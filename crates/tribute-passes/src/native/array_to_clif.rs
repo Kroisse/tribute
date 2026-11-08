@@ -809,7 +809,7 @@ mod tests {
     fn managed_array_construction_allocates_and_retains_in_helpers() {
         let lowered = lower(
             r#"core.module @test {
-  !Node = adt.struct<Node, (core.i32)>
+  !Node = adt.struct<"Node", (core.i32)>
   !NodeRef = adt.typeref<{name = "Node"}>
   !Nodes = adt.array<!NodeRef>
   func.func @build(%a: !NodeRef, %b: !NodeRef, %at: core.index) -> !Nodes {

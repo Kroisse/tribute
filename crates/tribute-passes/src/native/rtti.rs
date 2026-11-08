@@ -1301,7 +1301,7 @@ mod tests {
         let module = trunk_ir::parser::parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !Choice = adt.enum<Choice, [(), (core.i32, tribute_rt.anyref)]>
+  !Choice = adt.enum<"Choice", [(), (core.i32, tribute_rt.anyref)]>
   func.func @f(%n: core.i32, %v: tribute_rt.anyref) -> core.nil {
     %none = adt.variant_new {tag = 0, type = !Choice} : !Choice
     %pair = adt.variant_new %n, %v {tag = 1, type = !Choice} : !Choice
@@ -1375,7 +1375,7 @@ mod tests {
         let module = trunk_ir::parser::parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !Node = adt.struct<Node, (core.i32)>
+  !Node = adt.struct<"Node", (core.i32)>
   !NodeRef = adt.typeref<{name = "Node"}>
   !Nodes = adt.array<!NodeRef>
   !Shorts = adt.array<core.i16>

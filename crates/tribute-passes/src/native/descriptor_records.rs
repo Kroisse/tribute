@@ -407,8 +407,8 @@ mod tests {
     }
 
     const DECLARED: &str = r#"core.module @test {
-  !Pair = adt.struct<Pair, (core.i32, core.i32)>
-  !Choice = adt.enum<Choice, [(), (tribute_rt.anyref)]>
+  !Pair = adt.struct<"Pair", (core.i32, core.i32)>
+  !Choice = adt.enum<"Choice", [(), (tribute_rt.anyref)]>
   adt.struct_decl "Pair" (left, right)
   adt.enum_decl "Choice" [Nothing, Just]
 }"#;
@@ -444,7 +444,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !Pair = adt.struct<Pair, (core.i32, core.i32)>
+  !Pair = adt.struct<"Pair", (core.i32, core.i32)>
   adt.struct_decl "Pair" (left)
 }"#,
         );
@@ -463,7 +463,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !Choice = adt.enum<Choice, [(), (tribute_rt.anyref)]>
+  !Choice = adt.enum<"Choice", [(), (tribute_rt.anyref)]>
   func.func @f() -> core.nil {
     func.return
   }

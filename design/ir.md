@@ -1407,7 +1407,7 @@ Compiler가 소유하는 runtime 저장 layout은 예약 type 속성 `layout`으
   같은 의미의 값이라도 저장 layout이 다르면 이 속성으로 구별하지 않는다.
 - 일반 type 속성처럼 interning identity에 참여한다. `layout`이 없는 같은 모양의
   타입과는 다른 타입이다. Textual form은 일반 type 속성과 같다:
-  `adt.struct<_closure, (core.ptr), {layout = "closure"}>`.
+  `adt.struct<"_closure", (core.ptr), {layout = "closure"}>`.
 - 속성은 그 layout을 만드는 compiler의 canonical 생성자만 붙인다. Frontend와
   소스에서 온 타입은 이 속성을 갖지 않는다. 그래서 사용자 타입이 같은 이름이나
   모양을 가져도 compiler layout으로 취급되지 않는다.
@@ -1424,18 +1424,18 @@ Compiler가 소유하는 runtime 저장 layout은 예약 type 속성 `layout`으
 `adt.struct`는 이름 있는 nominal struct layout이다. 이름과 필드 타입의 위치 목록을
 가지며 전용 textual 문법을 쓴다. 필드 이름은 layout이 아니라 source 선언의
 [nominal 선언](#nominal-선언)이 소유하며, 필드는 위치로만
-가리킨다. 이름은 식별자(`[A-Za-z_][A-Za-z0-9_]*`)면 그대로 쓰고, 아니면 따옴표
-문자열로 쓴다(`adt.struct<"Nested::Closure", (…)>`). Struct 이름은 타입 이름공간의
-이름이며 symbol table의 정의가 아니므로 `@`를 붙이지 않는다.
+가리킨다. 이름은 식별자 여부와 상관없이 항상 따옴표 문자열로 쓴다. Struct 이름은
+타입 이름공간의 이름이며 symbol table의 정의가 아니므로 `@`를 붙이지 않는다.
 
 ```text
-adt.struct<Point, (core.i32, core.i32)>
-adt.struct<Node, (core.i32 {k = "v"}, adt.typeref<Node>)>
-adt.struct<_closure, (core.ptr), {layout = "closure"}>
-adt.struct<_closure_captures, (core.ptr, core.i32),
+adt.struct<"Point", (core.i32, core.i32)>
+adt.struct<"Node", (core.i32 {k = "v"}, adt.typeref<Node>)>
+adt.struct<"_closure", (core.ptr), {layout = "closure"}>
+adt.struct<"_closure_captures", (core.ptr, core.i32),
   {layout = "closure_captures",
-   closure_base = adt.struct<_closure, (core.ptr), {layout = "closure"}>}>
-adt.struct<Empty, ()>
+   closure_base = adt.struct<"_closure", (core.ptr), {layout = "closure"}>}>
+adt.struct<"Empty", ()>
+adt.struct<"geo::Point", (core.f64, core.f64)>
 ```
 
 - 저장 표현은 다음과 같다. 필드 타입은 `params`에 선언 순서대로 두고, struct
@@ -1453,7 +1453,7 @@ adt.struct<Empty, ()>
 - Row 매개변수를 가진 선언의 layout은 type 속성 `row_params`를 가지며, 필드 type의
   tail은 그 binder의 index다
   ([Nominal row 인자](tribute-dialects.md#nominal-row-인자)). Textual form은
-  binder를 이름 바로 뒤에 쓴다: `adt.struct<Callback['a0], (...)>`.
+  binder를 이름 바로 뒤에 쓴다: `adt.struct<"Callback"['a0], (...)>`.
   `row_params`도 전용 문법이 소유한다.
 
 #### Nominal 수준과 structural 수준
@@ -1600,10 +1600,10 @@ storage 확정은 다음 변환을 함께 적용한다.
 `adt.struct`와 같다.
 
 ```text
-adt.enum<Option, [(), (T)]>
-adt.enum<List, [(), (core.i32, adt.typeref<List>)]>
+adt.enum<"Option", [(), (T)]>
+adt.enum<"List", [(), (core.i32, adt.typeref<List>)]>
 adt.enum<"geo::Shape", [(), (core.f64, core.f64 {k = 1})], {layout = "x"}>
-adt.enum<Never, []>
+adt.enum<"Never", []>
 ```
 
 - Variant는 괄호로 감싼 필드 타입 목록이다. 필드가 없어도 괄호를 쓴다. 필드 타입
@@ -1628,7 +1628,7 @@ adt.enum<Never, []>
   필드 타입에 그대로 도달한다.
 - 재귀 참조는 같은 이름의 `adt.typeref`로 표현한다.
 - Row 매개변수를 가진 선언의 layout은 `adt.struct`와 같이 `row_params`를 가지며,
-  binder를 이름 바로 뒤에 쓴다: `adt.enum<Step['a0], [...]>`.
+  binder를 이름 바로 뒤에 쓴다: `adt.enum<"Step"['a0], [...]>`.
 
 ### `adt.typeref` nominal reference type
 

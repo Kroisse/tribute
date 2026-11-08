@@ -69,8 +69,8 @@ fn source_logical_cps_root_module(body: &str) -> (IrContext, Module) {
             !Done = closure.closure<func.func_sig<(core.nil) -> core.never>>
             !Resume = closure.closure<func.func_sig<(!Evidence, !Frame, tribute_rt.anyref) -> core.never>>
             !Dispatch = closure.closure<func.func_sig<(!Evidence, !Resume, core.i32, core.i32, core.i32, tribute_rt.anyref) -> core.never>>
-            !__tribute_continuation_frame_root_nil = adt.struct<__tribute_continuation_frame_root_nil, (!Done, !Dispatch), {tribute.cps_continuation_frame_result = core.nil}>
-            !Payload = adt.struct<__tribute_ability_payload_7590c57e, ()>
+            !__tribute_continuation_frame_root_nil = adt.struct<"__tribute_continuation_frame_root_nil", (!Done, !Dispatch), {tribute.cps_continuation_frame_result = core.nil}>
+            !Payload = adt.struct<"__tribute_ability_payload_7590c57e", ()>
             func.func @main(%evidence: !Evidence, %frame: !Frame) -> core.never attributes {tribute.calling_convention = "cps"} {
                 BODY
             }
@@ -895,7 +895,7 @@ fn native_one_shot_wrapper_traps_on_second_invocation() {
     use std::os::unix::process::ExitStatusExt;
 
     let input = r#"core.module @one_shot {tribute.entry = @main} {
-  !state = adt.struct<OneShotState, (core.i1)>
+  !state = adt.struct<"OneShotState", (core.i1)>
 
   func.func @one_shot_wrapper(%state: !state, %value: core.i32) -> core.i32 attributes {tribute.calling_convention = "direct"} {
     %consumed = adt.struct_get %state {field = 0, type = !state} : core.i1

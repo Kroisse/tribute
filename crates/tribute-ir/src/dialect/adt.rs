@@ -14,7 +14,7 @@ mod adt {
     /// Validated wrapper for a nominal `adt.struct` layout type.
     ///
     /// ```text
-    /// adt.struct<Point, (core.i32, core.i32)>
+    /// adt.struct<"Point", (core.i32, core.i32)>
     /// ```
     ///
     /// Field types are the type's parameters, in declaration order, and the
@@ -31,7 +31,7 @@ mod adt {
     /// Validated wrapper for a nominal `adt.enum` layout type.
     ///
     /// ```text
-    /// adt.enum<Option, [(), (core.i32)]>
+    /// adt.enum<"Option", [(), (core.i32)]>
     /// ```
     ///
     /// Each variant is one type parameter, in declaration order: an
@@ -696,9 +696,9 @@ impl Struct {
     }
 }
 
-// === Textual syntax: `adt.struct<Name, (type {attrs}, ...), {attrs}>` ===
+// === Textual syntax: `adt.struct<"Name", (type {attrs}, ...), {attrs}>` ===
 //
-// The name is a bare identifier, or a quoted string when it is not one.
+// The name is always a quoted string.
 
 impl trunk_ir::asm_format::TypeAsmFormat for Struct {
     fn print(&self, p: &mut trunk_ir::printer::AsmPrinter<'_>) -> std::fmt::Result {
@@ -718,7 +718,7 @@ fn write_struct_type(
     adt_struct: Struct,
 ) -> std::fmt::Result {
     use std::fmt::Write;
-    use trunk_ir::printer::display_name;
+    use trunk_ir::printer::display_string;
 
     let s = p.state();
     let ctx = s.ctx();
@@ -726,7 +726,7 @@ fn write_struct_type(
     write!(
         p,
         "adt.struct<{}, ({})",
-        display_name(adt_struct.name(ctx)),
+        display_string(adt_struct.name(ctx)),
         param_list(s, data)
     )?;
     let mut attrs = adt_struct.extra_attrs(ctx).peekable();
@@ -765,27 +765,25 @@ fn parse_field_list(
     p.parse_delimited("(", ")", |p| p.parse_param())
 }
 
-/// Parse a layout's name and the `,` after it, when the text after the
-/// opening bracket begins as `Name,`; `None`, reading nothing, otherwise.
+/// Parse a layout's quoted name and the `,` after it, when the text after
+/// the opening bracket begins with a string; `None`, reading nothing,
+/// otherwise. The generic spelling begins with a type or a dictionary.
 fn parse_layout_name(
     p: &mut trunk_ir::parser::AsmParser<'_>,
     what: &'static str,
 ) -> trunk_ir::parser::ParseResult<Option<String>> {
-    use trunk_ir::parser::lexer::{name_token, ws};
-    use winnow::prelude::*;
-
-    if (name_token, ws, ',').parse_peek(p.peek()).is_err() {
+    if !p.peek().starts_with('"') {
         return Ok(None);
     }
-    let layout_name = p.parse_token(what, name_token)?;
+    let layout_name = p.parse_token(what, trunk_ir::parser::lexer::string_lit)?;
     p.parse_punct(",")?;
     Ok(Some(layout_name))
 }
 
-/// Parse the rest of `adt.struct<Name, (type {attrs}, ...), {attrs}>` after
+/// Parse the rest of `adt.struct<"Name", (type {attrs}, ...), {attrs}>` after
 /// its opening bracket. The struct's name becomes the type's `name`
 /// attribute, which the type dictionary may not hold. Text that does not
-/// begin as `Name,` is the generic spelling.
+/// begin with a string is the generic spelling.
 fn parse_struct_type(
     p: &mut trunk_ir::parser::AsmParser<'_>,
     name: &str,
@@ -938,7 +936,7 @@ impl Enum {
     }
 }
 
-// === Textual syntax: `adt.enum<Name, [(type {attrs}, ...), ...], {attrs}>` ===
+// === Textual syntax: `adt.enum<"Name", [(type {attrs}, ...), ...], {attrs}>` ===
 //
 // Each variant is its field list, as an `adt.struct` writes its fields.
 
@@ -958,7 +956,7 @@ impl trunk_ir::asm_format::TypeAsmFormat for Enum {
 fn write_enum_type(p: &mut trunk_ir::printer::AsmPrinter<'_>, adt_enum: Enum) -> std::fmt::Result {
     use itertools::Itertools as _;
     use std::fmt::Write;
-    use trunk_ir::printer::display_name;
+    use trunk_ir::printer::display_string;
 
     let s = p.state();
     let ctx = s.ctx();
@@ -969,7 +967,7 @@ fn write_enum_type(p: &mut trunk_ir::printer::AsmPrinter<'_>, adt_enum: Enum) ->
     write!(
         p,
         "adt.enum<{}, [{variants}]",
-        display_name(adt_enum.name(ctx))
+        display_string(adt_enum.name(ctx))
     )?;
     let mut attrs = adt_enum.extra_attrs(ctx).peekable();
     if attrs.peek().is_some() {
@@ -978,11 +976,11 @@ fn write_enum_type(p: &mut trunk_ir::printer::AsmPrinter<'_>, adt_enum: Enum) ->
     p.write_char('>')
 }
 
-/// Parse the rest of `adt.enum<Name, [(type {attrs}, ...), ...], {attrs}>`
+/// Parse the rest of `adt.enum<"Name", [(type {attrs}, ...), ...], {attrs}>`
 /// after its opening bracket: each field list becomes an `adt.variant`
 /// parameter. The enum's name becomes the type's `name` attribute, which the
-/// type dictionary may not hold. Text that does not begin as `Name,` is the
-/// generic spelling.
+/// type dictionary may not hold. Text that does not begin with a string is
+/// the generic spelling.
 fn parse_enum_type(
     p: &mut trunk_ir::parser::AsmParser<'_>,
     name: &str,
@@ -1023,9 +1021,9 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !Point = adt.struct<Point, (core.i32, core.i32)>
-  !Empty = adt.struct<Empty, ()>
-  !Never = adt.enum<Never, []>
+  !Point = adt.struct<"Point", (core.i32, core.i32)>
+  !Empty = adt.struct<"Empty", ()>
+  !Never = adt.enum<"Never", []>
   adt.struct_decl "Point" (x, y)
   adt.struct_decl "Empty" ()
   adt.enum_decl "Never" []
@@ -1052,9 +1050,9 @@ mod tests {
         parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !Point = adt.struct<Point, (core.i32)>
+  !Point = adt.struct<"Point", (core.i32)>
   !PointRef = adt.typeref<{name = "Point"}>
-  !Shape = adt.enum<Shape, [(), (core.i32)]>
+  !Shape = adt.enum<"Shape", [(), (core.i32)]>
   !ShapeRef = adt.typeref<{name = "Shape"}>
   !Number = core.i32
   !NumberRef = adt.typeref<{name = "Number"}>
@@ -1184,10 +1182,11 @@ mod tests {
     #[test]
     fn test_roundtrip_adt_struct() {
         let input = r#"core.module @test {
-  !point = adt.struct<Point, (core.i32, core.i32 {k = @v})>
+  !point = adt.struct<"Point", (core.i32, core.i32 {k = @v})>
   !closure = adt.struct<"Nested::Closure", (func.func_sig<(core.i32) -> core.i32, {k = 1}> {}, core.tuple<core.ptr>), {layout = "closure"}>
-  !empty = adt.struct<Empty, ()>
-  !nested = adt.struct<Outer, (adt.struct<Inner, (core.i32), {layout = "closure"}> {m = 1})>
+  !empty = adt.struct<"Empty", ()>
+  !nested = adt.struct<"Outer", (adt.struct<"Inner", (core.i32), {layout = "closure"}> {m = 1})>
+  !escaped = adt.struct<"say \"hi\"", ()>
 }"#;
         let mut ctx = IrContext::new();
         let module = parse_module(&mut ctx, input).expect("adt.struct syntax should parse");
@@ -1206,10 +1205,11 @@ mod tests {
         assert_eq!(empty.field_count(&ctx), 0);
         let printed = module.display(&ctx).to_string();
         for expected in [
-            "!point = adt.struct<Point, (core.i32, core.i32 {k = @v})>",
+            "!point = adt.struct<\"Point\", (core.i32, core.i32 {k = @v})>",
             "adt.struct<\"Nested::Closure\", (func.func_sig<(core.i32) -> core.i32, {k = 1}>, core.tuple<core.ptr>), {layout = \"closure\"}>",
-            "!empty = adt.struct<Empty, ()>",
-            ", (adt.struct<Inner, (core.i32), {layout = \"closure\"}> {m = 1})>",
+            "!empty = adt.struct<\"Empty\", ()>",
+            ", (adt.struct<\"Inner\", (core.i32), {layout = \"closure\"}> {m = 1})>",
+            "adt.struct<\"say \\\"hi\\\"\", ()>",
         ] {
             assert!(printed.contains(expected), "{expected}\n{printed}");
         }
@@ -1219,10 +1219,10 @@ mod tests {
     #[test]
     fn repeated_struct_is_aliased_by_its_name() {
         let input = r#"core.module @test {
-  func.func @f1(%x: adt.struct<_Marker, (core.i32)>) -> adt.struct<_Marker, (core.i32)> {
+  func.func @f1(%x: adt.struct<"_Marker", (core.i32)>) -> adt.struct<"_Marker", (core.i32)> {
     func.return %x
   }
-  func.func @f2(%x: adt.struct<_Marker, (core.i32)>) -> adt.struct<_Marker, (core.i32)> {
+  func.func @f2(%x: adt.struct<"_Marker", (core.i32)>) -> adt.struct<"_Marker", (core.i32)> {
     func.return %x
   }
 }"#;
@@ -1230,7 +1230,7 @@ mod tests {
         let module = parse_module(&mut ctx, input).expect("struct types should parse");
         let printed = module.display(&ctx).to_string();
         assert!(
-            printed.contains("!_Marker = adt.struct<_Marker, (core.i32)>"),
+            printed.contains("!_Marker = adt.struct<\"_Marker\", (core.i32)>"),
             "{printed}"
         );
         assert!(
@@ -1243,11 +1243,11 @@ mod tests {
     #[test]
     fn test_roundtrip_adt_enum() {
         let input = r#"core.module @test {
-  !option = adt.enum<Option, [(), (core.i32)]>
+  !option = adt.enum<"Option", [(), (core.i32)]>
   !shape = adt.enum<"geo::Shape", [(), (core.f64, core.f64 {k = 1}), (core.ptr {k = 2})], {layout = "x"}>
-  !never = adt.enum<Never, []>
-  !list = adt.enum<List, [(), (core.i32, adt.typeref<{name = "List"}>)]>
-  !same = adt.enum<Same, [(core.i32), (core.i32)]>
+  !never = adt.enum<"Never", []>
+  !list = adt.enum<"List", [(), (core.i32, adt.typeref<{name = "List"}>)]>
+  !same = adt.enum<"Same", [(core.i32), (core.i32)]>
 }"#;
         let mut ctx = IrContext::new();
         let module = parse_module(&mut ctx, input).expect("adt.enum syntax should parse");
@@ -1292,10 +1292,10 @@ mod tests {
 
         let printed = module.display(&ctx).to_string();
         for expected in [
-            "!option = adt.enum<Option, [(), (core.i32)]>",
+            "!option = adt.enum<\"Option\", [(), (core.i32)]>",
             "adt.enum<\"geo::Shape\", [(), (core.f64, core.f64 {k = 1}), (core.ptr {k = 2})], {layout = \"x\"}>",
-            "!never = adt.enum<Never, []>",
-            "adt.enum<List, [(), (core.i32, adt.typeref<{name = \"List\"}>)]>",
+            "!never = adt.enum<\"Never\", []>",
+            "adt.enum<\"List\", [(), (core.i32, adt.typeref<{name = \"List\"}>)]>",
         ] {
             assert!(printed.contains(expected), "{expected}\n{printed}");
         }
@@ -1305,8 +1305,10 @@ mod tests {
     #[test]
     fn test_adt_enum_reserved_names_are_parse_errors() {
         for spelling in [
-            "adt.enum<E, [()], {name = @Q}>",
-            "adt.enum<E, [()], {name = \"Q\"}>",
+            "adt.enum<\"E\", [()], {name = @Q}>",
+            "adt.enum<\"E\", [()], {name = \"Q\"}>",
+            // The name is always a quoted string.
+            "adt.enum<E, [()]>",
         ] {
             let mut ctx = IrContext::new();
             let input = format!("core.module @test {{ !bad = {spelling} }}");
@@ -1338,8 +1340,10 @@ mod tests {
     #[test]
     fn test_adt_struct_reserved_names_are_parse_errors() {
         for spelling in [
-            "adt.struct<P, (core.i32), {name = @Q}>",
-            "adt.struct<P, (core.i32), {param_attrs = [{}]}>",
+            "adt.struct<\"P\", (core.i32), {name = @Q}>",
+            "adt.struct<\"P\", (core.i32), {param_attrs = [{}]}>",
+            // The name is always a quoted string.
+            "adt.struct<P, (core.i32)>",
         ] {
             let mut ctx = IrContext::new();
             let input = format!("core.module @test {{ !bad = {spelling} }}");
@@ -1350,7 +1354,7 @@ mod tests {
     #[test]
     fn test_malformed_adt_struct_parses_but_fails_validation() {
         for spelling in [
-            "adt.struct<P, (), {fields = []}>",
+            "adt.struct<\"P\", (), {fields = []}>",
             "adt.struct<core.i32, {name = @P}>",
         ] {
             let mut ctx = IrContext::new();
@@ -1404,7 +1408,7 @@ mod tests {
     #[test]
     fn variant_operations_take_a_position_of_their_enum() {
         let valid = r#"core.module @test {
-  !Shape = adt.enum<Shape, [(), (core.f64, core.f64)]>
+  !Shape = adt.enum<"Shape", [(), (core.f64, core.f64)]>
   func.func @f(%x: core.f64, %shape: !Shape) -> core.f64 {
     %dot = adt.variant_new {tag = 0, type = !Shape} : !Shape
     %rect = adt.variant_new %x, %x {tag = 1, type = !Shape} : !Shape
@@ -1481,7 +1485,7 @@ mod canonicalize_tests {
     }
 
     const PAIR: &str = r#"core.module @test {
-  !pair = adt.struct<Pair, (core.i32, core.i64)>
+  !pair = adt.struct<"Pair", (core.i32, core.i64)>
   func.func @f(%x: core.i32, %y: core.i64) -> core.i64 {
     %p = adt.struct_new %x, %y {type = !pair} : !pair
     %r = adt.struct_get %p {type = !pair, field = 1} : core.i64
@@ -1507,7 +1511,7 @@ mod canonicalize_tests {
     fn struct_get_of_a_block_argument_is_not_folded() {
         let (ctx, module, changed) = fold(
             r#"core.module @test {
-  !pair = adt.struct<Pair, (core.i32, core.i64)>
+  !pair = adt.struct<"Pair", (core.i32, core.i64)>
   func.func @f(%p: !pair) -> core.i64 {
     %r = adt.struct_get %p {type = !pair, field = 1} : core.i64
     func.return %r
@@ -1522,8 +1526,8 @@ mod canonicalize_tests {
     fn struct_get_with_a_different_layout_type_is_not_folded() {
         let (ctx, module, changed) = fold(
             r#"core.module @test {
-  !pair = adt.struct<Pair, (core.i32, core.i64)>
-  !other = adt.struct<Other, (core.i32, core.i64)>
+  !pair = adt.struct<"Pair", (core.i32, core.i64)>
+  !other = adt.struct<"Other", (core.i32, core.i64)>
   func.func @f(%x: core.i32, %y: core.i64) -> core.i64 {
     %p = adt.struct_new %x, %y {type = !pair} : !pair
     %r = adt.struct_get %p {type = !other, field = 1} : core.i64
@@ -1539,7 +1543,7 @@ mod canonicalize_tests {
     fn struct_get_with_a_mismatched_result_type_is_not_folded() {
         let (ctx, module, changed) = fold(
             r#"core.module @test {
-  !pair = adt.struct<Pair, (core.i32, core.i64)>
+  !pair = adt.struct<"Pair", (core.i32, core.i64)>
   func.func @f(%x: core.i32, %y: core.i64) -> core.i32 {
     %p = adt.struct_new %x, %y {type = !pair} : !pair
     %r = adt.struct_get %p {type = !pair, field = 1} : core.i32
@@ -1555,7 +1559,7 @@ mod canonicalize_tests {
     fn struct_get_out_of_range_field_is_not_folded() {
         let (ctx, module, changed) = fold(
             r#"core.module @test {
-  !pair = adt.struct<Pair, (core.i32, core.i64)>
+  !pair = adt.struct<"Pair", (core.i32, core.i64)>
   func.func @f(%x: core.i32, %y: core.i64) -> core.i64 {
     %p = adt.struct_new %x, %y {type = !pair} : !pair
     %r = adt.struct_get %p {type = !pair, field = 2} : core.i64
@@ -1571,7 +1575,7 @@ mod canonicalize_tests {
     fn struct_get_of_a_struct_mutated_through_an_alias_is_not_folded() {
         let (ctx, module, changed) = fold(
             r#"core.module @test {
-  !pair = adt.struct<Pair, (core.i32, core.i64)>
+  !pair = adt.struct<"Pair", (core.i32, core.i64)>
   func.func @f(%x: core.i32, %y: core.i64, %z: core.i64) -> core.i64 {
     %p = adt.struct_new %x, %y {type = !pair} : !pair
     %any = adt.ref_cast %p {type = tribute_rt.anyref} : tribute_rt.anyref
@@ -1590,7 +1594,7 @@ mod canonicalize_tests {
     fn struct_get_is_not_folded_when_another_function_writes_the_layout() {
         let (ctx, module, changed) = fold(
             r#"core.module @test {
-  !pair = adt.struct<Pair, (core.i32, core.i64)>
+  !pair = adt.struct<"Pair", (core.i32, core.i64)>
   func.func @write(%p: !pair, %z: core.i64) {
     adt.struct_set %p, %z {type = !pair, field = 1}
     func.return
@@ -1610,7 +1614,7 @@ mod canonicalize_tests {
     fn struct_get_of_a_mutated_struct_is_not_folded() {
         let (ctx, module, changed) = fold(
             r#"core.module @test {
-  !pair = adt.struct<Pair, (core.i32, core.i64)>
+  !pair = adt.struct<"Pair", (core.i32, core.i64)>
   func.func @f(%x: core.i32, %y: core.i64, %z: core.i64) -> core.i64 {
     %p = adt.struct_new %x, %y {type = !pair} : !pair
     adt.struct_set %p, %z {type = !pair, field = 1}
@@ -1627,7 +1631,7 @@ mod canonicalize_tests {
     fn struct_get_of_a_struct_with_explicit_ownership_is_not_folded() {
         let (ctx, module, changed) = fold(
             r#"core.module @test {
-  !pair = adt.struct<Pair, (core.i32, core.i64)>
+  !pair = adt.struct<"Pair", (core.i32, core.i64)>
   func.func @f(%x: core.i32, %y: core.i64) -> core.i64 {
     %p = adt.struct_new %x, %y {type = !pair} : !pair
     %r = adt.struct_get %p {type = !pair, field = 1} : core.i64
@@ -1644,7 +1648,7 @@ mod canonicalize_tests {
     fn ref_cast_to_the_operand_type_is_forwarded() {
         let (ctx, module, changed) = fold(
             r#"core.module @test {
-  !pair = adt.struct<Pair, (core.i32, core.i64)>
+  !pair = adt.struct<"Pair", (core.i32, core.i64)>
   func.func @f(%p: !pair) -> !pair {
     %r = adt.ref_cast %p {type = !pair} : !pair
     func.return %r
@@ -1659,7 +1663,7 @@ mod canonicalize_tests {
     fn ref_cast_to_another_type_is_not_folded() {
         let (ctx, module, changed) = fold(
             r#"core.module @test {
-  !pair = adt.struct<Pair, (core.i32, core.i64)>
+  !pair = adt.struct<"Pair", (core.i32, core.i64)>
   func.func @f(%p: !pair) -> tribute_rt.anyref {
     %r = adt.ref_cast %p {type = tribute_rt.anyref} : tribute_rt.anyref
     func.return %r

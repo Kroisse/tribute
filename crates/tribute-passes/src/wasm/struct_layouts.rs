@@ -144,9 +144,9 @@ mod tests {
         parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !Point = adt.struct<Point, (core.f64, core.f64)>
-  !Size = adt.struct<Size, (core.f64, core.f64)>
-  !Shape = adt.enum<Shape, [(core.f64, core.f64), ()]>
+  !Point = adt.struct<"Point", (core.f64, core.f64)>
+  !Size = adt.struct<"Size", (core.f64, core.f64)>
+  !Shape = adt.enum<"Shape", [(core.f64, core.f64), ()]>
 }"#,
         );
         let [point, size, shape] = ["Point", "Size", "Shape"].map(|name| alias(&ctx, name));
@@ -171,8 +171,8 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !Pair = adt.struct<Pair, (core.i64, core.i64)>
-  !Shape = adt.enum<Shape, [()]>
+  !Pair = adt.struct<"Pair", (core.i64, core.i64)>
+  !Shape = adt.enum<"Shape", [()]>
   wasm.func @f(%pair: adt.typeref<{name = "Pair"}>, %shape: adt.typeref<{name = "Shape"}>, %unknown: adt.typeref<{name = "Missing"}>) -> core.nil {
     wasm.return
   }
@@ -202,10 +202,10 @@ mod tests {
         parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !Closure = adt.struct<_closure, (tribute_rt.convention_table_ref), {layout = "closure"}>
-  !Inner = adt.struct<Inner, (core.i64)>
-  !E = adt.enum<E, [()]>
-  !Outer = adt.struct<Outer, (core.i1, adt.typeref<{name = "Outer"}>, !E, !Inner, !Closure)>
+  !Closure = adt.struct<"_closure", (tribute_rt.convention_table_ref), {layout = "closure"}>
+  !Inner = adt.struct<"Inner", (core.i64)>
+  !E = adt.enum<"E", [()]>
+  !Outer = adt.struct<"Outer", (core.i1, adt.typeref<{name = "Outer"}>, !E, !Inner, !Closure)>
 }"#,
         );
         let closure = alias(&ctx, "Closure");

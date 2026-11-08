@@ -916,6 +916,16 @@ fn display_attribute_key(key: &str) -> impl fmt::Display + '_ {
     })
 }
 
+/// `text` as a quoted string literal, which `parser::lexer::string_lit`
+/// reads back.
+pub fn display_string(text: &str) -> impl fmt::Display + '_ {
+    fmt::from_fn(move |f| {
+        f.write_char('"')?;
+        write_escaped_string(f, text)?;
+        f.write_char('"')
+    })
+}
+
 /// `name` bare when it is an identifier (`[A-Za-z_][A-Za-z0-9_]*`), and as
 /// a quoted string otherwise.
 pub fn display_name(name: &str) -> impl fmt::Display + '_ {

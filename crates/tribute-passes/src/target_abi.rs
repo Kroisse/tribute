@@ -1977,7 +1977,7 @@ mod tests {
             !Done = closure.closure<func.func_sig<(!Answer) -> core.never>>
             !Resume = closure.closure<func.func_sig<(!Evidence, !Frame, tribute_rt.anyref) -> core.never>>
             !Dispatch = closure.closure<func.func_sig<(!Evidence, !Resume, core.i32, core.i32, core.i32, tribute_rt.anyref) -> core.never>>
-            !{frame_name} = adt.struct<{frame_name}, (!Done, !Dispatch), {{tribute.cps_continuation_frame_result = !Answer}}>
+            !{frame_name} = adt.struct<"{frame_name}", (!Done, !Dispatch), {{tribute.cps_continuation_frame_result = !Answer}}>
             func.func @run(%ev: !Evidence, %dispatch: !Dispatch, %resume: !Resume, %payload: tribute_rt.anyref) -> core.never attributes {{tribute.calling_convention = "cps"}} {{
                 effect.dispatch_cps @State @get(%payload) [%ev, %dispatch, %resume] -> !Answer
             }}
@@ -2780,7 +2780,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   !semantic = closure.closure<func.func_sig<() -> core.i32>>
-  !_closure = adt.struct<_closure, (core.i32, tribute_rt.anyref)>
+  !_closure = adt.struct<"_closure", (core.i32, tribute_rt.anyref)>
   func.func @factory(%callback: !semantic) -> core.i32 attributes {tribute.calling_convention = "direct"} {
     func.unreachable
   }

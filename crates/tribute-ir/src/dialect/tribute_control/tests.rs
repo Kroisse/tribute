@@ -1800,7 +1800,7 @@ fn intrinsic_registry_order_duplicates_and_defined_claims_fail_closed() {
 fn managed_reference_metadata_and_return_contracts_fail_closed() {
     let (ctx, module) = parse_fixture(
         r#"core.module @test {
-  !S = adt.struct<S, ()>
+  !S = adt.struct<"S", ()>
   !Unnamed = adt.typeref
   !Parameterized = adt.typeref<core.i32, {name = "S"}>
   !Missing = adt.typeref<{name = "Missing"}>
@@ -1843,7 +1843,7 @@ fn managed_reference_metadata_and_return_contracts_fail_closed() {
 fn managed_defined_boundaries_null_and_compatible_cast_are_valid() {
     let (ctx, module) = parse_fixture(
         r#"core.module @test {
-  !S = adt.struct<S, ()>
+  !S = adt.struct<"S", ()>
   !R = adt.typeref<{name = "S"}>
   tribute_control.func @managed(%value: !R) -> !R {
     %null = adt.ref_null {type = !R} : !R
@@ -1861,7 +1861,7 @@ fn managed_defined_boundaries_null_and_compatible_cast_are_valid() {
 fn managed_bodyless_external_read_line_shape_and_raw_pointer_cast_chain_fail_closed() {
     let (ctx, module) = parse_fixture(
         r#"core.module @test {
-  !ReadLineResult = adt.enum<ReadLineResult, [(core.bytes), (), (), (core.i32, core.bytes)]>
+  !ReadLineResult = adt.enum<"ReadLineResult", [(core.bytes), (), (), (core.i32, core.bytes)]>
   !ReadLineResultRef = adt.typeref<{name = "ReadLineResult"}>
   tribute_control.func @user_read_line() -> !ReadLineResultRef
     attributes {abi = "intrinsic"}
@@ -1883,9 +1883,9 @@ fn managed_bodyless_external_read_line_shape_and_raw_pointer_cast_chain_fail_clo
 fn managed_nested_aggregate_in_bodyless_c_external_is_a_trusted_user_boundary() {
     let (ctx, module) = parse_fixture(
         r#"core.module @test {
-  !S = adt.struct<S, ()>
+  !S = adt.struct<"S", ()>
   !R = adt.typeref<{name = "S"}>
-  !Container = adt.struct<Container, (!R)>
+  !Container = adt.struct<"Container", (!R)>
   tribute_control.func @private_helper(%value: !Container) -> core.i32
     attributes {abi = "C"}
 }"#,
@@ -1912,8 +1912,8 @@ fn primitive_external_remains_a_conservative_boundary() {
 fn ref_cast_rejects_distinct_nominal_managed_references() {
     let (ctx, module) = parse_fixture(
         r#"core.module @test {
-  !S = adt.struct<S, ()>
-  !T = adt.struct<T, ()>
+  !S = adt.struct<"S", ()>
+  !T = adt.struct<"T", ()>
   !RS = adt.typeref<{name = "S"}>
   !RT = adt.typeref<{name = "T"}>
   tribute_control.func @incompatible(%value: !RS) -> !RT {
@@ -2291,9 +2291,9 @@ fn exact_adt_callable_projections_have_semantic_provenance() {
     let (ctx, module) = parse_fixture(
         r#"core.module @test {
   !F = tribute_control.func_sig<(core.i32) -> core.i32>
-  !Tuple = adt.struct<Tuple, (!F)>
+  !Tuple = adt.struct<"Tuple", (!F)>
   !TupleRef = adt.typeref<{name = "Tuple"}>
-  !Choice = adt.enum<Choice, [(!F)]>
+  !Choice = adt.enum<"Choice", [(!F)]>
   !ChoiceRef = adt.typeref<{name = "Choice"}>
   tribute_control.func @caller(%tuple: !TupleRef, %choice: !ChoiceRef, %value: core.i32) -> core.i32 {
     %tuple_callee = adt.struct_get %tuple {type = !Tuple, field = 0} : !F
@@ -2314,9 +2314,9 @@ fn adt_callable_projection_requires_matching_declared_field_type() {
     let (ctx, module) = parse_fixture(
         r#"core.module @test {
   !F = tribute_control.func_sig<(core.i32) -> core.i32>
-  !Tuple = adt.struct<Tuple, (core.i32)>
+  !Tuple = adt.struct<"Tuple", (core.i32)>
   !TupleRef = adt.typeref<{name = "Tuple"}>
-  !Choice = adt.enum<Choice, [(core.i32)]>
+  !Choice = adt.enum<"Choice", [(core.i32)]>
   !ChoiceRef = adt.typeref<{name = "Choice"}>
   tribute_control.func @caller(%tuple: !TupleRef, %choice: !ChoiceRef, %value: core.i32) -> core.i32 {
     %tuple_callee = adt.struct_get %tuple {type = !Tuple, field = 0} : !F
@@ -2341,8 +2341,8 @@ fn duplicate_nominal_layout_rejects_callable_projection_spoofing() {
     let (ctx, module) = parse_fixture(
         r#"core.module @test {
   !F = tribute_control.func_sig<(core.i32) -> core.i32>
-  !Canonical = adt.struct<Tuple, (core.i32)>
-  !Spoofed = adt.struct<Tuple, (!F)>
+  !Canonical = adt.struct<"Tuple", (core.i32)>
+  !Spoofed = adt.struct<"Tuple", (!F)>
   !TupleRef = adt.typeref<{name = "Tuple"}>
   tribute_control.func @caller(%tuple: !TupleRef, %value: core.i32) -> core.i32 {
     %canonical = adt.struct_new %value {type = !Canonical} : !TupleRef
@@ -2363,8 +2363,8 @@ fn duplicate_nominal_layout_rejects_callable_projection_spoofing() {
 fn unreachable_nominal_layout_collision_does_not_affect_validation() {
     let (ctx, module) = parse_fixture(
         r#"core.module @test {
-  !UnusedStruct = adt.struct<Unused, (core.i32)>
-  !UnusedEnum = adt.enum<Unused, [(core.i32)]>
+  !UnusedStruct = adt.struct<"Unused", (core.i32)>
+  !UnusedEnum = adt.enum<"Unused", [(core.i32)]>
   tribute_control.func @caller(%value: core.i32) -> core.i32 {
     tribute_control.return %value
   }

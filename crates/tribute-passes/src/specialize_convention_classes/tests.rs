@@ -152,7 +152,7 @@ fn a_layout_keeps_its_callable_field() {
     let printed = specialized(
         r#"core.module @m {
   !cb = tribute_control.func_sig<(core.i32) -> core.i32>
-  !Holder = adt.struct<Holder, (!cb)>
+  !Holder = adt.struct<"Holder", (!cb)>
   !HolderRef = adt.typeref<{name = "Holder"}>
   tribute_control.func @"Holder::callback"(%h: !HolderRef) -> !cb {
     %f = adt.struct_get %h {field = 0, type = !Holder} : !cb
@@ -172,7 +172,7 @@ fn a_layout_keeps_its_callable_field() {
     assert_contains(
         &printed,
         &[
-            "!Holder = adt.struct<Holder, (!cb)>",
+            "!Holder = adt.struct<\"Holder\", (!cb)>",
             "%1 = adt.struct_get %0 {field = 0, type = !Holder} : !cb",
             "%3 = adt.struct_new %1 {type = !Holder} : !HolderRef",
             "%5 = tribute_cps.call_indirect %4(%0) attributes {convention = \"direct\"} : (core.i32) -> core.i32",
@@ -825,7 +825,7 @@ fn a_published_layout_keeps_its_callable_fields() {
         &mut ctx,
         r#"core.module @m {
   !cb = tribute_control.func_sig<(core.i32) -> core.i32>
-  !Holder = adt.struct<Holder, (!cb)>
+  !Holder = adt.struct<"Holder", (!cb)>
   tribute_control.func @main(%x: core.i32) -> core.i32 {
     tribute_control.return %x
   }

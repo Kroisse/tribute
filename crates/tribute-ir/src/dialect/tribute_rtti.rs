@@ -381,9 +381,9 @@ mod tests {
         parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !point = adt.struct<Point, (core.i32)>
+  !point = adt.struct<"Point", (core.i32)>
   !point_ref = adt.typeref<{name = "Point"}>
-  !choice = adt.enum<Choice, [()]>
+  !choice = adt.enum<"Choice", [()]>
   !any = tribute_rt.anyref
   !small = tribute_rt.intref
   !raw = core.ptr
@@ -419,8 +419,8 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !Pair = adt.struct<Pair, (tribute_rt.anyref, core.i64)>
-  !Choice = adt.enum<Choice, [(), (!Pair, core.f64)]>
+  !Pair = adt.struct<"Pair", (tribute_rt.anyref, core.i64)>
+  !Choice = adt.enum<"Choice", [(), (!Pair, core.f64)]>
   tribute_rtti.layout {type = !Pair, index = 32, fields = ["dynamic", "u64"]}
   tribute_rtti.layout {type = !Choice, tag = 1, index = 33, fields = ["managed", "f64"]}
 }"#,
@@ -498,8 +498,8 @@ mod tests {
                 &mut ctx,
                 &format!(
                     r#"core.module @test {{
-  !Pair = adt.struct<Pair, (tribute_rt.anyref, core.i64)>
-  !Choice = adt.enum<Choice, [()]>
+  !Pair = adt.struct<"Pair", (tribute_rt.anyref, core.i64)>
+  !Choice = adt.enum<"Choice", [()]>
   {layout}
 }}"#
                 ),

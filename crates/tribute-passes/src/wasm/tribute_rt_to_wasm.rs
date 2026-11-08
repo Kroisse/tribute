@@ -51,7 +51,7 @@ fn f64_type(ctx: &mut IrContext) -> TypeRef {
 }
 
 /// Get the BoxedF64 struct type:
-/// `adt.struct<_BoxedF64, (core.f64), {layout = "boxed_f64"}>`
+/// `adt.struct<"_BoxedF64", (core.f64), {layout = "boxed_f64"}>`
 fn boxed_f64_type(ctx: &mut IrContext) -> TypeRef {
     let f64_ty = f64_type(ctx);
     let mut attrs = AttributeMap::new();

@@ -956,8 +956,8 @@ mod tests {
         parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !Named = adt.struct<_closure, (core.i32, tribute_rt.anyref)>
-  !Layout = adt.struct<Other, (core.i32), {layout = "closure"}>
+  !Named = adt.struct<"_closure", (core.i32, tribute_rt.anyref)>
+  !Layout = adt.struct<"Other", (core.i32), {layout = "closure"}>
 }"#,
         );
         let alias = |ctx: &IrContext, name: &str| {
@@ -1665,7 +1665,7 @@ mod tests {
             &mut ctx,
             &format!(
                 r#"core.module @test {{
-  !_closure = adt.struct<_closure, (core.i32, tribute_rt.anyref)>
+  !_closure = adt.struct<"_closure", (core.i32, tribute_rt.anyref)>
   !expected = closure.closure<func.func_sig<({evidence}, core.i32, core.i32) -> core.never>>
   !actual = closure.closure<func.func_sig<({evidence}, core.i32, core.i1) -> core.never>>
   !outer = closure.closure<func.func_sig<({evidence}, core.i32, !expected) -> core.never>>

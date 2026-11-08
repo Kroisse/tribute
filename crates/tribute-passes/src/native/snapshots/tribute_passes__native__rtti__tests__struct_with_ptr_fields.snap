@@ -3,7 +3,7 @@ source: crates/tribute-passes/src/native/rtti.rs
 expression: output
 ---
 core.module @test {
-  !Test = adt.struct<Test, (core.i32, tribute_rt.anyref)>
+  !Test = adt.struct<"Test", (core.i32, tribute_rt.anyref)>
 
   func.func @create_struct(%0: core.i32, %1: tribute_rt.anyref) -> !Test {
       %2 = adt.struct_new %0, %1 {type = !Test} : !Test

@@ -17,7 +17,7 @@ use crate::common::NativeTestBinary;
 fn program(body: &str, expected: i32) -> String {
     format!(
         r#"core.module @arrays {{
-  !Node = adt.struct<Node, (core.i32)>
+  !Node = adt.struct<"Node", (core.i32)>
   !NodeRef = adt.typeref<{{name = "Node"}}>
   !Nodes = adt.array<!NodeRef>
   !Ints = adt.array<core.i32>
