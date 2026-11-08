@@ -14,13 +14,13 @@ core.module @test {
       %1 = adt.variant_tag %0 {type = !"pkg::Shape"}
       %2 = scf.index_switch %1 : (core.index) -> core.i32
       case 0 {
-          %3 = adt.variant_get %0 {field = 0, tag = "Circle", type = !"pkg::Shape"} : core.i32
+          %3 = adt.variant_get %0 {field = 0, tag = 0, type = !"pkg::Shape"} : core.i32
           %4 = tribute_control.call @"std::Nat::*"(%3, %3) : (core.i32, core.i32) -> core.i32
           scf.yield %4
       }
       case 1 {
-          %5 = adt.variant_get %0 {field = 0, tag = "Rect", type = !"pkg::Shape"} : core.i32
-          %6 = adt.variant_get %0 {field = 1, tag = "Rect", type = !"pkg::Shape"} : core.i32
+          %5 = adt.variant_get %0 {field = 0, tag = 1, type = !"pkg::Shape"} : core.i32
+          %6 = adt.variant_get %0 {field = 1, tag = 1, type = !"pkg::Shape"} : core.i32
           %7 = tribute_control.call @"std::Nat::*"(%5, %6) : (core.i32, core.i32) -> core.i32
           scf.yield %7
       }
@@ -29,8 +29,8 @@ core.module @test {
           scf.yield %8
       }
       default {
-          %9 = adt.variant_get %0 {field = 0, tag = "Line", type = !"pkg::Shape"} : core.i32
-          %10 = adt.variant_get %0 {field = 1, tag = "Line", type = !"pkg::Shape"} : core.i32
+          %9 = adt.variant_get %0 {field = 0, tag = 3, type = !"pkg::Shape"} : core.i32
+          %10 = adt.variant_get %0 {field = 1, tag = 3, type = !"pkg::Shape"} : core.i32
           %11 = arith.constant 1 : core.i32
           scf.yield %11
       }
@@ -45,13 +45,13 @@ core.module @test {
           scf.yield %3
       }
       case 3 {
-          %4 = adt.variant_get %0 {field = 0, tag = "Line", type = !"pkg::Shape"} : core.i32
-          %5 = adt.variant_get %0 {field = 1, tag = "Line", type = !"pkg::Shape"} : core.i32
+          %4 = adt.variant_get %0 {field = 0, tag = 3, type = !"pkg::Shape"} : core.i32
+          %5 = adt.variant_get %0 {field = 1, tag = 3, type = !"pkg::Shape"} : core.i32
           %6 = tribute_control.call @"std::Nat::+"(%4, %5) : (core.i32, core.i32) -> core.i32
           scf.yield %6
       }
       case 0 {
-          %7 = adt.variant_get %0 {field = 0, tag = "Circle", type = !"pkg::Shape"} : core.i32
+          %7 = adt.variant_get %0 {field = 0, tag = 0, type = !"pkg::Shape"} : core.i32
           %8 = arith.constant 1 : core.i32
           scf.yield %8
       }

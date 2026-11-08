@@ -34,7 +34,7 @@ const CAST_FIXTURE: &str = r#"core.module @test {
   func.func @load(%choice: !ChoiceRef) -> !ChildRef {
     %erased = adt.ref_cast %choice {type = tribute_rt.anyref} : tribute_rt.anyref
     %restored = adt.ref_cast %erased {type = !ChoiceRef} : !ChoiceRef
-    %child = adt.variant_get %restored {type = !Choice, tag = "Some", field = 0} : !ChildRef
+    %child = adt.variant_get %restored {type = !Choice, tag = 0, field = 0} : !ChildRef
     func.return %child
   }
 }"#;

@@ -96,6 +96,20 @@ impl WellKnownTypes {
     }
 }
 
+/// The prelude `String` layout of the root module `module` and the position
+/// of its `Leaf` variant, which a string literal builds, as the module's
+/// nominal declarations name it. `None` when the module publishes no
+/// `String` or does not declare it.
+pub fn string_leaf(ctx: &IrContext, module: trunk_ir::rewrite::Module) -> Option<(TypeRef, u32)> {
+    use trunk_ir::ops::DialectType;
+
+    let string = WellKnownTypes::from_module(ctx, module.op()).string?;
+    let layout = crate::dialect::adt::Enum::from_type_ref(ctx, string)?;
+    let leaf = crate::dialect::adt::NominalDecls::collect(ctx, module)
+        .variant_position(ctx, layout, "Leaf")?;
+    Some((string, leaf))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

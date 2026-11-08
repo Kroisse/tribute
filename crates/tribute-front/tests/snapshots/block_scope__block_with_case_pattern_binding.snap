@@ -9,9 +9,9 @@ core.module @test {
   adt.enum_decl "pkg::Option" [Some, None]
   adt.enum_decl "pkg::Option$Nat" [Some, None]
   tribute_control.func @"pkg::example"['a0](%0: adt.typeref<{name = "pkg::Option$Nat"}>) -> core.i32 row(| 'a0) inferred {
-      %1 = adt.variant_is %0 {tag = "Some", type = !"pkg::Option$Nat"} : core.i1
+      %1 = adt.variant_is %0 {tag = 0, type = !"pkg::Option$Nat"} : core.i1
       %2 = scf.if %1 -> (core.i1) {
-          %3 = adt.variant_get %0 {field = 0, tag = "Some", type = !"pkg::Option$Nat"} : core.i32
+          %3 = adt.variant_get %0 {field = 0, tag = 0, type = !"pkg::Option$Nat"} : core.i32
           %4 = arith.constant true : core.i1
           scf.yield %4
       } else {
@@ -19,7 +19,7 @@ core.module @test {
           scf.yield %5
       }
       %6 = scf.if %2 -> (core.i32) {
-          %7 = adt.variant_get %0 {field = 0, tag = "Some", type = !"pkg::Option$Nat"} : core.i32
+          %7 = adt.variant_get %0 {field = 0, tag = 0, type = !"pkg::Option$Nat"} : core.i32
           scf.yield %7
       } else {
           %8 = arith.constant 0 : core.i32

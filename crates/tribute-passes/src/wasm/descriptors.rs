@@ -15,7 +15,7 @@
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::ops::ControlFlow;
 
-use tribute_ir::dialect::adt::layout::get_enum_variants;
+use tribute_ir::dialect::adt;
 use tribute_ir::dialect::tribute_rtti::{
     self, FieldKind, allocation_descriptor, descriptor_field_types,
 };
@@ -66,18 +66,15 @@ pub(crate) fn declare(ctx: &mut IrContext, module: Module) {
                 next += 1;
                 next - 1
             }
-            Some(tag) => {
-                let variants = get_enum_variants(ctx, ty)
-                    .expect("a variant descriptor's layout is an adt.enum");
-                let position = variants
-                    .iter()
-                    .position(|(name, _)| *name == tag)
-                    .expect("a variant descriptor names a variant of its enum");
+            Some(position) => {
+                let count = adt::Enum::from_type_ref(ctx, ty)
+                    .expect("a variant descriptor's layout is an adt.enum")
+                    .variant_count(ctx) as u32;
                 let first = *enum_blocks.entry(ty).or_insert_with(|| {
-                    next += variants.len() as u32;
-                    next - variants.len() as u32
+                    next += count;
+                    next - count
                 });
-                first + position as u32
+                first + position
             }
         };
         let fields = field_types
@@ -132,10 +129,10 @@ mod tests {
   !E = adt.enum<E { None(), Some(core.f64) }>
   wasm.func @main(%next: adt.typeref<{name = "S"}>, %any: tribute_rt.anyref, %n: tribute_rt.nat, %x: core.f64) -> core.nil {
     %one = wasm.i32_const 1 : core.i32
-    %some = adt.variant_new %x {type = !E, tag = "Some"} : !E
+    %some = adt.variant_new %x {tag = 1, type = !E} : !E
     %s = adt.struct_new %next, %any, %n {type = !S} : !S
     %closure = adt.struct_new %one {type = !Closure} : !Closure
-    %again = adt.variant_new %x {type = !E, tag = "Some"} : !E
+    %again = adt.variant_new %x {tag = 1, type = !E} : !E
     wasm.return
   }
 }"#,
@@ -159,7 +156,7 @@ mod tests {
             [
                 (
                     FIRST_USER_TYPE_IDX + 1,
-                    Some("Some"),
+                    Some(1),
                     vec![FieldKind::Float { width: 64 }]
                 ),
                 (
@@ -187,9 +184,8 @@ mod tests {
   !S = adt.struct<S(x: core.f64)>
   !E = adt.enum<E { None(), Some(core.f64) }>
   wasm.func @main(%x: core.f64) -> core.nil {
-    %some = adt.variant_new %x {type = !E, tag = "Some"} : !E
-    %erased = adt.variant_new %x {type = tribute_rt.anyref, tag = "Some"} : tribute_rt.anyref
-    %missing = adt.variant_new %x {type = !E, tag = "Other"} : !E
+    %some = adt.variant_new %x {tag = 1, type = !E} : !E
+    %erased = adt.variant_new %x {tag = 1, type = tribute_rt.anyref} : tribute_rt.anyref
     %s = adt.struct_new %x {type = !S} : !S
     wasm.return
   }
@@ -205,7 +201,7 @@ mod tests {
         assert_eq!(
             summary,
             [
-                (FIRST_USER_TYPE_IDX + 1, Some("Some")),
+                (FIRST_USER_TYPE_IDX + 1, Some(1)),
                 (FIRST_USER_TYPE_IDX + 2, None),
             ]
         );
@@ -220,9 +216,9 @@ mod tests {
   !S = adt.struct<S(x: core.f64)>
   !E = adt.enum<E { A(), B(core.f64), C(), D(core.f64) }>
   wasm.func @main(%x: core.f64) -> core.nil {
-    %d = adt.variant_new %x {type = !E, tag = "D"} : !E
+    %d = adt.variant_new %x {tag = 3, type = !E} : !E
     %s = adt.struct_new %x {type = !S} : !S
-    %b = adt.variant_new %x {type = !E, tag = "B"} : !E
+    %b = adt.variant_new %x {tag = 1, type = !E} : !E
     wasm.return
   }
 }"#,
@@ -238,9 +234,9 @@ mod tests {
         assert_eq!(
             summary,
             [
-                (FIRST_USER_TYPE_IDX + 3, Some("D")),
+                (FIRST_USER_TYPE_IDX + 3, Some(3)),
                 (FIRST_USER_TYPE_IDX + 4, None),
-                (FIRST_USER_TYPE_IDX + 1, Some("B")),
+                (FIRST_USER_TYPE_IDX + 1, Some(1)),
             ]
         );
     }

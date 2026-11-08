@@ -13,14 +13,13 @@ use crate::collections;
 
 use tribute_ir::dialect::adt;
 use tribute_ir::dialect::adt::NominalDecls;
-use tribute_ir::dialect::adt::layout::get_enum_variants;
 use tribute_ir::dialect::tribute_rtti::FieldKind;
 use trunk_ir::context::{BlockData, IrContext, RegionData};
 use trunk_ir::dialect::clif;
 use trunk_ir::ops::DialectType;
 use trunk_ir::smallvec::smallvec;
 use trunk_ir::types::Location;
-use trunk_ir::{BlockRef, OpRef, StringRef, SymbolPath, TypeRef};
+use trunk_ir::{BlockRef, OpRef, SymbolPath, TypeRef};
 
 use super::rtti::{RTTI_BOOL, RTTI_FLOAT, RTTI_INT, RTTI_NAT, RTTI_NIL};
 
@@ -72,7 +71,7 @@ impl DescriptorRecord {
         ctx: &IrContext,
         decls: &NominalDecls,
         ty: TypeRef,
-        tag: Option<StringRef>,
+        tag: Option<u32>,
         fields: Vec<FieldKind>,
     ) -> Self {
         if tribute_ir::dialect::adt::Array::matches(ctx, ty) {
@@ -114,12 +113,10 @@ impl DescriptorRecord {
                     fields: names.into_iter().zip(fields).collect(),
                 }
             }
-            Some(tag) => {
+            Some(position) => {
                 let layout = adt::Enum::from_type_ref(ctx, ty)
                     .expect("a variant descriptor has an adt.enum layout");
-                let position = get_enum_variants(ctx, ty)
-                    .and_then(|variants| variants.iter().position(|(name, _)| *name == tag))
-                    .expect("a variant descriptor names a variant of its adt.enum layout");
+                let position = usize::try_from(position).expect("a variant position fits usize");
                 let name = match decls.of_enum(ctx, layout) {
                     Some(decl) => {
                         assert_eq!(
@@ -133,7 +130,11 @@ impl DescriptorRecord {
                             .expect("the declaration names each variant")
                             .to_owned()
                     }
-                    None => ctx.str(tag).to_owned(),
+                    None => layout
+                        .variants(ctx)
+                        .nth(position)
+                        .map(|(name, _)| ctx.str(name).to_owned())
+                        .expect("a variant descriptor names a variant of its adt.enum layout"),
                 };
                 Self {
                     kind: RecordKind::Variant,
@@ -437,9 +438,8 @@ mod tests {
         );
 
         let choice = ctx.type_alias_by_text("Choice").unwrap();
-        let some = ctx.intern_str("Some");
         let record =
-            DescriptorRecord::of_layout(&ctx, &decls, choice, Some(some), vec![FieldKind::Dynamic]);
+            DescriptorRecord::of_layout(&ctx, &decls, choice, Some(1), vec![FieldKind::Dynamic]);
         assert_eq!(record.name, "Just");
         assert_eq!(record.owner, Some((choice, 1)));
     }
@@ -477,12 +477,11 @@ mod tests {
 }"#,
         );
         let choice = ctx.type_alias_by_text("Choice").expect("Choice alias");
-        let some = ctx.intern_str("Some");
         let record = DescriptorRecord::of_layout(
             &ctx,
             &NominalDecls::default(),
             choice,
-            Some(some),
+            Some(1),
             vec![FieldKind::Dynamic],
         );
         assert_eq!(record.kind, RecordKind::Variant);

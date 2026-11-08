@@ -456,6 +456,7 @@ fn native_evidence_hands_the_dispatcher_to_the_runtime_as_a_managed_value() {
   !Evidence = adt.array<adt.typeref<{name = "std::runtime::evidence::Marker"}>>
   !"std::Option$std::runtime::Dispatch" = adt.enum<"std::Option$std::runtime::Dispatch" { None(), Some(!_closure) }>
   !OptionRef = adt.typeref<{name = "std::Option$std::runtime::Dispatch"}>
+  adt.enum_decl "std::Option$std::runtime::Dispatch" [None, Some]
   func.func @"std::runtime::evidence::extend"(%ev: !Evidence, %id: core.i32, %prompt: core.i32, %tr: !OptionRef, %outer: !Evidence) -> !Evidence {
     func.return %ev
   }
@@ -1710,7 +1711,7 @@ fn enum_release_leaves_the_size_to_the_descriptor() {
   !Choice = adt.enum<Choice { None(), Some(core.i64, core.i64) }>
   !ChoiceRef = adt.typeref<{name = "Choice"}>
   func.func @drop() -> core.nil {
-    %choice = adt.variant_new {tag = "None", type = !Choice} : !ChoiceRef
+    %choice = adt.variant_new {tag = 0, type = !Choice} : !ChoiceRef
     func.return
   }
 }"#,
@@ -1737,7 +1738,7 @@ fn compatible_cast_and_enum_projection_preserve_borrowed_ownership() {
   func.func @load(%choice: !ChoiceRef) -> !ChildRef {
     %erased = adt.ref_cast %choice {type = tribute_rt.anyref} : tribute_rt.anyref
     %restored = adt.ref_cast %erased {type = !ChoiceRef} : !ChoiceRef
-    %child = adt.variant_get %restored {type = !Choice, tag = "Some", field = 0} : !ChildRef
+    %child = adt.variant_get %restored {type = !Choice, tag = 0, field = 0} : !ChildRef
     func.return %child
   }
 }"#,
@@ -1756,8 +1757,10 @@ fn compatible_cast_and_enum_projection_preserve_borrowed_ownership() {
         }
     });
     let projection = projection.expect("variant projection");
-    let missing_tag = ctx.string_attr("Missing");
-    for (key, invalid) in [("tag", missing_tag), ("field", trunk_ir::Attribute::Int(1))] {
+    for (key, invalid) in [
+        ("tag", trunk_ir::Attribute::Int(1)),
+        ("field", trunk_ir::Attribute::Int(1)),
+    ] {
         let original = ctx
             .op_attrs(projection)
             .get(key)
@@ -2411,7 +2414,7 @@ fn enum_rtti_uses_the_same_nested_managed_predicate() {
   !ChildRef = adt.typeref<{name = "Child"}>
   !Choice = adt.enum<Choice { None(), Some(!ChildRef, core.ptr), Bytes(core.bytes) }>
   func.func @some(%child: !ChildRef, %raw: core.ptr) -> !Choice {
-    %choice = adt.variant_new %child, %raw {tag = "Some", type = !Choice} : !Choice
+    %choice = adt.variant_new %child, %raw {tag = 1, type = !Choice} : !Choice
     func.return %choice
   }
 }"#,
@@ -2420,7 +2423,7 @@ fn enum_rtti_uses_the_same_nested_managed_predicate() {
         panic!("one RTTI descriptor per allocated variant")
     };
     assert_eq!(adt::nominal_name(&ctx, entry.ty), Some("Choice"));
-    assert_eq!(entry.tag.map(|tag| ctx.str(tag)), Some("Some"));
+    assert_eq!(entry.tag, Some(1));
     assert_eq!(entry.fields, [FieldKind::Managed, FieldKind::Raw]);
 }
 
