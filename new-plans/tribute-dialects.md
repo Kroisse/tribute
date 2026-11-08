@@ -12,15 +12,13 @@ TrunkIR core 위에서 Tribute가 정의하는 고수준 dialect의 여러 opera
 target-independent 직접형 경계다. CPS 전략은 이 경계 뒤에서 convention에 따라
 뜻이 달라지는 callable operation을
 [`tribute_cps`](#convention과-class-특수화)로 바꾼다. Dialect identifier는
-정확히 `tribute_control`이다. TrunkIR은 qualified operation을 하나의
-`<dialect>.<operation>` 쌍으로 parse하므로 dialect identifier 안에 점을 넣는
-등 separator를 하나 더 사용하는 표기는 invalid이다.
+정확히 `tribute_control`이다. Dialect identifier 안에 점을 넣는 등 separator를
+하나 더 사용하는 표기는 invalid이다.
 
 이 dialect는 CPS legalization 전의 Tribute 고유 callable과 effect-control
 의미를 함께 소유한다. ANF는 input invariant이지 dialect의 정체성이 아니다.
 산술, ADT/list/tuple/record 구성과 structured selection은 기존 dialect에 남는다.
-`func.*`, `closure.*`, `func.func_sig`는 physical 표현이므로 이 경계에 나타나지
-않는다.
+`func.*`, `closure.*`, `func.func_sig`는 이 경계에 나타나지 않는다.
 
 논리 callable type은 `tribute_control.func_sig<(Params...) -> Result>`이다.
 `Params`와 `Result`는 source-logical type이다. 이 type은 calling convention을
@@ -108,8 +106,7 @@ type, callable ABI, backend carrier가 아니며 continuation representation을
 
 Logical result가 `Never`인 source general operation은 canonical `core.never`
 TypeRef를 사용한다. 이 operation은 resumption을 만들지 않으며 `resume_token`도
-노출하지 않는다. Verifier가 erased type을 추측하지 않고 non-resumptive case를
-식별해야 하므로 `Never`용 `anyref` placeholder는 이 경계에서 valid하지 않다.
+노출하지 않는다. `Never`용 `anyref` placeholder는 이 경계에서 valid하지 않다.
 
 ## Ability row
 
@@ -152,15 +149,14 @@ binder의 종류를 나타내는 문자열이다. 속성이 없으면 binder가 
 | `local` | 값이 람다인 `let`의 지역 scheme이 양화한 row 변수. 그 람다의 type이 적는 변수이며 람다가 [소유](#지역-람다의-양화와-인스턴스화)한다 |
 | `body` | 어느 scheme도 양화하지 않은 row 변수, 또는 지역 scheme이 양화했지만 [양화하는 람다가 없는](#지역-람다의-양화와-인스턴스화) row 변수 |
 
-`ability_arg`는 ability instance의 symbol이 그 인자를 드러내지 않으므로 따로
-표시한다. 값이 람다가 아닌 binding은 한 번 계산되므로 그 지역 scheme의 변수를
-인스턴스화하는 사용이 없고, 그 변수는 `body`다.
+값이 람다가 아닌 binding은 그 지역 scheme의 변수를 인스턴스화하는 사용이 없고,
+그 변수는 `body`다.
 
 양화된 binder(`param`, `ability_arg`)가 scheme의 binder 순서로 먼저 오며, 그
 위치가 row 인자의 위치다. 나머지는 정의 안에 처음 나타난 순서로 뒤에 온다.
 Class 특수화가 람다의 entry 본문을 만들 때, 그 본문 안에서 row를 양화하는
-람다는 새 `local` binder를 목록 끝에 받는다. 그래서 한 정의의 인스턴스들은
-양화된 binder만 공유하고, 나머지 binder 목록은 서로 다를 수 있다.
+람다는 새 `local` binder를 목록 끝에 받는다. 한 정의의 인스턴스들은 양화된
+binder만 공유하고, 나머지 binder 목록은 서로 다를 수 있다.
 
 Binder 종류는 row의 구조만 기록하며 실행 전략을 담지 않는다. CPS 전략의 class
 특수화는 tail의 class를 binder 종류에 따라 읽는다.
@@ -179,7 +175,7 @@ Binder 종류는 row의 구조만 기록하며 실행 전략을 담지 않는다
 인자, operation 결과, tuple layout의 원소,
 [`adt.typeref`의 row 인자](#nominal-row-인자)가 모두 같다. Type은 binder를
 도입하지 않는다. 예외는 row 매개변수를 가진 nominal layout 하나이며, 그 binder는
-layout 안의 type에만 미친다. Module 수준의 다른 type에는 둘러싼 정의가 없으므로
+layout 안의 type에만 미친다.
 [`ability.operation`](../crates/tribute-ir/src/dialect/ability.rs)의 type은
 tail을 가질 수 없다.
 
@@ -187,14 +183,13 @@ tail을 가질 수 없다.
 
 [Row 매개변수](types.md#row-매개변수)를 가진 struct·enum의 layout
 (`adt.struct`, `adt.enum`)은 자기 row binder를 type 속성 `row_params`(개수)로
-선언한다. Binder는 모두 선언이 양화한 row 매개변수이므로 `func`의
-`row_binders`와 달리 종류 없이 개수만 둔다. Layout 안의 필드 type, 곧 필드의
-callable type과 중첩된 `adt.typeref`의 row 인자가 쓰는 tail은 이 binder의
-index다. 이 binder는 layout 밖으로 나가지 않는다.
+선언한다. `func`의 `row_binders`와 달리 종류 없이 개수만 둔다. Layout 안의 필드
+type, 곧 필드의 callable type과 중첩된 `adt.typeref`의 row 인자가 쓰는 tail은 이
+binder의 index다. 이 binder는 layout 밖으로 나가지 않는다.
 
-Nominal layout은 선언이 binder를 소유하므로 row 인자와 상관없이 하나다.
-[Tuple layout](#compiler-generated-tuple-layout)은 binder를 소유할 선언이
-없으므로 row를 layout 이름에 담고 둘러싼 정의의 binder를 쓴다.
+Nominal layout은 row 인자와 상관없이 하나다.
+[Tuple layout](#compiler-generated-tuple-layout)은 row를 layout 이름에 담고
+둘러싼 정의의 binder를 쓴다.
 
 ```text
 adt.struct<Callback['a0](run: tribute_control.func_sig<(core.i64) -> core.i64 row(| 'a0)>)>
@@ -204,15 +199,14 @@ adt.typeref<Callback[row()]>
 ```
 
 Textual form은 layout의 binder를 이름 바로 뒤에
-[정의 header의 binder 목록](#row-binder)과 같은 `['a0, 'a1, ...]`로 쓴다. 필드
-안의 tail이 그 앞에 선언된 binder를 가리키도록 binder 목록은 필드보다 먼저 온다.
-Binder는 종류 keyword와 합집합(`=`)을 쓰지 않으며 `'a0`부터 차례로 번호를
-붙인다.
+[정의 header의 binder 목록](#row-binder)과 같은 `['a0, 'a1, ...]`로 쓴다. Binder
+목록은 필드보다 먼저 온다. Binder는 종류 keyword와 합집합(`=`)을 쓰지 않으며
+`'a0`부터 차례로 번호를 붙인다.
 
 Typeref의 row 인자는 이름 바로 뒤에 `[row(...), ...]`로 쓴다. Row 인자 하나는
-`func_sig`의 row와 같은 `row(...)`이지만, 위치마다 하나씩 있어야 하므로 빈
-row도 생략하지 않고 `row()`로 쓴다. Row 매개변수가 없으면 `[...]`를 쓰지
-않는다. 이 문법으로 쓸 수 없는 속성 값은 일반 형태로 출력한다.
+`func_sig`의 row와 같은 `row(...)`이지만, 빈 row도 생략하지 않고 `row()`로 쓴다.
+Row 매개변수가 없으면 `[...]`를 쓰지 않는다. 이 문법으로 쓸 수 없는 속성 값은
+일반 형태로 출력한다.
 
 - 그 선언의 값 type인 `adt.typeref`는 row 매개변수마다 row 하나를 type 속성
   `row_args`에 선언 순서대로 가진다. 각 row는 `ability_row`와 같은 형식이며,
@@ -273,20 +267,16 @@ binder를 같은 [tail 규칙](cps-effects.md#row와-호출-규약)으로 읽어
 고르며, 값은 그 entry를 가진다.
 
 - 그 binder가 정의 안의 어느 매개변수 타입에도 나타나지 않으면 둘 다 요구
-  없음으로 읽는다. 값은 binder를 추상 변수로 두고 만들어졌고, binder가 정체를
-  잃는 매개변수 자리가 없으므로 그 binder를 통해 어떤 operation에도 닿지 못한다.
+  없음으로 읽는다.
 - 나타나면 둘 다 `Cps`로 읽는다. 그런 값의 매개변수 row tail이 그 `body`
   binder이면, 그 자리에 넘기는 람다는 매개변수의 callable type으로 만들고, 함수
-  참조는 그 type의 `tribute_control.func_ref`로 다시 만든다. Conversion cast는
-  callable의 ABI를 바꿀 수 없기 때문이다.
+  참조는 그 type의 `tribute_control.func_ref`로 다시 만든다.
 
 이름 붙은 함수를 그대로 묶은 binding과 그런 binding을 다시 묶은 별칭은, 람다의
-별칭과 달리 값을 묶지 않는다. 함수 참조는 할당도 효과도 없으므로, 그 binding의
-사용은 묶인 값을 읽지 않고 함수를 다시 참조한다. 그 `tribute_control.func_ref`는
-타입 검사가 그 사용에 고른 인스턴스의 row를 넘긴다. 함수 참조 자리의 row 인자는
-별칭마다 scheme을 인스턴스화한 row를 사용 쪽에서부터 거슬러 대입해 얻는다.
-그래서 순수한 사용은 `body` binder 대신 그 사용의 row를 보고, 닫힌 row의 람다를
-그대로 넘길 수 있다.
+별칭과 달리 값을 묶지 않는다. 그 binding의 사용은 묶인 값을 읽지 않고 함수를
+다시 참조한다. 그 `tribute_control.func_ref`는 타입 검사가 그 사용에 고른
+인스턴스의 row를 넘긴다. 함수 참조 자리의 row 인자는 별칭마다 scheme을
+인스턴스화한 row를 사용 쪽에서부터 거슬러 대입해 얻는다.
 
 ### Row 인자와 치환
 
@@ -303,11 +293,10 @@ class와 맞는지는 [convention class](cps-effects.md#row-변수의-convention
 참조가 보는 callee signature는 callee의 type에 row 인자를 치환한 것이다. 치환은
 type 안의 모든 `func_sig`(자기 자신 포함)와 `adt.typeref`의 row 인자에서, tail이
 양화된 binder `t`인 row `(I, t)`를 `(I ∪ args[t].instances, args[t].tail)`로
-바꾸고 정렬한다. 다른 속성은 바꾸지 않는다. Layout 안의 type은 layout의 binder를
-쓰므로 치환하지 않는다. Tuple layout은 원소를 치환한 뒤 같은 이름 규칙으로 다시
+바꾸고 정렬한다. 다른 속성은 바꾸지 않는다. Layout 안의 type은 치환하지 않는다.
+Tuple layout은 원소를 치환한 뒤 같은 이름 규칙으로 다시
 만든다([layout 이름](#compiler-generated-tuple-layout)). `call_indirect`와
-`tail_call_indirect`의 callee type은 이미 caller의 binder로 쓰여 있으므로 row
-인자가 없다.
+`tail_call_indirect`는 row 인자가 없다.
 
 `instantiate`의 `row_args`는 대상 람다의 `quantified_rows` 순서를 따른다.
 `i`번째 row 인자가 `quantified_rows`의 `i`번째 binder를 대체하며, 치환 규칙은
@@ -354,18 +343,15 @@ Type의 일치를 요구하는 규칙은 두 dialect에서 같고, convention을
 
 ### Convention entry
 
-Callable 값과 그 type은 convention을 갖지 않는다. 한 값이 여러 class의 자리에
-놓이고 자리마다 다른 convention으로 불릴 수 있기 때문이다. 호출 지점은 둘러싼
-인스턴스의 class로 정해지는 자기 convention 하나만 정적으로 알며, callee 값이
-어느 class에서 만들어졌는지 묻지 않는다. 그 차이는 값이 가진 convention entry가
-흡수한다.
+Callable 값과 그 type은 convention을 갖지 않는다. 호출 지점은 둘러싼 인스턴스의
+class로 정해지는 자기 convention 하나만 정적으로 알며, callee 값이 어느 class에서
+만들어졌는지 묻지 않는다. 그 차이는 값이 가진 convention entry가 흡수한다.
 
 예를 들어 `let wrap = fn(k) { fn() { k() } }`를 순수한 `k`와
 `EvidenceDirect`인 `k`로 쓰면, 두 사용은 모두 `Direct`를 고르고 `wrap`은
 `Direct` 본문 하나를 가진다. 그 본문이 만드는 `fn() { k() }`는 상한
 `EvidenceDirect`의 row를 가지므로 `Direct`와 `EvidenceDirect` 본문을 함께
-가지며, 각 본문은 `k`를 자기 convention으로 부른다. 아래 규칙은 class를 읽는
-방법, 본문을 두는 class, 본문이 없는 convention entry를 채우는 방법을 정한다.
+가지며, 각 본문은 `k`를 자기 convention으로 부른다.
 
 **Convention entry.** Callable 값은 convention마다 convention entry 하나를
 가진다. Convention entry는 그 convention으로 들어왔을 때 실행할 물리
@@ -374,8 +360,8 @@ parameter)는 그 convention이 정하고, convention entry를 구현하는 물�
 entry 함수라 한다.
 
 간접 이전은 자기 convention의 convention entry로 들어가며, 실행 중에 entry를
-고르지 않는다. 그래서 값마다 convention entry는 `Direct`, `EvidenceDirect`,
-`Cps` 셋을 넘지 않는다.
+고르지 않는다. 값마다 convention entry는 `Direct`, `EvidenceDirect`, `Cps` 셋을
+넘지 않는다.
 
 **Class 읽기.** Class 특수화는 row의 class를 정확한 class나 상한으로 읽는다.
 상한 `c`로 읽은 row는 실행 중에 `c`보다 약하거나 같은 어느 class든 요구할 수
@@ -402,29 +388,11 @@ class는 하한보다 약하지 않다.
   class마다 본문을 둔다.
 
 Class `c`의 본문은 위 읽기를 따르되, 자기 row의 tail이 상한이면 그 상한을
-`c`로 좁혀 상한으로 읽는다. 상한 이하의 class로 부르면 그 class의 본문으로
-들어오므로, 본문 `c`에 들어온 값의 실제 class는 `c`보다 강하지 않다는 것만 알
-수 있다. 그래서 하한이 `c`보다 약해도 tail을 정확한 `c`로 읽지 않으며, 본문
-`c`가 그 tail로 만드는 callable도 하한부터 `c`까지 본문을 가진다.
+`c`로 좁혀 상한으로 읽는다.
 
 **값은 나누지 않는다.** 같은 class를 고르는 사용들이 양화한 binder에 서로 다른
-class를 넘겨도 람다는 값 하나다. 그 binder로 읽는 row가 상한이 되고, 본문이 그
-row로 만드는 callable은 하한부터 상한까지 본문을 가지므로 어느 사용 쪽에서
-불러도 맞는 본문이 있다. 앞의 `wrap`이 그 예다.
-
-이 규칙은 다음 두 사실에 기댄다.
-
-- 상한으로 읽은 row로 만든 값의 실제 class는 그 row의 하한과 상한 사이에 있고,
-  값이 놓이는 자리의 class는 실제 class보다 약하지 않다. 상한 이하로 부르면 그
-  class의 본문이 있고, 상한보다 강하게 부르면 상한 본문을 부르는 adapter가 있다.
-- 간접 이전은 상한으로 부른다. 본문이 어떤 tail의 callable을 부르면 그 tail은
-  본문을 담은 callable의 row에도 있다. `handle`은 ability instance를 처리할 뿐
-  tail을 지우지 않기 때문이다. 그래서 그 상한은 본문의 convention보다 강하지
-  않다.
-
-대가는 정확도다. 상한으로 읽은 tail의 callable을 부르면 실제 callee보다 강한
-entry로 들어가 adapter를 거칠 수 있고, 상한으로 읽은 row의 callable은 쓰이지
-않는 class의 본문을 가질 수 있다. 결과는 바뀌지 않는다.
+class를 넘겨도 람다는 값 하나다. 앞의 `wrap`이 그 예다. 상한으로 읽어도 결과는
+바뀌지 않는다.
 
 **Capture.** 람다의 capture 목록은 하나이며, 모든 본문이 실제 사용하는 외부
 SSA 값과 일치한다. Capture는 closure 하나에 한 번만 담긴다.
@@ -442,7 +410,7 @@ SSA 값과 일치한다. Capture는 closure 하나에 한 번만 담긴다.
 
 Adapter는 본문을 이름으로 부르지 않는다. Environment 입력으로 받은 closure
 자신의 convention table에서 본문 class의 entry를 `closure.entry`로 읽고, 같은
-closure를 넘겨 부른다. 그래서 adapter는 람다나 capture에 매이지 않고 자기 entry
+closure를 넘겨 부른다. Adapter는 람다나 capture에 매이지 않고 자기 entry
 signature와 본문의 class로만 정해지며, target은 둘이 같은 convention entry들이
 adapter 하나를 공유하게 할 수 있다.
 
@@ -450,29 +418,21 @@ adapter 하나를 공유하게 할 수 있다.
 들어오자마자 trap하는 함수이며, target은 signature가 같은 trap entry들이 하나를
 공유하게 한다.
 
-Trap entry는 실행되지 않는다. 값이 놓이는 자리의 class는 그 값의 실제 class보다
-약하지 않고, 값은 실제 class부터 자기가 읽힌 상한까지의 본문을 모두 갖기
-때문이다. Class는 row의 tail에서 계산하고, 값이 tail의 정체를 잃을 수 있는
-자리(`ability_arg` tail, 매개변수 타입에 나타나는 `body` tail)는 `Cps`로만
-읽는다.
+Trap entry는 실행되지 않는다. Class는 row의 tail에서 계산하고, 값이 tail의
+정체를 잃을 수 있는 자리(`ability_arg` tail, 매개변수 타입에 나타나는 `body`
+tail)는 `Cps`로만 읽는다.
 
-Class 특수화는 확인할 수 있는 것을 확인한다. 모든 간접 이전의 convention은 그
-이전을 담은 인스턴스와 본문의 class 읽기로 callee type을 읽은 class(상한이면
-상한)와 같아야 하며, 다르면 컴파일 오류다. Trap entry는 값의 흐름을 따라가야만
-드러나는 위반을 실행 중에 멈추게 하는 안전망이다.
+모든 간접 이전의 convention은 그 이전을 담은 인스턴스와 본문의 class 읽기로
+callee type을 읽은 class(상한이면 상한)와 같아야 하며, 다르면 컴파일 오류다.
 
 **함수 참조.** 함수 참조의 convention entry 대상은 module 수준의 `func_table`
 정의 하나가 모아 가지며, `func_ref`는 그 table을 가리킨다. Table은 정의와
 참조의 class 인자마다 하나이므로, 같은 정의를 같은 class 인자로 참조하는
 `func_ref`들은 table을 공유한다.
 
-그래서 table의 내용은 참조가 넘기는 row가 아니라 정의와 class 인자만으로
-정한다. Class 인자는 넘긴 row의 하한을 담지 않으므로, 같은 class 인자를 넘기는
-참조들도 하한이 서로 다를 수 있기 때문이다. Table은 정의의 row를 class 인자로
-읽은 class가 정확하면 그 class의 대상 하나를 두고, 상한이면 정의의 row의
-하한부터 그 상한까지 class마다 대상 하나를 둔다. 참조가 넘기는 row는 정의의
-row에 적힌 ability instance를 그대로 가지므로, 참조된 값의 실제 class는 이 범위
-안에 있다.
+Table의 내용은 참조가 넘기는 row가 아니라 정의와 class 인자만으로 정한다.
+Table은 정의의 row를 class 인자로 읽은 class가 정확하면 그 class의 대상 하나를
+두고, 상한이면 정의의 row의 하한부터 그 상한까지 class마다 대상 하나를 둔다.
 
 Class `c`의 대상은 정의의 row의 tail인 class 변수의 인자를 람다 본문과 같이
 `c`로 좁힌 class 인자가 고르는 인스턴스이며, 대상들을 본문으로 삼아 같은
@@ -484,7 +444,7 @@ Class `c`의 대상은 정의의 row의 tail인 class 변수의 인자를 람다
 **생성된 closure.** CPS legalization이 만드는 closure(continuation, handler
 arm, delimiter region)는 source callable 값이 아니다. 그 closure type의
 callable은 자기 convention entry의 signature 자체이며, closure는 자기를 만든
-convention으로만 들어온다. 그래서 다른 convention entry는 모두 trap entry이고
+convention으로만 들어온다. 다른 convention entry는 모두 trap entry이고
 adapter를 두지 않는다. Adapter는 source 람다와 `func_ref`에만 있으며,
 legalization이 만들어 `closure.lambda`와 `closure.new`에 명시한다.
 
@@ -498,8 +458,8 @@ managed 참조를 담지 않는다.
 ## 사용자 정의 어셈블리 형식
 
 두 dialect의 `func`와 `lambda`만 custom parse/print를 요구한다. 두 dialect는 같은
-형식을 쓴다. `func_ref`, `instantiate`, `call`, `call_indirect`, `return`은
-generic assembly가 모든 정보를 손실 없이 표현하므로 custom format을 만들지 않는다.
+형식을 쓴다. `func_ref`, `instantiate`, `call`, `call_indirect`, `return`은 custom
+format을 만들지 않는다.
 
 `tribute_control`의 두 operation은 convention을 쓰지 않는다. `tribute_cps.func`는
 `convention(direct)`, `convention(evidence_direct)`, `convention(cps)` 가운데
@@ -551,13 +511,12 @@ Row binder는 위치로 이름을 붙여 `'a0`, `'a1`, …로 쓴다. `func`는 
 뒤의 `[...]`에 binder를 순서대로 선언한다. 종류가 `param`이 아니면 이름 앞에
 `ability_arg`, `local`, `body` 중 하나를 쓴다. 합집합의 결과인 binder는
 `'a0 = 'a1 | 'a2`처럼 source를 선언 순서로 적는다. Binder가 없으면 `[...]`를
-생략한다. 이름은 위치에서 정해지므로 parser는 `i`번째 binder의 이름이 `'ai`가
-아니면 거부한다. 이 표기가 `row_binders`와 `row_unions` 속성을 대신한다.
+생략한다. Parser는 `i`번째 binder의 이름이 `'ai`가 아니면 거부한다. 이 표기가
+`row_binders`와 `row_unions` 속성을 대신한다.
 
 Row는 convention 앞에 `row(@A, @B | 'a1)` 형식으로 쓴다. Instance 목록 뒤에
 `|`와 tail binder를 쓴다. Instance가 없으면 `row(| 'a1)`, tail이 없으면
-`row(@A)`다. 닫힌 빈 row는 쓰지 않는다. Binder 이름은 위치에서 정해지므로 type
-alias 안의 tail도 같은 뜻이다.
+`row(@A)`다. 닫힌 빈 row는 쓰지 않는다. Type alias 안의 tail도 같은 뜻이다.
 
 ```text
 tribute_cps.func @map['a0](%xs: !List, %f: !F) -> !List row(| 'a0) convention(cps) {
@@ -631,20 +590,17 @@ symbol의 선언 경로로 쓰지 않는다. 이 대응은 source lookup이나 �
 계약을 바꾸지 않는다.
 
 컴파일 단위의 정의는 모두 `core.module` 하나에 있으며, 소스 module은 IR의
-module 구조가 되지 않는다. 안쪽 module은 부모나 형제의 정의를 가리킬 수
-없으므로 소스 module 사이의 참조를 module 중첩으로 표현할 수 없다. 정의의
-`sym_name`은 소스 경로를 `::`로 이은 문자열이고, 참조는 그 이름 하나를
-component로 둔다. 이 문자열을 다시 나누어 소스 경로를 복원하지 않으며,
-구조화된 경로는 frontend가 가진다.
+module 구조가 되지 않는다. 정의의 `sym_name`은 소스 경로를 `::`로 이은
+문자열이고, 참조는 그 이름 하나를 component로 둔다. 이 문자열을 다시 나누어
+소스 경로를 복원하지 않으며, 구조화된 경로는 frontend가 가진다.
 
 정의의 이름(식별자)과 링크 이름은 다르다. 정의는 `link_name` 문자열 속성으로
 링크 이름을 따로 줄 수 있고, 없으면 `sym_name`이 링크 이름이다. 링크 이름은
 symbol 방출과 runtime 바인딩 판정만 읽으며, 참조와 symbol table은 `sym_name`을
-쓴다. C linkage의 이름 공간은 하나이므로 frontend는 `extern "C"` 선언에 선언한
-이름을 `link_name`으로 둔다. 다른 소스 module에 있는 같은 이름의 C 선언은
-IR에서 서로 다른 정의이고 링크 이름만 같다. 링크 이름이 같은 bodyless 선언은
-하나의 외부 symbol을 가리키므로 signature가 같아야 하며, 다르면 target 검증이
-거부한다.
+쓴다. Frontend는 `extern "C"` 선언에 선언한 이름을 `link_name`으로 둔다. 다른
+소스 module에 있는 같은 이름의 C 선언은 IR에서 서로 다른 정의이고 링크 이름만
+같다. 링크 이름이 같은 bodyless 선언은 signature가 같아야 하며, 다르면 target
+검증이 거부한다.
 
 Frontend 경계 verifier는 metadata 전체와 module의 callable graph를 mutation
 전에 대조한다. Direct call은 qualified symbol을 유일하게 resolve하고 완전한
@@ -662,10 +618,10 @@ operation이, block 인자이면 그 block을 가진 operation이 자기 선언�
 
 규칙은 operation 자신의 선언·속성이나 해소된 선언과의 일치로 근거를 세운다.
 다른 값에 기대는 규칙(lambda의 `instantiate`, callee의 `call_indirect` 결과,
-`handle`에 이르는 yield 등)에서는 그 값들이 모두 출처를 갖추어야 한다. 판정은
-거쳐 간 모든 값의 conjunction이다. `handle`의 handler에서 그 결과로 되돌아오는
-순환은 새 값을 더하지 않으므로 순환 밖에서 이르는 값만 출처를 갖추면 된다. 이
-출처 규칙은 handler를 구현하는 전략과 무관하다.
+`handle`에 이르는 yield 등)에서는 그 값들이 모두 출처를 갖추어야 한다.
+`handle`의 handler에서 그 결과로 되돌아오는 순환은 새 값을 더하지 않으므로
+순환 밖에서 이르는 값만 출처를 갖추면 된다. 이 출처 규칙은 handler를 구현하는
+전략과 무관하다.
 
 ## Evidence 선택 속성
 
@@ -942,16 +898,16 @@ type map이나 type interner에만 존재하는 layout은 게시된 정의가 �
 <a id="compiler-generated-tuple-layout"></a>
 
 Compiler-generated tuple layout의 이름은 원소의 logical type에서 정해지는
-함수이며, 원소가 callable type이면 그 [row](#ability-row)를 포함한다. 그래서
-row만 다른 두 tuple은 다른 layout이다. [row 치환](#row-인자와-치환)은 원소를
-치환한 layout을 같은 함수로 다시 만든다. 이 함수는 IR 계층이 소유하며
-frontend와 pass가 함께 쓴다.
+함수이며, 원소가 callable type이면 그 [row](#ability-row)를 포함한다. Row만
+다른 두 tuple은 다른 layout이다. [row 치환](#row-인자와-치환)은 원소를 치환한
+layout을 같은 함수로 다시 만든다. 이 함수는 IR 계층이 소유하며 frontend와
+pass가 함께 쓴다.
 
 Row를 버리는 CPS legalization도 원소를 변환한 tuple layout을 같은 함수로 다시
-만들고, 그 이름을 가리키는 typeref와 게시된 alias를 새 이름으로 바꾼다.
-그래서 row만 다른 tuple layout은 legalization 뒤에 하나가 된다. Nominal
-layout의 필드 type과, row 인자로 치환한 그 필드 type을 쓰는 `adt` 생성·접근
-operation도 같은 tuple layout을 가리키게 된다.
+만들고, 그 이름을 가리키는 typeref와 게시된 alias를 새 이름으로 바꾼다. Row만
+다른 tuple layout은 legalization 뒤에 하나가 된다. Nominal layout의 필드
+type과, row 인자로 치환한 그 필드 type을 쓰는 `adt` 생성·접근 operation도 같은
+tuple layout을 가리키게 된다.
 
 특수화된 enum의 variant 필드 타입은 해당 인스턴스에 함께 치환된 constructor
 스킴에서 가져온다. 원본 generic 스킴이나 생성·패턴 표현식으로 필드 표현을
@@ -982,14 +938,12 @@ Frontend는 type checking 내내 각 선언의 안정적인 identity를 보존�
 type 이름, variant 이름, field layout으로 type을 다시 찾지 않는다. Type 변환은
 entry를 다른 type-bearing attribute와 같은 방식으로 변환한다.
 
-현재 `core.module`의 특수 textual printer는 임의의 module attribute를
-직렬화하지 않으므로, 출력한 IR을 파싱하면 `tribute.types`가 보수적으로 빠진다.
-Entry가 필요한 lowering은 모두 fail closed다. Entry가 없으면 compiler 오류를
-보고하며, type 이름이나 layout에서 type을 재구성하지 않는다. Backend는 byte
-constant를 여전히 처리할 수 있지만, `std::String` entry가 없으면
-`adt.string_const`를 거부해야 한다. Evidence type을 만들거나 `effect.*`를
-lowering하는 pass는 `std::runtime::evidence::Marker` entry가 없으면 module을
-거부해야 한다.
+출력한 IR을 파싱하면 `tribute.types`가 보수적으로 빠진다. Entry가 필요한
+lowering은 모두 fail closed다. Entry가 없으면 compiler 오류를 보고하며, type
+이름이나 layout에서 type을 재구성하지 않는다. Backend는 byte constant를 여전히
+처리할 수 있지만, `std::String` entry가 없으면 `adt.string_const`를 거부해야
+한다. Evidence type을 만들거나 `effect.*`를 lowering하는 pass는
+`std::runtime::evidence::Marker` entry가 없으면 module을 거부해야 한다.
 
 ## Root entry 참조
 
@@ -1000,8 +954,7 @@ lowering하는 pass는 `std::runtime::evidence::Marker` entry가 없으면 modul
 
 - Class 특수화, `fn` arm 호출 검사, root bridge 합성처럼 bridge 전에 root
   worker를 다루는 단계는 이 참조가 가리키는 정의를 root worker로 읽는다.
-  참조는 module 수준의 symbol 참조이므로, 참조되지 않는 정의 제거는 이 정의를
-  root로 남긴다.
+  참조되지 않는 정의 제거는 이 정의를 root로 남긴다.
 - 참조가 root module의 정의 하나로 해석되지 않으면 bridge 합성은 오류로
   거부한다. 참조가 없으면 진입점이 없는 module이며 bridge를 합성하지 않는다.
 - Root bridge 합성은 참조를 소비한다. Root worker로 이름을 바꾸고 모듈 안의
