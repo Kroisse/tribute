@@ -912,4 +912,4 @@ that builds evidence types or lowers `effect.*` must reject the module when the
   참조가 없으면 진입점이 없는 module이며 bridge를 합성하지 않는다.
 - Root bridge 합성은 참조를 소비한다. Root worker로 이름을 바꾸고 모듈 안의 참조를
   옮긴 뒤 attribute를 제거한다. 그 뒤의 진입점은 bridge가 만든 root `main` wrapper이고,
-  target은 이 target ABI symbol로 진입점을 찾는다([출구 계약](ir.md#representationabi-경계)).
+  target은 이 target ABI symbol로 진입점을 찾는다([출구 계약](abi-boundary.md#representationabi-경계)).
