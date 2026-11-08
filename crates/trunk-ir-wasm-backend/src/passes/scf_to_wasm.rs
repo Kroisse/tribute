@@ -1334,9 +1334,9 @@ mod tests {
           }
           scf.yield
         } else {
-          scf.continue %acc
+          scf.yield
         }
-        scf.yield
+        scf.continue %acc
     }
     func.return %r
   }
@@ -1344,7 +1344,7 @@ mod tests {
         );
 
         // Inner if, outer if, loop, then the block around the loop.
-        assert_eq!(br_targets(&output), ["3", "2", "1"], "{output}");
+        assert_eq!(br_targets(&output), ["3", "2", "0"], "{output}");
     }
 
     #[test]
@@ -1381,7 +1381,7 @@ mod tests {
         default {
           scf.continue %acc
         }
-        scf.yield
+        scf.continue %acc
     }
     func.return %r
   }
@@ -1390,7 +1390,56 @@ mod tests {
 
         // Case 0 is in the outer comparison; case 1 and the default are in
         // the nested one.
-        assert_eq!(br_targets(&output), ["1", "3", "2"], "{output}");
+        assert_eq!(br_targets(&output), ["1", "3", "2", "0"], "{output}");
+    }
+
+    #[test]
+    fn lowered_loop_exits_in_nested_controls_emit_a_valid_module() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  wasm.func @count(%init: core.i32, %choice: core.i32) -> (core.i32) {
+      %r = scf.loop(%init) -> (core.i32) {
+        ^body(%acc: core.i32):
+          %zero = wasm.i32_const 0 : core.i32
+          %done = "wasm.i32_eq"(%acc, %zero) : core.i32
+          scf.if %done {
+            scf.break %acc
+          } else {
+            scf.yield
+          }
+          scf.index_switch %choice : (core.i32) -> ()
+          case 0 {
+            %one = wasm.i32_const 1 : core.i32
+            %next = "wasm.i32_sub"(%acc, %one) : core.i32
+            scf.continue %next
+          }
+          case 1 {
+            scf.break %acc
+          }
+          default {
+            scf.yield
+          }
+          scf.continue %acc
+      }
+      wasm.return %r
+  }
+}"#,
+        );
+        lower(
+            &mut ctx,
+            module,
+            TypeConverter::new(),
+            &mut Default::default(),
+        )
+        .expect("loop exits should lower to wasm");
+        let bytes = crate::emit_module_to_wasm(&mut ctx, module)
+            .expect("lowered loop exits must emit")
+            .bytes;
+        wasmparser::Validator::new()
+            .validate_all(&bytes)
+            .expect("lowered loop exits must validate");
     }
 
     fn control_fixture(body: &str) -> String {
