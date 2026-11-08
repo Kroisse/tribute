@@ -158,7 +158,7 @@ ast_to_ir           source-logical tribute_control IR, without conventions
 Specialize          unreferenced source function elimination (reachable
                     functions only), dead pure operation elimination,
                     convention class specialization (tribute_cps),
-                    unreferenced source function elimination
+                    unreferenced source function elimination again
 CheckFnArms         reject fn-arm calls that reach a Cps callee
 LegalizeCps         tribute_control_to_cps, lower_continuation_frames,
                     lower_closure_lambda, intrinsic/List/slots/I/O
@@ -176,7 +176,8 @@ LowerRuntimeCalls   target bytes intrinsic bridge
 ExitBoundary        closure storage layout, value integrity check, global
                     DCE, canonicalization, boundary exit verification
 ── target dialect lowering ──
-LowerTarget         Wasm or native lowering, below, up to emission
+LowerTarget         Wasm or native lowering (next two sections), then
+                    emission
 ```
 
 The [representation/ABI boundary](abi-boundary.md#representationabi-경계)

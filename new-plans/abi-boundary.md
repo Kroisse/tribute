@@ -2,7 +2,7 @@
 
 Compiler pipeline 단계의 불변 조건과 target representation/ABI 경계의 계약이다.
 
-## Pipeline Shape
+## 단계 불변 조건
 
 ```text
 source
@@ -38,7 +38,7 @@ Important stage invariants:
 <!-- markdownlint-disable-next-line MD033 -->
 <a id="representationabi-경계"></a>
 
-### Representation/ABI 경계
+## Representation/ABI 경계
 
 Representation/ABI 경계는 상위 제어 의미를 물리적 호출·저장·runtime 계약으로
 소비하는 target별 단계다. 이 단계는 shared middle-end가 끝난 뒤 시작하고 target
@@ -46,7 +46,7 @@ dialect lowering(`func_to_clif`, `func_to_wasm` 등) 앞에서 끝난다. 경계
 pass — native ownership/RTTI 계획, target dialect lowering, backend 검증기, emitter —
 는 출구가 명시한 물리 계약만 소비한다.
 
-#### 단계 구성
+### 단계 구성
 
 경계는 target별로 여러 pass로 이루어질 수 있으며 새 dialect, crate 또는 모든 target에
 같은 layout을 요구하지 않는다. 경계 안에서 다음을 순서대로 완결한다.
@@ -63,7 +63,7 @@ pass — native ownership/RTTI 계획, target dialect lowering, backend 검증�
 
 지원되는 FFI/intrinsic bridge의 의미도 이 단계 안에서 완결한다.
 
-#### 출구에서 확정되는 물리 계약
+### 출구에서 확정되는 물리 계약
 
 - **Exact signature:** 모든 정의·선언·직접 호출·간접 호출은 exact `func.func_sig`를
   가진다. Environment, evidence, continuation 인자는 이미 signature의 순서 있는 입력이며
@@ -110,7 +110,7 @@ pass — native ownership/RTTI 계획, target dialect lowering, backend 검증�
   출구 검증이 거부한다. 최종 import 등록과 미참조 선언의 처분은 target emission이
   정한다.
 
-#### 출구 적법성
+### 출구 적법성
 
 출구에 남으면 안 되는 것:
 
@@ -147,7 +147,7 @@ signature와 다른 타입의 `func.constant`도 위반으로 보고한다. 매�
 `Nil`이며 platform 규약을 따르는 정의인지도 검사한다. 위반이 하나라도 있으면
 target dialect lowering에 들어가기 전에 컴파일이 실패한다. 이 검증은 build 구성과 관계없이 항상 수행한다.
 
-#### Unrealized cast
+### Unrealized cast
 
 Boxing과 unboxing은 변환을 만든 pass가 이미 만들었으므로, 출구에 남는
 `core.unrealized_conversion_cast`는 타입만 바꾸며 target type 변환을 기다린다.
@@ -160,7 +160,7 @@ ownership/RTTI 계획 뒤에 box를 만들어 그 계획이 보지 못한 manage
 없는 `ReconcileUnrealizedCasts` pass가 cast를 닫으며, 그 뒤 남은 cast는 target emission
 경계가 거부한다.
 
-#### 직렬화
+### 직렬화
 
 경계 출력은 textual IR로 출력한 뒤 새 `IrContext`에서 파싱해도 frontend나 control
 보조 테이블 없이 target pipeline을 계속 진행할 수 있어야 한다. 출구 계약에 필요한

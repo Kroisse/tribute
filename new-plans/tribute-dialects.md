@@ -3,15 +3,13 @@
 TrunkIR core 위에서 Tribute가 정의하는 고수준 dialect의 여러 operation에 걸친
 규칙이다. TrunkIR 자체의 설계는 [ir.md](ir.md)를 따른다.
 
-## High-Level Dialects
-
 `tribute.*` represents source-level constructs that should disappear after
 resolution, type checking (including TDNR), and AST-to-IR lowering.
 
 <!-- markdownlint-disable-next-line MD033 -->
 <a id="direct-style-control"></a>
 
-### 직접형 호출 대상과 제어
+## 직접형 호출 대상과 제어
 
 `tribute_control.*`은 typed frontend lowering과 실행 전략 사이의 target-independent
 직접형 경계다. CPS 전략은 이 경계 뒤에서 convention에 따라 뜻이 달라지는 callable
@@ -106,7 +104,7 @@ canonical `core.never` TypeRef를 사용하고 resumption을 만들지 않으며
 non-resumptive case를 식별해야 하므로 `Never`용 `anyref` placeholder는 이
 경계에서 valid하지 않다.
 
-### Ability row
+## Ability row
 
 `tribute_control.func_sig`는 callable의 ability row를 `ability_row` type 속성으로
 가진다. 함수 형태에서는 결과 뒤의 `row(..)` 절로 쓴다. `|` 앞은 `instances`이고,
@@ -133,7 +131,7 @@ tribute_control.func_sig<(T) -> R row(@"<instance A>", @"<instance B>" | 'a1)>
   `func.func_sig`를 만들 때 row를 버리고 [`instantiate`](../crates/tribute-ir/src/dialect/tribute_control.rs)를
   피연산자로 대체하며, representation/ABI 경계의 출구는 row와 아래 속성들을 거부한다.
 
-#### Row binder
+### Row binder
 
 두 dialect의 `func`는 자기 row binder를 `row_binders` 속성으로 선언한다. 원소는
 binder의 종류를 나타내는 문자열이다.
@@ -171,7 +169,7 @@ layout 하나이며, 그 binder는 layout 안의 type에만 미친다. Module �
 둘러싼 정의가 없으므로 [`ability.operation`](../crates/tribute-ir/src/dialect/ability.rs)의
 type은 tail을 가질 수 없다.
 
-#### Nominal row 인자
+### Nominal row 인자
 
 [Row 매개변수](types.md#row-매개변수)를 가진 struct·enum의 layout(`adt.struct`,
 `adt.enum`)은 자기 row binder를 type 속성 `row_params`(개수)로 선언한다. Layout
@@ -213,7 +211,7 @@ Row 인자 하나는 `func_sig`의 row와 같은 `row(...)`이지만, row 인자
   [새 이름](#compiler-generated-tuple-layout)으로 다시 만들며, representation/ABI
   경계의 출구는 `row_args`와 `row_params`를 거부한다.
 
-#### Tail의 합집합
+### Tail의 합집합
 
 Row tail이 여러 tail의 합집합으로 선언된 정의는 `row_unions` 속성으로 그 합집합을
 적는다. 원소는 `{result = i, sources = [j, k, ...]}`이며 `sources`는 열린 source의
@@ -223,7 +221,7 @@ tail을 선언 순서로 담는다. `result`와 같은 tail은 `sources`에 넣�
 자기 row tail을 결과로 하는 합집합의 `i`번째 source를 가리키고, 호출의
 `{tails = [...]}`는 callee 합집합의 source마다 선택 하나를 같은 순서로 담는다.
 
-#### 지역 람다의 양화와 인스턴스화
+### 지역 람다의 양화와 인스턴스화
 
 값이 람다인 `let`의 지역 scheme이 양화한 row 변수는 그 람다가 소유한다.
 두 dialect의 `lambda`는 `quantified_rows` 속성에 자기가 양화하는 `local` binder의
@@ -265,7 +263,7 @@ row를 사용 쪽에서부터 거슬러 대입해 함수 참조 자리의 row �
 순수한 사용은 `body` binder 대신 그 사용의 row를 보고, 닫힌 row의 람다를 그대로
 넘길 수 있다.
 
-#### Row 인자와 치환
+### Row 인자와 치환
 
 Row-polymorphic 정의를 참조하는 `call`, `tail_call`, `func_ref`는 `row_args`로 callee의
 양화된 binder마다 row 하나를 넘긴다. 각 row는 `ability_row`와 같은 형식이며 tail은
@@ -286,7 +284,7 @@ type 안의 모든 `func_sig`(자기 자신 포함)와 `adt.typeref`의 row 인�
 `instantiate`의 `row_args`는 대상 람다의 `quantified_rows` 순서를 따른다. `i`번째
 row 인자가 `quantified_rows`의 `i`번째 binder를 대체하며, 치환 규칙은 위와 같다.
 
-#### Convention과 class 특수화
+### Convention과 class 특수화
 
 Convention은 `tribute_cps` dialect의 operation만 가진다. Frontend는 `tribute_control`만
 내보내며, 그 IR에는 convention이 없다. CPS 전략의
@@ -319,7 +317,7 @@ Convention에 관한 규칙은 다음과 같다.
 
 Type의 일치를 요구하는 규칙은 두 dialect에서 같고, convention을 비교하지 않는다.
 
-#### Convention entry
+### Convention entry
 
 Callable 값과 그 type은 convention을 갖지 않는다. 한 값이 여러 class의 자리에 놓이고
 자리마다 다른 convention으로 불릴 수 있기 때문이다. 호출 지점은 둘러싼 인스턴스의
@@ -439,7 +437,7 @@ code 대상(람다, `func_table`)마다 정적으로 하나이고, `Direct`,
 안의 위치이므로 위치를 따로 정하지 않는다. Table은 생성 뒤 바뀌지 않으며 managed
 참조를 담지 않는다.
 
-### 사용자 정의 어셈블리 형식
+## 사용자 정의 어셈블리 형식
 
 두 dialect의 `func`와 `lambda`만 custom parse/print를 요구하며, 두 dialect가 같은
 형식을 쓴다. `tribute_control`의 두 operation은 convention을 쓰지 않는다.
@@ -535,7 +533,7 @@ Operation attribute는 별개의 generic attribute dictionary에 남는다.
 `func_ref`, `instantiate`, `call`, `call_indirect`, `return`은 generic assembly가
 모든 정보를 손실 없이 표현하므로 custom format을 만들지 않는다.
 
-#### Named callable과 symbol
+## Named callable과 symbol
 
 Named callable의 source definition은 body를 가진 Tribute callable이다.
 `extern "intrinsic"`은 compiler-reserved directive이며, canonical qualified
@@ -584,7 +582,7 @@ Frontend 경계 verifier는 metadata 전체와 module의 callable graph를 mutat
 callable producer를 요구한다. Return은 enclosing callable의 logical result와 일치해야
 한다. Body가 없는 declaration도 body traversal 없이 같은 검사를 받는다.
 
-#### Callable 출처
+## Callable 출처
 
 Whole-IR verifier는 두 dialect의 `call_indirect`의 callee가 source signature를
 선언에서 얻은 값인지 따라간다. 그 판정 규칙은 값을 만든 operation이, block 인자이면
@@ -597,7 +595,7 @@ Whole-IR verifier는 두 dialect의 `call_indirect`의 callee가 source signatur
 handler에서 그 결과로 되돌아오는 순환은 새 값을 더하지 않으므로 순환 밖에서 이르는
 값만 출처를 갖추면 된다. 이 출처 규칙은 handler를 구현하는 전략과 무관하다.
 
-#### Evidence 선택 속성
+## Evidence 선택 속성
 
 `evidence_plan`은 호출이 callee에게 넘길 evidence를 caller evidence에서 고르는
 선택이며 [type-inference.md](type-inference.md#호출의-evidence-선택)가 정한 값을
@@ -649,7 +647,7 @@ evidence를 만들기 전에 적용하며 `mask`만 담는다.
 Callable operation의 physical lowering은
 [cps-effects.md](cps-effects.md#pre-cps-callable-shape)에만 정의한다.
 
-#### 구조화된 continuation 불변 조건
+## 구조화된 continuation 불변 조건
 
 Frontend output은 모든 실행 가능한 region 내부에서 strict ANF다. Strict child는
 왼쪽에서 오른쪽으로 정확히 한 번 평가한다. 선택된 case/conditional arm, case
@@ -694,7 +692,7 @@ dispatch 계층의 정확한 형상은 [cps-effects.md](cps-effects.md#dispatch-
 work를 모두 다룬다. AST containment scan이나 construct-specific continuation
 convention은 dialect contract에 포함되지 않는다.
 
-#### `ability` continuation frame 표면
+## `ability` continuation frame 표면
 
 CPS legalization과 frame 펼치기 사이의 계약이다. 펼치기의 의미와 pipeline 위치는
 [cps-effects.md](cps-effects.md#abstract-continuation-frames)를 따른다. 표면은
@@ -718,6 +716,8 @@ CPS legalization과 frame 펼치기 사이의 계약이다. 펼치기의 의미�
 
 `lower_continuation_frames` 뒤에는 이 타입과 operation이 남지 않는다.
 
+## `ability`와 `effect`
+
 `ability.*` represents effect evidence and handler dispatch. Ability operations
 are lowered through the effect pipeline; ability-related types may remain until
 their target-specific representation is selected.
@@ -728,6 +728,8 @@ inputs such as evidence, ability identity, operation name, payload,
 continuation, and handler closures. It must not expose Marker field indices,
 handler-table storage layout, closure field positions, or backend function
 pointer representation.
+
+## `closure`
 
 `closure.*` represents closure allocation and projection. `closure.closure`
 names the closure's callable type, which carries no convention; each
@@ -754,6 +756,8 @@ Compiler가 구성한 closure layout의 전체 type identity로 이 경계를 �
 native는 pointer 표현으로 변환한다. 이 규칙은 다른 struct나 nominal reference의
 일반 변환 정책을 바꾸지 않으며, semantic callable 검증을 대체하지 않는다.
 
+## `adt`
+
 `adt.*` represents target-independent product, sum, array, reference, and
 literal operations.
 
@@ -772,7 +776,7 @@ Dynamic `tribute_rt.anyref`에서 `adt.typeref`로 복원하는 명시적인
 native는 pointer 표현으로 물리화하고 Wasm은 concrete `ref.cast`를 생성한다.
 이 규칙은 일반 `adt.struct` 복원이나 nominal provenance 검증을 바꾸지 않는다.
 
-#### `adt` 배열
+### `adt` 배열
 
 `adt.array<E>`는 원소 타입 `E`의 값을 순서대로 담는 배열 object에 대한 managed
 참조다. `E`는 scalar, pointer, managed 참조 중 하나이며 원소 하나는 machine 값
@@ -805,6 +809,8 @@ Index는 부호 없는 값으로 해석한다. Target은 각 operation이 선언
 어긴 실행을 trap으로 끝내며, 범위 밖 원소를 읽거나 쓰거나 다른 값으로
 대신하지 않는다. Target이 표현할 수 있는 최대 길이나 할당 크기를 넘는 길이도
 trap이다.
+
+## `list`
 
 `list.*` represents the opaque canonical `List(a)` sequence contract. It uses
 `list.empty`, `list.prepend`, `list.is_empty`, `list.head`, and `list.tail`.
@@ -841,6 +847,8 @@ List의 logical representation은 compiler-owned nominal identity로 선택한�
 않는다. Source nominal의 `adt.typeref`와 layout은 동일한 해석된 선언 및
 specialization에 대응해야 한다.
 
+## Nominal layout의 게시
+
 Source-logical frontend는 nominal layout을 생성할 때 실제 `adt.struct` 또는
 `adt.enum` 타입을 normalized nominal symbol의 IR type alias로 게시한다.
 `adt.typeref`의 `name`, layout의 `name`(둘 다 문자열), 게시된 alias의 이름은
@@ -876,6 +884,8 @@ Native ownership 검사는 게시된 정의와 IR에서 도달하는 layout만 �
 누락되거나 모호한 layout은 거부하고, interner 전체 검색이나 이름의 일부를
 맞추는 방식으로 layout을 추정하지 않는다.
 
+## `tribute.types`
+
 The root `core.module` carries the package `std` type identities the compiler relies
 on in one dictionary attribute, `tribute.types`. Each key is the canonical
 declaration path of a type of package `std`, and each value is the exact `TypeRef`
@@ -898,7 +908,7 @@ reject `adt.string_const` when the `std::String` entry is absent, and a pass
 that builds evidence types or lowers `effect.*` must reject the module when the
 `std::runtime::evidence::Marker` entry is absent.
 
-### Root entry 참조
+## Root entry 참조
 
 실행 파일 빌드의 root 패키지가 진입점을 선언하면, frontend는 root `core.module`의
 `tribute.entry` attribute에 그 함수의 `SymbolRef`를 담는다. 진입점은 언어 규칙이
