@@ -401,18 +401,27 @@ impl<'db> TypeChecker<'db> {
         // Look up field in ModuleTypeEnv
         let (type_params, field_ty) = self.env.lookup_struct_field(struct_id, field_name)?;
 
-        // Substitute BoundVars with actual type arguments if any
-        let actual_args: Vec<Type<'db>> = match receiver_ty.kind(self.db()) {
-            TypeKind::Named { args, .. } => args.clone(),
-            _ => vec![],
+        let TypeKind::Named { row_args, args, .. } = receiver_ty.kind(self.db()) else {
+            return None;
         };
 
-        // Substitute BoundVars in field_ty with actual_args
-        if type_params.is_empty() {
-            Some(field_ty)
+        // Substitute BoundVars in field_ty with the type arguments
+        let field_ty = if type_params.is_empty() {
+            field_ty
         } else {
-            Some(self.substitute_bound_vars(field_ty, &actual_args))
+            self.substitute_bound_vars(field_ty, args)
+        };
+        // and the declaration's row binders with the row arguments.
+        if row_args.is_empty() {
+            return Some(field_ty);
         }
+        let declaration = self.env.lookup_type_def(struct_id.path(self.db()))?;
+        Some(subst::substitute_row_binders(
+            self.db(),
+            field_ty,
+            declaration.effect_params(self.db()),
+            row_args,
+        ))
     }
 
     /// Substitute BoundVars in a type with actual types.

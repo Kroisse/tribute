@@ -108,12 +108,15 @@ pub enum TypeKind<'db> {
     UniVar { id: UniVarId<'db> },
 
     // === Compound types ===
-    /// Named type (struct, enum, or type alias) with optional type arguments.
+    /// Named type (struct, enum, or type alias) with optional row and type
+    /// arguments.
     Named {
         /// Resolved nominal declaration identity.
         id: TypeDefId<'db>,
         /// The type name (may be qualified path like `std::List`)
         name: Symbol,
+        /// Row arguments, one for each row parameter of the declaration
+        row_args: Vec<AbilityRow<'db>>,
         /// Type arguments for generic types
         args: Vec<Type<'db>>,
     },
@@ -168,6 +171,7 @@ impl<'db> TypeKind<'db> {
         Self::Named {
             id: TypeDefId::synthetic(db, SymbolPath::new([name.clone()])),
             name,
+            row_args: vec![],
             args: vec![],
         }
     }
@@ -591,7 +595,7 @@ pub fn annotation_to_effect<'db>(
                 args: vec![],
             })
         }
-        TypeAnnotationKind::App { ctor, args } => {
+        TypeAnnotationKind::App { ctor, args, .. } => {
             let qualified = match &ctor.kind {
                 TypeAnnotationKind::Named(n) if !is_type_variable(n) => prefix.child(n.clone()),
                 TypeAnnotationKind::Path(path) => ability_path(path)?,
@@ -693,9 +697,13 @@ pub enum TypeAnnotationKind {
     Named(Symbol),
     /// A qualified type path: `std::collections::List`
     Path(Vec<Symbol>),
-    /// A parameterized type: `List(a)`, `Result(T, E)`
+    /// A parameterized type: `List(a)`, `Result(T, E)`, `Callback({e}, Int)`
+    ///
+    /// Each row argument holds its ability row items in the encoding of
+    /// `Func::abilities`, without `Infer`: `{}` is `vec![]`.
     App {
         ctor: Box<TypeAnnotation>,
+        row_args: Vec<Vec<TypeAnnotation>>,
         args: Vec<TypeAnnotation>,
     },
     /// A function type: `fn(Int, Int) -> Int`

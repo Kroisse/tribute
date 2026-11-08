@@ -400,6 +400,7 @@ fn test_annotation_app(db: &dyn salsa::Database) {
         ctor: Box::new(make_annotation(TypeAnnotationKind::Named(Symbol::new(
             "List",
         )))),
+        row_args: vec![],
         args: vec![make_annotation(TypeAnnotationKind::Named(Symbol::new(
             "Int",
         )))],
@@ -566,6 +567,7 @@ fn test_extract_list_element_type_of_list_types(db: &dyn salsa::Database) {
             TypeKind::Named {
                 id: TypeDefId::builtin_list(db),
                 name: Symbol::new("List"),
+                row_args: vec![],
                 args,
             },
         )
@@ -602,6 +604,7 @@ fn test_extract_list_element_type_of_non_list_returns_fresh_var(db: &dyn salsa::
                 TypeKind::Named {
                     id: TypeDefId::synthetic(db, trunk_ir::SymbolPath::new(["Option"])),
                     name: Symbol::new("Option"),
+                    row_args: vec![],
                     args: vec![int_ty],
                 },
             ),
@@ -613,6 +616,7 @@ fn test_extract_list_element_type_of_non_list_returns_fresh_var(db: &dyn salsa::
                 TypeKind::Named {
                     id: TypeDefId::builtin_list(db),
                     name: Symbol::new("List"),
+                    row_args: vec![],
                     args: vec![],
                 },
             ),

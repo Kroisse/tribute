@@ -5,8 +5,8 @@ use trunk_ir::Symbol;
 
 use crate::ast::{
     AbilityDecl, Decl, EnumDecl, FieldDecl, FuncDecl, Module, ModuleDecl, ModuleItem, OpDecl,
-    OpDeclKind, ParamDecl, StructDecl, TypeAnnotation, TypeAnnotationKind, TypeParamDecl,
-    UnresolvedName, UseDecl, VariantDecl, Visibility,
+    OpDeclKind, ParamDecl, RowParamDecl, StructDecl, TypeAnnotation, TypeAnnotationKind,
+    TypeParamDecl, UnresolvedName, UseDecl, VariantDecl, Visibility,
 };
 
 use super::context::{AstLoweringCtx, LoweredItem};
@@ -321,16 +321,28 @@ fn lower_type_node(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Option<TypeAnnot
             {
                 let ctor = Box::new(lower_type_node(ctx, *name_node)?);
 
-                // Collect type arguments (remaining children)
-                let args: Vec<TypeAnnotation> = children
-                    .iter()
-                    .skip(1)
-                    .filter_map(|child| lower_type_node(ctx, *child))
-                    .collect();
+                // The remaining children are the row and type arguments.
+                let mut row_args = Vec::new();
+                let mut args = Vec::new();
+                for child in children.iter().skip(1) {
+                    if child.kind() == "ability_row" {
+                        if !args.is_empty() {
+                            let span = trunk_ir::Span::new(child.start_byte(), child.end_byte());
+                            ctx.error(span, "a row argument must come before every type argument");
+                        }
+                        row_args.push(lower_ability_row(ctx, *child));
+                    } else if let Some(arg) = lower_type_node(ctx, *child) {
+                        args.push(arg);
+                    }
+                }
 
                 return Some(TypeAnnotation {
                     id,
-                    kind: TypeAnnotationKind::App { ctor, args },
+                    kind: TypeAnnotationKind::App {
+                        ctor,
+                        row_args,
+                        args,
+                    },
                 });
             }
             None
@@ -458,6 +470,7 @@ fn lower_ability_item(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Option<TypeAn
             id,
             kind: TypeAnnotationKind::App {
                 ctor: Box::new(name_ann),
+                row_args: vec![],
                 args,
             },
         })
@@ -506,18 +519,51 @@ fn lower_type_path(ctx: &mut AstLoweringCtx<'_>, node: Node) -> TypeAnnotation {
     }
 }
 
-/// Lower type parameters from a type_parameters node.
+/// Lower the `type_params` of a declaration into its row parameters and its
+/// type parameters.
 ///
-/// Parses `(a, b, c)` into a list of TypeParamDecl.
-fn lower_type_parameters(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Vec<TypeParamDecl> {
-    let mut params = Vec::new();
+/// Parses `({e}, a, b)`. A row parameter after a type parameter and a name
+/// declared twice, of either kind, are reported here.
+fn lower_type_parameters(
+    ctx: &mut AstLoweringCtx<'_>,
+    decl: Node,
+) -> (Vec<RowParamDecl>, Vec<TypeParamDecl>) {
+    let mut row_params = Vec::new();
+    let mut type_params = Vec::new();
+    let Some(node) = decl.child_by_field_name("type_params") else {
+        return (row_params, type_params);
+    };
+    let mut names = Vec::new();
     let mut cursor = node.walk();
 
     for child in node.named_children(&mut cursor) {
-        if child.kind() == "identifier" {
-            let id = ctx.fresh_id_with_span(&child);
-            let name = ctx.node_symbol(&child);
-            params.push(TypeParamDecl {
+        let name_node = match child.kind() {
+            "identifier" => child,
+            "row_parameter" => match child.child_by_field_name("name") {
+                Some(name) => name,
+                None => continue,
+            },
+            _ => continue,
+        };
+        let span = trunk_ir::Span::new(child.start_byte(), child.end_byte());
+        let id = ctx.fresh_id_with_span(&child);
+        let name = ctx.node_symbol(&name_node);
+        if names.contains(&name) {
+            ctx.error(span, format!("parameter `{name}` is declared twice"));
+        }
+        names.push(name.clone());
+        if child.kind() == "row_parameter" {
+            if decl.kind() == "ability_declaration" {
+                ctx.error(span, "an ability declaration has no row parameters");
+            } else if !type_params.is_empty() {
+                ctx.error(
+                    span,
+                    format!("row parameter `{{{name}}}` must come before every type parameter"),
+                );
+            }
+            row_params.push(RowParamDecl { id, name });
+        } else {
+            type_params.push(TypeParamDecl {
                 id,
                 name,
                 bounds: vec![],
@@ -525,7 +571,7 @@ fn lower_type_parameters(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Vec<TypePa
         }
     }
 
-    params
+    (row_params, type_params)
 }
 
 /// Lower a struct declaration.
@@ -536,10 +582,7 @@ fn lower_struct(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Option<StructDecl> 
     let id = ctx.fresh_id_with_span(&node);
     let name = ctx.node_symbol(&name_node);
 
-    let type_params = node
-        .child_by_field_name("type_params")
-        .map(|n| lower_type_parameters(ctx, n))
-        .unwrap_or_default();
+    let (row_params, type_params) = lower_type_parameters(ctx, node);
 
     let fields = lower_struct_fields(ctx, body_node);
 
@@ -548,6 +591,7 @@ fn lower_struct(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Option<StructDecl> 
         visibility: lower_visibility(ctx, node),
         name,
         disambiguator: ctx.occurrence(),
+        row_params,
         type_params,
         fields,
     })
@@ -613,10 +657,7 @@ fn lower_enum(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Option<EnumDecl> {
     let id = ctx.fresh_id_with_span(&node);
     let name = ctx.node_symbol(&name_node);
 
-    let type_params = node
-        .child_by_field_name("type_params")
-        .map(|n| lower_type_parameters(ctx, n))
-        .unwrap_or_default();
+    let (row_params, type_params) = lower_type_parameters(ctx, node);
 
     let variants = lower_enum_variants(ctx, body_node);
 
@@ -625,6 +666,7 @@ fn lower_enum(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Option<EnumDecl> {
         visibility: lower_visibility(ctx, node),
         name,
         disambiguator: ctx.occurrence(),
+        row_params,
         type_params,
         variants,
     })
@@ -727,10 +769,7 @@ fn lower_ability(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Option<AbilityDecl
     let id = ctx.fresh_id_with_span(&node);
     let name = ctx.node_symbol(&name_node);
 
-    let type_params = node
-        .child_by_field_name("type_params")
-        .map(|n| lower_type_parameters(ctx, n))
-        .unwrap_or_default();
+    let (_, type_params) = lower_type_parameters(ctx, node);
 
     let operations = lower_ability_operations(ctx, body_node);
 

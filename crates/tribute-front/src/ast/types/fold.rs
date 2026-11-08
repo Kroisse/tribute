@@ -10,7 +10,8 @@
 //! Traversal order is part of the contract (see `new-plans/generics.md`,
 //! "타입 순회와 binder별 치환"):
 //!
-//! - `Named` and `Tuple`: arguments in order.
+//! - `Named`: row arguments, then type arguments, each in order.
+//! - `Tuple`: elements in order.
 //! - `Func`: parameters, result, then the ability row.
 //! - `Continuation`: argument, result, then the ability row.
 //! - An ability row: each instance's arguments, instances in order. The row
@@ -224,14 +225,22 @@ impl<'db> Type<'db> {
     ) -> Result<Self, F::Error> {
         let db = folder.db();
         let kind = match self.kind(db) {
-            TypeKind::Named { id, name, args } => {
-                let Some(args) = fold_slice(args, folder)? else {
+            TypeKind::Named {
+                id,
+                name,
+                row_args,
+                args,
+            } => {
+                let new_row_args = fold_slice(row_args, folder)?;
+                let new_args = fold_slice(args, folder)?;
+                if new_row_args.is_none() && new_args.is_none() {
                     return Ok(self);
-                };
+                }
                 TypeKind::Named {
                     id: *id,
                     name: name.clone(),
-                    args,
+                    row_args: new_row_args.unwrap_or_else(|| row_args.clone()),
+                    args: new_args.unwrap_or_else(|| args.clone()),
                 }
             }
             TypeKind::Func {
@@ -296,7 +305,11 @@ impl<'db> Type<'db> {
         visitor: &mut V,
     ) -> ControlFlow<V::Break> {
         match self.kind(visitor.db()) {
-            TypeKind::Named { args, .. } | TypeKind::Tuple(args) => args.visit_with(visitor),
+            TypeKind::Named { row_args, args, .. } => {
+                row_args.visit_with(visitor)?;
+                args.visit_with(visitor)
+            }
+            TypeKind::Tuple(args) => args.visit_with(visitor),
             TypeKind::Func {
                 params,
                 result,

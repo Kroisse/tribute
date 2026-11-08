@@ -195,6 +195,7 @@ impl TypeShape {
                 TypeKind::Named {
                     id,
                     name,
+                    row_args: vec![],
                     args: build_all(db, args),
                 }
             }

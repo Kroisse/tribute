@@ -44,6 +44,7 @@ fn prepare_root<'db>(
                 trunk_ir::SymbolPath::new(["pkg".into(), packet_decl.name.clone()]),
             ),
             name: packet_decl.name.clone(),
+            row_args: vec![],
             args: vec![Type::new(db, TypeKind::Nat)],
         },
     );

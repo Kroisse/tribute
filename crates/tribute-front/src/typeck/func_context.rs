@@ -1578,9 +1578,10 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
         &self,
         id: crate::ast::TypeDefId<'db>,
         name: Symbol,
+        row_args: Vec<AbilityRow<'db>>,
         args: Vec<Type<'db>>,
     ) -> Type<'db> {
-        self.env.named_type_with_id(id, name, args)
+        self.env.named_type_with_id(id, name, row_args, args)
     }
 
     /// Construct the compiler-owned canonical `List(element)` type.
@@ -1870,6 +1871,7 @@ mod tests {
             TypeKind::Named {
                 id: TypeDefId::synthetic(db, trunk_ir::SymbolPath::new([type_name.clone()])),
                 name: type_name.clone(),
+                row_args: vec![],
                 args: vec![bound_var],
             },
         );

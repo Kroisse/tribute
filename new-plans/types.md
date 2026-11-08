@@ -231,6 +231,9 @@ operation의 매개변수·결과에 쓴 함수 타입은 함수 시그니처와
 - Ability annotation을 생략하면 빈 row이다. `fn(a) -> b`는 `fn(a) ->{} b`와 같다.
 - Row 매개변수가 아닌 row 변수를 쓰면 묶이지 않은 변수이므로 컴파일 에러다.
   Ability 선언은 row 매개변수를 갖지 않는다.
+- 선언 안의 row는 tail을 하나까지 가진다. 시그니처의 `{e1, e2}`는 두 row의
+  [합집합 관계](type-inference.md#여러-tail의-합집합인-row)를 만들지만, 선언의 필드 타입은 그
+  관계를 담지 않으므로 여러 row 매개변수를 한 row에 쓰면 컴파일 에러다.
 
 ```rust
 struct Handler { run: fn(Int) -> Int }               // fn(Int) ->{} Int
