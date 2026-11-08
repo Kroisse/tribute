@@ -51,8 +51,9 @@ impl std::error::Error for ConstValidationError {}
 pub struct ConstAnalysis {
     /// Distinct string/bytes payloads, in first-occurrence order.
     pub contents: Vec<Vec<u8>>,
-    /// Canonical prelude String enum type, when string constants are present.
-    pub(crate) string_enum_ty: Option<trunk_ir::TypeRef>,
+    /// Canonical prelude String enum type and the position of its `Leaf`,
+    /// when string constants are present.
+    pub(crate) string_leaf: Option<(trunk_ir::TypeRef, u32)>,
 }
 
 /// Context for collecting const payloads during analysis.
@@ -125,9 +126,9 @@ pub(crate) fn analyze_consts(ctx: &IrContext, module: Module) -> ConstAnalysis {
 
     ConstAnalysis {
         contents: collector.contents,
-        string_enum_ty: collector
+        string_leaf: collector
             .has_string_consts
-            .then(|| tribute_ir::metadata::WellKnownTypes::from_module(ctx, module.op()).string)
+            .then(|| tribute_ir::metadata::string_leaf(ctx, module))
             .flatten(),
     }
 }
@@ -150,7 +151,7 @@ pub(crate) fn validate_for_wasm(
         if result.is_err() || adt::StringConst::from_op(ctx, op).is_err() {
             return;
         }
-        if analysis.string_enum_ty.is_none() {
+        if analysis.string_leaf.is_none() {
             result = Err(ConstValidationError::MissingCanonicalStringType);
             return;
         }
@@ -179,7 +180,7 @@ pub(crate) fn lower(ctx: &mut IrContext, module: Module, analysis: &ConstAnalysi
     let segments = declare_data_segments(ctx, module, &analysis.contents);
 
     let applicator = PatternApplicator::new(TypeConverter::new())
-        .add_pattern(StringConstPattern::new(&segments, analysis.string_enum_ty))
+        .add_pattern(StringConstPattern::new(&segments, analysis.string_leaf))
         .add_pattern(BytesConstPattern::new(&segments));
     applicator.apply_partial(ctx, module);
 }
@@ -242,14 +243,14 @@ fn lookup_segment(segments: &DataSegments, content: &[u8]) -> Option<(u32, u32)>
 /// Pattern for `adt.string_const` -> `String::Leaf(wasm.bytes_from_data)`.
 struct StringConstPattern<'a> {
     segments: &'a DataSegments,
-    string_enum_ty: Option<trunk_ir::TypeRef>,
+    string_leaf: Option<(trunk_ir::TypeRef, u32)>,
 }
 
 impl<'a> StringConstPattern<'a> {
-    fn new(segments: &'a DataSegments, string_enum_ty: Option<trunk_ir::TypeRef>) -> Self {
+    fn new(segments: &'a DataSegments, string_leaf: Option<(trunk_ir::TypeRef, u32)>) -> Self {
         Self {
             segments,
-            string_enum_ty,
+            string_leaf,
         }
     }
 }
@@ -266,8 +267,8 @@ impl OpRewritePattern for StringConstPattern<'_> {
         let op = string_const.op_ref();
         let content = string_const.value(ctx).as_bytes();
         let (data_idx, len) = lookup_segment(self.segments, content)?;
-        let string_enum_ty =
-            rewriter.require(self.string_enum_ty, "canonical String enum type not found")?;
+        let (string_enum_ty, leaf_tag) =
+            rewriter.require(self.string_leaf, "canonical String enum type not found")?;
 
         let location = ctx.op(op).location;
         let bytes_ty = super::bytes::bytes_struct_type(ctx);
@@ -280,7 +281,7 @@ impl OpRewritePattern for StringConstPattern<'_> {
         let result_ty = ctx.op_result_types(op)[0];
         let leaf = adt::VariantNew::operands([bytes.result(ctx)])
             .r#type(string_enum_ty)
-            .tag("Leaf")
+            .tag(leaf_tag)
             .results(result_ty)
             .build(ctx, location);
 
@@ -428,7 +429,8 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !String = adt.enum<String { Leaf(core.bytes), Branch(wasm.anyref, wasm.anyref, core.i32) }>
+  !String = adt.enum<String { Branch(wasm.anyref, wasm.anyref, core.i32), Leaf(core.bytes) }>
+  adt.enum_decl "String" [Branch, Leaf]
   wasm.func @main() -> core.nil {
     %string = adt.string_const {value = "hello"} : wasm.anyref
     wasm.return
@@ -446,7 +448,8 @@ mod tests {
         assert!(!output.contains("adt.string_const"), "{output}");
         assert!(output.contains("wasm.bytes_from_data"), "{output}");
         assert!(output.contains("adt.variant_new"), "{output}");
-        assert!(output.contains("tag = \"Leaf\""), "{output}");
+        // The declaration, not a fixed position, locates `Leaf`.
+        assert!(output.contains("tag = 1"), "{output}");
     }
 
     #[test]
@@ -477,6 +480,8 @@ mod tests {
             r#"core.module @test {
   !PreludeString = adt.enum<String { Leaf(core.bytes), Branch(wasm.anyref, wasm.anyref, core.i32) }>
   !UserString = adt.enum<"user::String" { Leaf(core.bytes), Branch(wasm.anyref, wasm.anyref, core.i32) }>
+  adt.enum_decl "String" [Leaf, Branch]
+  adt.enum_decl "user::String" [Leaf, Branch]
   wasm.func @main() -> core.nil {
     %string = adt.string_const {value = "hello"} : wasm.anyref
     wasm.return
@@ -489,8 +494,8 @@ mod tests {
 
         let analysis = analyze_consts(&ctx, module);
 
-        assert_eq!(analysis.string_enum_ty, Some(prelude_string));
-        assert_ne!(analysis.string_enum_ty, Some(user_string));
+        assert_eq!(analysis.string_leaf, Some((prelude_string, 0)));
+        assert_ne!(analysis.string_leaf, Some((user_string, 0)));
     }
 
     #[test]
@@ -500,6 +505,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   !String = adt.enum<String { Leaf(core.bytes), Branch(wasm.anyref, wasm.anyref, core.i32) }>
+  adt.enum_decl "String" [Leaf, Branch]
   wasm.func @main() -> core.nil {
     %string = adt.string_const {value = "hello"} : wasm.anyref
     wasm.return
@@ -515,8 +521,8 @@ mod tests {
         let analysis = analyze_consts(&reparsed_ctx, reparsed);
 
         assert_eq!(
-            analysis.string_enum_ty,
-            Some(type_alias(&reparsed_ctx, "String"))
+            analysis.string_leaf,
+            Some((type_alias(&reparsed_ctx, "String"), 0))
         );
         assert_eq!(
             validate_for_wasm(&reparsed_ctx, reparsed, &analysis),
@@ -534,7 +540,7 @@ mod tests {
             missing_data_module,
             &ConstAnalysis {
                 contents: Vec::new(),
-                string_enum_ty: Some(placeholder_ty),
+                string_leaf: Some((placeholder_ty, 0)),
             },
         );
         assert_eq!(
@@ -549,7 +555,7 @@ mod tests {
             missing_type_module,
             &ConstAnalysis {
                 contents: vec![b"hello".to_vec()],
-                string_enum_ty: None,
+                string_leaf: None,
             },
         );
         assert_eq!(

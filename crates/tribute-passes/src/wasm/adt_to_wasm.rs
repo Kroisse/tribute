@@ -58,7 +58,6 @@
 use super::type_converter::gc_array_type;
 use tribute_ir::dialect::adt;
 use tribute_ir::dialect::adt::layout::get_enum_variants;
-use trunk_ir::StringRef;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::core::{self, IntegerLike};
 use trunk_ir::dialect::wasm as wasm_dialect;
@@ -107,7 +106,7 @@ fn physical_variant_field_type(ctx: &mut IrContext, ty: TypeRef) -> TypeRef {
 }
 
 /// The declared number of each user allocation descriptor.
-type DescriptorNumbers = HashMap<(TypeRef, Option<StringRef>), u32>;
+type DescriptorNumbers = HashMap<(TypeRef, Option<u32>), u32>;
 
 /// The field index of source field `field` in a value of layout `ty`.
 fn physical_field(ctx: &IrContext, ty: TypeRef, field: u32) -> u32 {
@@ -121,7 +120,7 @@ fn descriptor_operand(
     ctx: &mut IrContext,
     rewriter: &mut PatternRewriter<'_>,
     numbers: &DescriptorNumbers,
-    descriptor: (TypeRef, Option<StringRef>),
+    descriptor: (TypeRef, Option<u32>),
     loc: trunk_ir::types::Location,
 ) -> Option<trunk_ir::refs::ValueRef> {
     let number = *numbers.get(&descriptor)?;
@@ -289,14 +288,14 @@ impl OpRewritePattern for VariantNewPattern {
     ) -> Option<()> {
         let op = variant_new.op_ref();
         let loc = ctx.op(op).location;
-        let tag_sym = variant_new.tag_ref(ctx);
+        let tag = variant_new.tag(ctx);
         let base_type = canonical_enum_type(ctx, variant_new.r#type(ctx))?;
         let mut fields: Vec<_> = variant_new.fields(ctx).to_vec();
-        let descriptor = (variant_new.r#type(ctx), Some(tag_sym));
+        let descriptor = (variant_new.r#type(ctx), Some(tag));
         let descriptor = descriptor_operand(ctx, rewriter, &self.numbers, descriptor, loc)?;
         fields.insert(0, descriptor);
 
-        let variant_type = variant_type(ctx, base_type, tag_sym)?;
+        let variant_type = variant_type(ctx, base_type, tag)?;
 
         let new_op = wasm_gc_dialect::StructNew::operands(fields)
             .r#type(variant_type)
@@ -327,7 +326,7 @@ impl OpRewritePattern for VariantIsPattern {
     ) -> Option<()> {
         let op = variant_is.op_ref();
         let loc = ctx.op(op).location;
-        let tag = variant_is.tag_ref(ctx);
+        let tag = variant_is.tag(ctx);
         let ref_val = variant_is.r#ref(ctx);
         let result_ty = variant_is.result_ty(ctx);
 
@@ -375,10 +374,8 @@ fn first_variant_numbers(ctx: &IrContext, numbers: &DescriptorNumbers) -> HashMa
     numbers
         .iter()
         .filter_map(|(&(ty, tag), &number)| {
-            let position = get_enum_variants(ctx, ty)?
-                .iter()
-                .position(|(name, _)| Some(*name) == tag)?;
-            Some((ty, number - position as u32))
+            adt::Enum::from_type_ref(ctx, ty)?;
+            Some((ty, number - tag?))
         })
         .collect()
 }
@@ -459,15 +456,11 @@ impl OpRewritePattern for VariantGetPattern {
         let loc = ctx.op(op).location;
         let ref_val = variant_get.r#ref(ctx);
         let field_idx = variant_get.field(ctx);
-        let tag = variant_get.tag_ref(ctx);
+        let tag = variant_get.tag(ctx);
         let enum_type = canonical_enum_type(ctx, variant_get.r#type(ctx))?;
-        let declared_field_ty = get_enum_variants(ctx, enum_type)
-            .and_then(|variants| {
-                variants
-                    .into_iter()
-                    .find(|(variant_tag, _)| *variant_tag == tag)
-            })
-            .and_then(|(_, fields)| fields.get(field_idx as usize).copied())?;
+        let declared_field_ty = *adt::Enum::from_type_ref(ctx, enum_type)?
+            .variant_fields(ctx, tag)?
+            .get(field_idx as usize)?;
         let declared_field_ty = physical_variant_field_type(ctx, declared_field_ty);
         let requested_result_ty = physical_variant_field_type(ctx, variant_get.result_ty(ctx));
         // String::Leaf has the canonical bytes layout even though frontend
@@ -1145,9 +1138,9 @@ mod tests {
     %field = adt.struct_get %struct {type = !S, field = 0} : core.i32
     adt.struct_set %struct, %field {type = !S, field = 0}
 
-    %variant = adt.variant_new %one {type = !E, tag = "Some"} : !ERef
-    %is_some = adt.variant_is %variant {type = !E, tag = "Some"} : core.i32
-    %payload = adt.variant_get %variant {type = !E, tag = "Some", field = 0} : core.i32
+    %variant = adt.variant_new %one {type = !E, tag = 0} : !ERef
+    %is_some = adt.variant_is %variant {type = !E, tag = 0} : core.i32
+    %payload = adt.variant_get %variant {type = !E, tag = 0, field = 0} : core.i32
 
     %at = arith.constant 0 : core.index
     %count = arith.constant 2 : core.index
@@ -1224,9 +1217,9 @@ mod tests {
     adt.struct_set %first, %field {type = !S, field = 0}
     %closure = adt.struct_new %one {type = !Closure} : !Closure
     %table = adt.struct_get %closure {type = !Closure, field = 0} : core.i32
-    %some = adt.variant_new %one {type = !E, tag = "Some"} : !E
-    %none = adt.variant_new {type = !E, tag = "None"} : !E
-    %payload = adt.variant_get %some {type = !E, tag = "Some", field = 0} : core.i32
+    %some = adt.variant_new %one {type = !E, tag = 1} : !E
+    %none = adt.variant_new {type = !E, tag = 0} : !E
+    %payload = adt.variant_get %some {type = !E, tag = 1, field = 0} : core.i32
     wasm.return
   }
 }"#,
@@ -1315,10 +1308,10 @@ mod tests {
 
   wasm.func @main(%input: !ListRef) -> core.nil {
     %zero = wasm.i32_const 0 : core.i32
-    %empty = adt.variant_new {type = !List, tag = "Empty"} : !ListRef
-    %list = adt.variant_new %zero, %empty {type = !List, tag = "Cons"} : !ListRef
-    %is_cons = adt.variant_is %input {type = !List, tag = "Cons"} : core.i1
-    %tail = adt.variant_get %input {type = !List, tag = "Cons", field = 1} : !ListRef
+    %empty = adt.variant_new {type = !List, tag = 0} : !ListRef
+    %list = adt.variant_new %zero, %empty {type = !List, tag = 1} : !ListRef
+    %is_cons = adt.variant_is %input {type = !List, tag = 1} : core.i1
+    %tail = adt.variant_get %input {type = !List, tag = 1, field = 1} : !ListRef
     wasm.return
   }
 }"#,
@@ -1346,10 +1339,8 @@ mod tests {
             })
             .collect();
         let list = ctx.type_alias_by_text("List").expect("list layout");
-        let cons_tag = ctx.intern_str("Cons");
-        let empty_tag = ctx.intern_str("Empty");
-        let cons = variant_type(&mut ctx, list, cons_tag).expect("Cons layout");
-        let empty = variant_type(&mut ctx, list, empty_tag).expect("Empty layout");
+        let cons = variant_type(&mut ctx, list, 1).expect("Cons layout");
+        let empty = variant_type(&mut ctx, list, 0).expect("Empty layout");
         let described = crate::wasm::type_converter::described_adt_type(&mut ctx);
 
         // `variant_is` reads the descriptor through the `Described` type
@@ -1426,10 +1417,10 @@ mod tests {
 
   wasm.func @main(%input: !ERef) -> core.nil {
     %one = wasm.i32_const 1 : core.i32
-    %none = adt.variant_new {type = !E, tag = "None"} : !ERef
-    %some = adt.variant_new %one {type = !E, tag = "Some"} : !ERef
-    %is_some = adt.variant_is %input {type = !E, tag = "Some"} : core.i32
-    %is_other = adt.variant_is %input {type = !E, tag = "Other"} : core.i32
+    %none = adt.variant_new {type = !E, tag = 0} : !ERef
+    %some = adt.variant_new %one {type = !E, tag = 1} : !ERef
+    %is_some = adt.variant_is %input {type = !E, tag = 1} : core.i32
+    %is_other = adt.variant_is %input {type = !E, tag = 2} : core.i32
     wasm.return
   }
 }"#,
@@ -1491,7 +1482,7 @@ mod tests {
 
   wasm.func @main(%input: !ERef, %never: !FRef) -> core.nil {
     %one = wasm.i32_const 1 : core.i32
-    %some = adt.variant_new %one {type = !E, tag = "Some"} : !ERef
+    %some = adt.variant_new %one {type = !E, tag = 1} : !ERef
     %tag = adt.variant_tag %input {type = !E}
     %unallocated = adt.variant_tag %never {type = !F}
     wasm.return
@@ -1547,12 +1538,12 @@ mod tests {
   !B = adt.enum<B { Some(core.f64) }>
 
   wasm.func @main(%from_a_ref: !ARef, %from_b_ref: !BRef, %x: core.f64) -> core.nil {
-    %from_matching_typeref = adt.variant_get %from_a_ref {type = !A, tag = "Some", field = 0} : core.i32
-    %from_mismatched_typeref = adt.variant_get %from_b_ref {type = !A, tag = "Some", field = 0} : core.i32
-    %from_b = adt.variant_new %x {type = !B, tag = "Some"} : !BRef
-    %wrong_enum = adt.variant_get %from_b {type = !A, tag = "Some", field = 0} : core.i32
-    %from_a_other = adt.variant_new %x {type = !A, tag = "Other"} : !ARef
-    %wrong_tag = adt.variant_get %from_a_other {type = !A, tag = "Some", field = 0} : core.i32
+    %from_matching_typeref = adt.variant_get %from_a_ref {type = !A, tag = 0, field = 0} : core.i32
+    %from_mismatched_typeref = adt.variant_get %from_b_ref {type = !A, tag = 0, field = 0} : core.i32
+    %from_b = adt.variant_new %x {type = !B, tag = 0} : !BRef
+    %wrong_enum = adt.variant_get %from_b {type = !A, tag = 0, field = 0} : core.i32
+    %from_a_other = adt.variant_new %x {type = !A, tag = 1} : !ARef
+    %wrong_tag = adt.variant_get %from_a_other {type = !A, tag = 0, field = 0} : core.i32
     wasm.return
   }
 }"#,
@@ -1579,9 +1570,8 @@ mod tests {
             .collect();
         assert_eq!(casts.len(), 3);
         assert_eq!(casts[0].r#ref(&ctx), function_args[0]);
-        let some = ctx.intern_str("Some");
         let a = ctx.type_alias_by_text("A").expect("A layout");
-        let some_ty = variant_type(&mut ctx, a, some).expect("Some layout");
+        let some_ty = variant_type(&mut ctx, a, 0).expect("Some layout");
         assert!(casts.iter().all(|cast| cast.target_type(&ctx) == some_ty));
     }
 
@@ -1603,10 +1593,10 @@ mod tests {
   !String = adt.enum<String { Leaf(!Bytes) }>
 
   wasm.func @main(%e: !ERef, %box: !BoxRef, %string: !StringRef) -> core.nil {
-    %valid = adt.variant_get %e {type = !E, tag = "Some", field = 0} : core.i32
-    %invalid = adt.variant_get %e {type = !E, tag = "Some", field = 0} : core.i64
-    %node = adt.variant_get %box {type = !Box, tag = "Next", field = 0} : wasm.structref
-    %bytes = adt.variant_get %string {type = !String, tag = "Leaf", field = 0} : wasm.anyref
+    %valid = adt.variant_get %e {type = !E, tag = 0, field = 0} : core.i32
+    %invalid = adt.variant_get %e {type = !E, tag = 0, field = 0} : core.i64
+    %node = adt.variant_get %box {type = !Box, tag = 0, field = 0} : wasm.structref
+    %bytes = adt.variant_get %string {type = !String, tag = 0, field = 0} : wasm.anyref
     wasm.return
   }
 }"#,

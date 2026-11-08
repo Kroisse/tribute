@@ -1623,7 +1623,8 @@ adt.enum<Never {}>
   그것을 쓸 자리가 없으므로 `adt.enum`의 `param_attrs`는 type verifier가 거부한다.
   필드의 속성은 그 variant(`adt.variant`)의 매개변수 속성이다.
 - `adt.variant`는 `adt.enum`의 매개변수로만 쓴다. 값의 타입이나 연산의 타입 속성이
-  되지 않으며, 연산은 enum 타입과 variant 이름(`tag`)으로 variant를 가리킨다.
+  되지 않으며, 연산은 enum 타입과 선언 순서의 variant 위치(`tag`)로 variant를
+  가리킨다. 위치는 `adt.variant_tag`가 내는 값과 같다.
 - Variant 필드 타입이 매개변수의 매개변수이므로 일반 타입 순회와 변환은 variant
   필드 타입에 그대로 도달한다.
 - 재귀 참조는 같은 이름의 `adt.typeref`로 표현한다.
@@ -1677,6 +1678,10 @@ adt.enum_decl "geo::Shape" [Dot, Rect]
 - Frontend는 nominal layout을 게시할 때 그 선언을 함께 내보낸다. 특수화된 enum은
   인스턴스마다 layout과 선언을 가진다. Compiler가 만든 layout(closure 저장,
   continuation frame, tuple layout 등)은 선언이 없다.
+- Variant 연산은 이름이 아니라 위치로 variant를 가리킨다. Compiler가 이름으로 아는
+  compiler 소유 variant(문자열 literal이 만드는 `String`의 `Leaf`, evidence의
+  `Option`의 `Some`, `std::io::ReadLineResult`의 각 variant)를 만드는 pass는 그
+  위치를 선언에서 이름으로 찾는다.
 - Native RTTI 생성은 struct·enum의 이름, struct의 필드 이름, variant 이름을 선언에서
   읽는다([RTTI Table](rc.md#rtti-table)). 선언이 없는 layout의 레코드는 compiler가 정한
   이름을 쓴다. 선언은 값의 의미를 바꾸지 않으며, `adt` operation을 내리는 target

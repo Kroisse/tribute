@@ -341,7 +341,7 @@ pub(super) fn lower_constructor<'db>(
     );
     let values =
         super::super::expr::cast_variant_args(builder, location, values, type_attr, &variant);
-    let tag = builder.ir.intern_symbol_text(&variant);
+    let (tag, _) = super::super::expr::constructor_variant(builder.ir, type_attr, &variant);
     let variant = adt::VariantNew::operands(values)
         .r#type(type_attr)
         .tag(tag)
@@ -543,7 +543,7 @@ pub(super) fn lower_variant_record<'db>(
     let ordered =
         super::super::expr::cast_variant_args(builder, location, ordered, layout, variant);
     let result_ty = expr_type_for_id(builder, id);
-    let tag = builder.ir.intern_symbol_text(variant);
+    let (tag, _) = super::super::expr::constructor_variant(builder.ir, layout, variant);
     let value = adt::VariantNew::operands(ordered)
         .r#type(layout)
         .tag(tag)

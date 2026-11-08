@@ -48,8 +48,9 @@ pub struct NativeConstAnalysis {
     contents: Vec<Vec<u8>>,
     /// Whether the module contains any `adt.string_const` ops.
     has_string_consts: bool,
-    /// The exact prelude String enum type from module metadata.
-    string_enum_ty: Option<TypeRef>,
+    /// The exact prelude String enum type from module metadata, and the
+    /// position of its `Leaf`.
+    string_leaf: Option<(TypeRef, u32)>,
 }
 
 impl NativeConstAnalysis {
@@ -125,15 +126,15 @@ fn analyze_consts(ctx: &IrContext, module: Module) -> NativeConstAnalysis {
         });
     }
 
-    let string_enum_ty = collector
+    let string_leaf = collector
         .has_string_consts
-        .then(|| tribute_ir::metadata::WellKnownTypes::from_module(ctx, module.op()).string)
+        .then(|| tribute_ir::metadata::string_leaf(ctx, module))
         .flatten();
 
     NativeConstAnalysis {
         contents: collector.contents,
         has_string_consts: collector.has_string_consts,
-        string_enum_ty,
+        string_leaf,
     }
 }
 
@@ -173,7 +174,7 @@ fn lower(
     let i32_ty = TypeDataBuilder::new("core.i32").intern(ctx);
 
     let content_to_symbol = declare_rodata(ctx, module, &analysis.contents);
-    let string_enum_ty = analysis.string_enum_ty;
+    let string_leaf = analysis.string_leaf;
 
     let mut applicator =
         PatternApplicator::new(TypeConverter::new()).add_pattern(BytesConstNativePattern {
@@ -189,7 +190,7 @@ fn lower(
             ptr_ty,
             i64_ty,
             i32_ty,
-            string_enum_ty,
+            string_leaf,
         });
     }
 
@@ -420,7 +421,7 @@ struct StringConstNativePattern {
     ptr_ty: TypeRef,
     i64_ty: TypeRef,
     i32_ty: TypeRef,
-    string_enum_ty: Option<TypeRef>,
+    string_leaf: Option<(TypeRef, u32)>,
 }
 
 impl OpRewritePattern for StringConstNativePattern {
@@ -437,8 +438,8 @@ impl OpRewritePattern for StringConstNativePattern {
         let content_len = content.len() as u64;
         let data_sym = self.content_to_symbol.get(content).cloned()?;
 
-        let string_enum_ty = rewriter.require(
-            self.string_enum_ty,
+        let (string_enum_ty, leaf) = rewriter.require(
+            self.string_leaf,
             "String enum type not found, skipping string_const",
         )?;
 
@@ -469,7 +470,7 @@ impl OpRewritePattern for StringConstNativePattern {
             .build(ctx, loc);
         let variant_new = adt::VariantNew::operands([bytes.result(ctx)])
             .r#type(string_enum_ty)
-            .tag("Leaf")
+            .tag(leaf)
             .results(result_ty)
             .build(ctx, loc);
 
@@ -527,6 +528,8 @@ mod tests {
             r#"core.module @test {
   !PreludeString = adt.enum<String { Leaf(core.bytes), Branch(tribute_rt.anyref, tribute_rt.anyref, core.i32) }>
   !UserString = adt.enum<"user::String" { Leaf(core.bytes), Branch(tribute_rt.anyref, tribute_rt.anyref, core.i32) }>
+  adt.enum_decl "String" [Leaf, Branch]
+  adt.enum_decl "user::String" [Leaf, Branch]
   func.func @main() -> core.nil {
     %string = adt.string_const {value = "hello"} : tribute_rt.anyref
     func.return
@@ -548,8 +551,8 @@ mod tests {
 
         let analysis = analyze_consts(&ctx, module);
 
-        assert_eq!(analysis.string_enum_ty, Some(prelude_string));
-        assert_ne!(analysis.string_enum_ty, Some(user_string));
+        assert_eq!(analysis.string_leaf, Some((prelude_string, 0)));
+        assert_ne!(analysis.string_leaf, Some((user_string, 0)));
     }
 
     #[test]

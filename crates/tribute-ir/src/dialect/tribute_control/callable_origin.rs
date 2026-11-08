@@ -38,8 +38,7 @@ fn adt_projection_has_exact_callable_type(
     if let Ok(get) = adt::VariantGet::from_op(ctx, producer) {
         let layout = get.r#type(ctx);
         return projection_source_matches_layout(ctx, get.r#ref(ctx), layout, nominal_layouts)
-            && variant_field_type(ctx, layout, get.tag_ref(ctx), get.field(ctx))
-                == Some(result_type);
+            && variant_field_type(ctx, layout, get.tag(ctx), get.field(ctx)) == Some(result_type);
     }
     false
 }
@@ -59,12 +58,7 @@ fn struct_field_type(ctx: &IrContext, layout: TypeRef, field: u32) -> Option<Typ
     adt::Struct::from_type_ref(ctx, layout)?.field_type(ctx, usize::try_from(field).ok()?)
 }
 
-fn variant_field_type(
-    ctx: &IrContext,
-    layout: TypeRef,
-    tag: StringRef,
-    field: u32,
-) -> Option<TypeRef> {
+fn variant_field_type(ctx: &IrContext, layout: TypeRef, tag: u32, field: u32) -> Option<TypeRef> {
     adt::Enum::from_type_ref(ctx, layout)?
         .variant_fields(ctx, tag)?
         .get(usize::try_from(field).ok()?)

@@ -10,7 +10,7 @@ use tribute_ir::dialect::list;
 use trunk_ir::context::{BlockData, IrContext, RegionData};
 use trunk_ir::dialect::{arith, scf};
 use trunk_ir::refs::{BlockRef, TypeRef, ValueRef};
-use trunk_ir::types::{Attribute, Location, StringRef};
+use trunk_ir::types::{Attribute, Location};
 use trunk_ir::{Symbol, SymbolPath};
 
 use crate::ast::{LiteralPattern, NodeId, Pattern, PatternKind, ResolvedRef, TypedRef};
@@ -149,11 +149,11 @@ enum ConstructorLayout {
     Variant(VariantLayout),
 }
 
-/// The enum layout of one variant: the enum type, the variant's tag, and its
-/// field types.
+/// The enum layout of one variant: the enum type, the variant's position, and
+/// its field types.
 struct VariantLayout {
     ty: TypeRef,
-    tag: StringRef,
+    tag: u32,
     fields: Vec<TypeRef>,
 }
 
@@ -188,10 +188,13 @@ fn logical_constructor_pattern<'p, 'db>(
             (ConstructorLayout::Struct { ty, fields }, names)
         }
         None => {
-            let fields = get_enum_variants(ir, ty)
+            let (tag, fields) = get_enum_variants(ir, ty)
                 .expect("logical constructor layout must be a struct or an enum")
                 .into_iter()
-                .find_map(|(tag, fields)| (variant == ir.str(tag)).then_some(fields))
+                .enumerate()
+                .find_map(|(position, (tag, fields))| {
+                    (variant == ir.str(tag)).then_some((position as u32, fields))
+                })
                 .expect("resolved logical enum variant must exist");
             let names = match &*pattern.kind {
                 PatternKind::Record { .. } => ctx
@@ -200,11 +203,7 @@ fn logical_constructor_pattern<'p, 'db>(
                 _ => Vec::new(),
             };
             (
-                ConstructorLayout::Variant(VariantLayout {
-                    ty,
-                    tag: ir.intern_symbol_text(&variant),
-                    fields,
-                }),
+                ConstructorLayout::Variant(VariantLayout { ty, tag, fields }),
                 names,
             )
         }
@@ -266,10 +265,7 @@ pub(super) fn variant_tag_pattern<'db>(
             if !fields.iter().all(|(_, field)| irrefutable(field)) {
                 return None;
             }
-            let position = get_enum_variants(ir, layout.ty)?
-                .iter()
-                .position(|(tag, _)| *tag == layout.tag)?;
-            Some((layout.ty, position as u32))
+            Some((layout.ty, layout.tag))
         }
         _ => None,
     }

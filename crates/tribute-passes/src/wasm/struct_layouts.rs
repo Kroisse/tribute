@@ -12,8 +12,7 @@
 //! structural type of the struct it names, or the abstract struct reference
 //! when it names an enum, whose variants have different types.
 
-use tribute_ir::dialect::adt::layout::{get_enum_variants, get_struct_fields};
-use trunk_ir::StringRef;
+use tribute_ir::dialect::adt::layout::get_struct_fields;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::wasm_gc;
 use trunk_ir::refs::TypeRef;
@@ -56,11 +55,12 @@ pub fn struct_type(ctx: &mut IrContext, ty: TypeRef) -> Option<TypeRef> {
     ))
 }
 
-/// The `wasm_gc.struct` of variant `tag` of the enum layout `enum_ty`.
-pub fn variant_type(ctx: &mut IrContext, enum_ty: TypeRef, tag: StringRef) -> Option<TypeRef> {
-    let (_, fields) = get_enum_variants(ctx, enum_ty)?
-        .into_iter()
-        .find(|(variant, _)| *variant == tag)?;
+/// The `wasm_gc.struct` of the variant at position `tag` of the enum layout
+/// `enum_ty`.
+pub fn variant_type(ctx: &mut IrContext, enum_ty: TypeRef, tag: u32) -> Option<TypeRef> {
+    let fields = tribute_ir::dialect::adt::Enum::from_type_ref(ctx, enum_ty)?
+        .variant_fields(ctx, tag)?
+        .to_vec();
     Some(described_struct(ctx, fields))
 }
 
@@ -155,8 +155,7 @@ mod tests {
         let [point, size, shape] = ["Point", "Size", "Shape"].map(|name| alias(&ctx, name));
         let point = struct_type(&mut ctx, point).expect("user struct");
         let size = struct_type(&mut ctx, size).expect("user struct");
-        let rect_tag = ctx.intern_str("Rect");
-        let rect = variant_type(&mut ctx, shape, rect_tag).expect("variant");
+        let rect = variant_type(&mut ctx, shape, 0).expect("variant");
 
         assert_eq!(point, size);
         assert_eq!(point, rect);

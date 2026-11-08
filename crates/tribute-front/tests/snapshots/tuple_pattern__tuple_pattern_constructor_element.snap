@@ -12,9 +12,9 @@ core.module @test {
   tribute_control.func @"std::Nat::+"(%arg0: core.i32, %arg1: core.i32) -> core.i32
   tribute_control.func @"pkg::first"['a0](%0: !__logical_tuple_tuple_2_24_named_1_13_pkgZ3aZ3aItem_10_coreZ2ei32_1) -> core.i32 row(| 'a0) inferred {
       %1 = adt.struct_get %0 {field = 0, type = !__logical_tuple_tuple_2_24_named_1_13_pkgZ3aZ3aItem_10_coreZ2ei32} : !"pkg::Item_1"
-      %2 = adt.variant_is %1 {tag = "Number", type = !"pkg::Item"} : core.i1
+      %2 = adt.variant_is %1 {tag = 0, type = !"pkg::Item"} : core.i1
       %3 = scf.if %2 -> (core.i1) {
-          %4 = adt.variant_get %1 {field = 0, tag = "Number", type = !"pkg::Item"} : core.i32
+          %4 = adt.variant_get %1 {field = 0, tag = 0, type = !"pkg::Item"} : core.i32
           %5 = arith.constant true : core.i1
           scf.yield %5
       } else {
@@ -26,7 +26,7 @@ core.module @test {
       %9 = arith.andi %3, %8 : core.i1
       %10 = scf.if %9 -> (core.i32) {
           %11 = adt.struct_get %0 {field = 0, type = !__logical_tuple_tuple_2_24_named_1_13_pkgZ3aZ3aItem_10_coreZ2ei32} : !"pkg::Item_1"
-          %12 = adt.variant_get %11 {field = 0, tag = "Number", type = !"pkg::Item"} : core.i32
+          %12 = adt.variant_get %11 {field = 0, tag = 0, type = !"pkg::Item"} : core.i32
           %13 = adt.struct_get %0 {field = 1, type = !__logical_tuple_tuple_2_24_named_1_13_pkgZ3aZ3aItem_10_coreZ2ei32} : core.i32
           %14 = tribute_control.call @"std::Nat::+"(%12, %13) : (core.i32, core.i32) -> core.i32
           scf.yield %14
