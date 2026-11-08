@@ -334,10 +334,6 @@ pub fn operation_payload_type_ref(
     fields: impl IntoIterator<Item = trunk_ir::TypeRef>,
 ) -> trunk_ir::TypeRef {
     let op_idx = compute_op_idx(ability, ctx.str(op_name));
-    let fields = fields
-        .into_iter()
-        .enumerate()
-        .map(|(index, ty)| (format!("arg{index}"), ty));
     crate::dialect::adt::Struct::from_fields(
         ctx,
         format!("__tribute_ability_payload_{op_idx:08x}"),

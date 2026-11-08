@@ -142,7 +142,7 @@ fn frontend_publishes_runtime_types_with_the_prelude_types() {
     let cell = runtime_type(&ctx, m, &["pkg", "rt", "Cell"]).expect("published runtime type");
     assert_eq!(
         cell.display(&ctx).to_string(),
-        r#"adt.struct<"pkg::rt::Cell"(value: core.i32)>"#
+        r#"adt.struct<"pkg::rt::Cell", (core.i32)>"#
     );
     assert!(
         tribute_ir::metadata::WellKnownTypes::from_module(&ctx, m.op())

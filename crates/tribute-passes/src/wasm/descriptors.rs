@@ -124,9 +124,9 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !S = adt.struct<S(next: adt.typeref<{name = "S"}>, any: tribute_rt.anyref, n: tribute_rt.nat)>
-  !Closure = adt.struct<_closure(entries: tribute_rt.convention_table_ref), {layout = "closure"}>
-  !E = adt.enum<E { None(), Some(core.f64) }>
+  !S = adt.struct<"S", (adt.typeref<{name = "S"}>, tribute_rt.anyref, tribute_rt.nat)>
+  !Closure = adt.struct<"_closure", (tribute_rt.convention_table_ref), {layout = "closure"}>
+  !E = adt.enum<"E", [(), (core.f64)]>
   wasm.func @main(%next: adt.typeref<{name = "S"}>, %any: tribute_rt.anyref, %n: tribute_rt.nat, %x: core.f64) -> core.nil {
     %one = wasm.i32_const 1 : core.i32
     %some = adt.variant_new %x {tag = 1, type = !E} : !E
@@ -181,8 +181,8 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !S = adt.struct<S(x: core.f64)>
-  !E = adt.enum<E { None(), Some(core.f64) }>
+  !S = adt.struct<"S", (core.f64)>
+  !E = adt.enum<"E", [(), (core.f64)]>
   wasm.func @main(%x: core.f64) -> core.nil {
     %some = adt.variant_new %x {tag = 1, type = !E} : !E
     %erased = adt.variant_new %x {tag = 1, type = tribute_rt.anyref} : tribute_rt.anyref
@@ -213,8 +213,8 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !S = adt.struct<S(x: core.f64)>
-  !E = adt.enum<E { A(), B(core.f64), C(), D(core.f64) }>
+  !S = adt.struct<"S", (core.f64)>
+  !E = adt.enum<"E", [(), (core.f64), (), (core.f64)]>
   wasm.func @main(%x: core.f64) -> core.nil {
     %d = adt.variant_new %x {tag = 3, type = !E} : !E
     %s = adt.struct_new %x {type = !S} : !S

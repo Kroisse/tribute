@@ -45,7 +45,8 @@ pub(super) fn prescan_logical_nominal_layouts<'db>(
                     })
                     .collect::<Vec<_>>();
                 let name = super::super::qualified_type_name(ctx.db, &ctor);
-                let layout = ctx.adt_struct_type(ir, &name, &fields);
+                let field_types: Vec<_> = fields.iter().map(|&(_, ty)| ty).collect();
+                let layout = ctx.adt_struct_type(ir, &name, &field_types);
                 let field_names: Vec<_> = fields
                     .iter()
                     .map(|(field, _)| ir.intern_symbol_text(field))
@@ -70,7 +71,7 @@ pub(super) fn prescan_logical_nominal_layouts<'db>(
                     .map(|variant| {
                         let variant_ctor =
                             CtorId::new(ctx.db, qualified.child(variant.name.clone()));
-                        let fields = if enumeration.id.variant().is_some() {
+                        let fields: Vec<TypeRef> = if enumeration.id.variant().is_some() {
                             let scheme = *specialized_enum_variants.get(&variant.id)
                                 .expect("missing specialized enum variant schema");
                             let result = match scheme.body(ctx.db).kind(ctx.db) {
@@ -98,11 +99,18 @@ pub(super) fn prescan_logical_nominal_layouts<'db>(
                     qualified.clone(),
                     enumeration.disambiguator,
                 );
+                let variant_fields: Vec<_> =
+                    variants.iter().map(|(_, fields)| fields.clone()).collect();
                 let layout = if well_known_types.is_string(definition) {
-                    ctx.adt_enum_type_with_definition(ir, &name, &variants, location)
+                    ctx.adt_enum_type_with_definition(ir, &name, &variant_fields, location)
                 } else {
-                    ctx.adt_enum_type(ir, &name, &variants)
+                    ctx.adt_enum_type(ir, &name, &variant_fields)
                 };
+                for (position, (variant, _)) in variants.iter().enumerate() {
+                    let position =
+                        u32::try_from(position).expect("an enum has fewer than 2^32 variants");
+                    ctx.register_variant_position(layout, variant.clone(), position);
+                }
                 let variant_names: Vec<_> = variants
                     .iter()
                     .map(|(variant, _)| ir.intern_symbol_text(variant))

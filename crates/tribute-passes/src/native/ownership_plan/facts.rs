@@ -501,7 +501,7 @@ fn validate_projection_contract(
     } else if let Ok(get) = adt::StructGet::from_op(ctx, op) {
         let fields = get_struct_fields(ctx, get.r#type(ctx))
             .ok_or_else(|| OwnershipPlanError::new("struct_get has invalid layout"))?;
-        let (_, field_ty) = fields
+        let field_ty = fields
             .get(get.field(ctx) as usize)
             .ok_or_else(|| OwnershipPlanError::new("struct_get field is stale"))?;
         (get.r#type(ctx), *field_ty)

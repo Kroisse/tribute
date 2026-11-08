@@ -63,14 +63,14 @@ fn declaration_with_name<'a, 'db>(
 fn source_logical_cps_root_module(body: &str) -> (IrContext, Module) {
     let mut ctx = IrContext::new();
     let source = r#"core.module @test {tribute.entry = @main} {
-            !"std::runtime::evidence::Marker" = adt.struct<"std::runtime::evidence::Marker"(ability_id: core.i32, prompt_tag: core.i32)>
+            !"std::runtime::evidence::Marker" = adt.struct<"std::runtime::evidence::Marker", (core.i32, core.i32)>
             !Evidence = adt.array<adt.typeref<{name = "std::runtime::evidence::Marker"}>>
             !Frame = adt.typeref<{name = "__tribute_continuation_frame_root_nil", tribute.cps_continuation_frame_result = core.nil}>
             !Done = closure.closure<func.func_sig<(core.nil) -> core.never>>
             !Resume = closure.closure<func.func_sig<(!Evidence, !Frame, tribute_rt.anyref) -> core.never>>
             !Dispatch = closure.closure<func.func_sig<(!Evidence, !Resume, core.i32, core.i32, core.i32, tribute_rt.anyref) -> core.never>>
-            !__tribute_continuation_frame_root_nil = adt.struct<__tribute_continuation_frame_root_nil(done: !Done, dispatch: !Dispatch), {tribute.cps_continuation_frame_result = core.nil}>
-            !Payload = adt.struct<__tribute_ability_payload_7590c57e()>
+            !__tribute_continuation_frame_root_nil = adt.struct<"__tribute_continuation_frame_root_nil", (!Done, !Dispatch), {tribute.cps_continuation_frame_result = core.nil}>
+            !Payload = adt.struct<"__tribute_ability_payload_7590c57e", ()>
             func.func @main(%evidence: !Evidence, %frame: !Frame) -> core.never attributes {tribute.calling_convention = "cps"} {
                 BODY
             }
@@ -451,7 +451,7 @@ fn main() -> Nil {
                 .type_alias_by_text(decl.name(&ctx))
                 .and_then(|ty| adt::Struct::from_type_ref(&ctx, ty))
                 .unwrap_or_else(|| panic!("{} names a published struct", decl.name(&ctx)));
-            assert_eq!(decl.fields(&ctx).len(), layout.fields(&ctx).count());
+            assert_eq!(decl.fields(&ctx).len(), layout.fields(&ctx).len());
             declared.push(decl.name(&ctx).to_owned());
         } else if let Ok(decl) = adt::EnumDecl::from_op(&ctx, op) {
             let layout = ctx
@@ -895,7 +895,7 @@ fn native_one_shot_wrapper_traps_on_second_invocation() {
     use std::os::unix::process::ExitStatusExt;
 
     let input = r#"core.module @one_shot {tribute.entry = @main} {
-  !state = adt.struct<OneShotState(consumed: core.i1)>
+  !state = adt.struct<"OneShotState", (core.i1)>
 
   func.func @one_shot_wrapper(%state: !state, %value: core.i32) -> core.i32 attributes {tribute.calling_convention = "direct"} {
     %consumed = adt.struct_get %state {field = 0, type = !state} : core.i1
@@ -1838,24 +1838,36 @@ fn main() -> Nil {}
             )
             .unwrap();
         }
+        use tribute_ir::dialect::adt;
         use trunk_ir::dialect::core::{I1, I32};
+        use trunk_ir::ops::DialectType;
+        let decls = adt::NominalDecls::collect(&ir, module);
+        let variant_names = |ir: &IrContext, layout: TypeRef| -> Vec<String> {
+            let layout = adt::Enum::from_type_ref(ir, layout).expect("enum layout");
+            decls
+                .of_enum(ir, layout)
+                .expect("a source enum is declared")
+                .variants(ir)
+                .map(str::to_owned)
+                .collect()
+        };
         for (suffix, primitive) in [("Int", I32::NAME), ("Bool", I1::NAME)] {
             let inner = alias(&ir, &format!("pkg::Inner${suffix}"));
-            let value = get_struct_fields(&ir, inner).unwrap()[0].1;
+            let value = get_struct_fields(&ir, inner).unwrap()[0];
             assert_eq!(ir.get_type(value).name, primitive);
-            let outer =
-                get_enum_variants(&ir, alias(&ir, &format!("pkg::Outer${suffix}"))).unwrap();
-            assert_eq!(ir.str(outer[0].0), "Wrap");
-            assert_eq!(target(&ir, outer[0].1[0]), inner);
-            assert!(outer[2].1.is_empty());
-            assert_eq!(outer[3].1.len(), 2);
-            assert_eq!(outer[3].1[0], value);
-            assert_eq!(ir.get_type(outer[3].1[1]).name, I1::NAME);
-            assert_eq!(target(&ir, outer[4].1[0]), alias(&ir, "std::String"));
-            let tuple = target(&ir, outer[1].1[0]);
+            let outer_layout = alias(&ir, &format!("pkg::Outer${suffix}"));
+            let outer = get_enum_variants(&ir, outer_layout).unwrap();
+            assert_eq!(variant_names(&ir, outer_layout)[0], "Wrap");
+            assert_eq!(target(&ir, outer[0][0]), inner);
+            assert!(outer[2].is_empty());
+            assert_eq!(outer[3].len(), 2);
+            assert_eq!(outer[3][0], value);
+            assert_eq!(ir.get_type(outer[3][1]).name, I1::NAME);
+            assert_eq!(target(&ir, outer[4][0]), alias(&ir, "std::String"));
+            let tuple = target(&ir, outer[1][0]);
             let fields = get_struct_fields(&ir, tuple).unwrap();
-            assert_eq!(fields[0].1, value);
-            let callback = ir.get_type(fields[1].1);
+            assert_eq!(fields[0], value);
+            let callback = ir.get_type(fields[1]);
             assert_eq!(
                 callback.name.dialect(&ir),
                 if after_cps {
@@ -1866,21 +1878,22 @@ fn main() -> Nil {}
             );
             let boxed =
                 get_enum_variants(&ir, alias(&ir, &format!("pkg::Boxed${suffix}"))).unwrap();
-            assert_eq!(boxed[0].1, vec![value]);
+            assert_eq!(boxed[0], vec![value]);
         }
         let envelope = get_struct_fields(&ir, alias(&ir, "pkg::Envelope$Int")).unwrap();
-        assert_eq!(target(&ir, envelope[0].1), alias(&ir, "pkg::Outer$Int"));
+        assert_eq!(target(&ir, envelope[0]), alias(&ir, "pkg::Outer$Int"));
         let link = get_struct_fields(&ir, alias(&ir, "pkg::Link$Int")).unwrap();
-        assert_eq!(target(&ir, link[0].1), alias(&ir, "pkg::Loop$Int"));
+        assert_eq!(target(&ir, link[0]), alias(&ir, "pkg::Loop$Int"));
         let recursive = get_enum_variants(&ir, alias(&ir, "pkg::Loop$Int")).unwrap();
-        assert_eq!(target(&ir, recursive[0].1[0]), alias(&ir, "pkg::Link$Int"));
+        assert_eq!(target(&ir, recursive[0][0]), alias(&ir, "pkg::Link$Int"));
         for (name, primitive) in [
             ("pkg::A::Token$Int", I32::NAME),
             ("pkg::B::Token$Bool", I1::NAME),
         ] {
-            let variants = get_enum_variants(&ir, alias(&ir, name)).unwrap();
-            assert_eq!(ir.str(variants[0].0), "Item");
-            assert_eq!(ir.get_type(variants[0].1[0]).name, primitive);
+            let layout = alias(&ir, name);
+            let variants = get_enum_variants(&ir, layout).unwrap();
+            assert_eq!(variant_names(&ir, layout)[0], "Item");
+            assert_eq!(ir.get_type(variants[0][0]).name, primitive);
         }
         let output = module.op().display(&ir).to_string();
         for (name, primitive) in [
@@ -2023,16 +2036,16 @@ fn main() -> Nil {}
             ("pkg::Second", "pkg::First"),
         ] {
             let owner = layout(&ir, &Symbol::new(owner), STRUCT);
-            let field = get_struct_fields(&ir, owner).unwrap()[0].1;
+            let field = get_struct_fields(&ir, owner).unwrap()[0];
             let name = reference_name(&ir, field);
             assert_eq!(name, Symbol::new(target));
             layout(&ir, &name, STRUCT);
         }
         let holder = layout(&ir, &Symbol::new("pkg::Holder"), STRUCT);
-        let pair = get_struct_fields(&ir, holder).unwrap()[0].1;
+        let pair = get_struct_fields(&ir, holder).unwrap()[0];
         let tuple = layout(&ir, &reference_name(&ir, pair), STRUCT);
         let fields = get_struct_fields(&ir, tuple).unwrap();
-        let callback = ir.get_type(fields[1].1);
+        let callback = ir.get_type(fields[1]);
         if after_cps {
             assert_ne!(Some(tuple), source_tuple);
             assert!(callback.name.is(&ir, "closure.closure"));

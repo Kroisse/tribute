@@ -339,7 +339,7 @@ mod tests {
             &mut ctx,
             r#"
             core.module @test {
-                !"std::io::ReadLineResult" = adt.enum<"std::io::ReadLineResult" { ReadLine(core.bytes), ReadEndOfFile(), ReadInvalidEncoding(), ReadSystem(core.i32, core.bytes) }>
+                !"std::io::ReadLineResult" = adt.enum<"std::io::ReadLineResult", [(core.bytes), (), (), (core.i32, core.bytes)]>
                 adt.enum_decl "std::io::ReadLineResult" [ReadLine, ReadEndOfFile, ReadInvalidEncoding, ReadSystem]
 
                 func.func @caller(%0: core.bytes, %1: core.i1) -> tribute_rt.anyref {

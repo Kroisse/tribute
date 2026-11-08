@@ -429,7 +429,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !String = adt.enum<String { Branch(wasm.anyref, wasm.anyref, core.i32), Leaf(core.bytes) }>
+  !String = adt.enum<"String", [(wasm.anyref, wasm.anyref, core.i32), (core.bytes)]>
   adt.enum_decl "String" [Branch, Leaf]
   wasm.func @main() -> core.nil {
     %string = adt.string_const {value = "hello"} : wasm.anyref
@@ -478,8 +478,8 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !PreludeString = adt.enum<String { Leaf(core.bytes), Branch(wasm.anyref, wasm.anyref, core.i32) }>
-  !UserString = adt.enum<"user::String" { Leaf(core.bytes), Branch(wasm.anyref, wasm.anyref, core.i32) }>
+  !PreludeString = adt.enum<"String", [(core.bytes), (wasm.anyref, wasm.anyref, core.i32)]>
+  !UserString = adt.enum<"user::String", [(core.bytes), (wasm.anyref, wasm.anyref, core.i32)]>
   adt.enum_decl "String" [Leaf, Branch]
   adt.enum_decl "user::String" [Leaf, Branch]
   wasm.func @main() -> core.nil {
@@ -504,7 +504,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !String = adt.enum<String { Leaf(core.bytes), Branch(wasm.anyref, wasm.anyref, core.i32) }>
+  !String = adt.enum<"String", [(core.bytes), (wasm.anyref, wasm.anyref, core.i32)]>
   adt.enum_decl "String" [Leaf, Branch]
   wasm.func @main() -> core.nil {
     %string = adt.string_const {value = "hello"} : wasm.anyref

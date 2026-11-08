@@ -151,7 +151,7 @@ mod tests {
         }
         for ty in [
             r#"adt.typeref<{name = "Choice"}>"#,
-            "adt.struct<Point(x: core.i32)>",
+            "adt.struct<\"Point\", (core.i32)>",
             "tribute_rt.anyref",
         ] {
             let mut ctx = IrContext::new();

@@ -1109,7 +1109,7 @@ mod tests {
         let _module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !E = adt.enum<E {}>
+  !E = adt.enum<"E", []>
   !ERef = adt.typeref<{name = "E"}>
 }"#,
         );
@@ -1126,8 +1126,8 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !S = adt.struct<S(value: core.i32)>
-  !E = adt.enum<E { Some(core.i32) }>
+  !S = adt.struct<"S", (core.i32)>
+  !E = adt.enum<"E", [(core.i32)]>
   !ERef = adt.typeref<{name = "E"}>
   !A = adt.array<core.i32>
 
@@ -1205,9 +1205,9 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !S = adt.struct<S(value: core.i32)>
-  !Closure = adt.struct<_closure(entries: tribute_rt.convention_table_ref), {layout = "closure"}>
-  !E = adt.enum<E { None(), Some(core.i32) }>
+  !S = adt.struct<"S", (core.i32)>
+  !Closure = adt.struct<"_closure", (tribute_rt.convention_table_ref), {layout = "closure"}>
+  !E = adt.enum<"E", [(), (core.i32)]>
 
   wasm.func @main(%env: wasm.anyref) -> core.nil {
     %one = wasm.i32_const 1 : core.i32
@@ -1304,7 +1304,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   !ListRef = adt.typeref<{name = "List"}>
-  !List = adt.enum<List { Empty(), Cons(core.i32, !ListRef) }>
+  !List = adt.enum<"List", [(), (core.i32, !ListRef)]>
 
   wasm.func @main(%input: !ListRef) -> core.nil {
     %zero = wasm.i32_const 0 : core.i32
@@ -1413,7 +1413,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   !ERef = adt.typeref<{name = "E"}>
-  !E = adt.enum<E { None(), Some(core.i32), Other() }>
+  !E = adt.enum<"E", [(), (core.i32), ()]>
 
   wasm.func @main(%input: !ERef) -> core.nil {
     %one = wasm.i32_const 1 : core.i32
@@ -1476,9 +1476,9 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   !ERef = adt.typeref<{name = "E"}>
-  !E = adt.enum<E { None(), Some(core.i32), Other() }>
+  !E = adt.enum<"E", [(), (core.i32), ()]>
   !FRef = adt.typeref<{name = "F"}>
-  !F = adt.enum<F { A(), B() }>
+  !F = adt.enum<"F", [(), ()]>
 
   wasm.func @main(%input: !ERef, %never: !FRef) -> core.nil {
     %one = wasm.i32_const 1 : core.i32
@@ -1534,8 +1534,8 @@ mod tests {
             r#"core.module @test {
   !ARef = adt.typeref<{name = "A"}>
   !BRef = adt.typeref<{name = "B"}>
-  !A = adt.enum<A { Some(core.i32), Other(core.f64) }>
-  !B = adt.enum<B { Some(core.f64) }>
+  !A = adt.enum<"A", [(core.i32), (core.f64)]>
+  !B = adt.enum<"B", [(core.f64)]>
 
   wasm.func @main(%from_a_ref: !ARef, %from_b_ref: !BRef, %x: core.f64) -> core.nil {
     %from_matching_typeref = adt.variant_get %from_a_ref {type = !A, tag = 0, field = 0} : core.i32
@@ -1585,12 +1585,12 @@ mod tests {
   !BoxRef = adt.typeref<{name = "Box"}>
   !NodeRef = adt.typeref<{name = "Node"}>
   !StringRef = adt.typeref<{name = "String"}>
-  !E = adt.enum<E { Some(core.i32) }>
-  !Box = adt.enum<Box { Next(!NodeRef) }>
-  !Node = adt.enum<Node { Node() }>
+  !E = adt.enum<"E", [(core.i32)]>
+  !Box = adt.enum<"Box", [(!NodeRef)]>
+  !Node = adt.enum<"Node", [()]>
   !Data = adt.array<core.i8, {layout = "bytes_data"}>
-  !Bytes = adt.struct<_Bytes(data: !Data, offset: core.i32, len: core.i32), {layout = "bytes"}>
-  !String = adt.enum<String { Leaf(!Bytes) }>
+  !Bytes = adt.struct<"_Bytes", (!Data, core.i32, core.i32), {layout = "bytes"}>
+  !String = adt.enum<"String", [(!Bytes)]>
 
   wasm.func @main(%e: !ERef, %box: !BoxRef, %string: !StringRef) -> core.nil {
     %valid = adt.variant_get %e {type = !E, tag = 0, field = 0} : core.i32

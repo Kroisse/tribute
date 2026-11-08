@@ -190,7 +190,7 @@ Nominal layout은 row 인자와 상관없이 하나다.
 둘러싼 정의의 binder를 쓴다.
 
 ```text
-adt.struct<Callback['a0](run: tribute_control.func_sig<(core.i64) -> core.i64 row(| 'a0)>)>
+adt.struct<"Callback"['a0], (tribute_control.func_sig<(core.i64) -> core.i64 row(| 'a0)>)>
 adt.typeref<Callback[row(@"<State(Int)>")]>
 adt.typeref<Callback[row(| 'a2)]>
 adt.typeref<Callback[row()]>
