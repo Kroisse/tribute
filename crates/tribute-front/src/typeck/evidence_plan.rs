@@ -4,7 +4,7 @@
 //! each explicit ability instance is the top marker of that instance, and the
 //! row tail's handlers lie beneath. A call keeps that shape for its callee by
 //! counting, for each instance explicit in the caller's row, how many callee
-//! positions take the caller's handler (`new-plans/type-inference.md`,
+//! positions take the caller's handler (`design/type-inference.md`,
 //! 호출의 evidence 선택):
 //!
 //! - none, and the callee's row is open: `mask`, so an operation arriving

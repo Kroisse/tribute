@@ -1,5 +1,5 @@
 //! Tests for implicit constructors `.Name`, whose constructor the type of
-//! their context gives (`new-plans/type-inference.md` § 암묵적 생성자).
+//! their context gives (`design/type-inference.md` § 암묵적 생성자).
 
 mod common;
 

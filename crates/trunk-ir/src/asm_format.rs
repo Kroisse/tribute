@@ -127,7 +127,7 @@ pub struct SignatureParts<'a> {
 
 /// Conversion between a signature type and the function form
 /// `(%a: A, %b: B) -> R` that the `signature` format element writes
-/// (`new-plans/ir.md`, "Signature codec").
+/// (`design/ir.md`, "Signature codec").
 ///
 /// The dialect that defines the signature type implements it on the type's
 /// wrapper. A format names the codec through the bound of the type variable
@@ -220,7 +220,7 @@ pub fn parse_keyword(
 
 /// The syntax of the entities a `custom(D(a, b, ..))` format element names,
 /// written by hand inside an otherwise declarative format, as MLIR's
-/// `custom<D>` directive is (`new-plans/ir.md`, "선언적 어셈블리 형식").
+/// `custom<D>` directive is (`design/ir.md`, "선언적 어셈블리 형식").
 ///
 /// The element passes the entities in the order it names them: operands,
 /// attributes, successors, and regions, each as a [`CustomEntity`] when

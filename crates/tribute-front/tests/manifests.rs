@@ -1,4 +1,4 @@
-//! Packages loaded from their manifests (`new-plans/modules.md` §
+//! Packages loaded from their manifests (`design/modules.md` §
 //! 매니페스트 (`tribute.toml`)), without a file system.
 
 use tribute_core::diagnostic::SpanDiagnostic;

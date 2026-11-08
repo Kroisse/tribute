@@ -48,7 +48,7 @@ pub trait AttrKind {
 
     /// Write `attr`, a value `accepts` admits, as a declarative assembly
     /// format spells it: by default in generic attribute syntax. A keyword
-    /// kind writes its keyword (`new-plans/ir.md`, "선언적 어셈블리 형식").
+    /// kind writes its keyword (`design/ir.md`, "선언적 어셈블리 형식").
     fn print_text(p: &mut AsmPrinter<'_>, attr: &Attribute) -> fmt::Result {
         p.print_attribute(attr)
     }

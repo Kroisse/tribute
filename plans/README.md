@@ -1,30 +1,30 @@
 # Tribute Feature Proposals
 
-언어와 compiler phase의 authoritative contract는 [`new-plans/`](../new-plans/)에
+언어와 compiler phase의 authoritative contract는 [`design/`](../design/)에
 있다. 현재 target 지원과 실행 증거는
-[`capabilities.md`](../new-plans/capabilities.md)를 따른다. 구현 작업과 진행 상황은
+[`capabilities.md`](../design/capabilities.md)를 따른다. 구현 작업과 진행 상황은
 GitHub Issues에서 추적한다.
 
 ## Compiler Design
 
 | 문서 | 범위 |
 | ---- | ---- |
-| [design.md](../new-plans/design.md) | 언어와 source-logical compiler 구조 |
-| [syntax.md](../new-plans/syntax.md) | Source syntax |
-| [types.md](../new-plans/types.md) | 타입과 nominal identity |
-| [abilities.md](../new-plans/abilities.md) | Ability와 affine resume |
-| [modules.md](../new-plans/modules.md) | Module과 이름 해석 |
-| [type-inference.md](../new-plans/type-inference.md) | 타입 추론과 effect row |
-| [ir.md](../new-plans/ir.md) | IR dialect와 legality |
-| [cps-effects.md](../new-plans/cps-effects.md) | Shared CPS와 callable ABI |
-| [implementation.md](../new-plans/implementation.md) | Compiler phase 책임 |
-| [cranelift-backend.md](../new-plans/cranelift-backend.md) | Native backend와 RC |
-| [wasm-backend.md](../new-plans/wasm-backend.md) | WasmGC backend |
+| [design.md](../design/design.md) | 언어와 source-logical compiler 구조 |
+| [syntax.md](../design/syntax.md) | Source syntax |
+| [types.md](../design/types.md) | 타입과 nominal identity |
+| [abilities.md](../design/abilities.md) | Ability와 affine resume |
+| [modules.md](../design/modules.md) | Module과 이름 해석 |
+| [type-inference.md](../design/type-inference.md) | 타입 추론과 effect row |
+| [ir.md](../design/ir.md) | IR dialect와 legality |
+| [cps-effects.md](../design/cps-effects.md) | Shared CPS와 callable ABI |
+| [implementation.md](../design/implementation.md) | Compiler phase 책임 |
+| [cranelift-backend.md](../design/cranelift-backend.md) | Native backend와 RC |
+| [wasm-backend.md](../design/wasm-backend.md) | WasmGC backend |
 
 ## Feature Proposals
 
 아래 문서는 추가 library·tooling 기능의 제안이며 현재 지원이나 compiler 실행 순서를
-정의하지 않는다. Source 예제는 `new-plans/`의 syntax와 ability 계약을 따른다.
+정의하지 않는다. Source 예제는 `design/`의 syntax와 ability 계약을 따른다.
 
 | 문서 | 범위 |
 | ---- | ---- |

@@ -367,7 +367,7 @@ impl<'db> TypeChecker<'db> {
 
         let type_params = vars.type_params();
         // One external symbol cannot serve instances of different
-        // representations (`new-plans/modules.md`, "모듈 선언과 Use").
+        // representations (`design/modules.md`, "모듈 선언과 Use").
         if !type_params.is_empty() && func.abi != "intrinsic" {
             NodeDiagnostic::new(
                 format!(

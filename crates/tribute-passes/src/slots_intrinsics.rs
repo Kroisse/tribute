@@ -1,6 +1,6 @@
 //! Lower the `std::runtime::Slots` intrinsics to `adt` array operations.
 //!
-//! Each intrinsic is one `adt.array_*` operation (`new-plans/types.md`,
+//! Each intrinsic is one `adt.array_*` operation (`design/types.md`,
 //! "Slots"). Positions and lengths are `Nat` at the call and `core.index` at
 //! the array, converted with `arith.index_castui`; a length that does not
 //! fit `Nat` is truncated, as `Nat` bounds every array the runtime builds. A call is selected through

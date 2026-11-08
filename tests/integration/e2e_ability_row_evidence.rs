@@ -1,4 +1,4 @@
-//! Handlers are selected by row position (`new-plans/cps-effects.md`,
+//! Handlers are selected by row position (`design/cps-effects.md`,
 //! "Row 위치에 따른 evidence 선택"): a handler handles only the instances
 //! explicit in the row at its handle site, handler arms run outside their
 //! handle, and a resumed computation keeps those selections. Each program

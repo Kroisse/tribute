@@ -1,6 +1,6 @@
 //! Compiler-owned runtime items, found by canonical path.
 //!
-//! Runtime code is Tribute source under `std::runtime` (`new-plans/modules.md`,
+//! Runtime code is Tribute source under `std::runtime` (`design/modules.md`,
 //! "Compiler 소유 runtime 모듈"). A runtime item's identity is its canonical
 //! declaration path. Lowering finds a runtime function by the IR symbol built
 //! from that path, which only the prelude definition has, and a runtime type
@@ -36,7 +36,7 @@ pub enum RuntimeItemKind {
     Struct,
 }
 
-/// The evidence runtime module (`new-plans/cps-effects.md`).
+/// The evidence runtime module (`design/cps-effects.md`).
 pub mod evidence {
     pub const MARKER: &[&str] = &["std", "runtime", "evidence", "Marker"];
     pub const LOOKUP: &[&str] = &["std", "runtime", "evidence", "lookup"];
@@ -80,7 +80,7 @@ pub const RUNTIME_ITEMS: &[RuntimeItem] = &[
 ];
 
 /// The compiler intrinsic identities of the runtime array `Slots(a)`
-/// (`new-plans/types.md`, "Slots").
+/// (`design/types.md`, "Slots").
 pub const SLOTS_INTRINSICS: [&str; 6] = [
     "std::runtime::Slots::empty",
     "std::runtime::Slots::len",
@@ -110,7 +110,7 @@ pub fn function_entry_points(items: &[RuntimeItem]) -> Vec<SymbolPath> {
 /// Global DCE configuration that roots every function of `runtime`.
 ///
 /// A runtime function is a root until the target lowering stages that call
-/// it have run (`new-plans/modules.md`, "생존 범위"). Every runtime function
+/// it have run (`design/modules.md`, "생존 범위"). Every runtime function
 /// is called by target evidence lowering or earlier; the cleanup DCE after
 /// it removes the ones nothing calls.
 pub fn kept_alive(runtime: &[RuntimeItem]) -> trunk_ir::transforms::GlobalDceConfig {

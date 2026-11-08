@@ -1,5 +1,5 @@
 //! Source-logical callables whose calling convention the CPS strategy has
-//! assigned (`new-plans/ir.md`, "Convention과 class 특수화").
+//! assigned (`design/tribute-dialects.md`, "Convention과 class 특수화").
 //!
 //! Class specialization replaces the five `tribute_control` operations whose
 //! meaning depends on a convention with the operation of the same name here,
@@ -49,7 +49,7 @@ mod tribute_cps {
     ///   `"cps"`. The concise form always writes it.
     /// - **Meaning:** one class instance of a source function. Class
     ///   specialization computes the convention from the row with the
-    ///   instance's classes (`new-plans/cps-effects.md`, "Row와 호출 규약").
+    ///   instance's classes (`design/cps-effects.md`, "Row와 호출 규약").
     ///   The signature, row, and body keep the meaning they have on
     ///   `tribute_control.func`.
     /// - **Verification:** the schema checks the convention keyword.
@@ -99,7 +99,7 @@ mod tribute_cps {
     ///   order. Each body takes the source parameters. Each body is written
     ///   under its convention's keyword in `entries`.
     /// - **Meaning:** one lambda value with a body for each class
-    ///   `new-plans/ir.md` ("Convention entry") gives it: each class its uses
+    ///   `design/tribute-dialects.md` ("Convention entry") gives it: each class its uses
     ///   select, or each class from its row's lower bound to its upper bound
     ///   when that row reads as an upper bound. Its body of a convention
     ///   reads each binder it quantifies with the class its uses of that
@@ -173,7 +173,7 @@ mod tribute_cps {
     /// - **Placement:** directly in a module, as a symbol definition. Class
     ///   specialization makes one for each definition and class arguments
     ///   that a `tribute_cps.func_ref` refers to, named as
-    ///   `new-plans/cps-effects.md` ("Class 특수화 pass") gives, whose
+    ///   `design/cps-effects.md` ("Class 특수화 pass") gives, whose
     ///   targets are instances of that one definition. The IR does not
     ///   record which definition an instance comes from, so verification
     ///   cannot check this.
@@ -181,7 +181,7 @@ mod tribute_cps {
     ///   the `tribute_cps.func` instance it maps to. Each instance is the one the class arguments select
     ///   once the argument of the class variable that is the definition
     ///   row's tail is narrowed to that convention, as a lambda body narrows
-    ///   a tail. The conventions are the classes `new-plans/ir.md`
+    ///   a tail. The conventions are the classes `design/tribute-dialects.md`
     ///   ("Convention entry", 함수 참조) gives the definition's row read with
     ///   the class arguments. They depend only on the definition and the
     ///   class arguments, never on the row a reference passes, so every
@@ -190,7 +190,7 @@ mod tribute_cps {
     ///   directly. When a classless tail makes the instance `Cps` and its
     ///   convention is weaker, the entry is the `func_ref` adapter that
     ///   calls the worker through a value delimiter
-    ///   (`new-plans/cps-effects.md`, 값 delimiter). Legalization fills the
+    ///   (`design/cps-effects.md`, 값 delimiter). Legalization fills the
     ///   other entries by the same rule as a lambda's, once for the table.
     /// - **Verification:** the local verifier checks the attributes and that
     ///   each key of `entries` is a convention keyword. Whole-IR verification checks that each target
@@ -202,7 +202,7 @@ mod tribute_cps {
     /// - **Symbol:** a discardable `SymbolDefinition` that is not a
     ///   declaration. Its targets are its uses, so it keeps them alive
     ///   only while a live `tribute_cps.func_ref` uses it, and global DCE
-    ///   removes it once none does (`new-plans/ir.md`, "Core Invariants").
+    ///   removes it once none does (`design/ir.md`, "Core Invariants").
     /// - **Location:** the span of the referenced definition.
     #[verify]
     #[asm_format(symbol(sym_name) "=" entries)]

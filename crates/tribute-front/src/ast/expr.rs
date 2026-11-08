@@ -26,7 +26,7 @@ pub struct FieldInit<V> {
 }
 
 /// The functions a callee may name, by the rank of how each comes into the
-/// call's scope (`new-plans/modules.md` § 후보의 순위). A function is in its
+/// call's scope (`design/modules.md` § 후보의 순위). A function is in its
 /// highest rank only.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct Candidates<V> {
@@ -281,7 +281,7 @@ pub enum Stmt<V> {
 
 /// The local a `let` binds, by name alone, to a reference, and that
 /// reference. A named-function alias has this shape; its uses reference the
-/// function again (`new-plans/type-inference.md`, Generalization).
+/// function again (`design/type-inference.md`, Generalization).
 pub fn reference_binding<'a, V>(
     pattern: &Pattern<V>,
     value: &'a Expr<V>,

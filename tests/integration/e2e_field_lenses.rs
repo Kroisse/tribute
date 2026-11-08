@@ -9,7 +9,7 @@ use crate::common::{assert_native_output, assert_output_on_both_targets};
 
 #[test]
 fn test_native_field_setter_and_modifier() {
-    // The examples of `new-plans/syntax.md` and `new-plans/types.md`.
+    // The examples of `design/syntax.md` and `design/types.md`.
     assert_native_output(
         "field_lenses.trb",
         r#"
