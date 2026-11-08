@@ -12,11 +12,10 @@ TrunkIR core 위에서 Tribute가 정의하는 고수준 dialect의 여러 opera
 target-independent 직접형 경계다. CPS 전략은 이 경계 뒤에서 convention에 따라
 뜻이 달라지는 callable operation을
 [`tribute_cps`](#convention과-class-특수화)로 바꾼다. Dialect identifier는
-정확히 `tribute_control`이다. Dialect identifier 안에 점을 넣는 등 separator를
-하나 더 사용하는 표기는 invalid이다.
+정확히 `tribute_control`이다.
 
 이 dialect는 CPS legalization 전의 Tribute 고유 callable과 effect-control
-의미를 함께 소유한다. ANF는 input invariant이지 dialect의 정체성이 아니다.
+의미를 함께 소유한다.
 산술, ADT/list/tuple/record 구성과 structured selection은 기존 dialect에 남는다.
 `func.*`, `closure.*`, `func.func_sig`는 이 경계에 나타나지 않는다.
 
@@ -25,14 +24,10 @@ target-independent 직접형 경계다. CPS 전략은 이 경계 뒤에서 conve
 갖지 않는다([convention entry](#convention-entry)). `tribute_control`과
 `tribute_cps`가 이 type을 함께 쓰며, convention은 `tribute_cps`의 정의, 람다의
 convention entry, 간접 이전 operation에 둔다
-([convention과 class 특수화](#convention과-class-특수화)).
-
-이 type은 `[inputs..., results...]`를 평평하게 저장하고, 필수 u32 구분자
-`num_inputs`와 `num_results`로 둘을 나눈다. Source가 소유하는 검증된 API는
-result를 정확히 하나 요구한다. Type verifier는 result 하나, 0개 이상의
-parameter, 모든 component type의 resolution을 검사한다. Type verifier는
-convention 속성과 physical `func.func_sig`·`closure.closure` component를
-허용하지 않는다.
+([convention과 class 특수화](#convention과-class-특수화)). 저장 형식과 type
+verifier가 검사하는 것은
+[`FuncSig` 선언](../crates/tribute-ir/src/dialect/tribute_control/func_sig.rs)이
+정한다.
 
 Convention 값은 keyword 문자열 `"direct"`, `"evidence_direct"`, `"cps"` 가운데
 하나다. 이 문자열이 convention의 유일한 저장 형식이다. 정수나 다른 값은 잘못된

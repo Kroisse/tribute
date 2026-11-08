@@ -25,6 +25,19 @@ pub enum FuncSigTypeError {
 }
 
 /// Typed wrapper for an input-first, exactly-one-result source signature.
+///
+/// The type stores its inputs and results flat, as `[inputs..., results...]`,
+/// split by the required `u32` delimiters `num_inputs` and `num_results`; the
+/// source-owned validated API requires exactly one result. `Params` and
+/// `Result` are source-logical types. The type carries no calling convention
+/// (`new-plans/tribute-dialects.md`, "Convention entry"); its ability row is
+/// the `ability_row` type attribute ("Ability row").
+///
+/// The verifier checks that both delimiters are present `u32`s whose sum is
+/// the parameter count, that there is exactly one result, that no
+/// `tribute.calling_convention` attribute is present, and that the stored row
+/// is well formed and not written out when closed and empty. It does not
+/// inspect the component types.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct FuncSig(pub(super) TypeRef);
 
