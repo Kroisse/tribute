@@ -48,7 +48,8 @@ on its declaration in
 [`tribute_control`](../../crates/tribute-ir/src/dialect/tribute_control.rs),
 [`tribute_cps`](../../crates/tribute-ir/src/dialect/tribute_cps.rs), and
 [`ability`](../../crates/tribute-ir/src/dialect/ability.rs). See
-[the IR contract](../../new-plans/ir.md) for the rules that span operations, and
+[the high-level dialect rules](../../new-plans/tribute-dialects.md) for the rules
+that span operations, and
 [the shared pipeline](../../new-plans/cps-effects.md#shared-middle-end-pipeline).
 
 The target [representation/ABI boundary](../../new-plans/abi-boundary.md#representationabi-경계)

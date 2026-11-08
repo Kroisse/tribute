@@ -181,7 +181,7 @@ lowering이 쓰는 runtime 항목 경로의 집합을 가진다.
   않는다는 규칙은 그대로다.
 - Runtime 타입의 IR 표현은 pass를 거치며 바뀌므로 이름으로 찾지 않는다.
   Frontend는 `std::String`처럼 root `core.module`의 dictionary 속성
-  `tribute.types`([IR 계약](ir.md)에 정의)에 canonical 경로를 key로 그
+  `tribute.types`([IR 계약](tribute-dialects.md)에 정의)에 canonical 경로를 key로 그
   `TypeRef`를 게시하고, lowering은 이 항목을 읽는다.
 
 **제약.** `std::runtime`과 하위 모듈에서 본문이 있는 source 함수는 runtime
