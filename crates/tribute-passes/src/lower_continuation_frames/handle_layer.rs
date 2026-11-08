@@ -610,12 +610,8 @@ fn unpack_handler_payload(
 ) -> Vec<ValueRef> {
     let value_params = &arm.params[..arm.params.len() - usize::from(arm.resumptive)];
     let anyref = anyref_type(ctx);
-    let payload_type = ability::operation_payload_type_ref(
-        ctx,
-        &arm.binding.ability,
-        arm.binding.op_name,
-        value_params.iter().map(|_| anyref),
-    );
+    let payload_type =
+        ability::operation_payload_type_ref(ctx, value_params.iter().map(|_| anyref));
     let cast = core::UnrealizedConversionCast::operands(payload)
         .results(payload_type)
         .build(ctx, location);

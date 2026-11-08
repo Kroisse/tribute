@@ -53,9 +53,7 @@ fn push_one_shot_resume(
             )
         })?;
     let i1_type = TypeDataBuilder::new("core.i1").intern(ctx);
-    let state_name = ctx.intern_str("__tribute_one_shot_state");
-    let state_type =
-        adt::Struct::from_fields(ctx, state_name, [i1_type], AttributeMap::new()).as_type_ref();
+    let state_type = adt::Struct::literal(ctx, [i1_type], AttributeMap::new()).as_type_ref();
     let not_consumed = arith::Constant::operands()
         .value(Attribute::Int(0))
         .results(i1_type)
@@ -218,7 +216,7 @@ impl ExpandDispatches {
         let dispatch = frame_dispatch(ctx, block, location, &types, frame);
         detach_into(ctx, block, rewriter);
         let anyref = tribute_rt::Anyref::params().intern(ctx).as_type_ref();
-        let payload = pack_payload(ctx, rewriter, location, &ability, op_name, values, anyref);
+        let payload = pack_payload(ctx, rewriter, location, values, anyref);
         let dispatch = effect::DispatchCps::operands(evidence, dispatch, resume, payload)
             .ability(ability)
             .op_name(op_name)

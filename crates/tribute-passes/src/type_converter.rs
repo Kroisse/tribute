@@ -190,7 +190,7 @@ mod tests {
                 &mut ctx,
                 &format!(
                     r#"core.module @test {{
-                !Closure = adt.struct<"_closure", (tribute_rt.convention_table_ref), {{layout = "closure"}}>
+                !Closure = adt.struct<(tribute_rt.convention_table_ref), {{layout = "closure"}}>
                 func.func @transfer(%index: core.i32, %erased: tribute_rt.anyref) {{
                     {cast}
                     func.tail_call_indirect %index({arg}) attributes {{tribute.calling_convention = "cps"}} : (!Closure) -> ()

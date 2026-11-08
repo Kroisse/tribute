@@ -1206,7 +1206,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   !S = adt.struct<"S", (core.i32)>
-  !Closure = adt.struct<"_closure", (tribute_rt.convention_table_ref), {layout = "closure"}>
+  !Closure = adt.struct<(tribute_rt.convention_table_ref), {layout = "closure"}>
   !E = adt.enum<"E", [(), (core.i32)]>
 
   wasm.func @main(%env: wasm.anyref) -> core.nil {
@@ -1589,7 +1589,7 @@ mod tests {
   !Box = adt.enum<"Box", [(!NodeRef)]>
   !Node = adt.enum<"Node", [()]>
   !Data = adt.array<core.i8, {layout = "bytes_data"}>
-  !Bytes = adt.struct<"_Bytes", (!Data, core.i32, core.i32), {layout = "bytes"}>
+  !Bytes = adt.struct<(!Data, core.i32, core.i32), {layout = "bytes"}>
   !String = adt.enum<"String", [(!Bytes)]>
 
   wasm.func @main(%e: !ERef, %box: !BoxRef, %string: !StringRef) -> core.nil {

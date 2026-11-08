@@ -1199,10 +1199,12 @@ fn textual_resumptive_handle_emits_one_resultless_delimiter() {
         consumed_get: &mut Option<ValueRef>,
         consumed_set: &mut Option<ValueRef>,
     ) {
+        // The one-shot state is a literal layout holding its consumed flag.
         let is_one_shot_type = |ty: TypeRef| {
-            ctx.type_attrs(ty)
-                .get_str("name")
-                .is_some_and(|name| name.starts_with("__tribute_one_shot_state"))
+            adt::Struct::from_type_ref(ctx, ty).is_some_and(|layout| {
+                layout.name(ctx).is_none()
+                    && matches!(layout.fields(ctx), [flag] if trunk_ir::dialect::core::I1::matches(ctx, *flag))
+            })
         };
         if let Ok(get) = adt::StructGet::from_op(ctx, op)
             && is_one_shot_type(get.r#type(ctx))

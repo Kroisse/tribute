@@ -86,12 +86,17 @@ impl DescriptorRecord {
             None => {
                 let layout = adt::Struct::from_type_ref(ctx, ty)
                     .expect("a struct descriptor has an adt.struct layout");
-                // A compiler-built layout has no declaration and records its
-                // own name and positional field names.
+                // A compiler-built layout has no declaration and records
+                // positional field names under its name or, for a literal
+                // layout, its `layout` attribute.
                 let Some(decl) = decls.of_struct(ctx, layout) else {
+                    let name = layout.name(ctx).or_else(|| {
+                        ctx.type_attrs(ty)
+                            .get_str(tribute_ir::runtime_layout::LAYOUT_ATTR)
+                    });
                     return Self {
                         kind: RecordKind::Struct,
-                        name: layout.name(ctx).to_owned(),
+                        name: name.unwrap_or("struct").to_owned(),
                         owner: None,
                         fields: positional(fields),
                     };

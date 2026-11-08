@@ -529,7 +529,8 @@ mod tests {
             "{printed}"
         );
         assert!(printed.contains("] -> core.i32"), "{printed}");
-        assert!(printed.contains("__tribute_one_shot_state"), "{printed}");
+        // The one-shot state is a literal layout holding its consumed flag.
+        assert!(printed.contains("adt.struct<(core.i1)>"), "{printed}");
         // The wrapper marks the state consumed before it enters the raw
         // resumption, and traps when it is already consumed.
         assert_eq!(printed.matches("adt.struct_set").count(), 1, "{printed}");
@@ -550,7 +551,7 @@ mod tests {
         lower_continuation_frames(&mut ctx, module).unwrap();
         let printed = module.op().display(&ctx).to_string();
         assert!(!printed.contains("ability.abort"), "{printed}");
-        assert!(!printed.contains("one_shot_state"), "{printed}");
+        assert!(!printed.contains("adt.struct<(core.i1)>"), "{printed}");
         let mut dispatches = Vec::new();
         let _ = walk_op::<()>(&ctx, module.op(), &mut |op| {
             dispatches.extend(effect::DispatchCps::from_op(&ctx, op).ok());

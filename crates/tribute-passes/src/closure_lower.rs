@@ -83,7 +83,7 @@ pub(crate) fn closure_captures_layout(
     let mut view = attrs.view_mut(ctx);
     view.insert(runtime_layout::LAYOUT_ATTR, layout);
     view.insert(runtime_layout::CLOSURE_BASE_ATTR, Attribute::Type(base));
-    adt::Struct::from_fields(ctx, "_closure_captures", fields, attrs).as_type_ref()
+    adt::Struct::literal(ctx, fields, attrs).as_type_ref()
 }
 
 /// Whether `ty` is the closure base storage layout, identified by its

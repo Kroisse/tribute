@@ -34,8 +34,6 @@ use crate::convention_table::{ConventionTables, EntryLayout};
 const ROOT_MAIN_SYMBOL: &str = "__tribute_main";
 const ROOT_DONE_K_SYMBOL: &str = "__tribute_done_k";
 const ROOT_UNHANDLED_SYMBOL: &str = "__tribute_unhandled";
-const ROOT_COMPLETION_CELL_NAME: &str = "__tribute_completion_cell";
-const ERASED_COMPLETION_CELL_NAME: &str = "__tribute_erased_completion_cell";
 const DELIMIT_DONE_PREFIX: &str = "__tribute_delimit_done";
 const DELIMIT_UNHANDLED_PREFIX: &str = "__tribute_delimit_unhandled";
 
@@ -973,12 +971,7 @@ fn build_initial_evidence(
 }
 
 fn completion_cell_type(ctx: &mut IrContext, value_ty: TypeRef) -> TypeRef {
-    let name = if value_ty == core::Nil::params().intern(ctx).as_type_ref() {
-        ROOT_COMPLETION_CELL_NAME
-    } else {
-        ERASED_COMPLETION_CELL_NAME
-    };
-    adt::Struct::from_fields(ctx, name, [value_ty], AttributeMap::new()).as_type_ref()
+    adt::Struct::literal(ctx, [value_ty], AttributeMap::new()).as_type_ref()
 }
 
 /// Recover semantic R only from authenticated callable and nominal frame metadata.
@@ -1104,7 +1097,7 @@ fn validate_root_continuation_frame(
         TargetAbiError::new("target root bridge: worker frame must have an exact nominal layout")
     })?;
     let layout_struct = adt::Struct::from_type_ref(ctx, layout)
-        .filter(|layout_struct| layout_struct.name(ctx) == name)
+        .filter(|layout_struct| layout_struct.name(ctx) == Some(name))
         .filter(|_| continuation_frame::result_type(ctx, layout) == expected_provenance)
         .ok_or_else(|| {
             TargetAbiError::new("target root bridge: worker frame layout provenance is malformed")
@@ -2320,7 +2313,7 @@ mod tests {
 
     #[test]
     fn promoted_root_uses_typed_completion_and_ordinary_call() {
-        let (ctx, module) = compose_promoted_root();
+        let (mut ctx, module) = compose_promoted_root();
         let wrapper = function(&ctx, module, "main");
         let worker = function(&ctx, module, ROOT_MAIN_SYMBOL);
         let done_k = function(&ctx, module, ROOT_DONE_K_SYMBOL);
@@ -2388,11 +2381,11 @@ mod tests {
                 .iter()
                 .all(|op| func::TailCall::from_op(&ctx, *op).is_err())
         );
+        let nil_ty = core::Nil::params().intern(&mut ctx).as_type_ref();
+        let root_cell = completion_cell_type(&mut ctx, nil_ty);
         assert!(wrapper_ops.iter().any(|op| {
             adt::StructNew::from_op(&ctx, *op).is_ok()
-                && ctx.op_result_types(*op).first().is_some_and(|ty| {
-                    ctx.type_attrs(*ty).get_str("name") == Some(ROOT_COMPLETION_CELL_NAME)
-                })
+                && ctx.op_result_types(*op).first() == Some(&root_cell)
         }));
         assert!(
             wrapper_ops

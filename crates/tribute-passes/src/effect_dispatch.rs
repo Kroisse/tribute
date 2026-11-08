@@ -255,13 +255,10 @@ pub(crate) fn pack_payload(
     ctx: &mut IrContext,
     rewriter: &mut PatternRewriter<'_>,
     location: trunk_ir::types::Location,
-    ability: &SymbolPath,
-    op_name: StringRef,
     values: &[ValueRef],
     anyref: TypeRef,
 ) -> ValueRef {
-    let payload_type =
-        ability::operation_payload_type_ref(ctx, ability, op_name, values.iter().map(|_| anyref));
+    let payload_type = ability::operation_payload_type_ref(ctx, values.iter().map(|_| anyref));
     let dynamic_values = values
         .iter()
         .map(|&value| {

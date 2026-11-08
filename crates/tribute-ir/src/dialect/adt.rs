@@ -14,16 +14,20 @@ use trunk_ir::op_flag::Pure;
 
 #[trunk_ir::dialect]
 mod adt {
-    /// Validated wrapper for a nominal `adt.struct` layout type.
+    /// Validated wrapper for an `adt.struct` layout type.
     ///
     /// ```text
     /// adt.struct<"Point", (core.i32, core.i32)>
     /// adt.struct<"Callback"['a0], (tribute_control.func_sig<(core.i64) -> core.i64 row(| 'a0)>)>
+    /// adt.struct<(core.ptr), {layout = "closure"}>
     /// ```
     ///
-    /// Field types are the type's parameters, in declaration order, and the
-    /// struct's name is the type's `name` attribute. Fields have no names; the
-    /// source names are the layout's `adt.struct_decl`. A layout whose
+    /// Field types are the type's parameters, in declaration order. A
+    /// nominal layout's name is the type's `name` attribute, the key an
+    /// `adt.typeref` finds it by; a literal layout has no name and is only its
+    /// fields and attributes (`design/ir.md` § "`adt.struct` nominal layout
+    /// type"). Fields have no names; the source names are the layout's
+    /// `adt.struct_decl`. A layout whose
     /// declaration has row parameters counts its row binders in `row_params`,
     /// written after the name; a row tail inside its field types is the index
     /// of one of them (`design/tribute-dialects.md` § "Nominal row 인자").
@@ -32,7 +36,7 @@ mod adt {
     #[alias_hint]
     #[implements(ManagedRefType)]
     struct Struct<#[rest] FieldTypes> {
-        name: Attr<String>,
+        name: Option<Attr<String>>,
         row_params: Option<Attr<u32>>,
     }
 
@@ -306,8 +310,12 @@ impl ManagedRefType for Array {}
 
 // A named ADT type suggests its `name` as its alias.
 impl TypeAliasHint for Struct {
+    /// The layout's name, or a literal layout's runtime `layout` identifier.
     fn alias_hint<'a>(&self, ctx: &'a IrContext) -> Option<&'a str> {
-        Some(self.name(ctx))
+        self.name(ctx).or_else(|| {
+            ctx.type_attrs(self.as_type_ref())
+                .get_str(crate::runtime_layout::LAYOUT_ATTR)
+        })
     }
 }
 
@@ -728,7 +736,7 @@ impl NominalDecls {
 
     /// The declaration of the struct layout `layout`.
     pub fn of_struct(&self, ctx: &IrContext, layout: Struct) -> Option<StructDecl> {
-        self.structs.get(&layout.name_ref(ctx)).copied()
+        self.structs.get(&layout.name_ref(ctx)?).copied()
     }
 
     /// The declaration of the enum layout `layout`.
@@ -818,8 +826,10 @@ impl trunk_ir::rewrite::RewritePattern for EraseNominalDecls {
 /// A malformed `adt.struct` type.
 #[derive(Clone, Debug, PartialEq, Eq, derive_more::Display, derive_more::Error)]
 pub enum StructTypeError {
-    #[display("missing `{STRUCT_NAME_ATTR}` string")]
-    MissingName,
+    #[display("`{STRUCT_NAME_ATTR}` is not a string")]
+    MalformedName,
+    #[display("a literal `adt.struct` has no `{ROW_PARAMS_ATTR}`")]
+    LiteralRowParams,
     #[display("`fields` is not an `adt.struct` attribute; fields are type parameters")]
     FieldsAttribute,
     #[display("closure base fields are not a prefix of the closure capture layout")]
@@ -834,12 +844,15 @@ impl trunk_ir::type_verifier::VerifyType for Struct {
         if ctx.type_attrs(ty).contains_key("fields") {
             return Err(StructTypeError::FieldsAttribute.into());
         }
-        if ctx
-            .type_attrs(ty)
-            .get_string_ref(STRUCT_NAME_ATTR)
-            .is_none()
-        {
-            return Err(StructTypeError::MissingName.into());
+        let attrs = ctx.type_attrs(ty);
+        match attrs.get(STRUCT_NAME_ATTR) {
+            Some(Attribute::String(_)) => {}
+            Some(_) => return Err(StructTypeError::MalformedName.into()),
+            // A row binder is bound by the declaration a nominal layout has.
+            None if attrs.contains_key(ROW_PARAMS_ATTR) => {
+                return Err(StructTypeError::LiteralRowParams.into());
+            }
+            None => {}
         }
         if let Some(base) = ctx
             .type_attrs(ty)
@@ -938,10 +951,10 @@ impl Struct {
 }
 
 impl Struct {
-    /// Construct an `adt.struct` named `name` with `fields` in declaration
-    /// order.
+    /// Construct the nominal `adt.struct` named `name` with `fields` in
+    /// declaration order.
     ///
-    /// `attrs` holds the remaining type attributes, such as `layout`.
+    /// `attrs` holds the remaining type attributes.
     ///
     /// # Panics
     ///
@@ -950,15 +963,48 @@ impl Struct {
         ctx: &mut IrContext,
         name: impl Into<StringArg>,
         fields: impl IntoIterator<Item = TypeRef>,
+        attrs: AttributeMap,
+    ) -> Self {
+        let name = ctx.intern_string_arg(name.into());
+        Self::build(ctx, Some(name), fields, attrs)
+    }
+
+    /// Construct the literal `adt.struct` of `fields` in declaration order,
+    /// for a compiler storage layout no `adt.typeref` names.
+    ///
+    /// `attrs` holds the type attributes, such as `layout`.
+    ///
+    /// # Panics
+    ///
+    /// If `attrs` has a `fields` or `name` attribute.
+    pub fn literal(
+        ctx: &mut IrContext,
+        fields: impl IntoIterator<Item = TypeRef>,
+        attrs: AttributeMap,
+    ) -> Self {
+        assert!(
+            !attrs.view(ctx).contains_key(STRUCT_NAME_ATTR),
+            "a literal adt.struct has no name"
+        );
+        Self::build(ctx, None, fields, attrs)
+    }
+
+    fn build(
+        ctx: &mut IrContext,
+        name: Option<StringRef>,
+        fields: impl IntoIterator<Item = TypeRef>,
         mut attrs: AttributeMap,
     ) -> Self {
         let mut builder = TypeDataBuilder::new(<Struct as DialectType>::NAME);
         for ty in fields {
             builder = builder.param(ty);
         }
-        let name = ctx.intern_string_arg(name.into());
         attrs.view_mut(ctx).remove(PARAM_ATTRS_ATTR);
-        attrs.view_mut(ctx).insert(STRUCT_NAME_ATTR, name);
+        if let Some(name) = name {
+            attrs
+                .view_mut(ctx)
+                .insert(STRUCT_NAME_ATTR, Attribute::String(name));
+        }
         for (key, value) in attrs {
             builder = builder.attr(key, value);
         }
@@ -974,7 +1020,8 @@ impl Struct {
 
 // === Textual syntax: `adt.struct<"Name", (type {attrs}, ...), {attrs}>` ===
 //
-// The name is always a quoted string.
+// The name is always a quoted string. A literal layout writes no name:
+// `adt.struct<(type {attrs}, ...), {attrs}>`.
 
 impl trunk_ir::asm_format::TypeAsmFormat for Struct {
     fn print(&self, p: &mut trunk_ir::printer::AsmPrinter<'_>) -> std::fmt::Result {
@@ -999,13 +1046,16 @@ fn write_struct_type(
     let s = p.state();
     let ctx = s.ctx();
     let data = ctx.get_type(adt_struct.as_type_ref());
-    write!(
-        p,
-        "adt.struct<{}{}, ({})",
-        display_string(adt_struct.name(ctx)),
-        display_layout_binders(adt_struct.row_params(ctx).unwrap_or(0)),
-        param_list(s, data)
-    )?;
+    p.write_str("adt.struct<")?;
+    if let Some(name) = adt_struct.name(ctx) {
+        write!(
+            p,
+            "{}{}, ",
+            display_string(name),
+            display_layout_binders(adt_struct.row_params(ctx).unwrap_or(0))
+        )?;
+    }
+    write!(p, "({})", param_list(s, data))?;
     let mut attrs = adt_struct.extra_attrs(ctx).peekable();
     if attrs.peek().is_some() {
         write!(p, ", {}", s.attr_dict(attrs))?;
@@ -1062,12 +1112,21 @@ fn parse_layout_name(
 /// Parse the rest of `adt.struct<"Name"['a0], (type {attrs}, ...), {attrs}>`
 /// after its opening bracket. The struct's name becomes the type's `name`
 /// attribute and its binder list, if any, its `row_params`; the type
-/// dictionary may hold neither. Text that does not begin with a string is
-/// the generic spelling.
+/// dictionary may hold neither. A literal layout begins with its field list
+/// and its dictionary may hold no `name`. Text that begins with neither a
+/// string nor `(` is the generic spelling.
 fn parse_struct_type(
     p: &mut trunk_ir::parser::AsmParser<'_>,
     name: &str,
 ) -> trunk_ir::parser::ParseResult<Option<TypeRef>> {
+    if p.peek().starts_with('(') {
+        let params = parse_field_list(p)?;
+        let attrs = parse_layout_attrs(p)?;
+        if attrs.view(p.ctx()).contains_key(STRUCT_NAME_ATTR) {
+            return Err(p.expected("a literal layout's attributes without `name`"));
+        }
+        return p.build_type(name, params, attrs).map(Some);
+    }
     let Some((struct_name, binders)) = parse_layout_name(p, "a struct name")? else {
         return Ok(None);
     };
@@ -1490,6 +1549,9 @@ mod tests {
   !empty = adt.struct<"Empty", ()>
   !nested = adt.struct<"Outer", (adt.struct<"Inner", (core.i32), {layout = "closure"}> {m = 1})>
   !escaped = adt.struct<"say \"hi\"", ()>
+  !literal = adt.struct<(core.ptr, core.i32 {k = 1}), {layout = "closure"}>
+  !literal_empty = adt.struct<()>
+  !literal_nested = adt.struct<(adt.struct<(core.i32)>)>
 }"#;
         let mut ctx = IrContext::new();
         let module = parse_module(&mut ctx, input).expect("adt.struct syntax should parse");
@@ -1500,12 +1562,25 @@ mod tests {
             .collect();
         let i32_ty = TypeDataBuilder::new("core.i32").intern(&mut ctx);
         let point = Struct::from_type_ref(&ctx, aliases["point"]).unwrap();
-        assert_eq!(point.name(&ctx), "Point");
+        assert_eq!(point.name(&ctx), Some("Point"));
         assert_eq!(point.fields(&ctx), [i32_ty, i32_ty]);
         assert!(point.field_attrs(&ctx, 0).is_empty());
         assert_eq!(point.field_attrs(&ctx, 1).len(), 1);
         let empty = Struct::from_type_ref(&ctx, aliases["empty"]).unwrap();
         assert_eq!(empty.field_count(&ctx), 0);
+        let literal = Struct::from_type_ref(&ctx, aliases["literal"]).unwrap();
+        assert_eq!(literal.name(&ctx), None);
+        assert_eq!(literal.field_count(&ctx), 2);
+        // A literal layout is its fields and attributes.
+        let ptr_ty = TypeDataBuilder::new("core.ptr").intern(&mut ctx);
+        assert_eq!(
+            Struct::literal(&mut ctx, [i32_ty], AttributeMap::new()).as_type_ref(),
+            ctx.get_type(aliases["literal_nested"]).params[0]
+        );
+        assert_ne!(
+            Struct::literal(&mut ctx, [ptr_ty], AttributeMap::new()).as_type_ref(),
+            Struct::from_fields(&mut ctx, "P", [ptr_ty], AttributeMap::new()).as_type_ref()
+        );
         let printed = module.display(&ctx).to_string();
         for expected in [
             "!point = adt.struct<\"Point\", (core.i32, core.i32 {k = @v})>",
@@ -1513,6 +1588,9 @@ mod tests {
             "!empty = adt.struct<\"Empty\", ()>",
             ", (adt.struct<\"Inner\", (core.i32), {layout = \"closure\"}> {m = 1})>",
             "adt.struct<\"say \\\"hi\\\"\", ()>",
+            "adt.struct<(core.ptr, core.i32 {k = 1}), {layout = \"closure\"}>",
+            "adt.struct<()>",
+            "adt.struct<(adt.struct<(core.i32)>)>",
         ] {
             assert!(printed.contains(expected), "{expected}\n{printed}");
         }
@@ -1805,9 +1883,17 @@ mod tests {
         let p = ctx.string_attr("P");
         let cases = [
             (
-                "missing `name` string",
+                "`name` is not a string",
                 TypeDataBuilder::new("adt.struct")
                     .param(i32_ty)
+                    .attr("name", Attribute::Int(1))
+                    .build(&mut ctx),
+            ),
+            (
+                "a literal `adt.struct` has no `row_params`",
+                TypeDataBuilder::new("adt.struct")
+                    .param(i32_ty)
+                    .attr("row_params", Attribute::Int(1))
                     .build(&mut ctx),
             ),
             (

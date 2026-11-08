@@ -202,7 +202,7 @@ mod tests {
         parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !Closure = adt.struct<"_closure", (tribute_rt.convention_table_ref), {layout = "closure"}>
+  !Closure = adt.struct<(tribute_rt.convention_table_ref), {layout = "closure"}>
   !Inner = adt.struct<"Inner", (core.i64)>
   !E = adt.enum<"E", [()]>
   !Outer = adt.struct<"Outer", (core.i1, adt.typeref<{name = "Outer"}>, !E, !Inner, !Closure)>

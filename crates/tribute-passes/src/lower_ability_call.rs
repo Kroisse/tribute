@@ -114,15 +114,7 @@ impl OpRewritePattern for LowerCallPattern {
         };
 
         // === 2. Build the canonical payload product. ===
-        let shift_value_val = pack_payload(
-            ctx,
-            rewriter,
-            location,
-            &ability,
-            op_name,
-            value_operands,
-            t.anyref,
-        );
+        let shift_value_val = pack_payload(ctx, rewriter, location, value_operands, t.anyref);
 
         // === 3. Dispatch through target-independent effect ABI ===
         let dispatch_op = effect::DispatchTail::operands(evidence_val, shift_value_val)
