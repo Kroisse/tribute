@@ -598,6 +598,47 @@ fn substitute_layout_binders(
     crate::dialect::tribute_control::substitute_rows(ctx, ty, &rows)
 }
 
+/// [`field_type`] for a value of type `value_ty` whose struct layout is
+/// `layout`, without creating types: `None` also when the field type does
+/// not exist, which no IR value can then have.
+pub fn find_field_type(
+    ctx: &IrContext,
+    layout: Struct,
+    value_ty: TypeRef,
+    field: usize,
+) -> Option<TypeRef> {
+    let ty = layout.field_type(ctx, field)?;
+    find_layout_binders(ctx, layout.row_params(ctx), value_ty, ty)
+}
+
+/// The type of field `field` of variant `tag` of a value of type
+/// `value_ty` whose enum layout is `layout`, as [`find_field_type`] finds a
+/// struct field's.
+pub fn find_variant_field_type(
+    ctx: &IrContext,
+    layout: Enum,
+    value_ty: TypeRef,
+    tag: u32,
+    field: usize,
+) -> Option<TypeRef> {
+    let ty = *layout.variant_fields(ctx, tag)?.get(field)?;
+    find_layout_binders(ctx, layout.row_params(ctx), value_ty, ty)
+}
+
+/// [`substitute_layout_binders`] without creating types.
+fn find_layout_binders(
+    ctx: &IrContext,
+    row_params: Option<u32>,
+    value_ty: TypeRef,
+    ty: TypeRef,
+) -> Option<TypeRef> {
+    if row_params.is_none() {
+        return Some(ty);
+    }
+    let rows = Typeref::from_type_ref(ctx, value_ty)?.rows(ctx);
+    crate::dialect::tribute_control::find_substituted_rows(ctx, ty, &rows)
+}
+
 /// `adt.typeref<"Name"[row(..), ..], {attrs}>`.
 impl trunk_ir::asm_format::TypeAsmFormat for Typeref {
     fn print(&self, p: &mut trunk_ir::printer::AsmPrinter<'_>) -> std::fmt::Result {
