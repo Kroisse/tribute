@@ -926,8 +926,6 @@ fn renumber_placeholders(shape: TypeShape) -> TypeShape {
 pub(crate) enum RowRelation {
     /// The same effects as a set and the same tail.
     SetEqual,
-    /// Rows are not compared.
-    Ignore,
 }
 
 /// Structural equality of types, comparing rows by `relation`.
@@ -1004,9 +1002,6 @@ pub(crate) fn rows_equiv<'db>(
     right: AbilityRow<'db>,
     relation: RowRelation,
 ) -> bool {
-    if relation == RowRelation::Ignore {
-        return true;
-    }
     let contains = |row: AbilityRow<'db>, effect: &AbilityInstance<'db>| {
         row.instances(db).iter().any(|candidate| {
             candidate.ability_id == effect.ability_id

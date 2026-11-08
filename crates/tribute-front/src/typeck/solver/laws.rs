@@ -188,8 +188,7 @@ proptest! {
     }
 
     /// Closed ground types unify exactly when they are structurally equal,
-    /// with rows compared as sets; the quick check agrees when rows are
-    /// ignored.
+    /// with rows compared as sets, and the quick check agrees.
     #[test]
     fn ground_types_unify_iff_equal(
         left in type_shape(TypeGen::GROUND.continuations(true)),
@@ -203,7 +202,7 @@ proptest! {
             prop_assert!(!solver.has_bindings());
             prop_assert_eq!(
                 TypeSolver::new(&db).types_unifiable(left, right),
-                types_equiv(&db, left, right, RowRelation::Ignore),
+                equal,
             );
         }
     }
