@@ -76,14 +76,8 @@ pub(crate) fn closure_captures_layout(
     let mut fields = adt::Struct::from_type_ref(ctx, base)
         .expect("closure base is an adt.struct")
         .fields(ctx)
-        .map(|(name, ty)| (name.to_owned(), ty))
-        .collect::<Vec<_>>();
-    fields.extend(
-        captures
-            .iter()
-            .enumerate()
-            .map(|(index, &ty)| (format!("_{index}"), ty)),
-    );
+        .to_vec();
+    fields.extend_from_slice(captures);
     let mut attrs = AttributeMap::new();
     let layout = ctx.string_attr(runtime_layout::CLOSURE_CAPTURES);
     let mut view = attrs.view_mut(ctx);
@@ -962,8 +956,8 @@ mod tests {
         parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !Named = adt.struct<_closure(func_ptr: core.i32, env: tribute_rt.anyref)>
-  !Layout = adt.struct<Other(code: core.i32), {layout = "closure"}>
+  !Named = adt.struct<"_closure", (core.i32, tribute_rt.anyref)>
+  !Layout = adt.struct<"Other", (core.i32), {layout = "closure"}>
 }"#,
         );
         let alias = |ctx: &IrContext, name: &str| {
@@ -1548,11 +1542,11 @@ mod tests {
                 .get_type(runtime_layout::CLOSURE_BASE_ATTR),
             Some(base)
         );
-        itertools::assert_equal(
+        assert_eq!(
             adt::Struct::from_type_ref(&ctx, layout)
                 .unwrap()
                 .fields(&ctx),
-            [("entries", table_ty), ("_0", i64_ty), ("_1", i32_ty)],
+            [table_ty, i64_ty, i32_ty],
         );
 
         let make = func_by_name(&ctx, module, "make");
@@ -1671,7 +1665,7 @@ mod tests {
             &mut ctx,
             &format!(
                 r#"core.module @test {{
-  !_closure = adt.struct<_closure(func_ptr: core.i32, env: tribute_rt.anyref)>
+  !_closure = adt.struct<"_closure", (core.i32, tribute_rt.anyref)>
   !expected = closure.closure<func.func_sig<({evidence}, core.i32, core.i32) -> core.never>>
   !actual = closure.closure<func.func_sig<({evidence}, core.i32, core.i1) -> core.never>>
   !outer = closure.closure<func.func_sig<({evidence}, core.i32, !expected) -> core.never>>

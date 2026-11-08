@@ -86,7 +86,7 @@ impl Converter<'_> {
 
         // Nominal row arguments and layout row binders stay inside the
         // source-logical boundary, as callable rows do
-        // (`new-plans/ir.md` § "Nominal row 인자").
+        // (`design/tribute-dialects.md` § "Nominal row 인자").
         let erased = if data.name == tribute_ir::dialect::adt::Typeref::NAME {
             Some(tribute_control::ROW_ARGS_ATTR)
         } else if tribute_ir::dialect::adt::is_nominal(self.ctx, ty) {
@@ -127,7 +127,7 @@ impl Converter<'_> {
 
     /// The callable identity of a closure of the source signature `logical`:
     /// its converted parameters and result, without hidden parameters
-    /// (`new-plans/cps-effects.md`, "Closure type의 callable").
+    /// (`design/cps-effects.md`, "Closure type의 callable").
     pub(super) fn source_callable(&mut self, logical: TypeRef) -> TypeRef {
         let callable = tribute_control::FuncSig::from_type_ref(self.ctx, logical)
             .expect("pre-CPS validation checked function type");

@@ -20,24 +20,25 @@ use trunk_ir::TypeRef;
 use trunk_ir::context::IrContext;
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::rewrite::Module;
-use trunk_ir::types::{Attribute, Location, StringRef};
+use trunk_ir::types::{Attribute, Location};
 
 use crate::dialect::adt;
-use crate::dialect::adt::layout::{get_enum_variants, get_struct_fields};
+use crate::dialect::adt::layout::get_struct_fields;
 
 #[trunk_ir::dialect]
 mod tribute_rtti {
     /// The RTTI index and field kinds of one runtime type descriptor.
     ///
     /// For an `adt.struct` layout, `tag` is absent and `fields` lists one
-    /// kind per field. For an `adt.enum` layout, `tag` names the variant and
-    /// `fields` lists one kind per field of that variant. For an `adt.array`,
-    /// `tag` is absent and `fields` is the kind of its element.
+    /// kind per field. For an `adt.enum` layout, `tag` is the variant's
+    /// position, as for `adt.variant_new`, and `fields` lists one kind per
+    /// field of that variant. For an `adt.array`, `tag` is absent and
+    /// `fields` is the kind of its element.
     #[verify]
     #[asm_format(attr_dict_bare)]
     fn layout(
         r#type: Attr<Type>,
-        tag: Option<Attr<String>>,
+        tag: Option<Attr<u32>>,
         index: Attr<u32>,
         fields: Attr<[String]>,
     ) {
@@ -236,16 +237,16 @@ impl fmt::Display for FieldKind {
 }
 
 /// The runtime type descriptor an allocation operation creates: its layout
-/// type, and the variant tag for an `adt.variant_new`.
+/// type, and the variant's position for an `adt.variant_new`.
 pub fn allocation_descriptor(
     ctx: &IrContext,
     op: trunk_ir::OpRef,
-) -> Option<(TypeRef, Option<StringRef>)> {
+) -> Option<(TypeRef, Option<u32>)> {
     if let Ok(new) = adt::StructNew::from_op(ctx, op) {
         return Some((new.r#type(ctx), None));
     }
     let new = adt::VariantNew::from_op(ctx, op).ok()?;
-    Some((new.r#type(ctx), Some(new.tag_ref(ctx))))
+    Some((new.r#type(ctx), Some(new.tag(ctx))))
 }
 
 /// The runtime type descriptor a native allocation operation creates: an
@@ -254,7 +255,7 @@ pub fn allocation_descriptor(
 pub fn native_allocation_descriptor(
     ctx: &IrContext,
     op: trunk_ir::OpRef,
-) -> Option<(TypeRef, Option<StringRef>)> {
+) -> Option<(TypeRef, Option<u32>)> {
     let array_ty = if let Ok(new) = adt::ArrayNew::from_op(ctx, op) {
         new.r#type(ctx)
     } else if let Ok(of) = adt::ArrayOf::from_op(ctx, op) {
@@ -268,11 +269,11 @@ pub fn native_allocation_descriptor(
 }
 
 /// The field types of the descriptor `(ty, tag)`: the struct's fields, the
-/// fields of the enum variant `tag`, or an array's element.
+/// fields of the enum variant at position `tag`, or an array's element.
 pub fn descriptor_field_types(
     ctx: &IrContext,
     ty: TypeRef,
-    tag: Option<StringRef>,
+    tag: Option<u32>,
 ) -> Result<Vec<TypeRef>, String> {
     if let Some(array) = Array::from_type_ref(ctx, ty) {
         return match tag {
@@ -282,17 +283,12 @@ pub fn descriptor_field_types(
     }
     match tag {
         None => get_struct_fields(ctx, ty)
-            .map(|fields| fields.into_iter().map(|(_, ty)| ty).collect())
             .ok_or_else(|| "a layout without a tag must be an adt.struct".into()),
-        Some(tag) => {
-            let variants = get_enum_variants(ctx, ty)
-                .ok_or_else(|| "a layout with a tag must be an adt.enum".to_owned())?;
-            variants
-                .into_iter()
-                .find(|(name, _)| *name == tag)
-                .map(|(_, fields)| fields)
-                .ok_or_else(|| format!("adt.enum has no variant \"{}\"", ctx.str(tag)))
-        }
+        Some(tag) => adt::Enum::from_type_ref(ctx, ty)
+            .ok_or_else(|| "a layout with a tag must be an adt.enum".to_owned())?
+            .variant_fields(ctx, tag)
+            .map(<[TypeRef]>::to_vec)
+            .ok_or_else(|| format!("adt.enum has no variant at position {tag}")),
     }
 }
 
@@ -302,7 +298,7 @@ impl Layout {
         ctx: &mut IrContext,
         location: Location,
         ty: TypeRef,
-        tag: Option<StringRef>,
+        tag: Option<u32>,
         index: u32,
         fields: &[FieldKind],
     ) -> Self {
@@ -322,7 +318,7 @@ impl Layout {
     }
 
     fn decode(self, ctx: &IrContext) -> Result<Vec<FieldKind>, String> {
-        let expected = descriptor_field_types(ctx, self.r#type(ctx), self.tag_ref(ctx))?.len();
+        let expected = descriptor_field_types(ctx, self.r#type(ctx), self.tag(ctx))?.len();
         let fields = self.fields(ctx);
         if fields.len() != expected {
             return Err(format!(
@@ -351,10 +347,10 @@ impl Layout {
     pub fn declared_indices(
         ctx: &IrContext,
         module: Module,
-    ) -> HashMap<(TypeRef, Option<StringRef>), u32> {
+    ) -> HashMap<(TypeRef, Option<u32>), u32> {
         Self::declared(ctx, module)
             .into_iter()
-            .map(|layout| ((layout.r#type(ctx), layout.tag_ref(ctx)), layout.index(ctx)))
+            .map(|layout| ((layout.r#type(ctx), layout.tag(ctx)), layout.index(ctx)))
             .collect()
     }
 
@@ -385,9 +381,9 @@ mod tests {
         parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !point = adt.struct<Point(x: core.i32)>
+  !point = adt.struct<"Point", (core.i32)>
   !point_ref = adt.typeref<{name = "Point"}>
-  !choice = adt.enum<Choice { None() }>
+  !choice = adt.enum<"Choice", [()]>
   !any = tribute_rt.anyref
   !small = tribute_rt.intref
   !raw = core.ptr
@@ -423,10 +419,10 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !Pair = adt.struct<Pair(left: tribute_rt.anyref, right: core.i64)>
-  !Choice = adt.enum<Choice { None(), Some(!Pair, core.f64) }>
+  !Pair = adt.struct<"Pair", (tribute_rt.anyref, core.i64)>
+  !Choice = adt.enum<"Choice", [(), (!Pair, core.f64)]>
   tribute_rtti.layout {type = !Pair, index = 32, fields = ["dynamic", "u64"]}
-  tribute_rtti.layout {type = !Choice, tag = "Some", index = 33, fields = ["managed", "f64"]}
+  tribute_rtti.layout {type = !Choice, tag = 1, index = 33, fields = ["managed", "f64"]}
 }"#,
         );
         let layouts = module
@@ -447,7 +443,7 @@ mod tests {
                 }
             ]
         );
-        assert_eq!(layouts[1].tag(&ctx), Some("Some"));
+        assert_eq!(layouts[1].tag(&ctx), Some(1));
         assert_eq!(
             layouts[1].field_kinds(&ctx),
             [FieldKind::Managed, FieldKind::Float { width: 64 }]
@@ -493,8 +489,8 @@ mod tests {
                 "must be an adt.struct",
             ),
             (
-                r#"tribute_rtti.layout {type = !Choice, tag = "Other", index = 33, fields = []}"#,
-                "has no variant \"Other\"",
+                r#"tribute_rtti.layout {type = !Choice, tag = 2, index = 33, fields = []}"#,
+                "has no variant at position 2",
             ),
         ] {
             let mut ctx = IrContext::new();
@@ -502,8 +498,8 @@ mod tests {
                 &mut ctx,
                 &format!(
                     r#"core.module @test {{
-  !Pair = adt.struct<Pair(left: tribute_rt.anyref, right: core.i64)>
-  !Choice = adt.enum<Choice {{ None() }}>
+  !Pair = adt.struct<"Pair", (tribute_rt.anyref, core.i64)>
+  !Choice = adt.enum<"Choice", [()]>
   {layout}
 }}"#
                 ),

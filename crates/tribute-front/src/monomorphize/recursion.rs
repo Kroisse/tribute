@@ -1,5 +1,5 @@
 //! Reject polymorphic recursion before specialization
-//! (`new-plans/generics.md`, "Polymorphic Recursion").
+//! (`design/generics.md`, "Polymorphic Recursion").
 use std::ops::ControlFlow;
 
 use super::validate::{InstanceError, InstanceErrorKind};

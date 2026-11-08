@@ -6,7 +6,7 @@ use trunk_ir::refs::{OpRef, TypeRef};
 use trunk_ir::types::{Attribute, AttributeMap};
 
 /// The root-module dictionary of prelude type identities, keyed by
-/// canonical declaration path (`new-plans/ir.md`).
+/// canonical declaration path (`design/tribute-dialects.md`).
 pub const PRELUDE_TYPES_ATTR: &str = "tribute.types";
 
 const STRING_PATH: &str = "std::String";
@@ -33,7 +33,8 @@ pub fn publish_prelude_type(ctx: &mut IrContext, module: OpRef, path: &str, ty: 
 }
 
 /// The root-module reference to the function the root package of an
-/// executable build declares as its entry point (`new-plans/ir.md`).
+/// executable build declares as its entry point
+/// (`design/tribute-dialects.md`).
 pub const ROOT_ENTRY_ATTR: &str = "tribute.entry";
 
 /// The entry function the root module `module` names, if any.
@@ -93,6 +94,20 @@ impl WellKnownTypes {
             publish_prelude_type(ctx, module, STRING_PATH, string);
         }
     }
+}
+
+/// The prelude `String` layout of the root module `module` and the position
+/// of its `Leaf` variant, which a string literal builds, as the module's
+/// nominal declarations name it. `None` when the module publishes no
+/// `String` or does not declare it.
+pub fn string_leaf(ctx: &IrContext, module: trunk_ir::rewrite::Module) -> Option<(TypeRef, u32)> {
+    use trunk_ir::ops::DialectType;
+
+    let string = WellKnownTypes::from_module(ctx, module.op()).string?;
+    let layout = crate::dialect::adt::Enum::from_type_ref(ctx, string)?;
+    let leaf = crate::dialect::adt::NominalDecls::collect(ctx, module)
+        .variant_position(ctx, layout, "Leaf")?;
+    Some((string, leaf))
 }
 
 #[cfg(test)]

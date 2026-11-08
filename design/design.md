@@ -7,8 +7,8 @@
 Tribute는 정적 타입과 algebraic effects를 갖춘 함수형 프로그래밍 언어이다.
 
 Current implementation and target support is tracked separately in
-[capabilities.md](capabilities.md). Design intent in this document is not a
-support claim.
+[capabilities.md](../docs/capabilities.md). Design intent in this document is
+not a support claim.
 
 ### Design Goals
 
@@ -275,8 +275,9 @@ Source → CST → AST
 
 Frontend는 source의 결과 타입과 operation kind를 보존한다. Continuation과 hidden
 ABI 인자는 shared CPS legalization이 만들고, target 경계가 callable 결과 목록과
-closure 저장소를 물리화한다. 구체적인 pass 순서와 검증 경계는
-[implementation.md](implementation.md)와 [cps-effects.md](cps-effects.md)를 따른다.
+closure 저장소를 물리화한다. 구체적인 pass 순서는
+[lowering.md](lowering.md#pipeline-order), 검증 경계는
+[abi-boundary.md](abi-boundary.md)를 따른다.
 
 ---
 
@@ -315,7 +316,7 @@ closure 저장소를 물리화한다. 구체적인 pass 순서와 검증 경계�
 WasmGC는 shared middle-end가 만든 tail-call CPS, 명시적 evidence와 closure IR을
 소비한다. Target lowering은 GC layout과 exact callable signature를 정하고,
 직접/간접 proper-tail transfer를 Wasm 명령어로 내린다. 실행 지원 범위는
-[capabilities.md](capabilities.md), target 계약은 [wasm-backend.md](wasm-backend.md)를
+[capabilities.md](../docs/capabilities.md), target 계약은 [wasm-backend.md](wasm-backend.md)를
 따른다.
 
 ### 코드 생성

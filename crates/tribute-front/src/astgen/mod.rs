@@ -215,7 +215,7 @@ fn index_items<'db>(
 /// Parse and lower the file of the file module at `path` in its package,
 /// like [`lower_source_to_parsed_ast_with_module_path`]. Its items are owned
 /// as the same items declared inline would be
-/// (`new-plans/implementation.md` § 패키지 source 트리와 파일 입력).
+/// (`design/implementation.md` § 패키지 source 트리와 파일 입력).
 #[salsa::tracked(returns(as_ref))]
 pub fn lower_file_module<'db>(
     db: &'db dyn salsa::Database,

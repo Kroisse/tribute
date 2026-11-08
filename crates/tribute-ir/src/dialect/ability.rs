@@ -150,7 +150,7 @@ mod ability {
     /// `(Evidence, ability.frame<R>, V) -> core.never`; the result is an
     /// `ability.frame<V>`. When the frame is resumed, the optional
     /// `evidence_plan` selects the evidence passed to the resumed inner
-    /// computation, in the syntax of `new-plans/ir.md`, "Evidence 선택 속성".
+    /// computation, in the syntax of `design/tribute-dialects.md`, "Evidence 선택 속성".
     /// A frame for a structured branch has none. The produced frame's type is
     /// not inferred: it is built from the continuation's value type.
     #[verify]
@@ -292,7 +292,7 @@ mod ability {
     /// %r = ability.delimit %body, %ev : R
     /// ```
     ///
-    /// The value delimiter of `new-plans/cps-effects.md`, "값 delimiter".
+    /// The value delimiter of `design/cps-effects.md`, "값 delimiter".
     /// `body` is the `Cps` closure `(Evidence, ability.frame<R>) -> core.never`
     /// and the result is one `R`. `evidence` is the flow's evidence, or the
     /// result of `effect.initial_evidence` in a `Direct` flow, which takes no
@@ -334,10 +334,6 @@ pub fn operation_payload_type_ref(
     fields: impl IntoIterator<Item = trunk_ir::TypeRef>,
 ) -> trunk_ir::TypeRef {
     let op_idx = compute_op_idx(ability, ctx.str(op_name));
-    let fields = fields
-        .into_iter()
-        .enumerate()
-        .map(|(index, ty)| (format!("arg{index}"), ty));
     crate::dialect::adt::Struct::from_fields(
         ctx,
         format!("__tribute_ability_payload_{op_idx:08x}"),
@@ -480,7 +476,7 @@ use trunk_ir::types::{Attribute, Location, StringRef};
 
 /// The evidence marker: a nominal reference to the prelude's
 /// `std::runtime::evidence::Marker`, whose layout the root module publishes
-/// in `tribute.types` (`new-plans/cps-effects.md`).
+/// in `tribute.types` (`design/cps-effects.md`).
 pub fn marker_adt_type_ref(ctx: &mut IrContext) -> TypeRef {
     let name = crate::runtime_items::runtime_symbol(crate::runtime_items::evidence::MARKER);
     let name = ctx.intern_symbol_text(&name);

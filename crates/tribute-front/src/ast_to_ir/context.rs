@@ -387,6 +387,17 @@ impl<'db> IrLoweringCtx<'db> {
         self.nominal.variant_field_names(layout, tag)
     }
 
+    /// Register the declaration position of an enum variant.
+    pub fn register_variant_position(&mut self, layout: TypeRef, tag: Symbol, position: u32) {
+        self.nominal
+            .register_variant_position(layout, tag, position)
+    }
+
+    /// The declaration position of the variant `tag` of the enum `layout`.
+    pub fn variant_position(&self, layout: TypeRef, tag: &Symbol) -> Option<u32> {
+        self.nominal.variant_position(layout, tag)
+    }
+
     /// Field names of a struct in declaration order.
     pub fn struct_field_names(&self, ctor_id: CtorId<'db>) -> Option<&[Symbol]> {
         self.nominal.struct_field_names(ctor_id)
@@ -498,22 +509,22 @@ impl<'db> IrLoweringCtx<'db> {
         self.nominal.ability_symbol(ability_name, arguments)
     }
 
-    /// Create an `adt.struct` type with name and fields.
+    /// Create an `adt.struct` type with name and field types.
     pub fn adt_struct_type(
         &self,
         ir: &mut IrContext,
         name: &Symbol,
-        fields: &[(Symbol, TypeRef)],
+        fields: &[TypeRef],
     ) -> TypeRef {
         self.nominal.adt_struct_type(ir, name, fields)
     }
 
-    /// Create an `adt.enum` type with name and variants.
+    /// Create an `adt.enum` type with name and each variant's field types.
     pub fn adt_enum_type(
         &self,
         ir: &mut IrContext,
         name: &Symbol,
-        variants: &[(Symbol, Vec<TypeRef>)],
+        variants: &[Vec<TypeRef>],
     ) -> TypeRef {
         self.nominal.adt_enum_type(ir, name, variants)
     }
@@ -523,7 +534,7 @@ impl<'db> IrLoweringCtx<'db> {
         &self,
         ir: &mut IrContext,
         name: &Symbol,
-        variants: &[(Symbol, Vec<TypeRef>)],
+        variants: &[Vec<TypeRef>],
         definition: Location,
     ) -> TypeRef {
         self.nominal

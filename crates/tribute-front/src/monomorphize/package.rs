@@ -1,6 +1,6 @@
 //! Each library package's specialization, which reads the packages it
 //! depends on only through their checked results
-//! (`new-plans/implementation.md`, "프론트엔드 단계 경계와 정보 소유권").
+//! (`design/implementation.md`, "프론트엔드 단계 경계와 정보 소유권").
 
 use salsa::Accumulator;
 

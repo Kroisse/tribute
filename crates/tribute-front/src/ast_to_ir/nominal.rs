@@ -62,6 +62,9 @@ pub(crate) struct NominalTypes<'db> {
     /// [field names in declaration order]. Used to match brace-form
     /// constructor patterns by name.
     variant_field_names: HashMap<(TypeRef, Symbol), Vec<Symbol>>,
+    /// The declaration position of each enum variant: (enum layout, tag) →
+    /// position, which variant operations take as their `tag`.
+    variant_positions: HashMap<(TypeRef, Symbol), u32>,
     /// Type map: type name → arena TypeRef for adt.struct / adt.enum.
     /// Used for named structs, tuples, and (future) enum variants.
     type_map: HashMap<Symbol, TypeRef>,
@@ -81,6 +84,7 @@ impl<'db> NominalTypes<'db> {
             db,
             struct_fields: HashMap::default(),
             variant_field_names: HashMap::default(),
+            variant_positions: HashMap::default(),
             type_map: HashMap::default(),
             logical_nominal_declarations: HashSet::default(),
             row_binders: HashMap::default(),
@@ -186,6 +190,21 @@ impl<'db> NominalTypes<'db> {
     /// Field names of a named-field enum variant in declaration order.
     pub(crate) fn variant_field_names(&self, layout: TypeRef, tag: Symbol) -> Option<Vec<Symbol>> {
         self.variant_field_names.get(&(layout, tag)).cloned()
+    }
+
+    /// Register the declaration position of an enum variant.
+    pub(crate) fn register_variant_position(
+        &mut self,
+        layout: TypeRef,
+        tag: Symbol,
+        position: u32,
+    ) {
+        self.variant_positions.insert((layout, tag), position);
+    }
+
+    /// The declaration position of the variant `tag` of the enum `layout`.
+    pub(crate) fn variant_position(&self, layout: TypeRef, tag: &Symbol) -> Option<u32> {
+        self.variant_positions.get(&(layout, tag.clone())).copied()
     }
 
     /// Field names of a struct in declaration order.
@@ -525,27 +544,24 @@ impl<'db> NominalTypes<'db> {
         )])
     }
 
-    /// Create an `adt.struct` type with name and fields.
+    /// Create an `adt.struct` type with name and field types.
     pub(crate) fn adt_struct_type(
         &self,
         ir: &mut IrContext,
         name: &Symbol,
-        fields: &[(Symbol, TypeRef)],
+        fields: &[TypeRef],
     ) -> TypeRef {
         let name = ir.intern_symbol_text(name);
-        let fields: Vec<_> = fields
-            .iter()
-            .map(|(field, ty)| (ir.intern_symbol_text(field), *ty))
-            .collect();
-        adt::Struct::from_fields(ir, name, fields, AttributeMap::new()).as_type_ref()
+        adt::Struct::from_fields(ir, name, fields.iter().copied(), AttributeMap::new())
+            .as_type_ref()
     }
 
-    /// Create an `adt.enum` type with name and variants.
+    /// Create an `adt.enum` type with name and each variant's field types.
     pub(crate) fn adt_enum_type(
         &self,
         ir: &mut IrContext,
         name: &Symbol,
-        variants: &[(Symbol, Vec<TypeRef>)],
+        variants: &[Vec<TypeRef>],
     ) -> TypeRef {
         Self::enum_type(ir, name, variants, AttributeMap::new())
     }
@@ -555,7 +571,7 @@ impl<'db> NominalTypes<'db> {
         &self,
         ir: &mut IrContext,
         name: &Symbol,
-        variants: &[(Symbol, Vec<TypeRef>)],
+        variants: &[Vec<TypeRef>],
         definition: Location,
     ) -> TypeRef {
         let mut attrs = AttributeMap::new();
@@ -568,14 +584,11 @@ impl<'db> NominalTypes<'db> {
     fn enum_type(
         ir: &mut IrContext,
         name: &Symbol,
-        variants: &[(Symbol, Vec<TypeRef>)],
+        variants: &[Vec<TypeRef>],
         attrs: AttributeMap,
     ) -> TypeRef {
         let name = ir.intern_symbol_text(name);
-        let variants: Vec<_> = variants
-            .iter()
-            .map(|(variant, fields)| (ir.intern_symbol_text(variant), fields.iter().copied()))
-            .collect();
+        let variants = variants.iter().map(|fields| fields.iter().copied());
         adt::Enum::from_variants(ir, name, variants, attrs).as_type_ref()
     }
 

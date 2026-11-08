@@ -12,8 +12,7 @@
 //! structural type of the struct it names, or the abstract struct reference
 //! when it names an enum, whose variants have different types.
 
-use tribute_ir::dialect::adt::layout::{get_enum_variants, get_struct_fields};
-use trunk_ir::StringRef;
+use tribute_ir::dialect::adt::layout::get_struct_fields;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::wasm_gc;
 use trunk_ir::refs::TypeRef;
@@ -37,7 +36,7 @@ pub fn struct_type(ctx: &mut IrContext, ty: TypeRef) -> Option<TypeRef> {
         let fields = get_struct_fields(ctx, ty)?;
         let params: Vec<_> = fields
             .into_iter()
-            .map(|(_, field)| field_type(ctx, field))
+            .map(|field| field_type(ctx, field))
             .collect();
         return Some(
             wasm_gc::Struct::params(params)
@@ -50,17 +49,15 @@ pub fn struct_type(ctx: &mut IrContext, ty: TypeRef) -> Option<TypeRef> {
         return None;
     }
     let fields = get_struct_fields(ctx, ty)?;
-    Some(described_struct(
-        ctx,
-        fields.into_iter().map(|(_, field)| field),
-    ))
+    Some(described_struct(ctx, fields))
 }
 
-/// The `wasm_gc.struct` of variant `tag` of the enum layout `enum_ty`.
-pub fn variant_type(ctx: &mut IrContext, enum_ty: TypeRef, tag: StringRef) -> Option<TypeRef> {
-    let (_, fields) = get_enum_variants(ctx, enum_ty)?
-        .into_iter()
-        .find(|(variant, _)| *variant == tag)?;
+/// The `wasm_gc.struct` of the variant at position `tag` of the enum layout
+/// `enum_ty`.
+pub fn variant_type(ctx: &mut IrContext, enum_ty: TypeRef, tag: u32) -> Option<TypeRef> {
+    let fields = tribute_ir::dialect::adt::Enum::from_type_ref(ctx, enum_ty)?
+        .variant_fields(ctx, tag)?
+        .to_vec();
     Some(described_struct(ctx, fields))
 }
 
@@ -147,16 +144,15 @@ mod tests {
         parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !Point = adt.struct<Point(x: core.f64, y: core.f64)>
-  !Size = adt.struct<Size(width: core.f64, height: core.f64)>
-  !Shape = adt.enum<Shape { Rect(core.f64, core.f64), Dot() }>
+  !Point = adt.struct<"Point", (core.f64, core.f64)>
+  !Size = adt.struct<"Size", (core.f64, core.f64)>
+  !Shape = adt.enum<"Shape", [(core.f64, core.f64), ()]>
 }"#,
         );
         let [point, size, shape] = ["Point", "Size", "Shape"].map(|name| alias(&ctx, name));
         let point = struct_type(&mut ctx, point).expect("user struct");
         let size = struct_type(&mut ctx, size).expect("user struct");
-        let rect_tag = ctx.intern_str("Rect");
-        let rect = variant_type(&mut ctx, shape, rect_tag).expect("variant");
+        let rect = variant_type(&mut ctx, shape, 0).expect("variant");
 
         assert_eq!(point, size);
         assert_eq!(point, rect);
@@ -175,8 +171,8 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !Pair = adt.struct<Pair(left: core.i64, right: core.i64)>
-  !Shape = adt.enum<Shape { Dot() }>
+  !Pair = adt.struct<"Pair", (core.i64, core.i64)>
+  !Shape = adt.enum<"Shape", [()]>
   wasm.func @f(%pair: adt.typeref<{name = "Pair"}>, %shape: adt.typeref<{name = "Shape"}>, %unknown: adt.typeref<{name = "Missing"}>) -> core.nil {
     wasm.return
   }
@@ -206,10 +202,10 @@ mod tests {
         parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !Closure = adt.struct<_closure(entries: tribute_rt.convention_table_ref), {layout = "closure"}>
-  !Inner = adt.struct<Inner(value: core.i64)>
-  !E = adt.enum<E { None() }>
-  !Outer = adt.struct<Outer(flag: core.i1, next: adt.typeref<{name = "Outer"}>, e: !E, inner: !Inner, f: !Closure)>
+  !Closure = adt.struct<"_closure", (tribute_rt.convention_table_ref), {layout = "closure"}>
+  !Inner = adt.struct<"Inner", (core.i64)>
+  !E = adt.enum<"E", [()]>
+  !Outer = adt.struct<"Outer", (core.i1, adt.typeref<{name = "Outer"}>, !E, !Inner, !Closure)>
 }"#,
         );
         let closure = alias(&ctx, "Closure");

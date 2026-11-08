@@ -32,7 +32,7 @@ use trunk_ir::rewrite::type_converter::TypeConverter;
 use trunk_ir::rewrite::{
     ConversionError, ConversionTarget, Module, OpRewritePattern, PatternApplicator,
 };
-use trunk_ir::types::{Location, StringRef, TypeDataBuilder};
+use trunk_ir::types::{Location, TypeDataBuilder};
 
 /// Name of the runtime allocation function.
 const ALLOC_FN: &str = "__tribute_alloc";
@@ -155,7 +155,7 @@ pub(super) fn rc_allocation(
 /// %result    = clif.iadd(%payload, %zero)         // identity
 /// ```
 struct StructNewPattern {
-    rtti_map: HashMap<(TypeRef, Option<StringRef>), u32>,
+    rtti_map: HashMap<(TypeRef, Option<u32>), u32>,
     ptr_ty: TypeRef,
     i64_ty: TypeRef,
 }
@@ -269,7 +269,7 @@ impl OpRewritePattern for StructNewPattern {
 /// %result    = clif.iadd(%payload, %zero)         // identity
 /// ```
 struct VariantNewPattern {
-    rtti_map: HashMap<(TypeRef, Option<StringRef>), u32>,
+    rtti_map: HashMap<(TypeRef, Option<u32>), u32>,
     ptr_ty: TypeRef,
     i64_ty: TypeRef,
 }
@@ -285,7 +285,7 @@ impl OpRewritePattern for VariantNewPattern {
     ) -> Option<()> {
         let op = variant_new.op_ref();
         let enum_ty = variant_new.r#type(ctx);
-        let tag = variant_new.tag_ref(ctx);
+        let tag = variant_new.tag(ctx);
         let tc = rewriter.type_converter();
 
         let Some(variant_layout) = compute_variant_layout(ctx, enum_ty, tag, tc) else {
@@ -511,8 +511,7 @@ mod tests {
         let i32_ty = core::I32::type_ref(&mut ctx);
 
         // Point(x: i32, y: i32) - two scalar fields
-        let point_ty =
-            crate::native::rtti::make_struct_type(&mut ctx, &[("x", i32_ty), ("y", i32_ty)]);
+        let point_ty = crate::native::rtti::make_struct_type(&mut ctx, &[i32_ty, i32_ty]);
         let output = build_and_lower(&mut ctx, loc, point_ty, &[i32_ty, i32_ty]);
         insta::assert_snapshot!(output);
     }

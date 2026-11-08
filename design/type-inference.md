@@ -263,6 +263,9 @@ Row ::= {}                    -- 빈 row (순수)
 // OK: 타입 파라미터가 다르면 다른 ability로 취급
 fn foo() ->{State(Int), State(String)} Nil
 
+// OK: 닫힌 row {Ask}와 {Tell}은 같아질 수 없으므로 함수 인자의 effect만 달라도 다른 instance
+fn quux() ->{State(fn() ->{Ask} Nat), State(fn() ->{Tell} Nat)} Nil
+
 // Error: 동일한 ability 중복
 fn bar() ->{State(Int), State(Int)} Nil
 
@@ -993,7 +996,7 @@ binder를 참조하며, 지역 사용처마다 새로 인스턴스화하지 않�
 purity를 다시 추론하지 않는다.
 
 Lowering은 `let`에 묶인 람다를 원래 binding 위치에서 한 번만 만들고, 사용마다
-그 사용의 row 인자로 인스턴스화한다([IR 계약](ir.md#지역-람다의-양화와-인스턴스화)).
+그 사용의 row 인자로 인스턴스화한다([IR 계약](tribute-dialects.md#지역-람다의-양화와-인스턴스화)).
 사용처의 타입에 맞춘 람다를 따로 만들지 않으며, 첫 사용의 타입을 다른 사용 전체에
 적용하지도 않는다. 임의의 callable-producing RHS를 사용처마다 다시 평가하지 않는다.
 

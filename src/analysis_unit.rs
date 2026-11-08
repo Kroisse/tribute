@@ -1,5 +1,5 @@
 //! The packages the language server analyzes a document in
-//! (`new-plans/lsp.md` § 문서가 속한 패키지).
+//! (`design/lsp.md` § 문서가 속한 패키지).
 
 use itertools::Itertools;
 use tribute_core::diagnostic::{Diagnostic, SpanDiagnostic};
@@ -125,7 +125,7 @@ impl AnalysisUnit {
 }
 
 /// The packages the language server analyzes the file `document` in
-/// (`new-plans/lsp.md` § 문서가 속한 패키지): each root of the package the
+/// (`design/lsp.md` § 문서가 속한 패키지): each root of the package the
 /// file belongs to whose source tree reads it, the library first. A file
 /// no such root reads, or in no package, is analyzed as an executable root
 /// of its own.

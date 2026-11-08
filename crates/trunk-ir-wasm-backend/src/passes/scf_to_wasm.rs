@@ -4,8 +4,11 @@
 //! - `scf.if` -> `wasm.if`
 //! - `scf.loop` -> `wasm.block(wasm.loop(...))`
 //! - `scf.yield` -> `wasm.yield` (tracks region result value)
-//! - `scf.continue` -> `wasm.br(target=1)` (branch to loop)
-//! - `scf.break` -> `wasm.br(target=2)` (branch to outer block, past if and loop)
+//! - `scf.continue` -> `wasm.br` to the enclosing `wasm.loop`
+//! - `scf.break` -> `wasm.br` to the `wasm.block` around that loop
+//!
+//! A loop lowers its exits after the structures around them, since a Wasm
+//! branch names its target by the number of labels in between.
 
 use rustc_hash::FxHashSet as HashSet;
 use std::ops::ControlFlow;
@@ -66,8 +69,6 @@ pub fn lower(
         .add_pattern(ScfSwitchPattern(&plan))
         .add_pattern(ScfLoopPattern(&plan))
         .add_pattern(ScfYieldPattern)
-        .add_pattern(ScfContinuePattern)
-        .add_pattern(ScfBreakPattern)
         .with_target(scf_to_wasm_target())
         .apply_partial_conversion(ctx, module, SCF_TO_WASM_BOUNDARY)?;
     Ok(())
@@ -544,10 +545,10 @@ impl OpRewritePattern for ScfIfPattern<'_> {
 
 /// Pattern for `scf.loop` -> `wasm.block(wasm.loop(...))`
 ///
-/// The loop is wrapped in a block to provide a break target.
-/// From inside a `wasm.if` within the loop body:
-/// - `wasm.br(target=1)` branches to the loop (continue)
-/// - `wasm.br(target=2)` branches to the block (break)
+/// The loop is wrapped in a block to provide a break target. The loop
+/// lowers its own `scf.continue` and `scf.break` to `wasm.br`, as
+/// structured-to-CFG lowering does: the applicator lowers nested controls
+/// first, so the labels between each exit and the loop are known here.
 struct ScfLoopPattern<'a>(&'a ScfLoweringPlan);
 
 impl OpRewritePattern for ScfLoopPattern<'_> {
@@ -572,9 +573,19 @@ impl OpRewritePattern for ScfLoopPattern<'_> {
         // Get init operands
         let init: Vec<_> = loop_op.init(ctx).to_vec();
 
-        // Detach the body region from the original loop op
         let body = loop_op.body(ctx);
+        let exits = rewriter.require(
+            collect_loop_exits(ctx, body),
+            "a loop exit is nested in an operation that is not a Wasm label",
+        )?;
+        rewriter.ensure(
+            exits.iter().all(|exit| ctx.op_operands(exit.op).len() <= 1),
+            "multiple loop-carried values are not supported",
+        )?;
+
+        // Detach the body region from the original loop op
         ctx.detach_region(body);
+        lower_loop_exits(ctx, &exits);
 
         // The created `wasm.loop` owns the detached body, so its block
         // arguments become Wasm-level parameters. Declare them with target
@@ -671,86 +682,77 @@ impl OpRewritePattern for ScfYieldPattern {
     }
 }
 
-/// Pattern for `scf.continue` -> `wasm.br(target=1)`
-///
-/// Branches to the enclosing wasm.loop. Depth 1 is correct because
-/// `scf.continue` is always inside a `scf.if` (depth 0 = wasm.if,
-/// depth 1 = wasm.loop) within a `scf.loop`.
-struct ScfContinuePattern;
-
-impl OpRewritePattern for ScfContinuePattern {
-    type Op = scf::Continue;
-
-    fn match_and_rewrite(
-        &self,
-        ctx: &mut IrContext,
-        continue_op: Self::Op,
-        rewriter: &mut PatternRewriter<'_>,
-    ) -> Option<()> {
-        let op = continue_op.op_ref();
-        let loc = ctx.op(op).location;
-
-        // Get loop-carried values (variadic operands)
-        let values = ctx.op_operands(op).to_vec();
-        if values.len() > 1 {
-            // Multiple loop-carried values not yet supported; leave unlowered.
-            return None;
-        }
-
-        if values.is_empty() {
-            // No loop-carried values -- simple branch
-            let br_op = wasm_dialect::Br::operands().target(1).build(ctx, loc);
-            rewriter.replace_op(br_op.op_ref());
-            return Some(());
-        }
-
-        // Emit wasm.yield(value) + wasm.br(1) for each loop-carried value.
-        // The emit layer will translate yield+br targeting a loop into
-        // local.set for the loop arg followed by br.
-        let value = values[0];
-        let yield_op = wasm_dialect::Yield::operands(value).build(ctx, loc);
-        let br_op = wasm_dialect::Br::operands().target(1).build(ctx, loc);
-
-        rewriter.insert_op(yield_op.op_ref());
-        rewriter.replace_op(br_op.op_ref());
-        Some(())
-    }
+/// A loop's own `scf.continue` or `scf.break`, with the number of Wasm
+/// labels between it and the loop body.
+struct LoopExit {
+    op: OpRef,
+    labels: u32,
 }
 
-/// Pattern for `scf.break` -> `wasm.yield(value) + wasm.br(target=2)`
-///
-/// Branches to the enclosing wasm.block with a result value.
-/// `scf.break` is always inside a `scf.if` within a `scf.loop`, so after
-/// lowering the nesting is: wasm.block > wasm.loop > wasm.if. From inside
-/// the wasm.if, depth 2 targets the outer wasm.block (break out of loop).
-///
-/// According to WASM spec, `br` instruction takes no operands - values are
-/// passed via the stack. We use `wasm.yield` to mark the break value as the
-/// region's result, then branch without operands.
-struct ScfBreakPattern;
-
-impl OpRewritePattern for ScfBreakPattern {
-    type Op = scf::Break;
-
-    fn match_and_rewrite(
-        &self,
-        ctx: &mut IrContext,
-        break_op: Self::Op,
-        rewriter: &mut PatternRewriter<'_>,
+/// Collect the exits of the loop whose body is `body`, skipping the bodies
+/// of nested loops, which own their exits. The applicator lowers nested
+/// controls first, so every label between an exit and the body is a Wasm
+/// `block`, `loop`, or `if`; `None` reports any other enclosing operation.
+fn collect_loop_exits(ctx: &IrContext, body: RegionRef) -> Option<Vec<LoopExit>> {
+    /// `labels` is `None` below an operation that is not a Wasm label.
+    fn walk(
+        ctx: &IrContext,
+        region: RegionRef,
+        labels: Option<u32>,
+        exits: &mut Vec<LoopExit>,
     ) -> Option<()> {
-        let op = break_op.op_ref();
-        let loc = ctx.op(op).location;
-        let value = break_op.value(ctx);
-
-        // Emit the break value via wasm.yield (marks it as region result)
-        let yield_op = wasm_dialect::Yield::operands(value).build(ctx, loc);
-
-        // Branch to outer block (depth 2: if=0, loop=1, block=2)
-        let br_op = wasm_dialect::Br::operands().target(2).build(ctx, loc);
-
-        rewriter.insert_op(yield_op.op_ref());
-        rewriter.replace_op(br_op.op_ref());
+        for &block in &ctx.region(region).blocks {
+            for &op in &ctx.block(block).ops {
+                if scf::Continue::matches(ctx, op) || scf::Break::matches(ctx, op) {
+                    exits.push(LoopExit {
+                        op,
+                        labels: labels?,
+                    });
+                } else if !(wasm_dialect::Loop::matches(ctx, op) || scf::Loop::matches(ctx, op)) {
+                    let nested_labels = if wasm_dialect::Block::matches(ctx, op)
+                        || wasm_dialect::If::matches(ctx, op)
+                    {
+                        labels.map(|labels| labels + 1)
+                    } else {
+                        None
+                    };
+                    for nested in ctx.op_regions(op) {
+                        walk(ctx, nested, nested_labels, exits)?;
+                    }
+                }
+            }
+        }
         Some(())
+    }
+    let mut exits = Vec::new();
+    walk(ctx, body, Some(0), &mut exits)?;
+    Some(exits)
+}
+
+/// Replace each exit with `wasm.br`. Inside the body, `wasm.loop` is one
+/// label past the exit's enclosing labels and the `wasm.block` around it,
+/// the break target, is one more. A carried value is marked by `wasm.yield`
+/// before the branch: the emitter stores a continue's value into the loop
+/// argument and leaves a break's value on the stack for the block.
+fn lower_loop_exits(ctx: &mut IrContext, exits: &[LoopExit]) {
+    for exit in exits {
+        let loc = ctx.op(exit.op).location;
+        let block = ctx
+            .op(exit.op)
+            .parent_block
+            .expect("collected loop exits are in a block");
+        let target = if scf::Break::matches(ctx, exit.op) {
+            exit.labels + 1
+        } else {
+            exit.labels
+        };
+        if let Some(&value) = ctx.op_operands(exit.op).first() {
+            let yield_op = wasm_dialect::Yield::operands(value).build(ctx, loc);
+            ctx.insert_op_before(block, exit.op, yield_op.op_ref());
+        }
+        let br = wasm_dialect::Br::operands().target(target).build(ctx, loc);
+        ctx.insert_op_before(block, exit.op, br.op_ref());
+        trunk_ir::rewrite::erase_op(ctx, exit.op);
     }
 }
 
@@ -1258,6 +1260,138 @@ mod tests {
             output.contains("wasm_gc.array<core.i32>"),
             "operand types must keep their producer spelling: {output}"
         );
+    }
+
+    /// The `wasm.br` targets in printed order.
+    fn br_targets(output: &str) -> Vec<&str> {
+        output
+            .lines()
+            .filter_map(|line| line.trim().strip_prefix("wasm.br {target = "))
+            .map(|rest| rest.trim_end_matches('}'))
+            .collect()
+    }
+
+    #[test]
+    fn loop_exits_branch_past_every_enclosing_label() {
+        let output = lower_text(
+            r#"core.module @test {
+  func.func @main(%init: core.i32, %a: core.i1, %b: core.i1) -> core.i32 {
+    %r = scf.loop(%init) -> (core.i32) {
+      ^body(%acc: core.i32):
+        scf.if %a {
+          scf.if %b {
+            scf.break %acc
+          } else {
+            scf.continue %acc
+          }
+          scf.yield
+        } else {
+          scf.yield
+        }
+        scf.continue %acc
+    }
+    func.return %r
+  }
+}"#,
+        );
+
+        // Inner if, outer if, loop, then the block around the loop.
+        assert_eq!(br_targets(&output), ["3", "2", "0"], "{output}");
+    }
+
+    #[test]
+    fn loop_body_continue_targets_the_loop() {
+        let output = lower_text(
+            r#"core.module @test {
+  func.func @main(%init: core.i32) -> core.nil {
+    scf.loop(%init) {
+      ^body(%acc: core.i32):
+        scf.continue %acc
+    }
+    func.return
+  }
+}"#,
+        );
+
+        assert_eq!(br_targets(&output), ["0"], "{output}");
+    }
+
+    #[test]
+    fn loop_exits_in_switch_cases_count_the_case_dispatch() {
+        let output = lower_text(
+            r#"core.module @test {
+  func.func @main(%init: core.i32, %choice: core.i32) -> core.i32 {
+    %r = scf.loop(%init) -> (core.i32) {
+      ^body(%acc: core.i32):
+        scf.index_switch %choice : (core.i32) -> ()
+        case 0 {
+          scf.continue %acc
+        }
+        case 1 {
+          scf.break %acc
+        }
+        default {
+          scf.continue %acc
+        }
+        scf.continue %acc
+    }
+    func.return %r
+  }
+}"#,
+        );
+
+        // Case 0 is in the outer comparison; case 1 and the default are in
+        // the nested one.
+        assert_eq!(br_targets(&output), ["1", "3", "2", "0"], "{output}");
+    }
+
+    #[test]
+    fn lowered_loop_exits_in_nested_controls_emit_a_valid_module() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  wasm.func @count(%init: core.i32, %choice: core.i32) -> (core.i32) {
+      %r = scf.loop(%init) -> (core.i32) {
+        ^body(%acc: core.i32):
+          %zero = wasm.i32_const 0 : core.i32
+          %done = "wasm.i32_eq"(%acc, %zero) : core.i32
+          scf.if %done {
+            scf.break %acc
+          } else {
+            scf.yield
+          }
+          scf.index_switch %choice : (core.i32) -> ()
+          case 0 {
+            %one = wasm.i32_const 1 : core.i32
+            %next = "wasm.i32_sub"(%acc, %one) : core.i32
+            scf.continue %next
+          }
+          case 1 {
+            scf.break %acc
+          }
+          default {
+            scf.yield
+          }
+          scf.continue %acc
+      }
+      wasm.return %r
+  }
+}"#,
+        );
+        lower(
+            &mut ctx,
+            module,
+            TypeConverter::new(),
+            &mut Default::default(),
+        )
+        .expect("loop exits should lower to wasm");
+        let bytes = crate::emit_module_to_wasm(&mut ctx, module)
+            .expect("lowered loop exits must emit")
+            .bytes;
+        wasmparser::Validator::new()
+            .validate_all(&bytes)
+            .expect("lowered loop exits must validate");
     }
 
     fn control_fixture(body: &str) -> String {

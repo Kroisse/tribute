@@ -3,7 +3,7 @@
 use tribute_ir::dialect::adt;
 use trunk_ir::context::{BlockData, IrContext, RegionData};
 use trunk_ir::dialect::{arith, core, func, mem, scf};
-use trunk_ir::ops::DialectOp;
+use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{
     ConversionError, ConversionTarget, Module, OpRewritePattern, PatternApplicator,
@@ -32,23 +32,45 @@ const MESSAGE_OFFSET: u32 = 16;
 /// Lower every `tribute_io` operation and add the required runtime declarations.
 fn lower(ctx: &mut IrContext, module: Module) -> Result<(), ConversionError> {
     ensure_runtime_declarations(ctx, module);
-    let read_line_result_ty = find_read_line_result_type(ctx);
+    let read_line_result = find_read_line_result(ctx, module);
 
     PatternApplicator::new(TypeConverter::new())
         .add_pattern(NativeWritePattern)
-        .add_pattern(NativeReadLinePattern {
-            read_line_result_ty,
-        })
+        .add_pattern(NativeReadLinePattern { read_line_result })
         .with_target(ConversionTarget::new().illegal_dialect(tribute_io::DIALECT_NAME))
         .apply_partial_conversion(ctx, module, "io-to-native")?;
     Ok(())
 }
 
-fn find_read_line_result_type(ctx: &IrContext) -> Option<TypeRef> {
-    ctx.types().iter().find_map(|(ty, data)| {
-        (data.name == <tribute_ir::dialect::adt::Enum as trunk_ir::ops::DialectType>::NAME
+/// The `std::io::ReadLineResult` layout and the position of each variant.
+#[derive(Clone, Copy)]
+struct ReadLineResult {
+    ty: TypeRef,
+    line: u32,
+    end_of_file: u32,
+    invalid_encoding: u32,
+    system: u32,
+}
+
+fn find_read_line_result(ctx: &IrContext, module: Module) -> Option<ReadLineResult> {
+    let ty = ctx.types().iter().find_map(|(ty, data)| {
+        (data.name == <adt::Enum as DialectType>::NAME
             && data.attrs.view(ctx).get_str("name") == Some(READ_LINE_RESULT_TYPE))
         .then_some(ty)
+    })?;
+    let layout = adt::Enum::from_type_ref(ctx, ty)?;
+    let decls = adt::NominalDecls::collect(ctx, module);
+    let position = |variant| {
+        decls
+            .variant_position(ctx, layout, variant)
+            .unwrap_or_else(|| panic!("std::io declares the `{variant}` of ReadLineResult"))
+    };
+    Some(ReadLineResult {
+        ty,
+        line: position("ReadLine"),
+        end_of_file: position("ReadEndOfFile"),
+        invalid_encoding: position("ReadInvalidEncoding"),
+        system: position("ReadSystem"),
     })
 }
 
@@ -112,7 +134,7 @@ impl OpRewritePattern for NativeWritePattern {
 }
 
 struct NativeReadLinePattern {
-    read_line_result_ty: Option<TypeRef>,
+    read_line_result: Option<ReadLineResult>,
 }
 
 impl OpRewritePattern for NativeReadLinePattern {
@@ -125,7 +147,8 @@ impl OpRewritePattern for NativeReadLinePattern {
         rewriter: &mut PatternRewriter<'_>,
     ) -> Option<()> {
         let op = read_line.op_ref();
-        let enum_ty = self.read_line_result_ty?;
+        let variants = self.read_line_result?;
+        let enum_ty = variants.ty;
 
         let loc = ctx.op(op).location;
         let result_ty = ctx.op_result_types(op)[0];
@@ -179,17 +202,17 @@ impl OpRewritePattern for NativeReadLinePattern {
             loc,
             enum_ty,
             result_ty,
-            "ReadSystem",
+            variants.system,
             [code.result(ctx), message.result(ctx)],
         );
         let invalid_region =
-            variant_region(ctx, loc, enum_ty, result_ty, "ReadInvalidEncoding", []);
+            variant_region(ctx, loc, enum_ty, result_ty, variants.invalid_encoding, []);
         let invalid_if = scf::If::operands(invalid_cond.result(ctx))
             .results(result_ty)
             .regions(invalid_region, system_region)
             .build(ctx, loc);
 
-        let eof_region = variant_region(ctx, loc, enum_ty, result_ty, "ReadEndOfFile", []);
+        let eof_region = variant_region(ctx, loc, enum_ty, result_ty, variants.end_of_file, []);
         let eof_else = op_region(ctx, loc, invalid_if.op_ref(), invalid_if.result(ctx));
         let eof_if = scf::If::operands(eof_cond.result(ctx))
             .results(result_ty)
@@ -201,7 +224,7 @@ impl OpRewritePattern for NativeReadLinePattern {
             loc,
             enum_ty,
             result_ty,
-            "ReadLine",
+            variants.line,
             [bytes.result(ctx)],
         );
         let line_else = op_region(ctx, loc, eof_if.op_ref(), eof_if.result(ctx));
@@ -255,7 +278,7 @@ fn variant_region<const N: usize>(
     loc: Location,
     enum_ty: TypeRef,
     result_ty: TypeRef,
-    tag: &'static str,
+    tag: u32,
     fields: [ValueRef; N],
 ) -> RegionRef {
     let variant = adt::VariantNew::operands(fields)
@@ -316,7 +339,8 @@ mod tests {
             &mut ctx,
             r#"
             core.module @test {
-                !"std::io::ReadLineResult" = adt.enum<"std::io::ReadLineResult" { ReadLine(core.bytes), ReadEndOfFile(), ReadInvalidEncoding(), ReadSystem(core.i32, core.bytes) }>
+                !"std::io::ReadLineResult" = adt.enum<"std::io::ReadLineResult", [(core.bytes), (), (), (core.i32, core.bytes)]>
+                adt.enum_decl "std::io::ReadLineResult" [ReadLine, ReadEndOfFile, ReadInvalidEncoding, ReadSystem]
 
                 func.func @caller(%0: core.bytes, %1: core.i1) -> tribute_rt.anyref {
                 ^bb0:
@@ -340,10 +364,9 @@ mod tests {
             output.contains("func.call @__tribute_io_read_line("),
             "{output}"
         );
-        assert!(output.contains("tag = \"ReadLine\""), "{output}");
-        assert!(output.contains("tag = \"ReadEndOfFile\""), "{output}");
-        assert!(output.contains("tag = \"ReadInvalidEncoding\""), "{output}");
-        assert!(output.contains("tag = \"ReadSystem\""), "{output}");
+        for tag in 0..4 {
+            assert!(output.contains(&format!("tag = {tag}, ")), "{output}");
+        }
 
         let validation = trunk_ir::validation::validate_value_integrity(&ctx, module);
         assert!(validation.is_ok(), "{:?}", validation.errors);

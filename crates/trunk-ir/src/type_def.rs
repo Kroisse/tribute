@@ -84,7 +84,7 @@ impl TypeDef {
         }
     }
 
-    /// This definition, declared identified (`new-plans/ir.md` § "식별
+    /// This definition, declared identified (`design/ir.md` § "식별
     /// 타입"). Its assembly format must write the body.
     pub const fn identified(self) -> Self {
         Self {

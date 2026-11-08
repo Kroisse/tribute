@@ -420,7 +420,7 @@ fn inject_builtin_bindings<'db>(db: &'db dyn salsa::Database, env: &mut PackageE
 }
 
 /// Export the compiler-owned runtime types into `std::runtime`, as
-/// `pub(pkg)` items of the library package (`new-plans/modules.md`,
+/// `pub(pkg)` items of the library package (`design/modules.md`,
 /// "Compiler 소유 runtime 모듈"). A package that merges the library sees
 /// them as another package's restricted items, so it cannot name them.
 fn inject_runtime_bindings<'db>(db: &'db dyn salsa::Database, env: &mut PackageEnv<'db>) {

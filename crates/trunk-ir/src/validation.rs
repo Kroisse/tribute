@@ -1324,7 +1324,7 @@ pub fn validate_all(
 }
 
 /// Check that every identified type `module` reaches has a body
-/// (`new-plans/ir.md` § "식별 타입"): the types of its values and in its
+/// (`design/ir.md` § "식별 타입"): the types of its values and in its
 /// attributes, their parameters, and the bodies of identified types.
 pub fn validate_type_bodies(ctx: &IrContext, module: Module) -> ValidationResult {
     fn reach(

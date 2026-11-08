@@ -337,9 +337,9 @@ fn substitution_rebuilds_callables_and_tuple_layouts() {
 }
 
 const NOMINAL_ROWS: &str = r#"core.module @test {
-  !Callback = adt.struct<Callback['a0](run: tribute_control.func_sig<() -> core.i32 row(@B | 'a0)>)>
-  !open = adt.typeref<Callback[row(@A | 'a0)]>
-  !closed = adt.typeref<Callback[row(@A)]>
+  !Callback = adt.struct<"Callback"['a0], (tribute_control.func_sig<() -> core.i32 row(@B | 'a0)>)>
+  !open = adt.typeref<"Callback"[row(@A | 'a0)]>
+  !closed = adt.typeref<"Callback"[row(@A)]>
   !holder = tribute_control.func_sig<(!open) -> core.i32>
 }"#;
 
@@ -391,13 +391,13 @@ fn tuple_names_tell_row_arguments_apart() {
 fn row_arguments_match_the_layouts_row_binders() {
     assert_rejects(
         r#"core.module @test {
-  !Callback = adt.struct<Callback['a0](run: tribute_control.func_sig<() -> core.i32 row(| 'a0)>)>
-  !Point = adt.struct<Point(x: core.i32)>
-  tribute_control.func @missing(%c: adt.typeref<Callback>) -> core.i32 {
+  !Callback = adt.struct<"Callback"['a0], (tribute_control.func_sig<() -> core.i32 row(| 'a0)>)>
+  !Point = adt.struct<"Point", (core.i32)>
+  tribute_control.func @missing(%c: adt.typeref<"Callback">) -> core.i32 {
     %x = arith.constant 0 : core.i32
     tribute_control.return %x
   }
-  tribute_control.func @extra(%p: adt.typeref<Point[row()]>) -> core.i32 {
+  tribute_control.func @extra(%p: adt.typeref<"Point"[row()]>) -> core.i32 {
     %x = arith.constant 0 : core.i32
     tribute_control.return %x
   }
@@ -406,8 +406,8 @@ fn row_arguments_match_the_layouts_row_binders() {
     );
     assert_rejects(
         r#"core.module @test {
-  !Point = adt.struct<Point(x: core.i32)>
-  tribute_control.func @extra(%p: adt.typeref<Point[row()]>) -> core.i32 {
+  !Point = adt.struct<"Point", (core.i32)>
+  tribute_control.func @extra(%p: adt.typeref<"Point"[row()]>) -> core.i32 {
     %x = arith.constant 0 : core.i32
     tribute_control.return %x
   }
@@ -420,8 +420,8 @@ fn row_arguments_match_the_layouts_row_binders() {
 fn a_row_argument_tail_is_a_binder_of_its_definition() {
     assert_rejects(
         r#"core.module @test {
-  !Callback = adt.struct<Callback['a0](run: tribute_control.func_sig<() -> core.i32 row(| 'a0)>)>
-  tribute_control.func @f(%c: adt.typeref<Callback[row(| 'a0)]>) -> core.i32 {
+  !Callback = adt.struct<"Callback"['a0], (tribute_control.func_sig<() -> core.i32 row(| 'a0)>)>
+  tribute_control.func @f(%c: adt.typeref<"Callback"[row(| 'a0)]>) -> core.i32 {
     %x = arith.constant 0 : core.i32
     tribute_control.return %x
   }

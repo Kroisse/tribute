@@ -5,12 +5,12 @@
 //! extracted inside the matched region.
 
 use tribute_ir::dialect::adt;
-use tribute_ir::dialect::adt::layout::{get_enum_variants, get_struct_fields};
+use tribute_ir::dialect::adt::layout::get_struct_fields;
 use tribute_ir::dialect::list;
 use trunk_ir::context::{BlockData, IrContext, RegionData};
 use trunk_ir::dialect::{arith, scf};
 use trunk_ir::refs::{BlockRef, TypeRef, ValueRef};
-use trunk_ir::types::{Attribute, Location, StringRef};
+use trunk_ir::types::{Attribute, Location};
 use trunk_ir::{Symbol, SymbolPath};
 
 use crate::ast::{LiteralPattern, NodeId, Pattern, PatternKind, ResolvedRef, TypedRef};
@@ -31,11 +31,8 @@ fn logical_tuple_pattern_layout<'db>(
     let struct_ty = super::get_or_create_logical_tuple_type(ctx, ir, pattern)
         .unwrap_or_else(|| panic!("missing typechecked logical tuple layout"))
         .1;
-    let field_tys = get_struct_fields(ir, struct_ty)
-        .expect("logical tuple layout must be an adt.struct")
-        .into_iter()
-        .map(|(_, ty)| ty)
-        .collect();
+    let field_tys =
+        get_struct_fields(ir, struct_ty).expect("logical tuple layout must be an adt.struct");
     (struct_ty, field_tys)
 }
 
@@ -149,11 +146,11 @@ enum ConstructorLayout {
     Variant(VariantLayout),
 }
 
-/// The enum layout of one variant: the enum type, the variant's tag, and its
-/// field types.
+/// The enum layout of one variant: the enum type, the variant's position, and
+/// its field types.
 struct VariantLayout {
     ty: TypeRef,
-    tag: StringRef,
+    tag: u32,
     fields: Vec<TypeRef>,
 }
 
@@ -177,7 +174,6 @@ fn logical_constructor_pattern<'p, 'db>(
     let ty = super::resolve_enum_type_attr_for_constructor(ctx, ir, &ctor.resolved, ctor.ty);
     let (layout, names) = match get_struct_fields(ir, ty) {
         Some(fields) => {
-            let fields = fields.into_iter().map(|(_, ty)| ty).collect();
             let names = match &*pattern.kind {
                 PatternKind::Record { .. } => ctx
                     .struct_field_names(id)
@@ -188,11 +184,7 @@ fn logical_constructor_pattern<'p, 'db>(
             (ConstructorLayout::Struct { ty, fields }, names)
         }
         None => {
-            let fields = get_enum_variants(ir, ty)
-                .expect("logical constructor layout must be a struct or an enum")
-                .into_iter()
-                .find_map(|(tag, fields)| (variant == ir.str(tag)).then_some(fields))
-                .expect("resolved logical enum variant must exist");
+            let (tag, fields) = super::expr::constructor_variant(ctx, ir, ty, &variant);
             let names = match &*pattern.kind {
                 PatternKind::Record { .. } => ctx
                     .variant_field_names(ty, variant.clone())
@@ -200,11 +192,7 @@ fn logical_constructor_pattern<'p, 'db>(
                 _ => Vec::new(),
             };
             (
-                ConstructorLayout::Variant(VariantLayout {
-                    ty,
-                    tag: ir.intern_symbol_text(&variant),
-                    fields,
-                }),
+                ConstructorLayout::Variant(VariantLayout { ty, tag, fields }),
                 names,
             )
         }
@@ -266,10 +254,7 @@ pub(super) fn variant_tag_pattern<'db>(
             if !fields.iter().all(|(_, field)| irrefutable(field)) {
                 return None;
             }
-            let position = get_enum_variants(ir, layout.ty)?
-                .iter()
-                .position(|(tag, _)| *tag == layout.tag)?;
-            Some((layout.ty, position as u32))
+            Some((layout.ty, layout.tag))
         }
         _ => None,
     }

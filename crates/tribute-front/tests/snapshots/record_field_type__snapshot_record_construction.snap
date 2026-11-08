@@ -3,7 +3,7 @@ source: crates/tribute-front/tests/record_field_type.rs
 expression: ir_text
 ---
 core.module @test {
-  !"pkg::Point" = adt.struct<"pkg::Point"(x: core.i32, y: core.i32)>
+  !"pkg::Point" = adt.struct<"pkg::Point", (core.i32, core.i32)>
   !"pkg::Point_1" = adt.typeref<"pkg::Point">
   !t1 = tribute_control.func_sig<(!"pkg::Point_1", core.i32) -> !"pkg::Point_1">
   !t2 = tribute_control.func_sig<(core.i32) -> core.i32 row(| 'a0)>

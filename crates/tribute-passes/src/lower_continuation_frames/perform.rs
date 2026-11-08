@@ -54,13 +54,8 @@ fn push_one_shot_resume(
         })?;
     let i1_type = TypeDataBuilder::new("core.i1").intern(ctx);
     let state_name = ctx.intern_str("__tribute_one_shot_state");
-    let state_type = adt::Struct::from_fields(
-        ctx,
-        state_name,
-        [("consumed", i1_type)],
-        AttributeMap::new(),
-    )
-    .as_type_ref();
+    let state_type =
+        adt::Struct::from_fields(ctx, state_name, [i1_type], AttributeMap::new()).as_type_ref();
     let not_consumed = arith::Constant::operands()
         .value(Attribute::Int(0))
         .results(i1_type)

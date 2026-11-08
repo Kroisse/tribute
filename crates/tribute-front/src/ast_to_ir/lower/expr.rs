@@ -1,10 +1,31 @@
 //! Constructor coercion.
 
 use super::IrBuilder;
-use tribute_ir::dialect::adt::layout::get_enum_variants;
+use crate::ast_to_ir::context::IrLoweringCtx;
+use tribute_ir::dialect::adt;
 use trunk_ir::Symbol;
+use trunk_ir::context::IrContext;
+use trunk_ir::ops::DialectType;
 use trunk_ir::refs::{TypeRef, ValueRef};
 use trunk_ir::types::Location;
+
+/// The declaration position and field types of the variant `variant` of the
+/// enum layout `enum_ty`.
+pub(super) fn constructor_variant(
+    ctx: &IrLoweringCtx<'_>,
+    ir: &IrContext,
+    enum_ty: TypeRef,
+    variant: &Symbol,
+) -> (u32, Vec<TypeRef>) {
+    let position = ctx
+        .variant_position(enum_ty, variant)
+        .expect("resolved constructor must name a declared variant");
+    let fields = adt::Enum::from_type_ref(ir, enum_ty)
+        .and_then(|layout| layout.variant_fields(ir, position))
+        .expect("a declared variant is in its enum layout")
+        .to_vec();
+    (position, fields)
+}
 
 /// Coerce constructor arguments to the representation recorded in the enum
 /// layout. Generic enum fields are erased to `anyref`, so primitive payloads
@@ -16,13 +37,7 @@ pub(super) fn cast_variant_args<'db>(
     enum_ty: TypeRef,
     variant: &Symbol,
 ) -> Vec<ValueRef> {
-    let field_types = get_enum_variants(builder.ir, enum_ty)
-        .and_then(|variants| {
-            variants
-                .into_iter()
-                .find_map(|(tag, fields)| (variant == builder.ir.str(tag)).then_some(fields))
-        })
-        .expect("resolved constructor must exist in enum metadata");
+    let (_, field_types) = constructor_variant(builder.ctx, builder.ir, enum_ty, variant);
 
     assert_eq!(
         args.len(),

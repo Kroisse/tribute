@@ -49,7 +49,7 @@ use trunk_ir::rewrite::{
 };
 use trunk_ir::smallvec::smallvec;
 use trunk_ir::types::Location;
-use trunk_ir::{BlockRef, OpRef, RegionRef, StringRef, TypeRef, ValueRef};
+use trunk_ir::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
 
 use tribute_ir::dialect::{tribute_rt, tribute_rtti};
 
@@ -172,7 +172,7 @@ fn validate_declarations(
     let mut declared = HashSet::default();
     let mut indices = HashSet::default();
     for layout in layouts {
-        if !declared.insert((layout.r#type(ctx), layout.tag_ref(ctx))) {
+        if !declared.insert((layout.r#type(ctx), layout.tag(ctx))) {
             return Err(RttiError("a descriptor is declared more than once".into()));
         }
         let index = layout.index(ctx);
@@ -251,7 +251,7 @@ pub(crate) fn generate_rtti(
     let mut records = Vec::with_capacity(layouts.len());
     for layout in layouts {
         let ty = layout.r#type(ctx);
-        let tag = layout.tag_ref(ctx);
+        let tag = layout.tag(ctx);
         let rtti_idx = layout.index(ctx);
         let fields = layout.field_kinds(ctx);
         release_fns.insert(rtti_idx, release_fn_symbol(rtti_idx));
@@ -594,7 +594,7 @@ struct DescriptorRelease {
 fn descriptor_release(
     ctx: &IrContext,
     ty: TypeRef,
-    tag: Option<StringRef>,
+    tag: Option<u32>,
     fields: &[FieldKind],
     type_converter: &TypeConverter,
 ) -> DescriptorRelease {
@@ -1021,14 +1021,13 @@ fn gen_dealloc_and_return_with_size(
     ctx.push_op(block, ret_op.op_ref());
 }
 
-/// Build an `adt.struct` type with named fields (for testing and internal use).
+/// Build an `adt.struct` type with `fields` (for testing and internal use).
 #[cfg(test)]
-pub(crate) fn make_struct_type(ctx: &mut IrContext, fields: &[(&'static str, TypeRef)]) -> TypeRef {
-    let fields = fields.iter().map(|&(name, ty)| (name, ty));
+pub(crate) fn make_struct_type(ctx: &mut IrContext, fields: &[TypeRef]) -> TypeRef {
     tribute_ir::dialect::adt::Struct::from_fields(
         ctx,
         "Test",
-        fields,
+        fields.iter().copied(),
         trunk_ir::types::AttributeMap::new(),
     )
     .as_type_ref()
@@ -1169,7 +1168,7 @@ mod tests {
     fn declarations_receive_user_indices_in_plan_order() {
         let (mut ctx, loc) = test_ctx();
         let i32_ty = core::I32::type_ref(&mut ctx);
-        let point_ty = make_struct_type(&mut ctx, &[("x", i32_ty)]);
+        let point_ty = make_struct_type(&mut ctx, &[i32_ty]);
         let module = build_struct_new_module(&mut ctx, loc, point_ty, &[i32_ty]);
 
         declare_planned_layouts(&mut ctx, module);
@@ -1186,7 +1185,7 @@ mod tests {
     fn generation_rejects_an_undeclared_allocation_layout() {
         let (mut ctx, loc) = test_ctx();
         let i32_ty = core::I32::type_ref(&mut ctx);
-        let point_ty = make_struct_type(&mut ctx, &[("x", i32_ty)]);
+        let point_ty = make_struct_type(&mut ctx, &[i32_ty]);
         let module = build_struct_new_module(&mut ctx, loc, point_ty, &[i32_ty]);
         let (tc, _) = crate::native::type_converter::native_type_converter(&mut ctx);
 
@@ -1302,10 +1301,10 @@ mod tests {
         let module = trunk_ir::parser::parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !Choice = adt.enum<Choice { None(), Pair(core.i32, tribute_rt.anyref) }>
+  !Choice = adt.enum<"Choice", [(), (core.i32, tribute_rt.anyref)]>
   func.func @f(%n: core.i32, %v: tribute_rt.anyref) -> core.nil {
-    %none = adt.variant_new {type = !Choice, tag = "None"} : !Choice
-    %pair = adt.variant_new %n, %v {type = !Choice, tag = "Pair"} : !Choice
+    %none = adt.variant_new {tag = 0, type = !Choice} : !Choice
+    %pair = adt.variant_new %n, %v {tag = 1, type = !Choice} : !Choice
     func.return
   }
 }"#,
@@ -1315,8 +1314,7 @@ mod tests {
         generate_rtti(&mut ctx, module, &tc).expect("declared layouts");
 
         let choice = ctx.type_alias_by_text("Choice").expect("Choice alias");
-        let pair = ctx.intern_str("Pair");
-        let none = ctx.intern_str("None");
+        let (none, pair) = (0, 1);
         let pair_layout = compute_variant_layout(&ctx, choice, pair, &tc).expect("Pair layout");
         let none_layout = compute_variant_layout(&ctx, choice, none, &tc).expect("None layout");
         // Each variant is allocated, and so freed, with its own size.
@@ -1377,7 +1375,7 @@ mod tests {
         let module = trunk_ir::parser::parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !Node = adt.struct<Node(value: core.i32)>
+  !Node = adt.struct<"Node", (core.i32)>
   !NodeRef = adt.typeref<{name = "Node"}>
   !Nodes = adt.array<!NodeRef>
   !Shorts = adt.array<core.i16>
@@ -1421,7 +1419,7 @@ mod tests {
         let i32_ty = core::I32::type_ref(&mut ctx);
 
         // Point(x: i32, y: i32) - no managed fields
-        let point_ty = make_struct_type(&mut ctx, &[("x", i32_ty), ("y", i32_ty)]);
+        let point_ty = make_struct_type(&mut ctx, &[i32_ty, i32_ty]);
         let module = build_struct_new_module(&mut ctx, loc, point_ty, &[i32_ty, i32_ty]);
 
         let (tc, _) = crate::native::type_converter::native_type_converter(&mut ctx);
@@ -1439,7 +1437,7 @@ mod tests {
         let managed_ty = tribute_rt::Anyref::params().intern(&mut ctx).as_type_ref();
 
         // Node(value: i32, next: anyref) has one typed managed field.
-        let node_ty = make_struct_type(&mut ctx, &[("value", i32_ty), ("next", managed_ty)]);
+        let node_ty = make_struct_type(&mut ctx, &[i32_ty, managed_ty]);
         let module = build_struct_new_module(&mut ctx, loc, node_ty, &[i32_ty, managed_ty]);
 
         let (tc, _) = crate::native::type_converter::native_type_converter(&mut ctx);
@@ -1456,8 +1454,8 @@ mod tests {
         let i32_ty = core::I32::type_ref(&mut ctx);
         let ptr_ty = core::Ptr::params().intern(&mut ctx).as_type_ref();
 
-        let point_ty = make_struct_type(&mut ctx, &[("x", i32_ty), ("y", i32_ty)]);
-        let node_ty = make_struct_type(&mut ctx, &[("value", i32_ty), ("next", ptr_ty)]);
+        let point_ty = make_struct_type(&mut ctx, &[i32_ty, i32_ty]);
+        let node_ty = make_struct_type(&mut ctx, &[i32_ty, ptr_ty]);
 
         // Build module with two struct_new ops
         let func_ty = func::func_sig(&mut ctx, [i32_ty, i32_ty, ptr_ty], [node_ty]).as_type_ref();
@@ -1563,7 +1561,7 @@ mod tests {
         let managed_ty = tribute_rt::Anyref::params().intern(&mut ctx).as_type_ref();
 
         // The raw code pointer is unmanaged; the typed environment is managed.
-        let closure_ty = make_struct_type(&mut ctx, &[("func_ptr", ptr_ty), ("env", managed_ty)]);
+        let closure_ty = make_struct_type(&mut ctx, &[ptr_ty, managed_ty]);
         let module = build_struct_new_module(&mut ctx, loc, closure_ty, &[ptr_ty, managed_ty]);
 
         let (tc, _) = crate::native::type_converter::native_type_converter(&mut ctx);

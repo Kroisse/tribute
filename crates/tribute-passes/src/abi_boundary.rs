@@ -1,6 +1,6 @@
 //! Representation/ABI boundary exit verification.
 //!
-//! The boundary exit contract (`new-plans/ir.md`, "Representation/ABI 경계")
+//! The boundary exit contract (`design/abi-boundary.md`, "Representation/ABI 경계")
 //! forbids upper-level control operations, types, and semantic metadata past
 //! the point where target dialect lowering begins. This module reports every
 //! violation of that contract, and the pipeline rejects a module with any.
@@ -927,7 +927,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   !frame = adt.typeref<{name = "Frame", tribute.cps_continuation_frame_result = core.nil}>
-  !holder = adt.struct<Holder(callback: func.func_sig<(core.ptr) -> !frame>)>
+  !holder = adt.struct<"Holder", (func.func_sig<(core.ptr) -> !frame>)>
   func.func @run(%value: !holder) {
     func.return
   }
@@ -954,8 +954,8 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !Holder = adt.struct<Holder['a0](callback: core.ptr)>
-  func.func @run(%value: adt.typeref<Holder[row()]>, %layout: !Holder) {
+  !Holder = adt.struct<"Holder"['a0], (core.ptr)>
+  func.func @run(%value: adt.typeref<"Holder"[row()]>, %layout: !Holder) {
     func.return
   }
 }"#,

@@ -160,12 +160,12 @@ use tribute_ir::dialect::tribute_rtti::{descriptor_field_types, native_allocatio
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RttiTypePlan {
     pub ty: TypeRef,
-    pub tag: Option<StringRef>,
+    pub tag: Option<u32>,
     pub fields: Vec<FieldKind>,
 }
 
 impl RttiTypePlan {
-    pub fn key(&self) -> (TypeRef, Option<StringRef>) {
+    pub fn key(&self) -> (TypeRef, Option<u32>) {
         (self.ty, self.tag)
     }
 }
@@ -574,7 +574,7 @@ fn types_compatible(
 /// Plan the managed allocation descriptors, in first-allocation order.
 fn build_rtti_plan(
     ctx: &IrContext,
-    descriptors: impl IntoIterator<Item = (TypeRef, Option<StringRef>)>,
+    descriptors: impl IntoIterator<Item = (TypeRef, Option<u32>)>,
     managed_layouts: &HashSet<TypeRef>,
 ) -> Result<Vec<RttiTypePlan>, OwnershipPlanError> {
     let mut seen = HashSet::default();
@@ -591,7 +591,7 @@ fn build_rtti_plan(
 fn build_field_kinds(
     ctx: &IrContext,
     ty: TypeRef,
-    tag: Option<StringRef>,
+    tag: Option<u32>,
     managed_layouts: &HashSet<TypeRef>,
 ) -> Result<Vec<FieldKind>, OwnershipPlanError> {
     let fields = descriptor_field_types(ctx, ty, tag)

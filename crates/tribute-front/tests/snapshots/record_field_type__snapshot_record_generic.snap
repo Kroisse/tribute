@@ -3,8 +3,8 @@ source: crates/tribute-front/tests/record_field_type.rs
 expression: ir_text
 ---
 core.module @test {
-  !"pkg::Pair" = adt.struct<"pkg::Pair"(first: tribute_rt.anyref, second: tribute_rt.anyref)>
-  !"pkg::Pair$Int$Bool" = adt.struct<"pkg::Pair$Int$Bool"(first: core.i32, second: core.i1)>
+  !"pkg::Pair" = adt.struct<"pkg::Pair", (tribute_rt.anyref, tribute_rt.anyref)>
+  !"pkg::Pair$Int$Bool" = adt.struct<"pkg::Pair$Int$Bool", (core.i32, core.i1)>
   !"pkg::Pair$Int$Bool_1" = adt.typeref<"pkg::Pair$Int$Bool">
   !"pkg::Pair_1" = adt.typeref<"pkg::Pair">
   !t1 = tribute_control.func_sig<(!"pkg::Pair_1", tribute_rt.anyref) -> !"pkg::Pair_1">

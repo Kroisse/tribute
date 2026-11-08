@@ -1,6 +1,6 @@
 //! The frontend check of the compiler-owned runtime.
 //!
-//! Runtime code is the prelude module `std::runtime` (`new-plans/modules.md`,
+//! Runtime code is the prelude module `std::runtime` (`design/modules.md`,
 //! "Compiler 소유 runtime 모듈"). Every runtime item lowering uses must have a
 //! declaration of its kind at its canonical path, and every function of the
 //! runtime module must keep to the runtime code constraints. The source

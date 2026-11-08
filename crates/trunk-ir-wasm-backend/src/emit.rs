@@ -687,7 +687,7 @@ fn collect_module_info(ctx: &mut IrContext, module: IrModule) -> CompilationResu
     // whose calls were already removed. Resolve the surviving references freshly
     // from this final IR and drop the declarations nothing uses. Emission is
     // read-only here, distinct from generic DCE and authenticated intrinsic
-    // deletion; see `new-plans/wasm-backend.md`.
+    // deletion; see `design/wasm-backend.md`.
     let references = references::collect_function_references(ctx, module)?;
     references::dispose_bodyless_declarations(ctx, &mut info.funcs, &info.imports, &references)?;
 

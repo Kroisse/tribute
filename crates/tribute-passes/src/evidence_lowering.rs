@@ -4,7 +4,7 @@
 //! target. It lowers `effect.extend`, the evidence selection operations,
 //! `effect.dispatch_tail`, and `effect.dispatch_cps` to calls of the evidence
 //! runtime written in Tribute source, `std::runtime::evidence`
-//! (`new-plans/cps-effects.md`), which it finds by canonical path. The runtime
+//! (`design/cps-effects.md`), which it finds by canonical path. The runtime
 //! functions are compiled like any other source function; marker
 //! construction and field access stay inside them. The lowering is the same
 //! on every target.
@@ -19,7 +19,7 @@ use tribute_ir::runtime_items::{RuntimeFunction, RuntimeFunctionError, evidence}
 use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{core, func};
-use trunk_ir::ops::DialectOp;
+use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::pass::{Pass, PassRunResult};
 use trunk_ir::refs::{OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{
@@ -43,6 +43,8 @@ pub struct EvidenceRuntime {
     tail: Option<RuntimeFunction>,
     with_tail: Option<RuntimeFunction>,
     push: Option<RuntimeFunction>,
+    /// The position of `Some` in the `Option(Dispatch)` that `extend` takes.
+    some: Option<u32>,
 }
 
 /// Find the evidence runtime functions that the module's `effect.*`
@@ -60,16 +62,27 @@ pub(crate) fn prepare_evidence_runtime(
             .then(|| RuntimeFunction::lookup(ctx, module, path))
             .transpose()
     };
+    let extend = find(needs.extend, evidence::EXTEND)?;
+    let some = extend.map(|extend| {
+        let option_ty = extend.signature(ctx).inputs(ctx)[3];
+        let option = adt::layout_of(ctx, option_ty)
+            .and_then(|layout| adt::Enum::from_type_ref(ctx, layout))
+            .expect("the Option(Dispatch) layout is published");
+        adt::NominalDecls::collect(ctx, module)
+            .variant_position(ctx, option, "Some")
+            .expect("the prelude declares Option's `Some`")
+    });
     Ok(EvidenceRuntime {
         lookup: find(needs.lookup, evidence::LOOKUP)?,
         lookup_tr: find(needs.lookup_tr, evidence::LOOKUP_TR)?,
-        extend: find(needs.extend, evidence::EXTEND)?,
+        extend,
         mask: find(needs.mask, evidence::MASK)?,
         dup: find(needs.dup, evidence::DUP)?,
         outer: find(needs.outer, evidence::OUTER)?,
         tail: find(needs.tail, evidence::TAIL)?,
         with_tail: find(needs.with_tail, evidence::WITH_TAIL)?,
         push: find(needs.push, evidence::PUSH)?,
+        some,
     })
 }
 
@@ -199,12 +212,12 @@ fn replace_with_call(
 }
 
 /// `tr_dispatch_fn` as the `Some` of the runtime's `Option(Dispatch)`
-/// parameter `option_ty`.
+/// parameter `option_ty`, whose `Some` is at position `some`.
 fn some_dispatch(
     ctx: &mut IrContext,
     location: Location,
     tr_dispatch_fn: ValueRef,
-    option_ty: TypeRef,
+    (option_ty, some): (TypeRef, u32),
     rewriter: &mut PatternRewriter<'_>,
 ) -> ValueRef {
     let closure_ty = crate::closure_lower::closure_struct_type_ref(ctx);
@@ -222,7 +235,7 @@ fn some_dispatch(
         adt::layout_of(ctx, option_ty).expect("the Option(Dispatch) layout is published");
     let some = adt::VariantNew::operands([dispatch])
         .r#type(option_layout)
-        .tag("Some")
+        .tag(some)
         .results(option_ty)
         .build(ctx, location);
     rewriter.insert_op(some.op_ref());
@@ -254,8 +267,17 @@ impl OpRewritePattern for LowerEffectExtend<'_> {
             effect_dispatch::insert_ability_id(ctx, loc, &ability, rewriter)
         };
         let option_ty = function.signature(ctx).inputs(ctx)[3];
-        let tr_dispatch =
-            some_dispatch(ctx, loc, extend_op.tr_dispatch_fn(ctx), option_ty, rewriter);
+        let some = self
+            .runtime
+            .some
+            .expect("the evidence runtime was prepared for effect.extend");
+        let tr_dispatch = some_dispatch(
+            ctx,
+            loc,
+            extend_op.tr_dispatch_fn(ctx),
+            (option_ty, some),
+            rewriter,
+        );
         let args = vec![
             extend_op.evidence(ctx),
             ability_id,
@@ -446,9 +468,10 @@ mod tests {
 
     /// The evidence type and stand-ins for the runtime functions.
     const RUNTIME: &str = r#"  !Evidence = adt.array<adt.typeref<{name = "std::runtime::evidence::Marker"}>>
-  !Closure = adt.struct<_closure(entries: tribute_rt.convention_table_ref), {layout = "closure"}>
-  !"std::Option$std::runtime::Dispatch" = adt.enum<"std::Option$std::runtime::Dispatch" { None(), Some(!Closure) }>
+  !Closure = adt.struct<"_closure", (tribute_rt.convention_table_ref), {layout = "closure"}>
+  !"std::Option$std::runtime::Dispatch" = adt.enum<"std::Option$std::runtime::Dispatch", [(), (!Closure)]>
   !OptionRef = adt.typeref<{name = "std::Option$std::runtime::Dispatch"}>
+  adt.enum_decl "std::Option$std::runtime::Dispatch" [None, Some]
   func.func @"std::runtime::evidence::lookup"(%ev: !Evidence, %id: core.i32) -> core.i32 {
     func.return %id
   }
@@ -587,7 +610,7 @@ mod tests {
             "{printed}"
         );
         assert!(
-            printed.contains(r#"adt.variant_new %2 {tag = "Some""#),
+            printed.contains("adt.variant_new %2 {tag = 1, "),
             "{printed}"
         );
     }

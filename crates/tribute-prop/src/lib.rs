@@ -9,7 +9,7 @@
 //! produce, and for `Nat` an upper bound on its value. `+` and `*` choose
 //! their right operand within the bound the left one leaves, so every
 //! intermediate value stays in the current unsigned 32-bit range
-//! (`new-plans/numeric-types.md`) by construction.
+//! (`design/numeric-types.md`) by construction.
 //!
 //! This crate holds strategies only. Properties live next to the code they
 //! test.

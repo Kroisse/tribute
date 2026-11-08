@@ -567,10 +567,7 @@ fn tuple_layout_data(ctx: &mut IrContext, name: &str, elements: &[TypeRef]) -> T
     adt::Struct::from_fields(
         ctx,
         name.to_owned(),
-        elements
-            .iter()
-            .enumerate()
-            .map(|(index, element)| (index.to_string(), *element)),
+        elements.iter().copied(),
         AttributeMap::new(),
     )
     .as_type_ref()

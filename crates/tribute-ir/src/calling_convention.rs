@@ -56,7 +56,7 @@ impl CallingConvention {
     pub const ALL: [Self; 3] = [Self::Direct, Self::EvidenceDirect, Self::Cps];
 
     /// The position of this convention's entry in a closure's convention
-    /// table (`new-plans/ir.md`, "Convention entry").
+    /// table (`design/tribute-dialects.md`, "Convention entry").
     pub fn slot(self) -> u32 {
         match self {
             Self::Direct => 0,
@@ -161,7 +161,7 @@ pub enum ConventionError {
 /// A physical operation that records the calling convention of the callable
 /// it defines or transfers to, from CPS legalization until the last reader
 /// inside the representation/ABI boundary consumes it
-/// (`new-plans/cps-effects.md`, "CPS 변환의 호출 대상 형상").
+/// (`design/cps-effects.md`, "CPS 변환의 호출 대상 형상").
 ///
 /// Only these operations carry a convention, and passes read, write, and
 /// consume it only through this interface. A `closure.lambda` declares the
@@ -245,7 +245,7 @@ pub struct ConventionViolation {
 }
 
 /// Every operation under `root` whose convention is malformed or sits on an
-/// operation that cannot carry one (`new-plans/cps-effects.md`, "CPS 변환의
+/// operation that cannot carry one (`design/cps-effects.md`, "CPS 변환의
 /// 호출 대상 형상").
 pub fn verify_conventions(ctx: &IrContext, root: OpRef) -> Vec<ConventionViolation> {
     let mut violations = Vec::new();
@@ -326,7 +326,7 @@ pub fn cps_dispatch_type(
 
 /// The `Cps` entry, without the environment, of a generated continuation
 /// `closure`. Only a generated continuation's callable is its entry; a source
-/// callable value's is not (`new-plans/cps-effects.md`, "Closure type의
+/// callable value's is not (`design/cps-effects.md`, "Closure type의
 /// callable").
 pub fn cps_closure_function_type(ctx: &IrContext, closure: TypeRef) -> Option<TypeRef> {
     physical_closure_function_type(ctx, closure, CallingConvention::Cps)

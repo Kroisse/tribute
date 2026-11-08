@@ -604,7 +604,7 @@ impl IrContext {
     // ========================================================================
 
     /// The body bound to the identified type `ty`, or `None` when `ty` is not
-    /// identified or has no body yet (`new-plans/ir.md` § "식별 타입").
+    /// identified or has no body yet (`design/ir.md` § "식별 타입").
     pub fn type_body(&self, ty: TypeRef) -> Option<TypeRef> {
         self.type_bodies.get(&ty).copied()
     }

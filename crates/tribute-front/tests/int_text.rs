@@ -60,7 +60,7 @@ fn format_box(value: Int) -> String {
 
     let ir = run_ast_pipeline_with_ir(db, source);
     assert!(
-        ir.contains(r#"!"pkg::Boxed$Int" = adt.enum<"pkg::Boxed$Int" { Empty(), Box(core.i32) }>"#),
+        ir.contains(r#"!"pkg::Boxed$Int" = adt.enum<"pkg::Boxed$Int", [(), (core.i32)]>"#),
         "Boxed(Int) must be specialized to a layout with an Int field:\n{ir}"
     );
     let format_box = ir
@@ -68,14 +68,14 @@ fn format_box(value: Int) -> String {
         .nth(1)
         .expect("format_box function must be lowered");
     let construct = format_box
-        .find(r#"adt.variant_new %0 {tag = "Box", type = !"pkg::Boxed$Int"}"#)
+        .find(r#"adt.variant_new %0 {tag = 1, type = !"pkg::Boxed$Int"}"#)
         .expect("Box(value) must construct the specialized pkg::Boxed$Int");
     let int_to_string = format_box
         .find("call @\"std::Int::to_string\"(")
         .expect("Box payload must be passed to Int::to_string");
     assert!(
         format_box[construct..int_to_string].contains(
-            r#"adt.variant_get %1 {field = 0, tag = "Box", type = !"pkg::Boxed$Int"} : core.i32"#
+            r#"adt.variant_get %1 {field = 0, tag = 1, type = !"pkg::Boxed$Int"} : core.i32"#
         ),
         "pattern use must read the Int payload from the specialized layout:\n{format_box}"
     );
@@ -108,8 +108,7 @@ fn ok_int(value: Int) -> Result(Int, String) {
         .nth(1)
         .expect("ok_int function must be lowered");
     assert!(
-        ok_int
-            .contains(r#"adt.variant_new %0 {tag = "Ok", type = !"pkg::Result$Int$std::String"}"#),
+        ok_int.contains(r#"adt.variant_new %0 {tag = 0, type = !"pkg::Result$Int$std::String"}"#),
         ".Ok(value) must construct the specialized Result(Int, String) from the Int directly:\n{ok_int}"
     );
     assert!(

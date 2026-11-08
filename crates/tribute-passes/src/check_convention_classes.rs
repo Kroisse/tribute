@@ -1,7 +1,7 @@
 //! Check that the convention classes class specialization chose agree with
 //! the classes the rows of source-logical IR imply.
 //!
-//! The rules are those of `new-plans/cps-effects.md` ("Row 변수의 convention
+//! The rules are those of `design/cps-effects.md` ("Row 변수의 convention
 //! class"), read from the IR alone: row binders, `row_args` of references and
 //! instantiations, and the operations each ability instance declares.
 

@@ -1,12 +1,11 @@
 ---
 source: crates/tribute-passes/src/native/adapt_closure_layout.rs
-assertion_line: 437
 expression: result
 ---
 core.module @test {
-  !Base = adt.struct<_closure(entries: tribute_rt.convention_table_ref), {layout = "closure"}>
-  !Captures = adt.struct<_closure_captures(entries: tribute_rt.convention_table_ref, _0: tribute_rt.anyref), {closure_base = !Base, layout = "closure_captures"}>
-  !_closure_captures = adt.struct<_closure_captures(entries: core.ptr, _0: tribute_rt.anyref), {closure_base = adt.struct<_closure(entries: core.ptr), {layout = "closure"}>, layout = "closure_captures"}>
+  !Base = adt.struct<"_closure", (tribute_rt.convention_table_ref), {layout = "closure"}>
+  !Captures = adt.struct<"_closure_captures", (tribute_rt.convention_table_ref, tribute_rt.anyref), {closure_base = !Base, layout = "closure_captures"}>
+  !_closure_captures = adt.struct<"_closure_captures", (core.ptr, tribute_rt.anyref), {closure_base = adt.struct<"_closure", (core.ptr), {layout = "closure"}>, layout = "closure_captures"}>
 
   clif.func @test_fn(%0: core.ptr) -> core.i32 {
       %1 = clif.symbol_addr @__tribute_convention_table_0 : core.ptr

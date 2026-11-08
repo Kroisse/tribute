@@ -268,7 +268,7 @@ Shared ability/evidence lowering은 그 결과를 `effect.*` ABI로 바꾼다.
 Native target은 exact callable contract를 검증하고 CPS signature를 물리화한 뒤
 `native/evidence`에서 runtime lookup/extension과 handler closure 호출을 생성한다.
 이어서 closure storage layout을 확정하고 경계 출구를 검증하며, 여기까지가
-`lower_to_clif` 이전의 [representation/ABI 경계](ir.md#representationabi-경계)이다.
+`lower_to_clif` 이전의 [representation/ABI 경계](abi-boundary.md#representationabi-경계)이다.
 `func_to_clif`는 proper transfer operation을 `clif.return_call`과
 `clif.return_call_indirect`로 내리고, Cranelift 호출 규약은 signature의
 `call_conv`에서만 정한다.
@@ -327,7 +327,7 @@ RTTI index 공간에서 정한다. [Closure 저장 layout](ir.md#closure-저장-
 capture layout은 서로 다른 할당 descriptor이므로 layout마다 RTTI 선언과 release 함수를 가진다.
 Closure layout을 native 표현으로 바꾸는 일은 Tribute target 단계가 소유하며, 할당 op과 그 layout의
 RTTI 선언을 함께 바꾼다. Native closure 객체는 RC header 뒤 payload offset 0에 [convention
-table](ir.md#convention-entry)의 주소를 두고 그 뒤에 capture를 자연 정렬로 둔다. Convention
+table](tribute-dialects.md#convention-entry)의 주소를 두고 그 뒤에 capture를 자연 정렬로 둔다. Convention
 table은 entry 함수 목록마다 하나인 읽기 전용 `clif.data`이며, `Direct`, `EvidenceDirect`, `Cps`
 순서의 pointer 크기 칸 셋에 entry 함수의 주소를 `clif.func_reloc`로 적는다. 본문도 adapter도 없는 칸은 그
 convention entry의 signature를 가진 trap 함수의 주소다. Table 주소는 해제하지 않는 unmanaged 필드이고,
@@ -360,8 +360,8 @@ Bytes:  [ptr] [len: u64] [owner] [cap: u64] [bytes...]
 `Bytes`의 소유 규칙은 [rc.md](rc.md#bytes)를, 배열의 stride, 할당 크기와 소유
 규칙은 [rc.md](rc.md#array)를 따른다.
 
-[`adt` 배열 operation](ir.md#adt-배열)은 RC header lowering 단계에서 struct 할당과
-함께 낮춘다. [할당 크기](rc.md#array)로 `__tribute_alloc`을 부르고 header에 배열
+[`adt` 배열 operation](tribute-dialects.md#adt-배열)은 RC header lowering 단계에서
+struct 할당과 함께 낮춘다. [할당 크기](rc.md#array)로 `__tribute_alloc`을 부르고 header에 배열
 타입의 RTTI index를 기록한 뒤 `len`을 payload offset 0에 쓴다.
 
 - `adt.array_new`는 모든 원소 자리에 `initial`을 쓴다.

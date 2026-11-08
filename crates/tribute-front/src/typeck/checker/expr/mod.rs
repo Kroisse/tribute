@@ -277,7 +277,7 @@ impl<'db> TypeChecker<'db> {
                 };
                 // A written result or row is the lambda's own signature: the
                 // body is checked against it, and the context is matched with
-                // it (`new-plans/type-inference.md`, lambda annotations).
+                // it (`design/type-inference.md`, lambda annotations).
                 let annotated_result = return_ty
                     .as_ref()
                     .map(|ann| self.annotation_to_type_with_ctx(ctx, ann));
