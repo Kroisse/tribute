@@ -395,7 +395,7 @@ impl<'a> AsmPrinter<'a> {
 
     /// Write a type, as its alias when it has one in scope. Inside an
     /// identified type's body, an identified type is written as its key
-    /// (`new-plans/ir.md` § "식별 타입").
+    /// (`design/ir.md` § "식별 타입").
     pub fn print_type(&mut self, ty: TypeRef) -> fmt::Result {
         let in_body = self.state.identified_depth.get() > 0;
         if !(in_body && crate::type_def::is_identified(self.ctx(), ty))

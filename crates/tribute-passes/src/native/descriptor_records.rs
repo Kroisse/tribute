@@ -3,7 +3,7 @@
 //! Native RTTI generation emits `__tribute_rtti`, one read-only data object
 //! holding a fixed-size record per RTTI index, the index's release function
 //! and its descriptor, followed by the enum records, field arrays, and names
-//! the records address by offset, in the format `new-plans/rc.md` fixes. Records are built while
+//! the records address by offset, in the format `design/rc.md` fixes. Records are built while
 //! nominal layouts still carry their names, so lower passes see only the
 //! index.
 
@@ -60,7 +60,7 @@ pub struct DescriptorRecord {
 
 impl DescriptorRecord {
     /// The record of the descriptor `(ty, tag)`, read from its nominal layout
-    /// and the layout's declaration in `decls` (`new-plans/ir.md` § "Nominal
+    /// and the layout's declaration in `decls` (`design/ir.md` § "Nominal
     /// 선언").
     ///
     /// # Panics

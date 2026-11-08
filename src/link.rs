@@ -1,7 +1,7 @@
 //! Native executable linking against the Tribute runtime.
 //!
 //! The runtime staticlib is found in a sysroot chosen at link time; the
-//! layout comes from `tribute_sysroot`, and `new-plans/linking.md` states the
+//! layout comes from `tribute_sysroot`, and `design/linking.md` states the
 //! lookup contract.
 
 use std::path::{Path, PathBuf};

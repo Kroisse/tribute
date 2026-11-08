@@ -1,7 +1,7 @@
 //! Source-oriented type and effect formatting.
 //!
 //! Every formatter spells declaration names relative to the package being
-//! compiled (`new-plans/modules.md`, "진단의 이름 표기"), so each takes the
+//! compiled (`design/modules.md`, "진단의 이름 표기"), so each takes the
 //! [`NameDisplay`] of that package.
 
 use std::fmt;

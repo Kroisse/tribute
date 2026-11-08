@@ -217,7 +217,7 @@ impl LspServer {
     }
 
     /// Have the client watch the files the open documents' analyses read
-    /// (`new-plans/lsp.md` § 입력과 무효화), registering again only when
+    /// (`design/lsp.md` § 입력과 무효화), registering again only when
     /// they changed.
     fn update_watchers(&mut self) -> Result<(), Box<dyn Error + Send + Sync>> {
         if !self.watches_files {

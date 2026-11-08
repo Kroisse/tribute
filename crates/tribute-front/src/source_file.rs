@@ -44,7 +44,7 @@ impl SourceCst {
 }
 
 /// The files a compilation finds by URI, through the database's one
-/// [`FileProvider`] (`new-plans/implementation.md` § 패키지 source 트리와
+/// [`FileProvider`] (`design/implementation.md` § 패키지 source 트리와
 /// 파일 입력). Queries take `&dyn salsa::Database`, so the provider is
 /// reached through this singleton input rather than a database trait.
 #[salsa::input(singleton, debug)]

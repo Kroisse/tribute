@@ -41,7 +41,7 @@ const DELIMIT_DONE_PREFIX: &str = "__tribute_delimit_done";
 const DELIMIT_UNHANDLED_PREFIX: &str = "__tribute_delimit_unhandled";
 
 /// Per-parameter attribute recording a physical callable's entry ownership
-/// contract; see `new-plans/rc.md` (proper-tail ownership transfer).
+/// contract; see `design/rc.md` (proper-tail ownership transfer).
 pub(crate) const OWNERSHIP_ATTR: &str = "tribute.ownership";
 /// The [`OWNERSHIP_ATTR`] value: the caller supplies one ownership unit.
 pub(crate) const CONSUMED: &str = "consumed";
@@ -1797,7 +1797,7 @@ impl<'a> PhysicalTypeConverter<'a> {
     /// Physicalize a closure type's callable. It is the closure's identity,
     /// not an entry ABI, so it takes no convention: its components are
     /// converted, and a logical `core.never` result becomes the physical
-    /// empty result (`new-plans/cps-effects.md`, "Closure type의 callable").
+    /// empty result (`design/cps-effects.md`, "Closure type의 callable").
     fn convert_closure_callable(&mut self, ty: TypeRef) -> Result<TypeRef, TargetAbiError> {
         let callable = func::FuncSig::from_type_ref(self.ctx, ty).ok_or_else(|| {
             TargetAbiError::new("target ABI: closure callable is not a valid func.func_sig")

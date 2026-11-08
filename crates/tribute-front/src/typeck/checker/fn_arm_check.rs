@@ -2,7 +2,7 @@
 //!
 //! A `fn` operation returns to its perform site without handing over the
 //! continuation, so the arm that implements it cannot suspend or abort that
-//! computation (see `new-plans/abilities.md`, "`fn` Operation Handler"). The
+//! computation (see `design/abilities.md`, "`fn` Operation Handler"). The
 //! arm may not perform an `op` operation directly, and may not call a
 //! callable whose ability row names an ability that declares one, unless a
 //! `handle` inside the arm handles it. The rule is checked over the finalized

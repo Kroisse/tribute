@@ -89,7 +89,7 @@ impl<'a> AsmParser<'a> {
 
     /// Bind `body`, which the text wrote at `offset`, to the identified type
     /// `ty`, as an identified type's assembly format does for an occurrence
-    /// that writes a body (`new-plans/ir.md` § "식별 타입").
+    /// that writes a body (`design/ir.md` § "식별 타입").
     pub fn bind_type_body(&mut self, ty: TypeRef, body: TypeRef, offset: usize) -> ParseResult<()> {
         self.ctx
             .bind_type_body(ty, body)

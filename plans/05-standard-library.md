@@ -2,17 +2,17 @@
 
 표준 library는 source의 ability와 immutable value 계약을 따른다. 현재 public API와
 추가 기능 제안을 구분하며, 실제 지원 범위는
-[`capabilities.md`](../new-plans/capabilities.md)를 따른다.
+[`capabilities.md`](../design/capabilities.md)를 따른다.
 
 ## Canonical Surface
 
-- 수치 타입과 변환은 [`numeric-types.md`](../new-plans/numeric-types.md)를 따른다.
+- 수치 타입과 변환은 [`numeric-types.md`](../design/numeric-types.md)를 따른다.
 - `String`과 `Bytes`의 표현과 public API는
-  [`string.md`](../new-plans/string.md)를 따른다.
+  [`string.md`](../design/string.md)를 따른다.
 - Compiler-owned opaque `List(a)`는 literal, sequence-view pattern과
   `std::collections::List::prepend`를 제공한다. RRB node constructor는 source에
   노출하지 않는다. Public namespace 계약은
-  [`modules.md`](../new-plans/modules.md)를 따른다.
+  [`modules.md`](../design/modules.md)를 따른다.
 - Prelude는 `Option(a)`와 `Result(a, e)`, non-resumptive
   `abilities::Abort`와 `abilities::Throw(e)`를 제공한다.
 
@@ -21,7 +21,7 @@
 `std::io::Io`는 compiler-owned ambient ability다. 사용자 handler로 구현하거나
 제거하지 않는다. Public `print_line`과 `read_line`은 일반 source 함수이며,
 `read_line` 실패는 `Throw(std::io::Error)`로 처리한다. 전체 API, effect와 target
-계약은 [`io.md`](../new-plans/io.md)를 따른다.
+계약은 [`io.md`](../design/io.md)를 따른다.
 
 ```rust
 use abilities::Throw

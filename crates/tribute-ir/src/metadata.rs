@@ -6,7 +6,7 @@ use trunk_ir::refs::{OpRef, TypeRef};
 use trunk_ir::types::{Attribute, AttributeMap};
 
 /// The root-module dictionary of prelude type identities, keyed by
-/// canonical declaration path (`new-plans/tribute-dialects.md`).
+/// canonical declaration path (`design/tribute-dialects.md`).
 pub const PRELUDE_TYPES_ATTR: &str = "tribute.types";
 
 const STRING_PATH: &str = "std::String";
@@ -34,7 +34,7 @@ pub fn publish_prelude_type(ctx: &mut IrContext, module: OpRef, path: &str, ty: 
 
 /// The root-module reference to the function the root package of an
 /// executable build declares as its entry point
-/// (`new-plans/tribute-dialects.md`).
+/// (`design/tribute-dialects.md`).
 pub const ROOT_ENTRY_ATTR: &str = "tribute.entry";
 
 /// The entry function the root module `module` names, if any.

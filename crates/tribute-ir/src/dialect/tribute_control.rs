@@ -224,12 +224,12 @@ mod tribute_control {
     ///   `row_unions` are in range, and that each row instance resolves to an
     ///   `ability.decl`.
     /// - **Row attributes:** optional `row_binders`, `row_unions`, and
-    ///   `inferred_row` (`new-plans/tribute-dialects.md`, "Ability row").
+    ///   `inferred_row` (`design/tribute-dialects.md`, "Ability row").
     /// - **Ownership and value flow:** the body is isolated from above. Only
     ///   source locals and parameters enter as block arguments.
     /// - **Symbol:** a `SymbolDefinition`. A definition with a body and a
     ///   foreign `abi` is not discardable; any other is removed once nothing
-    ///   live uses it (`new-plans/ir.md`, "Core Invariants").
+    ///   live uses it (`design/ir.md`, "Core Invariants").
     /// - **Signature:** a `SourceCallable` whose signature is `type`.
     /// - **Flags:** `SourceFunc`, shared with `tribute_cps.func`.
     /// - **Location:** the whole span of the source function or extern
@@ -278,7 +278,7 @@ mod tribute_control {
     ///   only, and that only `instantiate` uses the result of a quantifying
     ///   lambda. Passing it as a capture of an inner lambda is not a use; the
     ///   use in that lambda's body must be an `instantiate`.
-    /// - **Row attributes:** optional `quantified_rows` (`new-plans/tribute-dialects.md`,
+    /// - **Row attributes:** optional `quantified_rows` (`design/tribute-dialects.md`,
     ///   "지역 람다의 양화와 인스턴스화").
     /// - **Ownership and value flow:** the captures are ordinary SSA uses,
     ///   and there is no other hidden operand.
@@ -316,7 +316,7 @@ mod tribute_control {
     ///   verification checks that the operand is the result of a lambda with
     ///   `quantified_rows`, that `row_args` has as many entries as that
     ///   attribute, and that the result is the lambda's type with `row_args`
-    ///   substituted (`new-plans/tribute-dialects.md`, "Row 인자와 치환"). The operand may be
+    ///   substituted (`design/tribute-dialects.md`, "Row 인자와 치환"). The operand may be
     ///   the `tribute_cps.lambda` class specialization made. The tails and
     ///   instances of the row arguments are checked in the scope of the
     ///   enclosing definition, like any other row.
@@ -353,7 +353,7 @@ mod tribute_control {
     /// - **Verification:** the local verifier checks the attribute and the
     ///   result shape. Whole-IR verification checks symbol resolution; that
     ///   the result equals the target type with `row_args` substituted
-    ///   (`new-plans/tribute-dialects.md`, "Row 인자와 치환") apart from the outer row; and
+    ///   (`design/tribute-dialects.md`, "Row 인자와 치환") apart from the outer row; and
     ///   that the outer row holds each instance of the substituted row and,
     ///   if that row has a tail, the same tail.
     /// - **Ownership and value flow:** the result is an ordinary SSA value.
@@ -375,8 +375,8 @@ mod tribute_control {
     ///
     /// - **Shape:** the source arguments in declaration order, one
     ///   source-logical result, `callee: Symbol`, and optional
-    ///   `evidence_plan` (`new-plans/tribute-dialects.md`, "Evidence 선택 속성") and
-    ///   `row_args` (`new-plans/tribute-dialects.md`, "Row 인자와 치환"). A non-terminator
+    ///   `evidence_plan` (`design/tribute-dialects.md`, "Evidence 선택 속성") and
+    ///   `row_args` (`design/tribute-dialects.md`, "Row 인자와 치환"). A non-terminator
     ///   with no region.
     /// - **Meaning:** calls a named source callable directly.
     /// - **Verification:** the local verifier checks the attributes and the
@@ -407,7 +407,7 @@ mod tribute_control {
     ///
     /// - **Shape:** a `tribute_control.func_sig` callee, the source
     ///   arguments, the one source-logical result of the callee type, and an
-    ///   optional `evidence_plan` (`new-plans/tribute-dialects.md`, "Evidence 선택 속성").
+    ///   optional `evidence_plan` (`design/tribute-dialects.md`, "Evidence 선택 속성").
     ///   A non-terminator with no region.
     /// - **Meaning:** calls a callable obtained from a lambda, a `func_ref`,
     ///   a parameter, a capture, a call result, a data projection, or an
@@ -415,7 +415,7 @@ mod tribute_control {
     /// - **Verification:** the local verifier matches the callee signature
     ///   with the argument and result types. Whole-IR verification follows
     ///   the callee to check that it is a callable origin, a value whose
-    ///   source signature comes from a declaration (`new-plans/tribute-dialects.md`,
+    ///   source signature comes from a declaration (`design/tribute-dialects.md`,
     ///   "Callable 출처").
     /// - **Ownership and value flow:** the callee and arguments are ordinary
     ///   SSA uses. There is no environment, evidence, or
@@ -441,8 +441,8 @@ mod tribute_control {
     /// ```
     ///
     /// - **Shape:** the source arguments in declaration order,
-    ///   `callee: Symbol`, and optional `evidence_plan` (`new-plans/tribute-dialects.md`,
-    ///   "Evidence 선택 속성") and `row_args` (`new-plans/tribute-dialects.md`, "Row 인자와
+    ///   `callee: Symbol`, and optional `evidence_plan` (`design/tribute-dialects.md`,
+    ///   "Evidence 선택 속성") and `row_args` (`design/tribute-dialects.md`, "Row 인자와
     ///   치환"). A terminator with no result or region, registered as a
     ///   `CallableExit`.
     /// - **Placement:** it may end the body of a `tribute_control.func` or
@@ -472,7 +472,7 @@ mod tribute_control {
     /// - **Ownership and value flow:** the arguments are ordinary SSA uses,
     ///   and there is no hidden operand. Shared legalization turns it into a
     ///   proper tail transfer for every combination of conventions
-    ///   (`new-plans/cps-effects.md`, "Source proper tail call의 적법화").
+    ///   (`design/cps-effects.md`, "Source proper tail call의 적법화").
     /// - **Location:** the source span including the `become` keyword and
     ///   the call.
     #[verify]
@@ -493,7 +493,7 @@ mod tribute_control {
     /// ```
     ///
     /// - **Shape:** a `tribute_control.func_sig` callee, the source
-    ///   arguments, and an optional `evidence_plan` (`new-plans/tribute-dialects.md`,
+    ///   arguments, and an optional `evidence_plan` (`design/tribute-dialects.md`,
     ///   "Evidence 선택 속성"). A terminator with no result or region,
     ///   registered as a `CallableExit`.
     /// - **Placement:** the same as `tribute_control.tail_call`.
@@ -594,7 +594,7 @@ mod tribute_control {
     ///   ability/effect ABI requires, whose body is `func.unreachable`. That
     ///   continuation captures no source suffix. A null, an in-band sentinel,
     ///   or an arbitrary `anyref` is not a continuation. The full ABI adapter
-    ///   rules are in `new-plans/cps-effects.md`, "Direct-style control
+    ///   rules are in `design/cps-effects.md`, "Direct-style control
     ///   boundary".
     /// - **Location:** the source location of the ability-operation call,
     ///   including the qualified callee and all arguments where possible.
@@ -639,7 +639,7 @@ mod tribute_control {
     ///   arm, in the order of `arms`, each with `ability: SymbolRef`,
     ///   `op_name: String`, `kind: OperationKind`, and
     ///   `operation_result_type: Type`. The optional `evidence_plan`
-    ///   (`new-plans/tribute-dialects.md`, "Evidence 선택 속성") selects the handlers to
+    ///   (`design/tribute-dialects.md`, "Evidence 선택 속성") selects the handlers to
     ///   mask in the outer evidence before the body evidence is made. Dynamic
     ///   prompt/owner tags and the physical tail-call representation are
     ///   legalization contracts, not semantic attributes of this operation.
@@ -732,7 +732,7 @@ mod tribute_control {
     ///   `InputType`.
     /// - **Results:** exactly one `AnswerType`.
     /// - **Attributes and regions:** only an optional `evidence_plan`
-    ///   (`new-plans/tribute-dialects.md`, "Evidence 선택 속성"), and no region.
+    ///   (`design/tribute-dialects.md`, "Evidence 선택 속성"), and no region.
     /// - **Terminator:** no. Strict work after `resume` stays explicitly in
     ///   the enclosing region and runs only after the resumed computation
     ///   returns.

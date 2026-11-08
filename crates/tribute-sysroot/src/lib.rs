@@ -2,7 +2,7 @@
 //!
 //! The compiler reads the native runtime from a sysroot, and development
 //! tooling populates one; both use this crate so they agree on the layout.
-//! See `new-plans/linking.md` for the lookup contract.
+//! See `design/linking.md` for the lookup contract.
 
 use std::path::{Path, PathBuf};
 

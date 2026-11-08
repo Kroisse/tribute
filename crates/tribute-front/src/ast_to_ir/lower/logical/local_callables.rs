@@ -30,7 +30,7 @@ struct Link<'db> {
 }
 
 /// The locals of one function body that a `let` binds to a named function,
-/// directly or through other such locals (`new-plans/tribute-dialects.md`, 지역 람다의
+/// directly or through other such locals (`design/tribute-dialects.md`, 지역 람다의
 /// 양화와 인스턴스화). A use of one references the function again.
 #[derive(Default)]
 pub(super) struct Aliases<'db> {

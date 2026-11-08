@@ -21,7 +21,7 @@
 
 ## TrunkIR Validation Responsibilities
 
-TrunkIR validation follows the layered model in `new-plans/ir.md`:
+TrunkIR validation follows the layered model in `design/ir.md`:
 
 - Local operation constraints belong in operation verifiers. They cover one
   operation's operands, results, attributes, regions, and terminator shape

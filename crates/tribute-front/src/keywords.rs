@@ -2,7 +2,7 @@
 //!
 //! Every keyword is strict: it is never an identifier, in any position.
 //! `r#name` is a raw identifier that spells a lowercase keyword as a name.
-//! See `new-plans/syntax.md`.
+//! See `design/syntax.md`.
 
 use std::borrow::Cow;
 

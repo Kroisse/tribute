@@ -1,5 +1,5 @@
 //! A lambda's written result type and ability row take part in inference
-//! (`new-plans/type-inference.md`, lambda annotations).
+//! (`design/type-inference.md`, lambda annotations).
 
 mod common;
 

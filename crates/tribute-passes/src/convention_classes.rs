@@ -2,7 +2,7 @@
 //! variables of each definition, the class a row requires inside an
 //! instance, and the instance names that record the classes.
 //!
-//! The rules are those of `new-plans/cps-effects.md` ("Row 변수의 convention
+//! The rules are those of `design/cps-effects.md` ("Row 변수의 convention
 //! class"), read from the IR alone: row binders, `row_args` of references and
 //! instantiations, and the operations each ability instance declares.
 
@@ -26,7 +26,7 @@ pub(crate) const CLASS_MARKER: &str = "$9";
 
 /// A convention class as class specialization reads a row: exact, or an
 /// upper bound, which says the row may require any class no stronger than
-/// it at run time (`new-plans/tribute-dialects.md`, "Convention entry"). The upper bound
+/// it at run time (`design/tribute-dialects.md`, "Convention entry"). The upper bound
 /// `Direct` is the exact `Direct`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct Class {
@@ -307,7 +307,7 @@ impl Function {
     /// a binder that is not `param`, or any tail of a definition without a
     /// body. Any other own tail reaches no callable, so it requires
     /// nothing, whether the row was written or inferred
-    /// (`new-plans/cps-effects.md`, "Row와 호출 규약").
+    /// (`design/cps-effects.md`, "Row와 호출 규약").
     pub(crate) fn own_row(
         &self,
         ctx: &IrContext,
@@ -386,7 +386,7 @@ pub(crate) fn func_tables(ctx: &IrContext, module: Module) -> HashMap<String, Op
 }
 
 /// The suffix of a function table's name after the name of the instance
-/// its class arguments select (`new-plans/cps-effects.md`, "Class 특수화
+/// its class arguments select (`design/cps-effects.md`, "Class 특수화
 /// pass").
 pub(crate) const TABLE_SUFFIX: &str = "$8";
 
@@ -577,7 +577,7 @@ impl Reader<'_> {
     /// reads as `Direct`, the start of their least fixed point. A `body`
     /// binder that occurs in no parameter type requires nothing: every value
     /// whose row has it was made with it abstract, and no argument of
-    /// another row reaches it (`new-plans/cps-effects.md`, "Row와 호출
+    /// another row reaches it (`design/cps-effects.md`, "Row와 호출
     /// 규약").
     fn tail(&self, ctx: &IrContext, tail: u32, at: OpRef) -> Class {
         let kind = usize::try_from(tail)
@@ -594,7 +594,7 @@ impl Reader<'_> {
 
     /// Settle the class of each local binder of `body` in each body of its
     /// lambda: the merge of the classes the instantiations that select that
-    /// body pass for it (`new-plans/tribute-dialects.md`, "Convention entry"). An
+    /// body pass for it (`design/tribute-dialects.md`, "Convention entry"). An
     /// instantiation selects every body its made row may require, so an
     /// instantiation whose row is an upper bound reaches the bodies from
     /// that row's lower bound up to the bound.
@@ -649,7 +649,7 @@ impl Reader<'_> {
 
 /// `class`, the class of binder `tail`, as read at `at`: each
 /// `tribute_cps.lambda` body around `at` whose lambda's own row has that
-/// tail reads it narrowed to the body's convention (`new-plans/tribute-dialects.md`,
+/// tail reads it narrowed to the body's convention (`design/tribute-dialects.md`,
 /// "Convention entry").
 fn narrowed(ctx: &IrContext, tail: u32, at: OpRef, mut class: Class) -> Class {
     let mut current = at;

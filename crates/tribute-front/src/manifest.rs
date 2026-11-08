@@ -1,8 +1,8 @@
 //! Package manifests and the package graph they declare
-//! (`new-plans/modules.md` § 매니페스트 (`tribute.toml`)).
+//! (`design/modules.md` § 매니페스트 (`tribute.toml`)).
 //!
 //! Manifests are read through the same per-URI file inputs as source files
-//! (`new-plans/implementation.md` § 패키지 source 트리와 파일 입력), so a
+//! (`design/implementation.md` § 패키지 source 트리와 파일 입력), so a
 //! query that reads a manifest depends on that file alone. Each manifest is
 //! parsed by its own query, and each package directory gets its
 //! [`Package`] input from a query keyed by its manifest file: editing a
@@ -227,7 +227,7 @@ fn loaded_dependencies(db: &dyn salsa::Database, file: FileEntry) -> Vec<FileEnt
 }
 
 /// The manifest of the package of each root source a tool analyzes as a
-/// package root (`new-plans/implementation.md` § 패키지 source 트리와 파일
+/// package root (`design/implementation.md` § 패키지 source 트리와 파일
 /// 입력). The CLI registers a package directory's `src/main.trb`. The
 /// language server instead finds the package of any source by its path,
 /// with `by_path`.
@@ -302,7 +302,7 @@ pub fn source_dependencies(
 
 /// The manifest of the package `source` belongs to by its path: that of the
 /// nearest ancestor directory with a manifest whose `src/` contains it
-/// (`new-plans/lsp.md` § 문서가 속한 패키지).
+/// (`design/lsp.md` § 문서가 속한 패키지).
 #[salsa::tracked]
 pub fn owning_manifest(db: &dyn salsa::Database, source: SourceCst) -> Option<FileEntry> {
     let path = uri_to_path(source.uri(db))?;

@@ -17,7 +17,7 @@ familiar syntax.
 - **Multiple Targets**: Cranelift (native) and WasmGC
 
 Current implementation support is narrower than the language design. See the
-[compiler capability matrix](new-plans/capabilities.md) for audited frontend,
+[compiler capability matrix](design/capabilities.md) for audited frontend,
 native, and WasmGC status. Compilation alone is not execution evidence.
 
 ## Quick Example
@@ -116,7 +116,7 @@ Native linking uses the runtime library from a sysroot. The compiler takes
 `--sysroot`, then the `TRIBUTE_SYSROOT` environment variable, then the parent
 of its own executable's directory. Inside this repository, `.cargo/config.toml`
 points `TRIBUTE_SYSROOT` at the `target/sysroot` that `cargo xtask runtime`
-populates. See [the linking design](new-plans/linking.md#runtime-sysroot).
+populates. See [the linking design](design/linking.md#runtime-sysroot).
 
 ## Language Examples
 
@@ -154,8 +154,8 @@ coverage, and platform checks; require successful CI before merging.
 
 ## Design Documents
 
-The `new-plans/` directory contains the authoritative language and compiler
-design. [`new-plans/capabilities.md`](new-plans/capabilities.md) separately
+The `design/` directory contains the authoritative language and compiler
+design. [`design/capabilities.md`](design/capabilities.md) separately
 records what the current implementation has demonstrated; design intent alone
 is not a support claim.
 

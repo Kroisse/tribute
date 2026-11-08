@@ -57,7 +57,7 @@ fn provider_uri(uri: &LspUri) -> Uri<String> {
 
 impl TributeDatabaseImpl {
     /// A database for the language server, which analyzes each source in
-    /// the package its path puts it in (`new-plans/lsp.md` § 문서가 속한
+    /// the package its path puts it in (`design/lsp.md` § 문서가 속한
     /// 패키지).
     pub fn language_server() -> Self {
         let mut db = Self::default();
@@ -150,7 +150,7 @@ impl TributeDatabaseImpl {
 
     /// The files that analyzing the open documents reads, other than the
     /// documents themselves, which the language server watches
-    /// (`new-plans/lsp.md` § 입력과 무효화): each document's source tree,
+    /// (`design/lsp.md` § 입력과 무효화): each document's source tree,
     /// the package it belongs to with its dependencies, and the manifests
     /// looked for to find that package.
     pub fn watched_files(&self) -> Vec<PathBuf> {
