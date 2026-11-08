@@ -70,8 +70,8 @@ Native **native-run**, WasmGC **compile-only**.
 
 Native **native-run**, WasmGC **wasm-run**.
 
-- Frontend: `test_float_literal` in `expr_coverage.rs` covers AST-to-IR
-  lowering.
+- Frontend: the `float_literal` case of `test_literal_expressions` in
+  `expr_coverage.rs` covers AST-to-IR lowering.
 - Native: `test_float_literal_compiles` in `tests/integration/e2e_float.rs`
   executes a literal and asserts its output.
 - Both targets: `test_literal_patterns` in `e2e_native.rs` passes `Float`
@@ -462,13 +462,15 @@ Native **native-run**, WasmGC **not-yet-verified**.
 
 ### Summary of Wasm execution claims
 
-The current **wasm-run** language-level claims are String/Bytes output through
-`std::io::print_line`, byte-wise String equality, `Bool` literals, `Nat`
-addition, multiplication, and ordering comparisons, `Nat::to_string`,
-`Bytes::slice_or_panic`, `Bytes::slice` clamping, and the `fn`, `op`
+The complete list of **wasm-run** language-level claims above is: `Nat`
+ordering comparisons, addition, and multiplication; `Float`, `Bool`, `Nil`,
+and `Rune` literals and their patterns; enum, variant, tuple, literal, and
+wildcard patterns in `case`; String/Bytes output through `std::io::print_line`;
+byte-wise String equality; `Bytes::slice_or_panic`, `Bytes::slice` clamping,
+and unsigned `Bytes::get_or_panic` reads; `Nat::to_string`; and the `fn`, `op`
 (including handlers that reinstall themselves), continuation-dropping Abort,
-row-polymorphic callback, and nested handler forms named above. That evidence
-does not establish general WasmGC parity with native.
+row-polymorphic callback, and nested handler forms. That evidence does not
+establish general WasmGC parity with native.
 
 ## Diagnostics, LSP, and compilation boundaries
 
