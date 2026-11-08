@@ -22,6 +22,9 @@ Key design docs:
 - `new-plans/abilities.md`
 - `new-plans/type-inference.md`
 - `new-plans/ir.md`
+- `new-plans/tribute-dialects.md`
+- `new-plans/abi-boundary.md`
+- `new-plans/lowering.md`
 - `new-plans/implementation.md`
 - `new-plans/lsp.md`
 - `new-plans/cranelift-backend.md`

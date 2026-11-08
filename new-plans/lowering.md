@@ -144,17 +144,52 @@ Rules:
 - Keep exact API behavior in Rustdoc near `ConversionTarget`,
   `ConversionMode`, `PatternApplicator`, and `PatternRewriter`.
 
+## Pipeline Order
+
+This section is the single source of the concrete pass order after the
+frontend. Other documents summarize it and link here. The order is one chain of
+stages, which `stage_passes` in `src/pipeline.rs` builds; each compiler entry
+point runs a contiguous range of it. The contracts each stage establishes
+belong to [abi-boundary.md](abi-boundary.md) and
+[cps-effects.md](cps-effects.md).
+
+```text
+ast_to_ir           source-logical tribute_control IR, without conventions
+Specialize          unreferenced source function elimination (reachable
+                    functions only), dead pure operation elimination,
+                    convention class specialization (tribute_cps),
+                    unreferenced source function elimination
+CheckFnArms         reject fn-arm calls that reach a Cps callee
+LegalizeCps         tribute_control_to_cps, lower_continuation_frames,
+                    lower_closure_lambda, intrinsic/List/slots/I/O
+                    intrinsic lowering
+LowerEffects        lower_ability_call, resolve_evidence,
+                    lower_handle_dispatch
+CheckArity          call arity check
+── representation/ABI boundary ──
+EnterTarget         value integrity check, global DCE (runtime functions
+                    kept), function inlining, canonicalization, CPS callable
+                    physicalization (physical signatures, root entry bridge,
+                    value delimiters), closure lowering, target evidence
+                    lowering
+LowerRuntimeCalls   target bytes intrinsic bridge
+ExitBoundary        closure storage layout, value integrity check, global
+                    DCE, canonicalization, boundary exit verification
+── target dialect lowering ──
+LowerTarget         Wasm or native lowering, below, up to emission
+```
+
+The [representation/ABI boundary](abi-boundary.md#representationabi-경계)
+spans `EnterTarget` through `ExitBoundary`; every later pass consumes only its
+exit contract.
+
 ## Wasm Lowering
 
 The Wasm pipeline lowers target-independent dialects into `wasm.*` while using
 analysis plans for type indices, function indices, data segments, imports, and
 memory layout.
 
-The [representation/ABI boundary](abi-boundary.md#representationabi-경계)
-precedes Wasm dialect lowering. It performs target ABI validation, CPS signature
-physicalization, entry bridge composition, closure lowering, Wasm evidence
-lowering at the shared value/control level, and closure storage finalization,
-then verifies the boundary exit. Wasm dialect lowering then runs:
+After the [boundary](#pipeline-order) exit, Wasm dialect lowering runs:
 
 ```text
 validate_lowerable_structured_control
@@ -208,17 +243,9 @@ The native pipeline lowers Tribute-specific runtime operations and
 target-independent dialects into `clif.*`, then validates the native backend
 boundary before emission.
 
-The shared route supplies legalized callable/control IR and the effect ABI.
-Native stages consume that result in this order. The first five lines form the
-[representation/ABI boundary](abi-boundary.md#representationabi-경계);
-every later stage consumes only its exit contract:
+After the [boundary](#pipeline-order) exit, native lowering runs:
 
 ```text
-target ABI validation + CPS signature physicalization
-root and entry bridge composition
-closure lowering
-evidence_lowering
-finalize_closure_storage_layout + boundary exit verification
 native String/Bytes/I/O/List lowering
 scf_to_cf
 typed ownership/RTTI planning + explicit RC materialization

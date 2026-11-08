@@ -606,28 +606,12 @@ tail ABI의 구분과 순서는 [cps-effects.md](cps-effects.md#dispatch-layers)
 
 **파이프라인 분기:**
 
-모든 source 함수는 아래 target-side closure storage 순서를 따른다. Root wrapper만
-exact root contract에 따라 생성하며 별도의 호환 lowering 경로를 두지 않는다.
-
-```text
-공통: parse → resolve → typecheck → ast_to_ir
-      → source-logical global DCE (산출물 컴파일)
-      → tribute_control_to_cps → lower_continuation_frames
-      → lower_closure_lambda → lower_ability_call
-      → resolve_evidence → lower_handle_dispatch
-      → effect ABI verification → target ABI validation
-      → CPS signature physicalization
-      → value delimiter and root entry bridge composition
-      → lower_closures_in_func → evidence_lowering
-      → finalize_closure_storage_layout → boundary exit verification
-
-WASM:   → lower_to_wasm → backend-ready verification → emit_wasm
-Native: → lower_to_clif → backend-ready verification → emit_native
-```
-
-Target ABI validation부터 boundary exit verification까지가
-[representation/ABI 경계](abi-boundary.md#representationabi-경계)이다. 그 뒤의 pass는
-의미적 호출 규약이나 제어 metadata를 읽지 않는다.
+모든 source 함수는 shared route를 거쳐
+[representation/ABI 경계](abi-boundary.md#representationabi-경계)를 지난 뒤 Wasm 또는
+native lowering으로 갈라진다. Root wrapper만 exact root contract에 따라 생성하며 별도의
+호환 lowering 경로를 두지 않는다. 구체적인 pass 순서는
+[lowering.md](lowering.md#pipeline-order)가 정한다. 경계 뒤의 pass는 의미적 호출
+규약이나 제어 metadata를 읽지 않는다.
 
 `tribute_control_to_cps`의 출력은 physical callable/closure 표면과 logical
 `ability.*` 표면이다. `closure.closure`의 exact callable signature는 shared

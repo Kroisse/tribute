@@ -1233,35 +1233,12 @@ frame 펼치기가 구성한다.
 
 ## 공통 middle-end 파이프라인
 
-Callable/control과 effect 관련 pass의 순서는 다음과 같다:
-
-모든 source 함수는 이 shared route와 target ABI boundary를 통과한다. Root wrapper의
-생성은 exact root contract에 따르며, 별도의 호환 closure-lowering 경로는 두지 않는다.
-
-```text
-ast_to_ir (tribute_control callable/control + ordinary value IR, convention 없음)
-→ 참조되지 않는 정의 제거
-→ 쓰이지 않는 순수 operation 제거
-→ class 특수화 (convention을 가진 callable을 tribute_cps로)
-→ 참조되지 않는 정의 제거
-→ tribute_control_to_cps
-→ lower_continuation_frames
-→ lower_closure_lambda
-→ lower_ability_call
-→ resolve_evidence
-→ lower_handle_dispatch
-→ effect ABI verification
-── representation/ABI 경계 ──
-→ target ABI validation and CPS signature physicalization
-→ root and entry bridge composition
-→ lower_closures_in_func
-→ target evidence lowering (native 또는 Wasm)
-→ finalize_closure_storage_layout
-→ boundary exit verification
-── target dialect lowering ──
-→ proper-tail lowering과 target dialect conversion
-→ backend-ready verification
-```
+모든 source 함수는 같은 shared route를 거쳐 target ABI boundary를 통과한다. Class
+특수화가 convention을 정한 뒤 `tribute_control_to_cps`가 CPS로 적법화하고,
+`lower_ability_call`, `resolve_evidence`, `lower_handle_dispatch`가 effect ABI를
+만든다. 구체적인 pass 순서는 [lowering.md](lowering.md#pipeline-order)가 정한다.
+Root wrapper의 생성은 exact root contract에 따르며, 별도의 호환 closure-lowering
+경로는 두지 않는다.
 
 `tribute_control_to_cps`의 출력은 physical `func.*`/`closure.*` callable 표면,
 추상 frame 표면, logical `ability.*` dispatch 표면이다. `lower_continuation_frames`의

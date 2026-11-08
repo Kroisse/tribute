@@ -17,6 +17,9 @@ source
   -> emit
 ```
 
+이 도식은 단계의 큰 흐름만 보인다. 구체적인 pass 순서는
+[lowering.md](lowering.md#pipeline-order)가 정한다.
+
 Important stage invariants:
 
 | Stage | Required invariant |
