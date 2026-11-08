@@ -8,7 +8,7 @@
 //!
 //! Bodyless declarations stay: CPS legalization checks the registered compiler
 //! intrinsics against them, and they cost no lowering. Runtime functions stay
-//! for the target lowering that calls them (`new-plans/modules.md`, "생존
+//! for the target lowering that calls them (`design/modules.md`, "생존
 //! 범위"), unless nothing reachable can make it call them.
 
 use std::ops::ControlFlow;

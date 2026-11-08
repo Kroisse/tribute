@@ -303,7 +303,7 @@ pub(super) fn collect_from_type<'db>(
 /// A nominal type's name is only how a reference spelled it, so instances
 /// are keyed by this form: one spelled `ParseError` inside its module and
 /// `std::Int::ParseError` outside it is one instance
-/// (`new-plans/implementation.md`).
+/// (`design/implementation.md`).
 pub(super) fn canonical_args<'db>(
     db: &'db dyn salsa::Database,
     args: &[Type<'db>],

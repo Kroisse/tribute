@@ -4,7 +4,7 @@
 //! target. It lowers `effect.extend`, the evidence selection operations,
 //! `effect.dispatch_tail`, and `effect.dispatch_cps` to calls of the evidence
 //! runtime written in Tribute source, `std::runtime::evidence`
-//! (`new-plans/cps-effects.md`), which it finds by canonical path. The runtime
+//! (`design/cps-effects.md`), which it finds by canonical path. The runtime
 //! functions are compiled like any other source function; marker
 //! construction and field access stay inside them. The lowering is the same
 //! on every target.

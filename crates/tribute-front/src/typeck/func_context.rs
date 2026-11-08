@@ -1200,7 +1200,7 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
     }
 
     /// End the scope of the row names a `let` introduced: names outside
-    /// `outer` name fresh rows again after it (`new-plans/type-inference.md`,
+    /// `outer` name fresh rows again after it (`design/type-inference.md`,
     /// row variables).
     pub(crate) fn end_let_row_scope(&mut self, outer: &HashSet<Symbol>) {
         self.scope

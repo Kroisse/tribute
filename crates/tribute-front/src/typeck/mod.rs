@@ -255,7 +255,7 @@ pub struct LocalCallableInstance<'db> {
 /// One change a call makes to its caller's evidence before the callee runs.
 ///
 /// A call keeps the caller's evidence except for the ability instances its
-/// plan names (`new-plans/type-inference.md`, 호출의 evidence 선택).
+/// plan names (`design/type-inference.md`, 호출의 evidence 선택).
 #[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub enum EvidenceStep<'db> {
     /// The callee reaches this caller-explicit instance only through its row

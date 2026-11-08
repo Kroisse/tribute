@@ -1,5 +1,5 @@
 //! Exclusion of generic templates from the specialization output
-//! (`new-plans/generics.md`, "특수화 결과").
+//! (`design/generics.md`, "특수화 결과").
 //!
 //! A function or extern function with type parameters is a template. Its
 //! nodes, its metadata, and its scheme leave the output with it. Struct and

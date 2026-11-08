@@ -374,7 +374,7 @@ impl Fold for Muli {
 ///   runtime behavior; the fold doesn't synthesize a result.
 /// - `a == INT_MIN && b == -1` at the result width: backend traps on
 ///   signed-overflow. Tribute's integer-overflow policy isn't pinned
-///   down (`new-plans/types.md` doesn't specify wrap vs trap), so the
+///   down (`design/types.md` doesn't specify wrap vs trap), so the
 ///   conservative choice is to leave the op alone — that way IR
 ///   semantics match whatever the backend does.
 impl Fold for Divsi {

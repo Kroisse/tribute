@@ -40,7 +40,7 @@ pub struct UnresolvedName {
     /// Node ID for looking up the span in SpanMap.
     pub id: NodeId,
     /// Whether the name is an implicit constructor `.Name`, whose type its
-    /// context gives (`new-plans/type-inference.md` § 암묵적 생성자).
+    /// context gives (`design/type-inference.md` § 암묵적 생성자).
     pub implicit: bool,
 }
 
@@ -399,7 +399,7 @@ pub enum ResolvedRef<'db> {
     /// An implicit constructor `.Name`, which type checking resolves to a
     /// [`Constructor`](Self::Constructor) of the type its context gives,
     /// falling back to `candidates`: the constructors `Name` of the types in
-    /// scope, by rank (`new-plans/modules.md` § 암묵적 생성자의 후보).
+    /// scope, by rank (`design/modules.md` § 암묵적 생성자의 후보).
     ImplicitConstructor {
         name: Symbol,
         candidates: Candidates<CtorId<'db>>,

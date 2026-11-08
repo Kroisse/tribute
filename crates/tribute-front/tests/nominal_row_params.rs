@@ -1,5 +1,5 @@
 //! Row parameters of struct and enum declarations and the row arguments of
-//! their types (`new-plans/types.md`, "Row 매개변수").
+//! their types (`design/types.md`, "Row 매개변수").
 use salsa_test_macros::salsa_test;
 use tribute_core::diagnostic::{CompilationPhase, Diagnostic};
 use tribute_front::analysis;

@@ -7,7 +7,7 @@
 //! continue into the children. An override that does not call them skips the
 //! subtree.
 //!
-//! Traversal order is part of the contract (see `new-plans/generics.md`,
+//! Traversal order is part of the contract (see `design/generics.md`,
 //! "타입 순회와 binder별 치환"):
 //!
 //! - `Named`: row arguments, then type arguments, each in order.

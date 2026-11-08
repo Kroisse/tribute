@@ -1,4 +1,4 @@
-//! Output determinism (`new-plans/implementation.md`, 출력 결정성).
+//! Output determinism (`design/implementation.md`, 출력 결정성).
 //!
 //! The same input compiled in two fresh databases, or by two processes,
 //! yields the same boundary-exit IR text for both targets, the same native

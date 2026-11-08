@@ -46,7 +46,7 @@ mod adt {
 
     /// `adt.array`: a managed reference to an array object whose elements
     /// are `Element` values in order. An element is a scalar, a pointer, or a
-    /// managed reference; see `new-plans/ir.md` § "`adt` 배열". The unmanaged
+    /// managed reference; see `design/tribute-dialects.md` § "`adt` 배열". The unmanaged
     /// linear array is `core.array`, which no `adt` array operation accepts.
     #[implements(ManagedRefType)]
     struct Array<Element>;
@@ -62,7 +62,7 @@ mod adt {
     /// When the layout declares row parameters, each field operand has the
     /// layout's field type with the layout's row binders replaced by the
     /// `row_args` of the result's `adt.typeref`, using call-site row
-    /// substitution; see `new-plans/ir.md` § "Nominal row 인자".
+    /// substitution; see `design/tribute-dialects.md` § "Nominal row 인자".
     #[flags(Pure)]
     #[asm_format(fields attr_dict_bare ":" type(result))]
     fn struct_new(r#type: Attr<Type>, fields: Variadic<_>) -> Value<_> {}
@@ -72,7 +72,7 @@ mod adt {
     /// When the layout declares row parameters, the result has the layout's
     /// field type with the layout's row binders replaced by the `row_args` of
     /// the `ref` operand's `adt.typeref`, using call-site row substitution; see
-    /// `new-plans/ir.md` § "Nominal row 인자".
+    /// `design/tribute-dialects.md` § "Nominal row 인자".
     #[flags(Pure)]
     #[asm_format(r#ref attr_dict_bare ":" type(result))]
     fn struct_get(r#type: Attr<Type>, field: Attr<u32>, r#ref: Value<_>) -> Value<_> {}
@@ -86,7 +86,7 @@ mod adt {
     /// When the layout declares row parameters, each field operand has the
     /// layout's field type with the layout's row binders replaced by the
     /// `row_args` of the result's `adt.typeref`, using call-site row
-    /// substitution; see `new-plans/ir.md` § "Nominal row 인자".
+    /// substitution; see `design/tribute-dialects.md` § "Nominal row 인자".
     #[flags(Pure)]
     #[asm_format(fields attr_dict_bare ":" type(result))]
     fn variant_new(r#type: Attr<Type>, tag: Attr<String>, fields: Variadic<_>) -> Value<_> {}
@@ -111,9 +111,9 @@ mod adt {
     ///   reference is undefined, as for `adt.variant_is`.
     /// - **Ownership:** borrows `ref`.
     /// - **Location:** a case that selects by variant switches on this
-    ///   position (`new-plans/types.md` § "망라성과 도달 불가 arm"); each target
+    ///   position (`design/types.md` § "망라성과 도달 불가 arm"); each target
     ///   computes it from the value's runtime type descriptor
-    ///   (`new-plans/runtime-types.md` § "Variant 판별").
+    ///   (`design/runtime-types.md` § "Variant 판별").
     #[flags(Pure)]
     #[asm_format(r#ref attr_dict_bare)]
     fn variant_tag(r#type: Attr<Type>, r#ref: Value<_>) -> Value<Index> {}
@@ -123,7 +123,7 @@ mod adt {
     /// When the layout declares row parameters, the result has the layout's
     /// field type with the layout's row binders replaced by the `row_args` of
     /// the `ref` operand's `adt.typeref`, using call-site row substitution; see
-    /// `new-plans/ir.md` § "Nominal row 인자".
+    /// `design/tribute-dialects.md` § "Nominal row 인자".
     #[flags(Pure)]
     #[asm_format(r#ref attr_dict_bare ":" type(result))]
     fn variant_get(
@@ -148,7 +148,7 @@ mod adt {
     ///   records the struct's name and field names from it.
     /// - **Location:** the frontend emits it with the layout of each source
     ///   struct; the target pass that lowers `adt` operations erases it
-    ///   (`new-plans/ir.md` § "Nominal 선언").
+    ///   (`design/ir.md` § "Nominal 선언").
     #[asm_format(name custom(FieldNames(fields)) attr_dict)]
     fn struct_decl(name: Attr<String>, fields: Attr<[String]>) {}
 
@@ -166,7 +166,7 @@ mod adt {
     ///   records the enum's name and its variants' names from it.
     /// - **Location:** the frontend emits it with the layout of each source
     ///   enum and each specialized enum instance; the target pass that
-    ///   lowers `adt` operations erases it (`new-plans/ir.md` § "Nominal 선언").
+    ///   lowers `adt` operations erases it (`design/ir.md` § "Nominal 선언").
     #[asm_format(name custom(VariantNames(variants)) attr_dict)]
     fn enum_decl(name: Attr<String>, variants: Attr<[String]>) {}
 
@@ -440,7 +440,7 @@ pub fn nominal_name(ctx: &IrContext, ty: TypeRef) -> Option<&str> {
 
 /// The `adt.struct` or `adt.enum` layout of a value of type `ty`: `ty`
 /// itself when it is a layout, or the layout an `adt.typeref` names
-/// (`new-plans/ir.md` § "`adt.typeref` nominal reference type"), which the
+/// (`design/ir.md` § "`adt.typeref` nominal reference type"), which the
 /// frontend publishes as the type alias of that name. `None` for any other
 /// type or a name without a published layout.
 pub fn layout_of(ctx: &IrContext, ty: TypeRef) -> Option<TypeRef> {
@@ -456,7 +456,7 @@ pub fn layout_of(ctx: &IrContext, ty: TypeRef) -> Option<TypeRef> {
 }
 
 /// The nominal declarations of a module, by the name of the layout each one
-/// declares (`new-plans/ir.md` § "Nominal 선언").
+/// declares (`design/ir.md` § "Nominal 선언").
 #[derive(Debug, Default)]
 pub struct NominalDecls {
     structs: HashMap<StringRef, StructDecl>,

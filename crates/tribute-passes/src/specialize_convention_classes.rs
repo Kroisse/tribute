@@ -1,5 +1,5 @@
 //! Class specialization: the first pass of the CPS strategy
-//! (`new-plans/cps-effects.md`, "Class 특수화 pass").
+//! (`design/cps-effects.md`, "Class 특수화 pass").
 //!
 //! The frontend's source-logical IR has rows but no calling conventions. This
 //! pass selects the class variables of every definition, collects the class
@@ -9,7 +9,7 @@
 //! body rule selects, and replaces every source callable and indirect
 //! transfer with its `tribute_cps` operation, which declares its convention.
 //!
-//! A class is exact or an upper bound (`new-plans/ir.md`, "Convention
+//! A class is exact or an upper bound (`design/tribute-dialects.md`, "Convention
 //! entry"). A lambda stays one value: uses that select one body but pass
 //! different classes for a binder make that binder an upper bound in that
 //! body. Each body is a copy of the lambda's body, whose nested lambdas
@@ -358,7 +358,7 @@ impl Instance<'_> {
     }
 
     /// Give every lambda in `body` the bodies the body rule selects
-    /// (`new-plans/ir.md`, "Convention entry"), one lambda at a time, and
+    /// (`design/tribute-dialects.md`, "Convention entry"), one lambda at a time, and
     /// settle the local classes.
     ///
     /// The bodies a lambda needs depend on the binders its uses and its own
@@ -601,7 +601,7 @@ impl Instance<'_> {
     /// The targets of the table of `definition` for `classes`, by
     /// convention: one per class its own row may require read with those
     /// classes, each the instance whose argument for the class variable that
-    /// is that row's tail narrows to that class (`new-plans/ir.md`,
+    /// is that row's tail narrows to that class (`design/tribute-dialects.md`,
     /// "Convention entry", 함수 참조).
     fn table_targets(
         &self,

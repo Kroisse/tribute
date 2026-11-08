@@ -3,7 +3,7 @@
 The canonical examples in this directory are checked against the current
 single-source-file CLI. They use public APIs and are the best starting point for
 running Tribute today. The
-[compiler capability matrix](../new-plans/capabilities.md) is authoritative for
+[compiler capability matrix](../design/capabilities.md) is authoritative for
 the wider frontend and target status.
 
 ## Canonical runnable examples
@@ -133,7 +133,7 @@ Current boundaries relevant to these files:
 - Inline modules have native execution evidence, but file-module loading,
   package compilation, and separate Tribute-module linking are unsupported.
 - Language-level Wasm execution is limited to the forms the
-  [capability matrix](../new-plans/capabilities.md) lists as **wasm-run**:
+  [capability matrix](../design/capabilities.md) lists as **wasm-run**:
   String/Bytes output, String equality, `Nat` comparisons, Bytes slicing, and
   the `fn`, one-shot `op`, and Abort handler forms.
 

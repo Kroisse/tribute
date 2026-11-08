@@ -3,7 +3,7 @@
 //! `#[asm_format(..)]` with format elements stores an [`OpFormat`] in the
 //! operation's definition. The printer and the parser interpret it against
 //! the definition's [`OpSchema`], so one declaration gives both directions
-//! (`new-plans/ir.md`, "선언적 어셈블리 형식").
+//! (`design/ir.md`, "선언적 어셈블리 형식").
 
 use std::fmt::{self, Write};
 use std::ops::Range;

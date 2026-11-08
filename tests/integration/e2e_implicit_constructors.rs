@@ -1,4 +1,4 @@
-//! Implicit constructors `.Name` (`new-plans/type-inference.md` § 암묵적 생성자).
+//! Implicit constructors `.Name` (`design/type-inference.md` § 암묵적 생성자).
 
 use crate::common::assert_output_on_both_targets;
 
