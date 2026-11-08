@@ -334,8 +334,9 @@ impl<'db> TypeSolver<'db> {
     ///
     /// Like [`Self::types_unifiable`], this never rejects a pair that
     /// unifies. Its only rejection is a label of one side with no candidate
-    /// instance on the other and no tail to supply it; rows with distinct
-    /// tails, rigid or not, are never rejected. So two
+    /// instance on the other when that other side is closed; two open rows,
+    /// whether their tails are shared or distinct, rigid or not, are never
+    /// rejected. So two
     /// instances of one ability whose function arguments have rows that can
     /// never be equal, such as `{Ask}` and `{Tell}`, stay distinct.
     pub(super) fn rows_unifiable(&self, r1: AbilityRow<'db>, r2: AbilityRow<'db>) -> bool {
@@ -361,7 +362,8 @@ impl<'db> TypeSolver<'db> {
             (None, None) => covered(r1, r2) && covered(r2, r1),
             (Some(_), None) => covered(r1, r2),
             (None, Some(_)) => covered(r2, r1),
-            (Some(v1), Some(v2)) if v1 == v2 => covered(r1, r2) && covered(r2, r1),
+            // Another position may bind an open tail to the labels the other
+            // side names, so two open rows are never rejected.
             (Some(_), Some(_)) => true,
         }
     }

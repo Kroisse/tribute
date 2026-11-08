@@ -646,6 +646,41 @@ fn instances_whose_function_arguments_differ_only_in_effects_stay_distinct() {
     );
 }
 
+#[test]
+fn quick_check_accepts_rows_whose_shared_tail_another_position_binds() {
+    // `fn(fn() ->{e} Nat) ->{A | e} Nat` and `fn(fn() ->{A} Nat) ->{e} Nat`
+    // unify: the parameters bind `e = {A}`, so both result rows are `{A}`.
+    let db = test_db();
+    let nat = Type::new(&db, TypeKind::Nat);
+    let tail = RowVar { id: 100 };
+    let a = AbilityInstance {
+        ability_id: test_ability_id(&db, "A"),
+        args: vec![],
+    };
+    let func = |params, effect| {
+        Type::new(
+            &db,
+            TypeKind::Func {
+                params,
+                result: nat,
+                effect,
+            },
+        )
+    };
+    let left = func(
+        vec![func(vec![], AbilityRow::open(&db, tail))],
+        AbilityRow::new(&db, vec![a.clone()], Some(tail)),
+    );
+    let right = func(
+        vec![func(vec![], AbilityRow::single(&db, a))],
+        AbilityRow::open(&db, tail),
+    );
+
+    let mut solver = TypeSolver::new(&db);
+    solver.unify_types(left, right).unwrap();
+    assert!(TypeSolver::new(&db).types_unifiable(left, right));
+}
+
 // =========================================================================
 // row_occurs_in_type tests for params/result recursion
 // =========================================================================
