@@ -11,24 +11,7 @@ and location) is the doc comment on its `#[dialect]` declaration, which is
 authoritative for that operation. Rules that span operations stay in
 `design/`.
 
-Key design docs:
-
-- `design/design.md`
-- `design/syntax.md`
-- `design/types.md`
-- `design/io.md`
-- `design/host-interface.md`
-- `design/modules.md`
-- `design/abilities.md`
-- `design/type-inference.md`
-- `design/ir.md`
-- `design/tribute-dialects.md`
-- `design/abi-boundary.md`
-- `design/lowering.md`
-- `design/implementation.md`
-- `design/lsp.md`
-- `design/cranelift-backend.md`
-- `design/runtime-types.md`
+`design/README.md` indexes those documents by scope.
 
 ## Working Rules
 
