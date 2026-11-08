@@ -89,22 +89,27 @@ impl DescriptorRecord {
                     .expect("a struct descriptor has an adt.struct layout");
                 // A compiler-built layout has no declaration and records the
                 // names it carries itself.
-                let names: Vec<String> = match decls.of_struct(ctx, layout) {
-                    Some(decl) => decl.fields(ctx).map(str::to_owned).collect(),
-                    None => layout
-                        .fields(ctx)
-                        .map(|(name, _)| name.to_owned())
-                        .collect(),
+                let (name, names): (&str, Vec<String>) = match decls.of_struct(ctx, layout) {
+                    Some(decl) => (
+                        decl.name(ctx),
+                        decl.fields(ctx).map(str::to_owned).collect(),
+                    ),
+                    None => (
+                        layout.name(ctx),
+                        layout
+                            .fields(ctx)
+                            .map(|(name, _)| name.to_owned())
+                            .collect(),
+                    ),
                 };
                 assert_eq!(
                     names.len(),
                     fields.len(),
-                    "the declaration of {} names each of its fields",
-                    layout.name(ctx),
+                    "the declaration of {name} names each of its fields",
                 );
                 Self {
                     kind: RecordKind::Struct,
-                    name: layout.name(ctx).to_owned(),
+                    name: name.to_owned(),
                     owner: None,
                     fields: names.into_iter().zip(fields).collect(),
                 }
@@ -198,6 +203,7 @@ fn reserved_records() -> [(u32, DescriptorRecord); 5] {
 /// followed by the enum records, field arrays, and names they refer to.
 pub fn generate(
     ctx: &mut IrContext,
+    decls: &NominalDecls,
     module_block: BlockRef,
     records: Vec<(u32, DescriptorRecord)>,
     release_fns: &HashMap<u32, SymbolPath>,
@@ -216,9 +222,13 @@ pub fn generate(
         if let Some((owner, _)) = record.owner
             && !enums.iter().any(|(ty, _)| *ty == owner)
         {
-            let name = adt::nominal_name(ctx, owner)
-                .expect("an enum layout has a nominal name")
-                .to_owned();
+            let layout =
+                adt::Enum::from_type_ref(ctx, owner).expect("a variant's owner is an adt.enum");
+            let name = match decls.of_enum(ctx, layout) {
+                Some(decl) => decl.name(ctx),
+                None => layout.name(ctx),
+            }
+            .to_owned();
             enums.push((
                 owner,
                 DescriptorRecord {
@@ -485,6 +495,7 @@ mod tests {
         let release = SymbolPath::new(["__tribute_release_5"]);
         generate(
             &mut ctx,
+            &NominalDecls::default(),
             block,
             vec![(5, record)],
             &[(5, release.clone())]

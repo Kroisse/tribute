@@ -394,10 +394,12 @@ fn wasm_boundary_exit_programs_meet_the_contract(db: &crate::TributeDatabaseImpl
 
 /// The nominal declarations of source types reach native RTTI generation,
 /// each naming the layout published under its name, including layouts whose
-/// fields CPS legalization converts.
+/// fields CPS legalization converts, and the RTTI table takes its names from
+/// them.
 #[salsa_test]
-fn nominal_declarations_reach_the_native_boundary_exit(db: &crate::TributeDatabaseImpl) {
+fn nominal_declarations_name_native_rtti_records(db: &crate::TributeDatabaseImpl) {
     use tribute_ir::dialect::adt;
+    use trunk_ir::types::Attribute;
 
     let source = source_from_str(
         "nominal_declarations.trb",
@@ -460,12 +462,73 @@ fn main() -> Nil {
             declared.push(decl.name(&ctx).to_owned());
         }
     }
-    for name in ["Point", "Handler", "Shape", "Maybe$Int"] {
+    let declared_as = |name: &str| {
+        declared
+            .iter()
+            .find(|declared| declared.rsplit("::").next() == Some(name))
+            .unwrap_or_else(|| panic!("{name} is declared: {declared:?}"))
+            .clone()
+    };
+    let decls = adt::NominalDecls::collect(&ctx, module);
+    for name in ["Point", "Handler"] {
+        let layout = ctx.type_alias_by_text(&declared_as(name)).unwrap();
+        let layout = adt::Struct::from_type_ref(&ctx, layout).unwrap();
+        assert!(decls.of_struct(&ctx, layout).is_some(), "{name}");
+    }
+    for name in ["Shape", "Maybe$Int"] {
+        let layout = ctx.type_alias_by_text(&declared_as(name)).unwrap();
+        let layout = adt::Enum::from_type_ref(&ctx, layout).unwrap();
+        assert!(decls.of_enum(&ctx, layout).is_some(), "{name}");
+    }
+
+    // The RTTI table takes its names from the declarations: renamed there,
+    // the names reach the table although the layouts still carry the old
+    // ones.
+    let point = declared_as("Point");
+    let shape = declared_as("Shape");
+    for &op in &ctx.block(block).ops.clone() {
+        if adt::StructDecl::from_op(&ctx, op).is_ok_and(|decl| decl.name(&ctx) == point) {
+            let fields = ["declared_x", "declared_y"].map(|name| ctx.string_attr(name));
+            ctx.op_attrs_mut(op)
+                .insert("fields", Attribute::List(fields.into()));
+        } else if adt::EnumDecl::from_op(&ctx, op).is_ok_and(|decl| decl.name(&ctx) == shape) {
+            let variants =
+                ["DeclaredDot", "DeclaredCircle", "DeclaredRect"].map(|name| ctx.string_attr(name));
+            ctx.op_attrs_mut(op)
+                .insert("variants", Attribute::List(variants.into()));
+        }
+    }
+    let config = StageConfig {
+        native: NativeLowering {
+            sanitize: false,
+            optimizations: NativeOptimizationOptions::production(),
+            stop_after: Some(NativePipelineStage::AfterRcInsertion),
+        },
+        ..StageConfig::target(tribute_passes::abi_boundary::TargetKind::Native)
+    };
+    run_stages(
+        &mut ctx,
+        module,
+        config,
+        Stage::LowerTarget..=Stage::LowerTarget,
+    )
+    .expect("native lowering");
+    let table = module
+        .ops(&ctx)
+        .iter()
+        .find_map(|&op| {
+            clif::Data::from_op(&ctx, op).ok().filter(|data| {
+                data.sym_name(&ctx) == tribute_passes::native::descriptor_records::RTTI_TABLE
+            })
+        })
+        .expect("the RTTI table");
+    let bytes = table.bytes(&ctx);
+    for name in ["declared_x", "declared_y", "DeclaredCircle"] {
         assert!(
-            declared
-                .iter()
-                .any(|declared| declared.rsplit("::").next() == Some(name)),
-            "{name} is declared: {declared:?}"
+            bytes
+                .windows(name.len())
+                .any(|window| window == name.as_bytes()),
+            "{name} is in the RTTI table"
         );
     }
 }

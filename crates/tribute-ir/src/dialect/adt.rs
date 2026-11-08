@@ -1089,6 +1089,34 @@ mod tests {
     }
 
     #[test]
+    fn nominal_declarations_are_found_by_their_layout_names() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  !Point = adt.struct<Point(x: core.i32, y: core.i32)>
+  !Empty = adt.struct<Empty()>
+  !Never = adt.enum<Never {}>
+  adt.struct_decl "Point" {fields = ["x", "y"]}
+  adt.struct_decl "Empty" {fields = []}
+  adt.enum_decl "Never" {variants = []}
+}"#,
+        );
+        assert_roundtrip(&ctx, module.op());
+        let decls = NominalDecls::collect(&ctx, module);
+        let alias = |ctx: &IrContext, name| ctx.type_alias_by_text(name).expect("fixture alias");
+        let point = Struct::from_type_ref(&ctx, alias(&ctx, "Point")).unwrap();
+        let point = decls.of_struct(&ctx, point).expect("Point is declared");
+        assert_eq!(point.fields(&ctx).collect::<Vec<_>>(), ["x", "y"]);
+        let empty = Struct::from_type_ref(&ctx, alias(&ctx, "Empty")).unwrap();
+        let empty = decls.of_struct(&ctx, empty).expect("Empty is declared");
+        assert_eq!(empty.fields(&ctx).len(), 0);
+        let never = Enum::from_type_ref(&ctx, alias(&ctx, "Never")).unwrap();
+        let never = decls.of_enum(&ctx, never).expect("Never is declared");
+        assert_eq!(never.variants(&ctx).len(), 0);
+    }
+
+    #[test]
     fn layout_of_resolves_a_typeref_to_its_published_layout() {
         let mut ctx = IrContext::new();
         parse_test_module(
