@@ -186,7 +186,6 @@ mod tests {
   wasm.func @main(%x: core.f64) -> core.nil {
     %some = adt.variant_new %x {tag = 1, type = !E} : !E
     %erased = adt.variant_new %x {tag = 1, type = tribute_rt.anyref} : tribute_rt.anyref
-    %missing = adt.variant_new %x {tag = 2, type = !E} : !E
     %s = adt.struct_new %x {type = !S} : !S
     wasm.return
   }
