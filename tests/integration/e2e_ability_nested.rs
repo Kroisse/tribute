@@ -470,6 +470,66 @@ fn main() ->{Io} Nil {
     assert_native_output("same_ability_same_spelled_nominals.trb", code, "7");
 }
 
+/// Two instances of one ability whose function arguments differ only in
+/// their effect rows are distinct instances, each handled by its own handler.
+#[test]
+fn test_same_ability_instances_with_function_arguments_differing_in_effects() {
+    let code = r#"use std::io::{Io, print_line}
+
+ability Ask { op ask() -> Nat }
+ability Tell { op tell() -> Nat }
+
+ability State(s) {
+    op get() -> s
+    op set(value: s) -> Nil
+}
+
+fn run_ask_state(comp: fn() ->{e, State(fn() ->{Ask} Nat)} Nat, init: fn() ->{Ask} Nat) ->{e} Nat {
+    handle comp() {
+        do result { result }
+        op State::get() { run_ask_state(fn() { resume init }, init) }
+        op State::set(v) { run_ask_state(fn() { resume Nil }, v) }
+    }
+}
+
+fn run_tell_state(comp: fn() ->{e, State(fn() ->{Tell} Nat)} Nat, init: fn() ->{Tell} Nat) ->{e} Nat {
+    handle comp() {
+        do result { result }
+        op State::get() { run_tell_state(fn() { resume init }, init) }
+        op State::set(v) { run_tell_state(fn() { resume Nil }, v) }
+    }
+}
+
+fn run_ask(comp: fn() ->{e, Ask} Nat) ->{e} Nat {
+    handle comp() {
+        do result { result }
+        op Ask::ask() { run_ask(fn() { resume 3 }) }
+    }
+}
+
+fn get_ask() ->{State(fn() ->{Ask} Nat)} fn() ->{Ask} Nat {
+    State::get()
+}
+
+fn set_tell(value: fn() ->{Tell} Nat) ->{State(fn() ->{Tell} Nat)} Nil {
+    State::set(value)
+}
+
+fn both() ->{State(fn() ->{Tell} Nat), State(fn() ->{Ask} Nat)} Nat {
+    set_tell(fn() { Tell::tell() })
+    let f = get_ask()
+    run_ask(fn() { f() })
+}
+
+fn main() ->{Io} Nil {
+    let tell_state = fn() { run_tell_state(fn() { both() }, fn() { Tell::tell() }) }
+    let result = run_ask_state(tell_state, fn() { Ask::ask() + 7 })
+    print_line(result.to_string)
+}
+"#;
+    assert_output_on_both_targets("same_ability_effect_differing_functions.trb", code, "10");
+}
+
 // =============================================================================
 // Ability-heavy sanitizer smoke test (#407)
 // =============================================================================

@@ -601,6 +601,86 @@ fn test_different_effect_arity_returns_arity_mismatch() {
     );
 }
 
+#[test]
+fn instances_whose_function_arguments_differ_only_in_effects_stay_distinct() {
+    // `State(fn() ->{Ask} Nat)` matches only its own instance in
+    // `{State(fn() ->{Tell} Nat), State(fn() ->{Ask} Nat)}`, since the
+    // closed rows `{Ask}` and `{Tell}` never unify. The tail takes the other.
+    let db = test_db();
+    let mut solver = TypeSolver::new(&db);
+
+    let nat = Type::new(&db, TypeKind::Nat);
+    let thunk = |ability: &str| {
+        let effect = AbilityRow::single(
+            &db,
+            AbilityInstance {
+                ability_id: test_ability_id(&db, ability),
+                args: vec![],
+            },
+        );
+        Type::new(
+            &db,
+            TypeKind::Func {
+                params: vec![],
+                result: nat,
+                effect,
+            },
+        )
+    };
+    let state = |arg| AbilityInstance {
+        ability_id: test_ability_id(&db, "State"),
+        args: vec![arg],
+    };
+    let ask_state = state(thunk("Ask"));
+    let tell_state = state(thunk("Tell"));
+
+    let tail = RowVar { id: 100 };
+    let open = AbilityRow::new(&db, vec![ask_state.clone()], Some(tail));
+    let closed = AbilityRow::new(&db, vec![tell_state.clone(), ask_state], None);
+
+    assert!(!solver.types_unifiable(thunk("Ask"), thunk("Tell")));
+    solver.unify_rows(open, closed).unwrap();
+    assert_eq!(
+        solver.row_subst.get(tail.id),
+        Some(AbilityRow::new(&db, vec![tell_state], None)),
+    );
+}
+
+#[test]
+fn quick_check_accepts_rows_whose_shared_tail_another_position_binds() {
+    // `fn(fn() ->{e} Nat) ->{A | e} Nat` and `fn(fn() ->{A} Nat) ->{e} Nat`
+    // unify: the parameters bind `e = {A}`, so both result rows are `{A}`.
+    let db = test_db();
+    let nat = Type::new(&db, TypeKind::Nat);
+    let tail = RowVar { id: 100 };
+    let a = AbilityInstance {
+        ability_id: test_ability_id(&db, "A"),
+        args: vec![],
+    };
+    let func = |params, effect| {
+        Type::new(
+            &db,
+            TypeKind::Func {
+                params,
+                result: nat,
+                effect,
+            },
+        )
+    };
+    let left = func(
+        vec![func(vec![], AbilityRow::open(&db, tail))],
+        AbilityRow::new(&db, vec![a.clone()], Some(tail)),
+    );
+    let right = func(
+        vec![func(vec![], AbilityRow::single(&db, a))],
+        AbilityRow::open(&db, tail),
+    );
+
+    let mut solver = TypeSolver::new(&db);
+    solver.unify_types(left, right).unwrap();
+    assert!(TypeSolver::new(&db).types_unifiable(left, right));
+}
+
 // =========================================================================
 // row_occurs_in_type tests for params/result recursion
 // =========================================================================

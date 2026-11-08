@@ -263,6 +263,9 @@ Row ::= {}                    -- 빈 row (순수)
 // OK: 타입 파라미터가 다르면 다른 ability로 취급
 fn foo() ->{State(Int), State(String)} Nil
 
+// OK: 닫힌 row {Ask}와 {Tell}은 같아질 수 없으므로 함수 인자의 effect만 달라도 다른 instance
+fn quux() ->{State(fn() ->{Ask} Nat), State(fn() ->{Tell} Nat)} Nil
+
 // Error: 동일한 ability 중복
 fn bar() ->{State(Int), State(Int)} Nil
 

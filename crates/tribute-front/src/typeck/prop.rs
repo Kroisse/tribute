@@ -921,21 +921,11 @@ fn renumber_placeholders(shape: TypeShape) -> TypeShape {
 // Comparisons of built types
 // ============================================================================
 
-/// How [`types_equiv`] relates the effect rows at corresponding positions.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum RowRelation {
-    /// The same effects as a set and the same tail.
-    SetEqual,
-    /// Rows are not compared.
-    Ignore,
-}
-
-/// Structural equality of types, comparing rows by `relation`.
+/// Structural equality of types, comparing rows with [`rows_equiv`].
 pub(crate) fn types_equiv<'db>(
     db: &'db dyn salsa::Database,
     left: Type<'db>,
     right: Type<'db>,
-    relation: RowRelation,
 ) -> bool {
     if left == right {
         return true;
@@ -945,7 +935,7 @@ pub(crate) fn types_equiv<'db>(
             && left
                 .iter()
                 .zip(right)
-                .all(|(left, right)| types_equiv(db, *left, *right, relation))
+                .all(|(left, right)| types_equiv(db, *left, *right))
     };
     match (left.kind(db), right.kind(db)) {
         (
@@ -973,8 +963,8 @@ pub(crate) fn types_equiv<'db>(
             },
         ) => {
             all(left_params, right_params)
-                && types_equiv(db, *left_result, *right_result, relation)
-                && rows_equiv(db, *left_effect, *right_effect, relation)
+                && types_equiv(db, *left_result, *right_result)
+                && rows_equiv(db, *left_effect, *right_effect)
         }
         (TypeKind::Tuple(left), TypeKind::Tuple(right)) => all(left, right),
         (
@@ -989,24 +979,21 @@ pub(crate) fn types_equiv<'db>(
                 effect: right_effect,
             },
         ) => {
-            types_equiv(db, *left_arg, *right_arg, relation)
-                && types_equiv(db, *left_result, *right_result, relation)
-                && rows_equiv(db, *left_effect, *right_effect, relation)
+            types_equiv(db, *left_arg, *right_arg)
+                && types_equiv(db, *left_result, *right_result)
+                && rows_equiv(db, *left_effect, *right_effect)
         }
         _ => false,
     }
 }
 
-/// Row comparison used by [`types_equiv`].
+/// Row equality used by [`types_equiv`]: the same effects as a set and the
+/// same tail.
 pub(crate) fn rows_equiv<'db>(
     db: &'db dyn salsa::Database,
     left: AbilityRow<'db>,
     right: AbilityRow<'db>,
-    relation: RowRelation,
 ) -> bool {
-    if relation == RowRelation::Ignore {
-        return true;
-    }
     let contains = |row: AbilityRow<'db>, effect: &AbilityInstance<'db>| {
         row.instances(db).iter().any(|candidate| {
             candidate.ability_id == effect.ability_id
@@ -1015,7 +1002,7 @@ pub(crate) fn rows_equiv<'db>(
                     .args
                     .iter()
                     .zip(&effect.args)
-                    .all(|(a, b)| types_equiv(db, *a, *b, relation))
+                    .all(|(a, b)| types_equiv(db, *a, *b))
         })
     };
     left.rest(db) == right.rest(db)

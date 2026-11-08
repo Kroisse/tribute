@@ -13,8 +13,8 @@ use proptest::prelude::*;
 use super::{ConstraintSet, SolveError, TypeSolver};
 use crate::ast::{AbilityRow, Type};
 use crate::typeck::prop::{
-    RowRelation, RowShape, Sharing, TypeGen, TypeShape, context_with_hole, generalization,
-    row_and_shuffle, row_shape, rows_equiv, type_shape, types_equiv, univar,
+    RowShape, Sharing, TypeGen, TypeShape, context_with_hole, generalization, row_and_shuffle,
+    row_shape, rows_equiv, type_shape, types_equiv, univar,
 };
 
 /// Unification variables and row tails for open types.
@@ -130,7 +130,7 @@ proptest! {
         prop_assert!(result.is_ok(), "{:?}", result);
         prop_assert!(solver.settled());
         prop_assert!(
-            types_equiv(&db, solver.resolved(pattern), ground, RowRelation::SetEqual),
+            types_equiv(&db, solver.resolved(pattern), ground),
             "{:?} resolved to {:?}, expected {:?}",
             pattern,
             solver.resolved(pattern),
@@ -148,7 +148,7 @@ proptest! {
         if result.is_ok() && solver.settled() {
             let (left, right) = (solver.resolved(left), solver.resolved(right));
             prop_assert!(
-                types_equiv(&db, left, right, RowRelation::SetEqual),
+                types_equiv(&db, left, right),
                 "resolved sides differ: {:?} vs {:?}",
                 left,
                 right,
@@ -179,7 +179,7 @@ proptest! {
             let (solver, result) = solve_types(&db, first, second);
             let unifier = result.is_ok()
                 && solver.settled()
-                && types_equiv(&db, solver.resolved(first), solver.resolved(second), RowRelation::SetEqual);
+                && types_equiv(&db, solver.resolved(first), solver.resolved(second));
             if unifier {
                 let reversed = solve_types(&db, second, first).1;
                 prop_assert!(reversed.is_ok(), "{:?}", reversed);
@@ -188,8 +188,7 @@ proptest! {
     }
 
     /// Closed ground types unify exactly when they are structurally equal,
-    /// with rows compared as sets; the quick check agrees when rows are
-    /// ignored.
+    /// with rows compared as sets, and the quick check agrees.
     #[test]
     fn ground_types_unify_iff_equal(
         left in type_shape(TypeGen::GROUND.continuations(true)),
@@ -197,13 +196,13 @@ proptest! {
     ) {
         let db = salsa::DatabaseImpl::new();
         for (left, right) in [(left.build(&db), right.build(&db)), (left.build(&db), left.build(&db))] {
-            let equal = types_equiv(&db, left, right, RowRelation::SetEqual);
+            let equal = types_equiv(&db, left, right);
             let (solver, result) = solve_types(&db, left, right);
             prop_assert_eq!(result.is_ok(), equal, "{:?} ~ {:?}: {:?}", left, right, result);
             prop_assert!(!solver.has_bindings());
             prop_assert_eq!(
                 TypeSolver::new(&db).types_unifiable(left, right),
-                types_equiv(&db, left, right, RowRelation::Ignore),
+                equal,
             );
         }
     }
@@ -239,7 +238,7 @@ proptest! {
     ) {
         let db = salsa::DatabaseImpl::new();
         for (left, right) in [(&left, &right), (&row, &shuffled)] {
-            let same = rows_equiv(&db, left.build(&db), right.build(&db), RowRelation::SetEqual);
+            let same = rows_equiv(&db, left.build(&db), right.build(&db));
             let (solver, result) = solve_rows(&db, left.build(&db), right.build(&db));
             prop_assert_eq!(result.is_ok(), same, "{:?} ~ {:?}: {:?}", left, right, result);
             prop_assert!(result.is_ok() || matches!(result, Err(SolveError::RowMismatch { .. })), "{:?}", result);
@@ -288,12 +287,11 @@ proptest! {
                     .cloned()
                     .collect(),
             );
-            prop_assert!(rows_equiv(&db, bound, difference.build(&db), RowRelation::SetEqual));
+            prop_assert!(rows_equiv(&db, bound, difference.build(&db)));
             prop_assert!(rows_equiv(
                 &db,
                 solver.row_subst.apply(&db, open_row),
                 closed_row,
-                RowRelation::SetEqual,
             ));
         }
     }
@@ -312,7 +310,7 @@ proptest! {
         let (solver, result) = solve_rows(&db, left, right);
         prop_assert!(result.is_ok(), "{:?}", result);
         let (left, right) = (solver.row_subst.apply(&db, left), solver.row_subst.apply(&db, right));
-        prop_assert!(rows_equiv(&db, left, right, RowRelation::SetEqual), "{:?} vs {:?}", left, right);
+        prop_assert!(rows_equiv(&db, left, right), "{:?} vs {:?}", left, right);
         prop_assert!(left.rest(&db).is_some_and(|tail| tail.id > base + 1));
     }
 
@@ -443,7 +441,7 @@ fn open_row_tail_binding_keeps_argument_bindings() {
     let (solver, result) = solve_rows(&db, open, closed);
     assert!(result.is_ok());
     let (open, closed) = (solver.normalize_row(open), solver.normalize_row(closed));
-    assert!(rows_equiv(&db, open, closed, RowRelation::SetEqual));
+    assert!(rows_equiv(&db, open, closed));
 }
 
 /// A tail may occur in the effects bound to the other tail: equating
@@ -478,7 +476,7 @@ fn open_rows_allow_a_tail_in_the_other_remainder() {
     let (solver, result) = solve_rows(&db, left, right);
     assert!(result.is_ok(), "{result:?}");
     let (left, right) = (solver.normalize_row(left), solver.normalize_row(right));
-    assert!(rows_equiv(&db, left, right, RowRelation::SetEqual));
+    assert!(rows_equiv(&db, left, right));
 }
 
 /// Binding both tails must not form a cycle through each other: in
