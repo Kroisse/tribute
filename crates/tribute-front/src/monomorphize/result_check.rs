@@ -1,4 +1,4 @@
-//! The check of the specialization output (`new-plans/generics.md`,
+//! The check of the specialization output (`design/generics.md`,
 //! "특수화 결과"). A violation is a compiler inconsistency, not a source
 //! error.
 

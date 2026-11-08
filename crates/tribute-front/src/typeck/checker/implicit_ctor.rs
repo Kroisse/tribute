@@ -1,4 +1,4 @@
-//! Implicit constructors `.Name` (`new-plans/type-inference.md` § 암묵적 생성자).
+//! Implicit constructors `.Name` (`design/type-inference.md` § 암묵적 생성자).
 //!
 //! An implicit constructor names the constructor `Name` of the type its
 //! context gives. Where that type or a single candidate decides it as it is

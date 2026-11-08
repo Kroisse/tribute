@@ -91,7 +91,7 @@ impl PackageName {
 
 /// How diagnostics spell identity paths while one package is compiled: its
 /// own declarations without its package component, unless the rest would
-/// then start with a dependency's name (`new-plans/modules.md`, "진단의 이름
+/// then start with a dependency's name (`design/modules.md`, "진단의 이름
 /// 표기").
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NameDisplay {

@@ -7,7 +7,7 @@
 //! emitted when an explicit import binds its symbol.
 //!
 //! This module owns the read-only emission disposition described in
-//! `new-plans/wasm-backend.md`. It first collects every surviving reference to
+//! `design/wasm-backend.md`. It first collects every surviving reference to
 //! a function symbol, freshly from the final IR, and then drops the bodyless
 //! declarations that nothing uses. Omission is decided here and never mutates
 //! the IR, which keeps it distinct from generic DCE reachability and

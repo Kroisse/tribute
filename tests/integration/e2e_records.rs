@@ -5,7 +5,7 @@ use crate::common::assert_output_on_both_targets;
 #[test]
 fn test_record_field_shorthand() {
     // `User { name, age }` initializes each field from the variable of the
-    // same name (`new-plans/syntax.md`).
+    // same name (`design/syntax.md`).
     assert_output_on_both_targets(
         "record_field_shorthand.trb",
         r#"

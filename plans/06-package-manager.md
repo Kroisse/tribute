@@ -31,7 +31,7 @@ test-utils = "0.2"
 ```
 
 The current manifest contract in
-[`new-plans/modules.md`](../new-plans/modules.md#매니페스트-tributetoml) defines
+[`design/modules.md`](../design/modules.md#매니페스트-tributetoml) defines
 only `[package] name` and `{ path = "..." }` dependencies. The other keys and
 the version requirements above are proposed extensions for registry support.
 

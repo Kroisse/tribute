@@ -190,7 +190,7 @@ impl<'db> TypeChecker<'db> {
 
     /// Whether a `let` of `value` quantifies rows: a use of a lambda or of a
     /// named-function alias chooses its own rows, and every other binding's
-    /// uses share them (`new-plans/type-inference.md`, Generalization).
+    /// uses share them (`design/type-inference.md`, Generalization).
     fn generalizes_rows(
         &self,
         ctx: &mut FunctionInferenceContext<'_, 'db>,

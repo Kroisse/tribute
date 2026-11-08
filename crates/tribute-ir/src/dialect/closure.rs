@@ -15,7 +15,7 @@ mod closure {
     /// `FuncType` is not an entry ABI: a source callable value's is its
     /// converted source signature, with no evidence, continuation frame, or
     /// environment, and a generated continuation's is its `Cps` entry
-    /// without the environment (`new-plans/cps-effects.md`, "Closure type의
+    /// without the environment (`design/cps-effects.md`, "Closure type의
     /// callable"). The type records no calling convention and no environment
     /// index. A closure is entered through the convention of each transfer,
     /// whose exact signature carries the entry ABI, and that convention alone
@@ -35,13 +35,13 @@ mod closure {
     ///   `Cps`), and any number of captures.
     /// - **Meaning:** the entry at a convention's slot is the physical
     ///   callable a transfer of that convention enters: a body, an adapter,
-    ///   or a trap entry (`new-plans/tribute-dialects.md`, "Convention entry"). Every entry
+    ///   or a trap entry (`design/tribute-dialects.md`, "Convention entry"). Every entry
     ///   function receives the closure itself as its environment, at the
     ///   environment index of its slot's convention, and reads the captures
     ///   with `unpack`.
     /// - **Lowering:** closure lowering makes it one allocation of the
     ///   convention table reference (`tribute_rt.convention_table`) and the
-    ///   captures; see the closure storage layout in `new-plans/ir.md`.
+    ///   captures; see the closure storage layout in `design/ir.md`.
     ///
     /// ```text
     /// %c = closure.new [@f, @trap_e, @trap_c] %x, %y : closure.closure<S>
@@ -95,7 +95,7 @@ mod closure {
     ///   from every signature. `adapters` names, by convention keyword, the
     ///   adapter entry functions of a source lambda's stronger convention
     ///   table slots without a body, and a trap entry fills each other slot
-    ///   (`new-plans/tribute-dialects.md`, "Convention entry"). A generated closure, whose
+    ///   (`design/tribute-dialects.md`, "Convention entry"). A generated closure, whose
     ///   closure type's callable is its own entry, has one body and no
     ///   adapters.
     /// - **Verification:** the verifier checks that the conventions are

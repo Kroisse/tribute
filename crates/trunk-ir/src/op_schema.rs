@@ -6,7 +6,7 @@
 //! through which it is registered and looked up by operation name.
 //!
 //! [`OpSchema::verify`] runs the declarative operation-verifier stages
-//! described in `new-plans/ir.md`: entity counts and attributes, individual
+//! described in `design/ir.md`: entity counts and attributes, individual
 //! type constraints, type-variable bindings, and projection and list
 //! relations. Each stage runs only if the previous ones passed;
 //! [`OpDef::verify`](crate::op_def::OpDef::verify) then runs the operation's

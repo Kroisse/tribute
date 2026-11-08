@@ -1,6 +1,6 @@
 //! The source tree of a package: its root file and the files of its file
-//! modules, read into one AST (`new-plans/implementation.md` § 패키지 source
-//! 트리와 파일 입력, `new-plans/modules.md` § 모듈 선언).
+//! modules, read into one AST (`design/implementation.md` § 패키지 source
+//! 트리와 파일 입력, `design/modules.md` § 모듈 선언).
 //!
 //! Each file is parsed by its own query, so editing one file parses only
 //! that file again; [`source_tree`] puts each file's declarations in the

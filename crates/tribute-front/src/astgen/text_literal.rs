@@ -1,6 +1,6 @@
 //! Decoding of string, bytes, and rune literals.
 //!
-//! A literal is decoded from its source text following `new-plans/syntax.md`:
+//! A literal is decoded from its source text following `design/syntax.md`:
 //! delimiters are removed, a block literal's indentation is stripped, line
 //! breaks are normalized to LF, and escapes are processed. Indentation is
 //! decided on the source text, before escapes and interpolation.

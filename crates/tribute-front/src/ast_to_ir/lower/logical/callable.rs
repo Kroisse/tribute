@@ -119,7 +119,7 @@ pub(super) fn lower_function_ref<'db>(
 }
 
 /// Reference the function the named-function alias `local` stands for,
-/// with the rows its use `node` passes (`new-plans/tribute-dialects.md`, 지역 람다의
+/// with the rows its use `node` passes (`design/tribute-dialects.md`, 지역 람다의
 /// 양화와 인스턴스화), or `None` if `local` is no such alias.
 pub(super) fn lower_alias_reference<'db>(
     builder: &mut IrBuilder<'_, 'db>,
@@ -889,7 +889,7 @@ pub(super) fn lower_lambda<'db>(
     // differ only where the parameter's row tail is a binder that keeps no
     // instantiation: a parameter of a generalized computation result, or an
     // ability argument. Such a tail occurs in a parameter type of that value
-    // and reads `Cps` (`new-plans/cps-effects.md`, Row와 호출 규약). The
+    // and reads `Cps` (`design/cps-effects.md`, Row와 호출 규약). The
     // lambda takes that row, since a conversion cast cannot change a callable
     // ABI. At any other parameter the two rows are already the same.
     let row = expected_ty

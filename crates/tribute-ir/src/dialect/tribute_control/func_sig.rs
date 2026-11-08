@@ -16,7 +16,7 @@ pub enum FuncSigTypeError {
     #[display("a source signature has exactly one result, found {_0}")]
     ResultCount(#[error(not(source))] u32),
     /// A callable type has no convention; the operations that call or make
-    /// a callable declare it (`new-plans/tribute-dialects.md`, "Convention entry").
+    /// a callable declare it (`design/tribute-dialects.md`, "Convention entry").
     #[display("a source callable type has no calling convention")]
     Convention,
     /// The ability row is malformed, or written out although closed and empty.
@@ -30,7 +30,7 @@ pub enum FuncSigTypeError {
 /// split by the required `u32` delimiters `num_inputs` and `num_results`; the
 /// source-owned validated API requires exactly one result. `Params` and
 /// `Result` are source-logical types. The type carries no calling convention
-/// (`new-plans/tribute-dialects.md`, "Convention entry"); its ability row is
+/// (`design/tribute-dialects.md`, "Convention entry"); its ability row is
 /// the `ability_row` type attribute ("Ability row").
 ///
 /// The verifier checks that both delimiters are present `u32`s whose sum is

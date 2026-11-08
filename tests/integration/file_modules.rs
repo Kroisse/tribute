@@ -1,4 +1,4 @@
-//! A package's file modules (`new-plans/modules.md` § 모듈 선언): each `mod`
+//! A package's file modules (`design/modules.md` § 모듈 선언): each `mod`
 //! without a body reads its file, and the package is checked as if its
 //! modules were written inline.
 

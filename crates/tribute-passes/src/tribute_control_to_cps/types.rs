@@ -114,7 +114,7 @@ impl Converter<'_> {
 
     /// The callable identity of a closure of the source signature `logical`:
     /// its converted parameters and result, without hidden parameters
-    /// (`new-plans/cps-effects.md`, "Closure type의 callable").
+    /// (`design/cps-effects.md`, "Closure type의 callable").
     pub(super) fn source_callable(&mut self, logical: TypeRef) -> TypeRef {
         let callable = tribute_control::FuncSig::from_type_ref(self.ctx, logical)
             .expect("pre-CPS validation checked function type");
