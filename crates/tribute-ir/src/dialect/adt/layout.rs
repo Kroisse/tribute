@@ -152,7 +152,8 @@ pub fn compute_mem_struct_layout(ctx: &IrContext, struct_ty: TypeRef) -> Option<
     Some(natural_layout(ctx, fields.iter().copied()))
 }
 
-/// Compute the memory layout of the variant `tag` of an `adt.enum` type.
+/// Compute the memory layout of the variant at position `tag` of an
+/// `adt.enum` type.
 ///
 /// A variant object holds only its own fields, so its layout is that of a
 /// struct with those fields. Uses the `TypeConverter` to determine the native
@@ -161,7 +162,7 @@ pub fn compute_mem_struct_layout(ctx: &IrContext, struct_ty: TypeRef) -> Option<
 pub fn compute_variant_layout(
     ctx: &IrContext,
     enum_ty: TypeRef,
-    tag: StringRef,
+    tag: u32,
     type_converter: &TypeConverter,
 ) -> Option<StructLayout> {
     let fields = super::Enum::from_type_ref(ctx, enum_ty)?.variant_fields(ctx, tag)?;

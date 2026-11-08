@@ -508,12 +508,9 @@ fn validate_projection_contract(
     } else {
         let get = adt::VariantGet::from_op(ctx, op)
             .map_err(|_| OwnershipPlanError::new("unsupported ADT projection"))?;
-        let variants = get_enum_variants(ctx, get.r#type(ctx))
-            .ok_or_else(|| OwnershipPlanError::new("variant_get has invalid layout"))?;
-        let fields = variants
-            .iter()
-            .find(|(tag, _)| *tag == get.tag_ref(ctx))
-            .map(|(_, fields)| fields)
+        let fields = adt::Enum::from_type_ref(ctx, get.r#type(ctx))
+            .ok_or_else(|| OwnershipPlanError::new("variant_get has invalid layout"))?
+            .variant_fields(ctx, get.tag(ctx))
             .ok_or_else(|| OwnershipPlanError::new("variant_get tag is stale"))?;
         let field_ty = fields
             .get(get.field(ctx) as usize)

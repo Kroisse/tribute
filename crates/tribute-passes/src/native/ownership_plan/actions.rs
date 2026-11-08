@@ -501,12 +501,9 @@ impl ActionPlanner<'_> {
             return self.plan_owning_operands(op, 0, fields.iter().map(|(_, ty)| *ty));
         }
         if let Ok(new) = adt::VariantNew::from_op(self.ir, op) {
-            let variants = get_enum_variants(self.ir, new.r#type(self.ir))
-                .ok_or_else(|| OwnershipPlanError::new("variant_new has invalid layout"))?;
-            let fields = variants
-                .iter()
-                .find(|(tag, _)| *tag == new.tag_ref(self.ir))
-                .map(|(_, fields)| fields.as_slice())
+            let fields = adt::Enum::from_type_ref(self.ir, new.r#type(self.ir))
+                .ok_or_else(|| OwnershipPlanError::new("variant_new has invalid layout"))?
+                .variant_fields(self.ir, new.tag(self.ir))
                 .ok_or_else(|| OwnershipPlanError::new("variant_new tag is stale"))?;
             validate_allocation_result(self.ir, op, new.r#type(self.ir), self.managed_layouts)?;
             return self.plan_owning_operands(op, 0, fields.iter().copied());

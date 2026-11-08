@@ -32,7 +32,7 @@ use trunk_ir::rewrite::type_converter::TypeConverter;
 use trunk_ir::rewrite::{
     ConversionError, ConversionTarget, Module, OpRewritePattern, PatternApplicator,
 };
-use trunk_ir::types::{Location, StringRef, TypeDataBuilder};
+use trunk_ir::types::{Location, TypeDataBuilder};
 
 /// Name of the runtime allocation function.
 const ALLOC_FN: &str = "__tribute_alloc";
@@ -155,7 +155,7 @@ pub(super) fn rc_allocation(
 /// %result    = clif.iadd(%payload, %zero)         // identity
 /// ```
 struct StructNewPattern {
-    rtti_map: HashMap<(TypeRef, Option<StringRef>), u32>,
+    rtti_map: HashMap<(TypeRef, Option<u32>), u32>,
     ptr_ty: TypeRef,
     i64_ty: TypeRef,
 }
@@ -269,7 +269,7 @@ impl OpRewritePattern for StructNewPattern {
 /// %result    = clif.iadd(%payload, %zero)         // identity
 /// ```
 struct VariantNewPattern {
-    rtti_map: HashMap<(TypeRef, Option<StringRef>), u32>,
+    rtti_map: HashMap<(TypeRef, Option<u32>), u32>,
     ptr_ty: TypeRef,
     i64_ty: TypeRef,
 }
@@ -285,7 +285,7 @@ impl OpRewritePattern for VariantNewPattern {
     ) -> Option<()> {
         let op = variant_new.op_ref();
         let enum_ty = variant_new.r#type(ctx);
-        let tag = variant_new.tag_ref(ctx);
+        let tag = variant_new.tag(ctx);
         let tc = rewriter.type_converter();
 
         let Some(variant_layout) = compute_variant_layout(ctx, enum_ty, tag, tc) else {

@@ -401,7 +401,7 @@ mod tests {
             r#"core.module @test {
   func.func @test_fn() -> core.i32 {
     %0 = clif.iconst 42 : core.ptr
-    %1 = adt.variant_get %0 {tag = "Some", field = 0, type = adt.enum<Choice { None(), Some(core.i32) }>} : core.i32
+    %1 = adt.variant_get %0 {tag = 1, field = 0, type = adt.enum<Choice { None(), Some(core.i32) }>} : core.i32
     func.return %1
   }
 }"#,
@@ -422,7 +422,7 @@ mod tests {
             r#"core.module @test {
   func.func @test_fn() -> core.i32 {
     %0 = clif.iconst 42 : core.ptr
-    %1 = adt.variant_is %0 {tag = "Some", type = adt.enum<Choice { None(), Some(core.i32) }>} : core.i32
+    %1 = adt.variant_is %0 {tag = 1, type = adt.enum<Choice { None(), Some(core.i32) }>} : core.i32
     func.return %1
   }
 }"#,

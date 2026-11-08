@@ -44,7 +44,7 @@ use trunk_ir::refs::{OpRef, TypeRef};
 use trunk_ir::rewrite::{
     Module, OpRewritePattern, PatternApplicator, PatternRewriter, TypeConverter,
 };
-use trunk_ir::types::{Attribute, StringRef};
+use trunk_ir::types::Attribute;
 use trunk_ir::walk::{WalkAction, walk_op};
 
 use super::ownership_plan::NativeOwnershipPlan;
@@ -60,20 +60,20 @@ pub(crate) fn lower(
 ) {
     // Whether each field of a declared descriptor is released: a struct
     // layout, or an enum layout and one of its variant tags.
-    let released: HashMap<(TypeRef, Option<StringRef>), Vec<bool>> =
+    let released: HashMap<(TypeRef, Option<u32>), Vec<bool>> =
         tribute_rtti::Layout::declared(ctx, module)
             .iter()
             .map(|layout| {
                 let fields = layout.field_kinds(ctx);
                 (
-                    (layout.r#type(ctx), layout.tag_ref(ctx)),
+                    (layout.r#type(ctx), layout.tag(ctx)),
                     fields.into_iter().map(|kind| kind.is_released()).collect(),
                 )
             })
             .collect();
 
     let mut accesses: Vec<(OpRef, TypeRef)> = Vec::new();
-    let mut variants: Vec<(TypeRef, StringRef)> = Vec::new();
+    let mut variants: Vec<(TypeRef, u32)> = Vec::new();
     let _ = walk_op::<()>(ctx, module.op(), &mut |op| {
         let layout = if let Ok(get) = adt::StructGet::from_op(ctx, op) {
             Some(get.r#type(ctx))
@@ -86,7 +86,7 @@ pub(crate) fn lower(
             accesses.push((op, layout));
         }
         if let Ok(get) = adt::VariantGet::from_op(ctx, op) {
-            variants.push((get.r#type(ctx), get.tag_ref(ctx)));
+            variants.push((get.r#type(ctx), get.tag(ctx)));
         }
         ControlFlow::Continue(WalkAction::Advance)
     });
@@ -115,7 +115,7 @@ pub(crate) fn lower(
     }
 
     // A variant holds only its own fields, so its layout is a struct's.
-    let mut variant_layouts: HashMap<(TypeRef, StringRef), TypeRef> = HashMap::default();
+    let mut variant_layouts: HashMap<(TypeRef, u32), TypeRef> = HashMap::default();
     for (enum_ty, tag) in variants {
         if variant_layouts.contains_key(&(enum_ty, tag)) {
             continue;
@@ -148,7 +148,7 @@ pub(crate) fn lower(
 
 /// `adt.variant_get` -> `adt.struct_get` of the variant's `mem.struct`.
 struct VariantGetPattern {
-    layouts: HashMap<(TypeRef, StringRef), TypeRef>,
+    layouts: HashMap<(TypeRef, u32), TypeRef>,
 }
 
 impl OpRewritePattern for VariantGetPattern {
@@ -161,7 +161,7 @@ impl OpRewritePattern for VariantGetPattern {
         rewriter: &mut PatternRewriter<'_>,
     ) -> Option<()> {
         let op = variant_get.op_ref();
-        let variant = (variant_get.r#type(ctx), variant_get.tag_ref(ctx));
+        let variant = (variant_get.r#type(ctx), variant_get.tag(ctx));
         let &structural = self.layouts.get(&variant)?;
         let loc = ctx.op(op).location;
         let field_get = adt::StructGet::operands(variant_get.r#ref(ctx))
@@ -178,7 +178,7 @@ impl OpRewritePattern for VariantGetPattern {
 /// `tribute_rtti.descriptor` and the variant's declared descriptor number, or
 /// constant false for a variant without one.
 struct VariantIsPattern {
-    numbers: HashMap<(TypeRef, Option<StringRef>), u32>,
+    numbers: HashMap<(TypeRef, Option<u32>), u32>,
 }
 
 impl OpRewritePattern for VariantIsPattern {
@@ -193,7 +193,7 @@ impl OpRewritePattern for VariantIsPattern {
         let op = variant_is.op_ref();
         let loc = ctx.op(op).location;
         let result_ty = variant_is.result_ty(ctx);
-        let descriptor = (variant_is.r#type(ctx), Some(variant_is.tag_ref(ctx)));
+        let descriptor = (variant_is.r#type(ctx), Some(variant_is.tag(ctx)));
         let Some(&number) = self.numbers.get(&descriptor) else {
             let never = arith::Constant::operands()
                 .value(Attribute::Bool(false))
@@ -416,11 +416,11 @@ mod tests {
             r#"core.module @test {
   !ChoiceRef = adt.typeref<{name = "Choice"}>
   !Choice = adt.enum<Choice { None(), Some(core.i32), Other() }>
-  tribute_rtti.layout {fields = [], index = 5, type = !Choice, tag = "None"}
-  tribute_rtti.layout {fields = ["u32"], index = 6, type = !Choice, tag = "Some"}
+  tribute_rtti.layout {fields = [], index = 5, type = !Choice, tag = 0}
+  tribute_rtti.layout {fields = ["u32"], index = 6, type = !Choice, tag = 1}
   func.func @test(%choice: !ChoiceRef) -> core.i1 {
-    %is_some = adt.variant_is %choice {tag = "Some", type = !Choice} : core.i1
-    %is_other = adt.variant_is %choice {tag = "Other", type = !Choice} : core.i1
+    %is_some = adt.variant_is %choice {tag = 1, type = !Choice} : core.i1
+    %is_other = adt.variant_is %choice {tag = 2, type = !Choice} : core.i1
     func.return %is_some
   }
 }"#,
@@ -447,7 +447,7 @@ mod tests {
             r#"core.module @test {
   !ChoiceRef = adt.typeref<{name = "Choice"}>
   !Choice = adt.enum<Choice { None(), Some(core.i32), Other() }>
-  tribute_rtti.layout {fields = ["u32"], index = 5, type = !Choice, tag = "Some"}
+  tribute_rtti.layout {fields = ["u32"], index = 5, type = !Choice, tag = 1}
   func.func @test(%choice: !ChoiceRef) -> core.index {
     %tag = adt.variant_tag %choice {type = !Choice}
     func.return %tag
@@ -479,10 +479,10 @@ mod tests {
   !ChildRef = adt.typeref<{name = "Child"}>
   !ChoiceRef = adt.typeref<{name = "Choice"}>
   !Choice = adt.enum<Choice { None(), Pair(core.i8, !ChildRef), Raw(core.ptr, core.i64) }>
-  tribute_rtti.layout {fields = ["u8", "managed"], index = 6, type = !Choice, tag = "Pair"}
+  tribute_rtti.layout {fields = ["u8", "managed"], index = 6, type = !Choice, tag = 1}
   func.func @test(%choice: !ChoiceRef) -> !ChildRef {
-    %child = adt.variant_get %choice {tag = "Pair", field = 1, type = !Choice} : !ChildRef
-    %raw = adt.variant_get %choice {tag = "Raw", field = 1, type = !Choice} : core.i64
+    %child = adt.variant_get %choice {tag = 1, field = 1, type = !Choice} : !ChildRef
+    %raw = adt.variant_get %choice {tag = 2, field = 1, type = !Choice} : core.i64
     func.return %child
   }
 }"#,

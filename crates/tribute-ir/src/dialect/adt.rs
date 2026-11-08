@@ -83,17 +83,29 @@ mod adt {
     /// A new value of variant `tag` of enum layout `type` whose fields are
     /// `fields` in order.
     ///
+    /// ```text
+    /// %dot = adt.variant_new %x, %y {tag = 1, type = !Shape} : !Shape
+    /// ```
+    ///
+    /// `tag` is the variant's position among the layout's variants, in
+    /// declaration order, as `adt.variant_tag` returns it; the verifier
+    /// rejects a position the layout does not have.
+    ///
     /// When the layout declares row parameters, each field operand has the
     /// layout's field type with the layout's row binders replaced by the
     /// `row_args` of the result's `adt.typeref`, using call-site row
     /// substitution; see `design/tribute-dialects.md` § "Nominal row 인자".
     #[flags(Pure)]
+    #[verify]
     #[asm_format(fields attr_dict_bare ":" type(result))]
-    fn variant_new(r#type: Attr<Type>, tag: Attr<String>, fields: Variadic<_>) -> Value<_> {}
+    fn variant_new(r#type: Attr<Type>, tag: Attr<u32>, fields: Variadic<_>) -> Value<_> {}
 
+    /// Whether `ref`, a value of enum layout `type`, is of variant `tag`, the
+    /// variant's position as for `adt.variant_new`.
     #[flags(Pure)]
+    #[verify]
     #[asm_format(r#ref attr_dict_bare ":" type(result))]
-    fn variant_is(r#type: Attr<Type>, tag: Attr<String>, r#ref: Value<_>) -> Value<_> {}
+    fn variant_is(r#type: Attr<Type>, tag: Attr<u32>, r#ref: Value<_>) -> Value<_> {}
 
     /// The position of `ref`'s variant among the variants of the
     /// `adt.enum` `type`, in declaration order.
@@ -118,17 +130,19 @@ mod adt {
     #[asm_format(r#ref attr_dict_bare)]
     fn variant_tag(r#type: Attr<Type>, r#ref: Value<_>) -> Value<Index> {}
 
-    /// Field `field` of `ref`, a value of variant `tag` of enum layout `type`.
+    /// Field `field` of `ref`, a value of variant `tag` of enum layout `type`,
+    /// the variant's position as for `adt.variant_new`.
     ///
     /// When the layout declares row parameters, the result has the layout's
     /// field type with the layout's row binders replaced by the `row_args` of
     /// the `ref` operand's `adt.typeref`, using call-site row substitution; see
     /// `design/tribute-dialects.md` § "Nominal row 인자".
     #[flags(Pure)]
+    #[verify]
     #[asm_format(r#ref attr_dict_bare ":" type(result))]
     fn variant_get(
         r#type: Attr<Type>,
-        tag: Attr<String>,
+        tag: Attr<u32>,
         field: Attr<u32>,
         r#ref: Value<_>,
     ) -> Value<_> {
@@ -488,6 +502,64 @@ impl NominalDecls {
     /// The declaration of the enum layout `layout`.
     pub fn of_enum(&self, ctx: &IrContext, layout: Enum) -> Option<EnumDecl> {
         self.enums.get(&layout.name_ref(ctx)).copied()
+    }
+
+    /// The position of the variant the declaration of `layout` names
+    /// `variant`, for a pass that builds a variant of a compiler-owned enum
+    /// by its source name.
+    pub fn variant_position(&self, ctx: &IrContext, layout: Enum, variant: &str) -> Option<u32> {
+        self.of_enum(ctx, layout)?.position_of(ctx, variant)
+    }
+}
+
+impl EnumDecl {
+    /// The position of the variant this declaration names `variant`.
+    pub fn position_of(self, ctx: &IrContext, variant: &str) -> Option<u32> {
+        let position = self.variants(ctx).position(|name| name == variant)?;
+        Some(u32::try_from(position).expect("an enum has fewer than 2^32 variants"))
+    }
+}
+
+/// A variant operation whose `tag` is not a variant of its `type`.
+#[derive(Debug, derive_more::Display, derive_more::Error)]
+pub enum VariantTagError {
+    #[display("`type` is not an `adt.enum` layout")]
+    NotAnEnum,
+    #[display("tag {tag} is not a variant of an enum with {count} variant(s)")]
+    OutOfRange { tag: u32, count: usize },
+}
+
+/// Check that `tag` is the position of a variant of the enum layout `ty`.
+fn verify_variant_tag(
+    ctx: &IrContext,
+    ty: TypeRef,
+    tag: u32,
+) -> Result<(), trunk_ir::ops::VerificationError> {
+    let count = Enum::from_type_ref(ctx, ty)
+        .ok_or(VariantTagError::NotAnEnum)?
+        .variant_count(ctx);
+    if usize::try_from(tag).is_ok_and(|tag| tag < count) {
+        Ok(())
+    } else {
+        Err(VariantTagError::OutOfRange { tag, count }.into())
+    }
+}
+
+impl trunk_ir::ops::Verify for VariantNew {
+    fn verify(&self, ctx: &IrContext) -> Result<(), trunk_ir::ops::VerificationError> {
+        verify_variant_tag(ctx, self.r#type(ctx), self.tag(ctx))
+    }
+}
+
+impl trunk_ir::ops::Verify for VariantIs {
+    fn verify(&self, ctx: &IrContext) -> Result<(), trunk_ir::ops::VerificationError> {
+        verify_variant_tag(ctx, self.r#type(ctx), self.tag(ctx))
+    }
+}
+
+impl trunk_ir::ops::Verify for VariantGet {
+    fn verify(&self, ctx: &IrContext) -> Result<(), trunk_ir::ops::VerificationError> {
+        verify_variant_tag(ctx, self.r#type(ctx), self.tag(ctx))
     }
 }
 
@@ -905,10 +977,13 @@ impl Enum {
         })
     }
 
-    /// The field types of the variant named `tag`.
-    pub fn variant_fields(self, ctx: &IrContext, tag: StringRef) -> Option<&[TypeRef]> {
-        self.variants(ctx)
-            .find_map(|(name, fields)| (name == tag).then_some(fields))
+    /// The field types of the variant at position `tag`.
+    pub fn variant_fields(self, ctx: &IrContext, tag: u32) -> Option<&[TypeRef]> {
+        let variant = *ctx
+            .get_type(self.0)
+            .params
+            .get(usize::try_from(tag).ok()?)?;
+        Some(&ctx.get_type(variant).params[..])
     }
 
     /// The type attributes other than the name.
@@ -1341,10 +1416,8 @@ mod tests {
             .map(|(name, fields)| (ctx.str(name), fields.to_vec()))
             .collect();
         assert_eq!(variants, [("None", vec![]), ("Some", vec![i32_ty])]);
-        let some = ctx.intern_str("Some");
-        assert_eq!(option.variant_fields(&ctx, some), Some(&[i32_ty][..]));
-        let missing = ctx.intern_str("Missing");
-        assert_eq!(option.variant_fields(&ctx, missing), None);
+        assert_eq!(option.variant_fields(&ctx, 1), Some(&[i32_ty][..]));
+        assert_eq!(option.variant_fields(&ctx, 2), None);
         // A variant is one type parameter, so type traversal reaches fields.
         assert_eq!(ctx.get_type(aliases["option"]).params.len(), 2);
 
@@ -1491,6 +1564,52 @@ mod tests {
             ctx.type_attrs(valid.as_type_ref())
                 .contains_key(PARAM_ATTRS_ATTR)
         );
+    }
+
+    #[test]
+    fn variant_operations_take_a_position_of_their_enum() {
+        let valid = r#"core.module @test {
+  !Shape = adt.enum<Shape { Dot(), Rect(core.f64, core.f64) }>
+  func.func @f(%x: core.f64, %shape: !Shape) -> core.f64 {
+    %dot = adt.variant_new {tag = 0, type = !Shape} : !Shape
+    %rect = adt.variant_new %x, %x {tag = 1, type = !Shape} : !Shape
+    %is_rect = adt.variant_is %shape {tag = 1, type = !Shape} : core.i1
+    %width = adt.variant_get %shape {field = 0, tag = 1, type = !Shape} : core.f64
+    func.return %width
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, valid);
+        assert_roundtrip(&ctx, module.op());
+        assert!(validate_operation_verifiers(&ctx, module).is_ok());
+
+        for (invalid, expected) in [
+            (
+                "adt.variant_new {tag = 2, type = !Shape} : !Shape",
+                "tag 2 is not a variant of an enum with 2 variant(s)",
+            ),
+            (
+                "adt.variant_is %shape {tag = 2, type = !Shape} : core.i1",
+                "tag 2 is not a variant",
+            ),
+            (
+                "adt.variant_get %shape {field = 0, tag = 5, type = !Shape} : core.f64",
+                "tag 5 is not a variant",
+            ),
+            (
+                "adt.variant_is %shape {tag = 0, type = core.f64} : core.i1",
+                "`type` is not an `adt.enum` layout",
+            ),
+        ] {
+            let mut ctx = IrContext::new();
+            let text = valid.replace(
+                "%is_rect = adt.variant_is %shape {tag = 1, type = !Shape} : core.i1",
+                &format!("%bad = {invalid}"),
+            );
+            let module = parse_test_module(&mut ctx, &text);
+            let result = validate_operation_verifiers(&ctx, module).to_string();
+            assert!(result.contains(expected), "{invalid}: {result}");
+        }
     }
 }
 

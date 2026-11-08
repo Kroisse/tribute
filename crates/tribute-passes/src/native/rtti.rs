@@ -49,7 +49,7 @@ use trunk_ir::rewrite::{
 };
 use trunk_ir::smallvec::smallvec;
 use trunk_ir::types::Location;
-use trunk_ir::{BlockRef, OpRef, RegionRef, StringRef, TypeRef, ValueRef};
+use trunk_ir::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
 
 use tribute_ir::dialect::{tribute_rt, tribute_rtti};
 
@@ -172,7 +172,7 @@ fn validate_declarations(
     let mut declared = HashSet::default();
     let mut indices = HashSet::default();
     for layout in layouts {
-        if !declared.insert((layout.r#type(ctx), layout.tag_ref(ctx))) {
+        if !declared.insert((layout.r#type(ctx), layout.tag(ctx))) {
             return Err(RttiError("a descriptor is declared more than once".into()));
         }
         let index = layout.index(ctx);
@@ -251,7 +251,7 @@ pub(crate) fn generate_rtti(
     let mut records = Vec::with_capacity(layouts.len());
     for layout in layouts {
         let ty = layout.r#type(ctx);
-        let tag = layout.tag_ref(ctx);
+        let tag = layout.tag(ctx);
         let rtti_idx = layout.index(ctx);
         let fields = layout.field_kinds(ctx);
         release_fns.insert(rtti_idx, release_fn_symbol(rtti_idx));
@@ -594,7 +594,7 @@ struct DescriptorRelease {
 fn descriptor_release(
     ctx: &IrContext,
     ty: TypeRef,
-    tag: Option<StringRef>,
+    tag: Option<u32>,
     fields: &[FieldKind],
     type_converter: &TypeConverter,
 ) -> DescriptorRelease {
@@ -1304,8 +1304,8 @@ mod tests {
             r#"core.module @test {
   !Choice = adt.enum<Choice { None(), Pair(core.i32, tribute_rt.anyref) }>
   func.func @f(%n: core.i32, %v: tribute_rt.anyref) -> core.nil {
-    %none = adt.variant_new {type = !Choice, tag = "None"} : !Choice
-    %pair = adt.variant_new %n, %v {type = !Choice, tag = "Pair"} : !Choice
+    %none = adt.variant_new {tag = 0, type = !Choice} : !Choice
+    %pair = adt.variant_new %n, %v {tag = 1, type = !Choice} : !Choice
     func.return
   }
 }"#,
@@ -1315,8 +1315,7 @@ mod tests {
         generate_rtti(&mut ctx, module, &tc).expect("declared layouts");
 
         let choice = ctx.type_alias_by_text("Choice").expect("Choice alias");
-        let pair = ctx.intern_str("Pair");
-        let none = ctx.intern_str("None");
+        let (none, pair) = (0, 1);
         let pair_layout = compute_variant_layout(&ctx, choice, pair, &tc).expect("Pair layout");
         let none_layout = compute_variant_layout(&ctx, choice, none, &tc).expect("None layout");
         // Each variant is allocated, and so freed, with its own size.
