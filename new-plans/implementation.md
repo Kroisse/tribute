@@ -96,7 +96,7 @@ Wasm 대상 변환 경계는 공통 함수 시그니처와 그 안의 중첩 타
 ## 직접형 제어 소유권
 
 구조와 의미의 source of truth는
-[ir.md](ir.md#direct-style-control), conversion 규칙은
+[ir.md](tribute-dialects.md#direct-style-control), conversion 규칙은
 [cps-effects.md](cps-effects.md#direct-style-control-boundary)이다.
 
 Dependency direction은 다음과 같이 고정한다:
@@ -110,7 +110,7 @@ tribute        -> tribute-front + tribute-passes
 `tribute-front`는 `tribute-passes`에 의존하지 않는다. 각 계층의 책임은 다음과
 같다:
 
-- `tribute-front`는 [논리 callable/control 계약](ir.md#direct-style-control)을
+- `tribute-front`는 [논리 callable/control 계약](tribute-dialects.md#direct-style-control)을
   emit하고 `func.*`, `closure.*`, `func.func_sig` 또는 dispatch representation을
   만들지 않는다.
 - `tribute-ir`는 callable/control type과 operation, custom assembly, local
@@ -132,7 +132,7 @@ tribute        -> tribute-front + tribute-passes
 검증 책임은 구현 계층과 분리한다:
 
 - Frontend 경계는 `tribute-ir` validator와 generic SSA/use-chain validation을
-  함께 호출한다. 세부 검증 계약은 [ir.md](ir.md#direct-style-control)를 따른다.
+  함께 호출한다. 세부 검증 계약은 [ir.md](tribute-dialects.md#direct-style-control)를 따른다.
 - Whole-IR verifier는 static affine path를, converted resumption runtime은
   closure 재호출에 대한 dynamic one-shot enforcement를 소유한다.
 - 대상별 최종 경계는 보존된
@@ -576,7 +576,7 @@ op SomeOp::cancel() { fallback_value }      // 0회: 암묵적 drop
 WasmGC는 native와 같은 shared middle-end의 tail-call CPS / effect ABI 결과를
 입력으로 받는다.
 
-[Representation/ABI 경계](ir.md#representationabi-경계) 안의 Wasm evidence
+[Representation/ABI 경계](abi-boundary.md#representationabi-경계) 안의 Wasm evidence
 lowering은 `effect.*`를 `std::runtime::evidence` runtime 항목 호출, closure
 unpacking, `func.call_indirect` 또는 `func.tail_call`/`func.tail_call_indirect`로
 낮춘다. 그 뒤 Wasm dialect lowering이 이를
@@ -626,7 +626,7 @@ Native: → lower_to_clif → backend-ready verification → emit_native
 ```
 
 Target ABI validation부터 boundary exit verification까지가
-[representation/ABI 경계](ir.md#representationabi-경계)이다. 그 뒤의 pass는
+[representation/ABI 경계](abi-boundary.md#representationabi-경계)이다. 그 뒤의 pass는
 의미적 호출 규약이나 제어 metadata를 읽지 않는다.
 
 `tribute_control_to_cps`의 출력은 physical callable/closure 표면과 logical
@@ -800,7 +800,7 @@ flowchart TB
 | `lower_closures_in_func` | validated `closure.new`/`func`/`unpack` | closure capture layout 할당과 exact indirect calls; function-anchored |
 | `finalize_closure_storage_layout` | remaining closure type surfaces | alias/signature/value/type attribute의 closure base layout |
 | target evidence preparation/lowering | `effect.*` | Native extern 또는 Wasm helper와 ordinary/proper-tail dispatch; 공유 value/control dialect 수준 |
-| boundary exit verification | 경계 안의 모든 pass 결과 | [출구 적법성](ir.md#representationabi-경계)을 만족하는 물리 IR; 위반은 pass failure |
+| boundary exit verification | 경계 안의 모든 pass 결과 | [출구 적법성](abi-boundary.md#representationabi-경계)을 만족하는 물리 IR; 위반은 pass failure |
 | target dialect lowering | 경계 출구의 물리 IR | `clif.*` 또는 `wasm.*`; backend-ready 검증 뒤 emission |
 | local cleanup | `func.func` body | canonicalization, DCE; function-anchored |
 | `global_dce` | module symbols | reachable symbols; module-wide |

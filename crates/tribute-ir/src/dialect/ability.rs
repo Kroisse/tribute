@@ -150,7 +150,7 @@ mod ability {
     /// `(Evidence, ability.frame<R>, V) -> core.never`; the result is an
     /// `ability.frame<V>`. When the frame is resumed, the optional
     /// `evidence_plan` selects the evidence passed to the resumed inner
-    /// computation, in the syntax of `new-plans/ir.md`, "Evidence 선택 속성".
+    /// computation, in the syntax of `new-plans/tribute-dialects.md`, "Evidence 선택 속성".
     /// A frame for a structured branch has none. The produced frame's type is
     /// not inferred: it is built from the continuation's value type.
     #[verify]

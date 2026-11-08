@@ -1,5 +1,5 @@
 //! Source-logical callables whose calling convention the CPS strategy has
-//! assigned (`new-plans/ir.md`, "Convention과 class 특수화").
+//! assigned (`new-plans/tribute-dialects.md`, "Convention과 class 특수화").
 //!
 //! Class specialization replaces the five `tribute_control` operations whose
 //! meaning depends on a convention with the operation of the same name here,
@@ -99,7 +99,7 @@ mod tribute_cps {
     ///   order. Each body takes the source parameters. Each body is written
     ///   under its convention's keyword in `entries`.
     /// - **Meaning:** one lambda value with a body for each class
-    ///   `new-plans/ir.md` ("Convention entry") gives it: each class its uses
+    ///   `new-plans/tribute-dialects.md` ("Convention entry") gives it: each class its uses
     ///   select, or each class from its row's lower bound to its upper bound
     ///   when that row reads as an upper bound. Its body of a convention
     ///   reads each binder it quantifies with the class its uses of that
@@ -181,7 +181,7 @@ mod tribute_cps {
     ///   the `tribute_cps.func` instance it maps to. Each instance is the one the class arguments select
     ///   once the argument of the class variable that is the definition
     ///   row's tail is narrowed to that convention, as a lambda body narrows
-    ///   a tail. The conventions are the classes `new-plans/ir.md`
+    ///   a tail. The conventions are the classes `new-plans/tribute-dialects.md`
     ///   ("Convention entry", 함수 참조) gives the definition's row read with
     ///   the class arguments. They depend only on the definition and the
     ///   class arguments, never on the row a reference passes, so every

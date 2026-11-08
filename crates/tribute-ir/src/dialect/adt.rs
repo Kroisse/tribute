@@ -42,7 +42,7 @@ mod adt {
 
     /// `adt.array`: a managed reference to an array object whose elements
     /// are `Element` values in order. An element is a scalar, a pointer, or a
-    /// managed reference; see `new-plans/ir.md` § "`adt` 배열". The unmanaged
+    /// managed reference; see `new-plans/tribute-dialects.md` § "`adt` 배열". The unmanaged
     /// linear array is `core.array`, which no `adt` array operation accepts.
     #[implements(ManagedRefType)]
     struct Array<Element>;
@@ -58,7 +58,7 @@ mod adt {
     /// When the layout declares row parameters, each field operand has the
     /// layout's field type with the layout's row binders replaced by the
     /// `row_args` of the result's `adt.typeref`, using call-site row
-    /// substitution; see `new-plans/ir.md` § "Nominal row 인자".
+    /// substitution; see `new-plans/tribute-dialects.md` § "Nominal row 인자".
     #[flags(Pure)]
     #[asm_format(fields attr_dict_bare ":" type(result))]
     fn struct_new(r#type: Attr<Type>, fields: Variadic<_>) -> Value<_> {}
@@ -68,7 +68,7 @@ mod adt {
     /// When the layout declares row parameters, the result has the layout's
     /// field type with the layout's row binders replaced by the `row_args` of
     /// the `ref` operand's `adt.typeref`, using call-site row substitution; see
-    /// `new-plans/ir.md` § "Nominal row 인자".
+    /// `new-plans/tribute-dialects.md` § "Nominal row 인자".
     #[flags(Pure)]
     #[asm_format(r#ref attr_dict_bare ":" type(result))]
     fn struct_get(r#type: Attr<Type>, field: Attr<u32>, r#ref: Value<_>) -> Value<_> {}
@@ -82,7 +82,7 @@ mod adt {
     /// When the layout declares row parameters, each field operand has the
     /// layout's field type with the layout's row binders replaced by the
     /// `row_args` of the result's `adt.typeref`, using call-site row
-    /// substitution; see `new-plans/ir.md` § "Nominal row 인자".
+    /// substitution; see `new-plans/tribute-dialects.md` § "Nominal row 인자".
     #[flags(Pure)]
     #[asm_format(fields attr_dict_bare ":" type(result))]
     fn variant_new(r#type: Attr<Type>, tag: Attr<String>, fields: Variadic<_>) -> Value<_> {}
@@ -119,7 +119,7 @@ mod adt {
     /// When the layout declares row parameters, the result has the layout's
     /// field type with the layout's row binders replaced by the `row_args` of
     /// the `ref` operand's `adt.typeref`, using call-site row substitution; see
-    /// `new-plans/ir.md` § "Nominal row 인자".
+    /// `new-plans/tribute-dialects.md` § "Nominal row 인자".
     #[flags(Pure)]
     #[asm_format(r#ref attr_dict_bare ":" type(result))]
     fn variant_get(

@@ -51,7 +51,7 @@ on its declaration in
 [the IR contract](../../new-plans/ir.md) for the rules that span operations, and
 [the shared pipeline](../../new-plans/cps-effects.md#shared-middle-end-pipeline).
 
-The target [representation/ABI boundary](../../new-plans/ir.md#representationabi-경계)
+The target [representation/ABI boundary](../../new-plans/abi-boundary.md#representationabi-경계)
 ends with an exit verification that rejects any violation in every build; later
 passes read only the physical contracts it checked. After the frontend, the
 pipeline is one ordered chain of stages that `stage_passes` in

@@ -150,8 +150,8 @@ The Wasm pipeline lowers target-independent dialects into `wasm.*` while using
 analysis plans for type indices, function indices, data segments, imports, and
 memory layout.
 
-The [representation/ABI boundary](ir.md#representationabi-경계) precedes Wasm
-dialect lowering. It performs target ABI validation, CPS signature
+The [representation/ABI boundary](abi-boundary.md#representationabi-경계)
+precedes Wasm dialect lowering. It performs target ABI validation, CPS signature
 physicalization, entry bridge composition, closure lowering, Wasm evidence
 lowering at the shared value/control level, and closure storage finalization,
 then verifies the boundary exit. Wasm dialect lowering then runs:
@@ -210,8 +210,8 @@ boundary before emission.
 
 The shared route supplies legalized callable/control IR and the effect ABI.
 Native stages consume that result in this order. The first five lines form the
-[representation/ABI boundary](ir.md#representationabi-경계); every later stage
-consumes only its exit contract:
+[representation/ABI boundary](abi-boundary.md#representationabi-경계);
+every later stage consumes only its exit contract:
 
 ```text
 target ABI validation + CPS signature physicalization

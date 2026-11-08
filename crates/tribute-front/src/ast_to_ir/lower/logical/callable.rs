@@ -119,7 +119,7 @@ pub(super) fn lower_function_ref<'db>(
 }
 
 /// Reference the function the named-function alias `local` stands for,
-/// with the rows its use `node` passes (`new-plans/ir.md`, 지역 람다의
+/// with the rows its use `node` passes (`new-plans/tribute-dialects.md`, 지역 람다의
 /// 양화와 인스턴스화), or `None` if `local` is no such alias.
 pub(super) fn lower_alias_reference<'db>(
     builder: &mut IrBuilder<'_, 'db>,

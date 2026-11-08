@@ -16,7 +16,7 @@ pub enum FuncSigTypeError {
     #[display("a source signature has exactly one result, found {_0}")]
     ResultCount(#[error(not(source))] u32),
     /// A callable type has no convention; the operations that call or make
-    /// a callable declare it (`new-plans/ir.md`, "Convention entry").
+    /// a callable declare it (`new-plans/tribute-dialects.md`, "Convention entry").
     #[display("a source callable type has no calling convention")]
     Convention,
     /// The ability row is malformed, or written out although closed and empty.
