@@ -480,10 +480,7 @@ use trunk_ir::types::{Attribute, Location, StringRef};
 pub fn marker_adt_type_ref(ctx: &mut IrContext) -> TypeRef {
     let name = crate::runtime_items::runtime_symbol(crate::runtime_items::evidence::MARKER);
     let name = ctx.intern_symbol_text(&name);
-    crate::dialect::adt::Typeref::params()
-        .name(name)
-        .intern(ctx)
-        .as_type_ref()
+    crate::dialect::adt::Typeref::named(ctx, name, []).as_type_ref()
 }
 
 /// The evidence type: `Slots(Marker)`, an `adt.array` of markers.

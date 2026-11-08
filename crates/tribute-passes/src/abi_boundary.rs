@@ -45,6 +45,7 @@ const FORBIDDEN_ATTRIBUTES: &[&str] = &[
     tribute_ir::dialect::tribute_control::INFERRED_ROW_ATTR,
     tribute_ir::dialect::tribute_control::QUANTIFIED_ROWS_ATTR,
     tribute_ir::dialect::tribute_control::ROW_ARGS_ATTR,
+    tribute_ir::dialect::tribute_control::ROW_PARAMS_ATTR,
 ];
 
 /// Prefix of language-specific attributes, which must be classified.
@@ -945,6 +946,29 @@ mod tests {
             violations.iter().any(|violation| violation.op == Some(run)),
             "the marker must be reported where the function uses it: {violations:#?}"
         );
+    }
+
+    #[test]
+    fn nominal_row_arguments_and_binders_are_forbidden() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  !Holder = adt.struct<"Holder"['a0], (core.ptr)>
+  func.func @run(%value: adt.typeref<"Holder"[row()]>, %layout: !Holder) {
+    func.return
+  }
+}"#,
+        );
+        let violations = verify_boundary_exit(&ctx, module, TargetKind::Native);
+        for name in ["row_args", "row_params"] {
+            assert!(
+                violations
+                    .iter()
+                    .any(|violation| violation.kind == attribute(name)),
+                "{name}: {violations:#?}"
+            );
+        }
     }
 
     #[test]

@@ -84,18 +84,31 @@ impl Converter<'_> {
             return converted;
         }
 
+        // Nominal row arguments and layout row binders stay inside the
+        // source-logical boundary, as callable rows do
+        // (`design/tribute-dialects.md` § "Nominal row 인자").
+        let erased = if data.name == tribute_ir::dialect::adt::Typeref::NAME {
+            Some(tribute_control::ROW_ARGS_ATTR)
+        } else if tribute_ir::dialect::adt::is_nominal(self.ctx, ty) {
+            Some(tribute_control::ROW_PARAMS_ATTR)
+        } else {
+            None
+        };
         let params: Vec<_> = data
             .params
             .iter()
             .copied()
             .map(|param| self.convert_type(param))
             .collect();
+        let erased = erased.and_then(|name| self.ctx.lookup_str(name));
         let attrs: Vec<_> = data
             .attrs
             .iter()
+            .filter(|(key, _)| Some(*key) != erased)
             .map(|(key, value)| (key, self.convert_attribute(value)))
             .collect();
         if params == data.params.as_slice()
+            && attrs.len() == data.attrs.len()
             && attrs
                 .iter()
                 .all(|(key, value)| data.attrs.view(self.ctx).get(*key) == Some(value))

@@ -945,3 +945,40 @@ fn a_body_tail_in_a_parameter_type_reads_cps() {
     );
     assert!(!printed.contains("make$9"), "{printed}");
 }
+
+/// A `body` tail that a parameter type passes as a nominal row argument
+/// occurs in that parameter type (`design/tribute-dialects.md` § "Row binder").
+#[test]
+fn a_body_tail_in_a_parameter_types_row_argument_reads_cps() {
+    let printed = specialized(
+        r#"core.module @m {
+  !Callback = adt.struct<"Callback"['a0], (tribute_control.func_sig<() -> core.i32 row(| 'a0)>)>
+  tribute_control.func @make['a0]() -> tribute_control.func_sig<() -> core.i32 row(| 'a0)> {
+    %f = tribute_control.lambda() -> core.i32 row(| 'a0) captures [] {
+      %c = arith.constant 7 : core.i32
+      tribute_control.return %c
+    }
+    tribute_control.return %f
+  }
+  tribute_control.func @ignore['a0]() -> tribute_control.func_sig<(adt.typeref<"Callback"[row(| 'a0)]>) -> core.i32> {
+    %f = tribute_control.lambda(%k: adt.typeref<"Callback"[row(| 'a0)]>) -> core.i32 captures [] {
+      %c = arith.constant 7 : core.i32
+      tribute_control.return %c
+    }
+    tribute_control.return %f
+  }
+  tribute_control.func @main[body 'a0]() -> core.i32 {
+    %h = tribute_control.call @make() attributes {row_args = [{tail = 0}]} : () -> tribute_control.func_sig<() -> core.i32 row(| 'a0)>
+    %i = tribute_control.call @ignore() attributes {row_args = [{tail = 0}]} : () -> tribute_control.func_sig<(adt.typeref<"Callback"[row(| 'a0)]>) -> core.i32>
+    %r = tribute_control.call_indirect %h() : () -> core.i32 row(| 'a0)
+    tribute_control.return %r
+  }
+}"#,
+    );
+    assert_contains(
+        &printed,
+        &[
+            "tribute_cps.call_indirect %0() attributes {convention = \"cps\"} : () -> core.i32 row(| 'a0)",
+        ],
+    );
+}

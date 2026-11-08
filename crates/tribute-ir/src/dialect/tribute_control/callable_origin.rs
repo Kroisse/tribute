@@ -31,14 +31,21 @@ fn adt_projection_has_exact_callable_type(
         return false;
     }
     if let Ok(get) = adt::StructGet::from_op(ctx, producer) {
-        let layout = get.r#type(ctx);
-        return projection_source_matches_layout(ctx, get.r#ref(ctx), layout, nominal_layouts)
-            && struct_field_type(ctx, layout, get.field(ctx)) == Some(result_type);
+        let (layout, source) = (get.r#type(ctx), get.r#ref(ctx));
+        return projection_source_matches_layout(ctx, source, layout, nominal_layouts)
+            && struct_field_type(ctx, layout, ctx.value_ty(source), get.field(ctx))
+                == Some(result_type);
     }
     if let Ok(get) = adt::VariantGet::from_op(ctx, producer) {
-        let layout = get.r#type(ctx);
-        return projection_source_matches_layout(ctx, get.r#ref(ctx), layout, nominal_layouts)
-            && variant_field_type(ctx, layout, get.tag(ctx), get.field(ctx)) == Some(result_type);
+        let (layout, source) = (get.r#type(ctx), get.r#ref(ctx));
+        return projection_source_matches_layout(ctx, source, layout, nominal_layouts)
+            && variant_field_type(
+                ctx,
+                layout,
+                ctx.value_ty(source),
+                get.tag(ctx),
+                get.field(ctx),
+            ) == Some(result_type);
     }
     false
 }
@@ -54,15 +61,29 @@ fn projection_source_matches_layout(
         && nominal_identity(ctx, ctx.value_ty(source)) == layout_identity
 }
 
-fn struct_field_type(ctx: &IrContext, layout: TypeRef, field: u32) -> Option<TypeRef> {
-    adt::Struct::from_type_ref(ctx, layout)?.field_type(ctx, usize::try_from(field).ok()?)
+/// The type of field `field` of struct `layout`, as a value of type
+/// `value_ty` sees it through its row arguments.
+fn struct_field_type(
+    ctx: &IrContext,
+    layout: TypeRef,
+    value_ty: TypeRef,
+    field: u32,
+) -> Option<TypeRef> {
+    let layout = adt::Struct::from_type_ref(ctx, layout)?;
+    adt::find_field_type(ctx, layout, value_ty, usize::try_from(field).ok()?)
 }
 
-fn variant_field_type(ctx: &IrContext, layout: TypeRef, tag: u32, field: u32) -> Option<TypeRef> {
-    adt::Enum::from_type_ref(ctx, layout)?
-        .variant_fields(ctx, tag)?
-        .get(usize::try_from(field).ok()?)
-        .copied()
+/// The type of a variant field of enum `layout`, as [`struct_field_type`]
+/// reads a struct field's.
+fn variant_field_type(
+    ctx: &IrContext,
+    layout: TypeRef,
+    value_ty: TypeRef,
+    tag: u32,
+    field: u32,
+) -> Option<TypeRef> {
+    let layout = adt::Enum::from_type_ref(ctx, layout)?;
+    adt::find_variant_field_type(ctx, layout, value_ty, tag, usize::try_from(field).ok()?)
 }
 
 /// What an indirect callee's provenance is checked against, and the origin

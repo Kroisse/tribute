@@ -3,10 +3,10 @@ source: crates/tribute-front/tests/tuple_pattern.rs
 expression: ir_text
 ---
 core.module @test {
-  !__logical_tuple_tuple_2_24_named_1_13_pkgZ3aZ3aItem_10_coreZ2ei32 = adt.struct<"__logical_tuple_tuple_2_24_named_1_13_pkgZ3aZ3aItem_10_coreZ2ei32", (adt.typeref<{name = "pkg::Item"}>, core.i32)>
+  !__logical_tuple_tuple_2_24_named_1_13_pkgZ3aZ3aItem_10_coreZ2ei32 = adt.struct<"__logical_tuple_tuple_2_24_named_1_13_pkgZ3aZ3aItem_10_coreZ2ei32", (adt.typeref<"pkg::Item">, core.i32)>
   !"pkg::Item" = adt.enum<"pkg::Item", [(core.i32), ()]>
-  !"pkg::Item_1" = adt.typeref<{name = "pkg::Item"}>
-  !__logical_tuple_tuple_2_24_named_1_13_pkgZ3aZ3aItem_10_coreZ2ei32_1 = adt.typeref<{name = "__logical_tuple_tuple_2_24_named_1_13_pkgZ3aZ3aItem_10_coreZ2ei32"}>
+  !"pkg::Item_1" = adt.typeref<"pkg::Item">
+  !__logical_tuple_tuple_2_24_named_1_13_pkgZ3aZ3aItem_10_coreZ2ei32_1 = adt.typeref<"__logical_tuple_tuple_2_24_named_1_13_pkgZ3aZ3aItem_10_coreZ2ei32">
 
   adt.enum_decl "pkg::Item" [Number, Empty]
   tribute_control.func @"std::Nat::+"(%arg0: core.i32, %arg1: core.i32) -> core.i32

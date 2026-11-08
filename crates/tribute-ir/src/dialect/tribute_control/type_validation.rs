@@ -262,11 +262,27 @@ pub(super) fn validate_managed_reference_boundaries(
                 format!("{ty}: adt.typeref cannot have type parameters"),
             );
         }
-        if !nominal_layouts.contains_key(&name) {
+        let Some(&layout) = nominal_layouts.get(&name) else {
             push_type_error(
                 errors,
                 format!(
                     "{ty}: adt.typeref {:?} has no verified nominal declaration",
+                    ctx.str(name)
+                ),
+            );
+            continue;
+        };
+        let binders = adt::Struct::from_type_ref(ctx, layout)
+            .and_then(|layout| layout.row_params(ctx))
+            .or_else(|| adt::Enum::from_type_ref(ctx, layout).and_then(|l| l.row_params(ctx)))
+            .unwrap_or(0);
+        let args =
+            adt::Typeref::from_type_ref(ctx, ty).map_or(0, |typeref| typeref.rows(ctx).len());
+        if usize::try_from(binders).ok() != Some(args) {
+            push_type_error(
+                errors,
+                format!(
+                    "{ty}: adt.typeref {:?} passes {args} row arguments to a layout with {binders} row binders",
                     ctx.str(name)
                 ),
             );

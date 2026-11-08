@@ -5,8 +5,8 @@ expression: ir_text
 core.module @test {
   !"pkg::Pair" = adt.struct<"pkg::Pair", (core.i32, core.i32)>
   !"pkg::Triple" = adt.struct<"pkg::Triple", (core.i32, core.i32, core.i32)>
-  !"pkg::Triple_1" = adt.typeref<{name = "pkg::Triple"}>
-  !"pkg::Pair_1" = adt.typeref<{name = "pkg::Pair"}>
+  !"pkg::Triple_1" = adt.typeref<"pkg::Triple">
+  !"pkg::Pair_1" = adt.typeref<"pkg::Pair">
   !t0 = tribute_control.func_sig<(core.i32) -> core.i32 row(| 'a0)>
   !t1 = tribute_control.func_sig<(!"pkg::Triple_1", !t0) -> !"pkg::Triple_1" row(| 'a0)>
   !t2 = tribute_control.func_sig<(!"pkg::Triple_1", core.i32) -> !"pkg::Triple_1">

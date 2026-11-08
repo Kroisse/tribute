@@ -59,7 +59,10 @@ use symbol_validation::*;
 use type_validation::*;
 use validation::*;
 
-pub(crate) use asm::{assign_lambda_names, parse_func, parse_lambda, print_func, print_lambda};
+pub(crate) use asm::{
+    assign_lambda_names, display_layout_binders, display_row_argument, parse_func, parse_lambda,
+    parse_layout_binders, parse_row_argument, print_func, print_lambda,
+};
 pub use declarations::{
     CompilerIntrinsicDeclaration, OperationDeclaration, declare_abilities, declare_operations,
     operation_declarations,
@@ -86,7 +89,7 @@ pub use callable_origin::{CallableArgumentOrigin, CallableQuery, CallableResultO
 
 pub use row::{
     ABILITY_ROW_ATTR, INFERRED_ROW_ATTR, QUANTIFIED_ROWS_ATTR, ROW_ARGS_ATTR, ROW_BINDERS_ATTR,
-    ROW_UNIONS_ATTR, Row, RowArgs, RowBinder, RowUnion, find_substituted_rows,
+    ROW_PARAMS_ATTR, ROW_UNIONS_ATTR, Row, RowArgs, RowBinder, RowUnion, find_substituted_rows,
     logical_tuple_elements, logical_tuple_name, logical_tuple_type, quantified_count,
     quantified_rows, row_args, row_binders, row_unions, substitute_rows, visit_rows,
 };

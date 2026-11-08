@@ -191,9 +191,9 @@ Nominal layout은 row 인자와 상관없이 하나다.
 
 ```text
 adt.struct<"Callback"['a0], (tribute_control.func_sig<(core.i64) -> core.i64 row(| 'a0)>)>
-adt.typeref<Callback[row(@"<State(Int)>")]>
-adt.typeref<Callback[row(| 'a2)]>
-adt.typeref<Callback[row()]>
+adt.typeref<"Callback"[row(@"<State(Int)>")]>
+adt.typeref<"Callback"[row(| 'a2)]>
+adt.typeref<"Callback"[row()]>
 ```
 
 Textual form은 layout의 binder를 이름 바로 뒤에

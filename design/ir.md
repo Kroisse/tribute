@@ -1246,7 +1246,7 @@ WasmGC 배열 명령의 index와 길이는 memory의 index type과 관계없이 
 core.i32
 core.tuple<core.i32, core.ptr {k = "v"}>
 core.ref<core.i32, {nullable = true}>
-adt.typeref<Point>
+adt.typeref<"Point">
 func.func_sig<(core.i32 {tribute.ownership = "consumed"}) -> core.i64, {call_conv = "tail"}>
 ```
 
@@ -1429,7 +1429,7 @@ Compiler가 소유하는 runtime 저장 layout은 예약 type 속성 `layout`으
 
 ```text
 adt.struct<"Point", (core.i32, core.i32)>
-adt.struct<"Node", (core.i32 {k = "v"}, adt.typeref<Node>)>
+adt.struct<"Node", (core.i32 {k = "v"}, adt.typeref<"Node">)>
 adt.struct<"_closure", (core.ptr), {layout = "closure"}>
 adt.struct<"_closure_captures", (core.ptr, core.i32),
   {layout = "closure_captures",
@@ -1601,7 +1601,7 @@ storage 확정은 다음 변환을 함께 적용한다.
 
 ```text
 adt.enum<"Option", [(), (T)]>
-adt.enum<"List", [(), (core.i32, adt.typeref<List>)]>
+adt.enum<"List", [(), (core.i32, adt.typeref<"List">)]>
 adt.enum<"geo::Shape", [(), (core.f64, core.f64 {k = 1})], {layout = "x"}>
 adt.enum<"Never", []>
 ```
@@ -1633,13 +1633,13 @@ adt.enum<"Never", []>
 ### `adt.typeref` nominal reference type
 
 `adt.typeref`는 이름으로 nominal layout을 가리키는 값 type이며 전용 textual 문법을
-쓴다. 이름 표기 규칙은 `adt.struct`와 같다.
+쓴다. `adt.struct`처럼 이름은 언제나 따옴표로 감싼 문자열로 쓴다.
 
 ```text
-adt.typeref<Point>
+adt.typeref<"Point">
 adt.typeref<"geo::Shape">
-adt.typeref<Callback[row(@"<State(Int)>")]>
-adt.typeref<Pair[row(), row(@A | 'a0)]>
+adt.typeref<"Callback"[row(@"<State(Int)>")]>
+adt.typeref<"Pair"[row(), row(@A | 'a0)]>
 ```
 
 - 저장 표현은 type 속성 `name`(문자열)과, row 매개변수를 가진 선언을 가리킬 때의

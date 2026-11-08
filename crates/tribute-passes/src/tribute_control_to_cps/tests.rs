@@ -531,6 +531,27 @@ fn textual_nested_attribute_types_convert_atomically() {
 }
 
 #[test]
+fn nominal_row_arguments_and_binders_are_erased() {
+    let input = r#"core.module @test {
+  !Callback = adt.struct<"Callback"['a0], (tribute_control.func_sig<() -> core.i32 row(| 'a0)>)>
+  !pure = adt.typeref<"Callback"[row()]>
+  tribute_cps.func @identity(%value: !pure) -> !pure convention(direct) {
+    tribute_control.return %value
+  }
+}"#;
+    let (mut ctx, module) = parse(input);
+    tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default()).unwrap();
+    let printed = module.op().display(&ctx).to_string();
+    assert!(printed.contains("adt.struct<\"Callback\", ("), "{printed}");
+    assert!(printed.contains("adt.typeref<\"Callback\">"), "{printed}");
+    assert!(!printed.contains("row("), "{printed}");
+
+    let mut reparsed = IrContext::new();
+    let reparsed_module = parse_test_module(&mut reparsed, &printed);
+    verify_tribute_control_post_cps(&reparsed, reparsed_module, &mut Default::default()).unwrap();
+}
+
+#[test]
 fn source_signature_metadata_roundtrips_before_conversion() {
     let source = r#"core.module @test {
   !inner = tribute_control.func_sig<(core.i32) -> core.i32>

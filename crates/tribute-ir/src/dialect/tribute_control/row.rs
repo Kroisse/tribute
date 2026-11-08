@@ -18,8 +18,12 @@ pub const ROW_UNIONS_ATTR: &str = "row_unions";
 /// inferred rather than annotated.
 pub const INFERRED_ROW_ATTR: &str = "inferred_row";
 /// Attribute of a reference holding one row for each quantified binder of
-/// its callee.
+/// its callee, and type attribute of an `adt.typeref` holding one row for
+/// each row parameter of its declaration.
 pub const ROW_ARGS_ATTR: &str = "row_args";
+/// Type attribute of an `adt.struct` or `adt.enum` layout counting its row
+/// binders.
+pub const ROW_PARAMS_ATTR: &str = "row_params";
 /// `tribute_control.lambda` attribute listing the local binders it
 /// quantifies, in instantiation order.
 pub const QUANTIFIED_ROWS_ATTR: &str = "quantified_rows";
@@ -484,10 +488,14 @@ fn type_key(ctx: &IrContext, ty: TypeRef) -> String {
         );
     }
     let data = ctx.get_type(ty);
-    if data.name == crate::dialect::adt::Typeref::NAME
-        && let Some(name) = data.attrs.view(ctx).get_str("name")
-    {
-        return key("named", [text(name)]);
+    if let Some(typeref) = adt::Typeref::from_type_ref(ctx, ty) {
+        // Row arguments are part of the type, so they tell tuples apart.
+        return key(
+            "named",
+            [text(typeref.name(ctx))]
+                .into_iter()
+                .chain(typeref.rows(ctx).iter().map(row_key)),
+        );
     }
     let attributes = |reserved: &[&str]| -> Vec<String> {
         data.attrs
@@ -499,13 +507,7 @@ fn type_key(ctx: &IrContext, ty: TypeRef) -> String {
     };
     if let Some(signature) = <super::FuncSig as trunk_ir::ops::DialectType>::from_type_ref(ctx, ty)
     {
-        let row = signature.row(ctx);
-        let row = key(
-            "row",
-            row.instances.iter().map(path_key).chain([row
-                .tail
-                .map_or_else(|| "closed".to_owned(), |tail| tail.to_string())]),
-        );
+        let row = row_key(&signature.row(ctx));
         return key(
             "callable",
             signature
@@ -524,6 +526,15 @@ fn type_key(ctx: &IrContext, ty: TypeRef) -> String {
             .iter()
             .map(|param| type_key(ctx, *param))
             .chain(attributes(&[])),
+    )
+}
+
+fn row_key(row: &Row) -> String {
+    key(
+        "row",
+        row.instances.iter().map(path_key).chain([row
+            .tail
+            .map_or_else(|| "closed".to_owned(), |tail| tail.to_string())]),
     )
 }
 
@@ -568,8 +579,7 @@ pub fn logical_tuple_type(ctx: &mut IrContext, elements: &[TypeRef]) -> TypeRef 
     let name = logical_tuple_name(ctx, elements);
     let layout = tuple_layout_data(ctx, &name, elements);
     ctx.register_type_alias(Symbol::new(&name), layout);
-    let name = ctx.intern_str(&name);
-    adt::Typeref::params().name(name).intern(ctx).as_type_ref()
+    adt::Typeref::named(ctx, name, []).as_type_ref()
 }
 
 /// The element types of a compiler-generated tuple layout.
@@ -688,11 +698,15 @@ impl<S: TypeSink> Substitution<'_, S> {
                 self.sink.tuple(&substituted)
             };
         }
-        let data = self.sink.ctx().get_type(ty);
-        if data.name == crate::dialect::adt::Typeref::NAME {
+        let ctx = self.sink.ctx();
+        if let Some(typeref) = adt::Typeref::from_type_ref(ctx, ty) {
+            return self.typeref(ty, typeref);
+        }
+        // A layout's own rows name its binders, not the substituted ones.
+        if binds_rows(ctx, ty) {
             return Some(ty);
         }
-        let mut data = data.clone();
+        let mut data = ctx.get_type(ty).clone();
         let row = stored_row(self.sink.ctx(), &data).transpose().ok()?;
         let mut changed = false;
         for param in data.params.iter_mut() {
@@ -722,6 +736,50 @@ impl<S: TypeSink> Substitution<'_, S> {
             Some(ty)
         }
     }
+
+    /// `typeref` with its row arguments substituted.
+    fn typeref(&mut self, ty: TypeRef, typeref: adt::Typeref) -> Option<TypeRef> {
+        let ctx = self.sink.ctx();
+        let rows = typeref.rows(ctx);
+        if rows.is_empty() {
+            return Some(ty);
+        }
+        let substituted = rows
+            .iter()
+            .map(|row| row.substitute(self.args))
+            .collect::<Option<Vec<_>>>()?;
+        if substituted == rows {
+            return Some(ty);
+        }
+        let mut data = ctx.get_type(ty).clone();
+        let key = self.sink.key(ROW_ARGS_ATTR)?;
+        let values = substituted
+            .iter()
+            .map(|row| self.sink.row(row))
+            .collect::<Option<Vec<_>>>()?;
+        let entries: Vec<_> = data
+            .attrs
+            .iter()
+            .map(|(existing, attr)| {
+                let attr = if existing == key {
+                    Attribute::List(values.clone())
+                } else {
+                    attr.clone()
+                };
+                (existing, attr)
+            })
+            .collect();
+        data.attrs = AttributeMap::from_refs(self.sink.ctx(), entries);
+        self.sink.make(data)
+    }
+}
+
+/// Whether `ty` is a nominal layout that declares row binders, which the
+/// rows inside it name.
+fn binds_rows(ctx: &IrContext, ty: TypeRef) -> bool {
+    let data = ctx.get_type(ty);
+    (data.name == adt::Struct::NAME || data.name == adt::Enum::NAME)
+        && data.attrs.view(ctx).contains_key(ROW_PARAMS_ATTR)
 }
 
 /// Replace, in every callable type inside `ty`, a tail that `args` names
@@ -779,6 +837,18 @@ fn visit_rows_in(
         return;
     }
     let data = ctx.get_type(ty);
+    if data.name == adt::Typeref::NAME {
+        if let Some(Attribute::List(rows)) = data.attrs.view(ctx).get(ROW_ARGS_ATTR) {
+            for row in rows {
+                visit(Row::from_attribute(ctx, row));
+            }
+        }
+        return;
+    }
+    // A layout's own rows name its binders, which no definition shares.
+    if binds_rows(ctx, ty) {
+        return;
+    }
     if data.attrs.view(ctx).contains_key(ABILITY_ROW_ATTR)
         && let Some(row) = stored_row(ctx, data)
     {

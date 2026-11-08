@@ -336,6 +336,100 @@ fn substitution_rebuilds_callables_and_tuple_layouts() {
     assert_eq!(substitute_rows(&mut ctx, i32_ty, &[]), Some(i32_ty));
 }
 
+const NOMINAL_ROWS: &str = r#"core.module @test {
+  !Callback = adt.struct<"Callback"['a0], (tribute_control.func_sig<() -> core.i32 row(@B | 'a0)>)>
+  !open = adt.typeref<"Callback"[row(@A | 'a0)]>
+  !closed = adt.typeref<"Callback"[row(@A)]>
+  !holder = tribute_control.func_sig<(!open) -> core.i32>
+}"#;
+
+#[test]
+fn substitution_rewrites_row_arguments_but_not_layouts() {
+    let (mut ctx, _) = parse(NOMINAL_ROWS);
+    let alias = |ctx: &IrContext, name| ctx.type_alias_by_text(name).expect("fixture alias");
+    let [open, closed, layout, holder] =
+        ["open", "closed", "Callback", "holder"].map(|name| alias(&ctx, name));
+
+    // The row argument's tail names a binder of the enclosing definition.
+    let args = [Row::default()];
+    assert_eq!(substitute_rows(&mut ctx, open, &args), Some(closed));
+    let holder = substitute_rows(&mut ctx, holder, &args).unwrap();
+    let holder = FuncSig::from_type_ref(&ctx, holder).unwrap();
+    assert_eq!(holder.inputs(&ctx), [closed]);
+    // The layout's own tail names its binder, which the arguments do not
+    // stand for.
+    assert_eq!(substitute_rows(&mut ctx, layout, &args), Some(layout));
+}
+
+#[test]
+fn visiting_rows_reads_row_arguments_but_not_layouts() {
+    let (ctx, _) = parse(NOMINAL_ROWS);
+    let alias = |name| ctx.type_alias_by_text(name).expect("fixture alias");
+    let rows = |ty| {
+        let mut rows = Vec::new();
+        visit_rows(&ctx, ty, &mut |row| rows.push(row.unwrap()));
+        rows
+    };
+    let a = SymbolPath::new(["A"]);
+    assert_eq!(rows(alias("holder")), [Row::new([a], Some(0))]);
+    assert_eq!(rows(alias("Callback")), []);
+}
+
+#[test]
+fn tuple_names_tell_row_arguments_apart() {
+    let (mut ctx, _) = parse(NOMINAL_ROWS);
+    let alias = |ctx: &IrContext, name| ctx.type_alias_by_text(name).expect("fixture alias");
+    let [open, closed] = ["open", "closed"].map(|name| alias(&ctx, name));
+    let plain = adt::Typeref::named(&mut ctx, "Callback", []).as_type_ref();
+    let names = [open, closed, plain].map(|ty| logical_tuple_name(&ctx, &[ty]));
+    assert_ne!(names[0], names[1]);
+    assert_ne!(names[1], names[2]);
+    assert_ne!(names[0], names[2]);
+}
+
+#[test]
+fn row_arguments_match_the_layouts_row_binders() {
+    assert_rejects(
+        r#"core.module @test {
+  !Callback = adt.struct<"Callback"['a0], (tribute_control.func_sig<() -> core.i32 row(| 'a0)>)>
+  !Point = adt.struct<"Point", (core.i32)>
+  tribute_control.func @missing(%c: adt.typeref<"Callback">) -> core.i32 {
+    %x = arith.constant 0 : core.i32
+    tribute_control.return %x
+  }
+  tribute_control.func @extra(%p: adt.typeref<"Point"[row()]>) -> core.i32 {
+    %x = arith.constant 0 : core.i32
+    tribute_control.return %x
+  }
+}"#,
+        "passes 0 row arguments to a layout with 1 row binders",
+    );
+    assert_rejects(
+        r#"core.module @test {
+  !Point = adt.struct<"Point", (core.i32)>
+  tribute_control.func @extra(%p: adt.typeref<"Point"[row()]>) -> core.i32 {
+    %x = arith.constant 0 : core.i32
+    tribute_control.return %x
+  }
+}"#,
+        "passes 1 row arguments to a layout with 0 row binders",
+    );
+}
+
+#[test]
+fn a_row_argument_tail_is_a_binder_of_its_definition() {
+    assert_rejects(
+        r#"core.module @test {
+  !Callback = adt.struct<"Callback"['a0], (tribute_control.func_sig<() -> core.i32 row(| 'a0)>)>
+  tribute_control.func @f(%c: adt.typeref<"Callback"[row(| 'a0)]>) -> core.i32 {
+    %x = arith.constant 0 : core.i32
+    tribute_control.return %x
+  }
+}"#,
+        "row tail 0 names no row binder in scope",
+    );
+}
+
 #[test]
 fn finding_a_substituted_row_needs_only_the_keys_it_holds() {
     let mut ctx = IrContext::new();
