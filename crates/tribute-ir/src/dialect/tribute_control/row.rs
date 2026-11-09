@@ -218,17 +218,21 @@ impl trunk_ir::attr_kind::AttrKind for Row {
     }
 }
 
-/// What kind of row variable a binder of a definition stands for.
+/// What kind of row variable a binder of a definition stands for, one
+/// element of a `func`'s `row_binders`; the list's order and the meaning
+/// of each kind are on the `tribute_control.func` declaration.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum RowBinder {
     /// Quantified by the definition's scheme.
     Param,
     /// Quantified by the definition's scheme and named inside an ability
-    /// argument.
+    /// argument of the signature or body.
     AbilityArg,
-    /// Quantified by the local scheme of a `let`-bound lambda.
+    /// Quantified by the local scheme of a `let`-bound lambda, which owns it
+    /// and lists it in its `quantified_rows`.
     Local,
-    /// Quantified by no scheme.
+    /// Quantified by no scheme, or by a local scheme without a lambda that
+    /// quantifies it.
     Body,
 }
 

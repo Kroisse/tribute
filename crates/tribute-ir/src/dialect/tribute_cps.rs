@@ -46,7 +46,12 @@ mod tribute_cps {
     ///
     /// - **Shape:** `tribute_control.func` with a required
     ///   `convention: String`, one of `"direct"`, `"evidence_direct"`, and
-    ///   `"cps"`. The concise form always writes it.
+    ///   `"cps"`.
+    /// - **Format:** that of `tribute_control.func`, with `convention(direct)`,
+    ///   `convention(evidence_direct)`, or `convention(cps)` after the row
+    ///   (and `inferred`) and before ` attributes {..}`. The concise form
+    ///   always writes it and the parser requires it; the printer never
+    ///   infers it from the body, and the callable type never writes one.
     /// - **Meaning:** one class instance of a source function. Class
     ///   specialization computes the convention from the row with the
     ///   instance's classes (`design/cps-effects.md`, "Row와 호출 규약").
@@ -96,8 +101,14 @@ mod tribute_cps {
     ///
     /// - **Shape:** `tribute_control.lambda` with a required
     ///   `conventions` list and one body region per element, in the same
-    ///   order. Each body takes the source parameters. Each body is written
-    ///   under its convention's keyword in `entries`.
+    ///   order. Each body takes the source parameters.
+    /// - **Format:** that of `tribute_control.lambda` up to the optional
+    ///   ` attributes {..}`, then `entries { .. }` in place of the one body:
+    ///   each body under its convention's keyword, in convention order and
+    ///   at most one per convention, sharing the parameters the header
+    ///   names. Adapters and trap entries are not written; legalization
+    ///   fills a convention entry that has no body
+    ///   (`design/tribute-dialects.md`, "Convention entry").
     /// - **Meaning:** one lambda value with a body for each class
     ///   `design/tribute-dialects.md` ("Convention entry") gives it: each class its uses
     ///   select, or each class from its row's lower bound to its upper bound
