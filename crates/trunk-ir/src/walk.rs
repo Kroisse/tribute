@@ -122,7 +122,8 @@ pub fn reachable_types_from(
 }
 
 /// The types `op` and the operations nested in it reach: the types of their
-/// results and block arguments and the types in their attributes, with
+/// results and block arguments and the types in their and their block
+/// arguments' attributes, with
 /// every type those reach through [`visit_type_children`]. Each appears
 /// once, in the order first reached.
 pub fn reachable_types(ctx: &IrContext, op: OpRef) -> Vec<TypeRef> {
@@ -134,7 +135,12 @@ pub fn reachable_types(ctx: &IrContext, op: OpRef) -> Vec<TypeRef> {
         }
         for region in ctx.op_regions(op) {
             for &block in &ctx.region(region).blocks {
-                roots.extend(ctx.block(block).args.iter().map(|arg| arg.ty));
+                for arg in &ctx.block(block).args {
+                    roots.push(arg.ty);
+                    for attr in arg.attrs.values() {
+                        attr.visit_types(&mut |ty| roots.push(ty));
+                    }
+                }
             }
         }
         ControlFlow::Continue(WalkAction::Advance)
@@ -302,5 +308,20 @@ mod tests {
         });
 
         assert!(!found_const);
+    }
+
+    #[test]
+    fn reachable_types_include_block_argument_attributes() {
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @f(%x: core.i32 {k = core.tuple<core.i64>}) -> core.nil {
+    func.return
+  }
+}"#,
+        );
+        let i64_ty = TypeDataBuilder::new("core.i64").intern(&mut ctx);
+        assert!(reachable_types(&ctx, module.op()).contains(&i64_ty));
     }
 }
