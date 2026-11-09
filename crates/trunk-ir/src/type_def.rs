@@ -7,7 +7,7 @@ use crate::asm_format::{
     TypeAliasHint, TypeAliasHook, TypeAsmFormat, TypeAsmHooks, erased_alias_hint,
 };
 use crate::name::{Definition, DefinitionTable, Name, NameArg, QualifiedName};
-use crate::ops::VerificationError;
+use crate::ops::{DialectType, VerificationError};
 use crate::type_verifier::{VerifyType, erased_verifier};
 use crate::{IrContext, TypeRef};
 
@@ -37,14 +37,41 @@ pub struct TypeDef {
     /// Calls the wrapper's [`TypeAliasHint`]
     /// impl for types that suggest printer alias names.
     pub alias_hint: Option<TypeAliasHook>,
-    /// Whether the type is identified: its data is a key, and the context
-    /// binds its body once ([`IrContext::bind_type_body`]). An identified
-    /// type registers an assembly format, which writes its body.
-    pub identified: bool,
+    /// Calls the wrapper's [`IdentifiedType`] impl for types whose instances
+    /// may be identified. An identified type registers an assembly format,
+    /// which writes its body.
+    pub identifier: Option<IdentifierHook>,
 }
 
 /// A type verifier, calling the wrapper's [`VerifyType`] impl.
 pub type TypeVerifier = fn(&IrContext, TypeRef) -> Result<(), VerificationError>;
+
+/// A type's identifier, calling the wrapper's [`IdentifiedType`] impl.
+pub type IdentifierHook = for<'a> fn(&'a IrContext, TypeRef) -> Option<&'a str>;
+
+/// A type whose instances may be identified (`design/ir.md` § "식별 타입"):
+/// an instance with an identifier is a key, and the context binds its body
+/// once ([`IrContext::bind_type_body`]). An instance without one is an
+/// ordinary type.
+///
+/// `#[dialect]` opts in with `#[identified]`, and a hand-written definition
+/// adds it with [`TypeDef::with_identifier`].
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` is declared with `#[identified]` but does not implement `IdentifiedType`",
+    label = "`#[identified]` requires this implementation",
+    note = "add `impl IdentifiedType for {Self} {{ fn identifier<'a>(&self, ctx: &'a IrContext) -> Option<&'a str> {{ .. }} }}`"
+)]
+pub trait IdentifiedType: DialectType {
+    /// The identifier this instance's data holds, or `None` when the
+    /// instance is not identified. The printer names the alias of an
+    /// identified type by it.
+    fn identifier<'a>(&self, ctx: &'a IrContext) -> Option<&'a str>;
+}
+
+/// `T`'s identifier as a [`TypeDef`] stores it.
+pub(crate) fn erased_identifier<T: IdentifiedType>(ctx: &IrContext, ty: TypeRef) -> Option<&str> {
+    T::from_type_ref(ctx, ty)?.identifier(ctx)
+}
 
 impl TypeDef {
     /// A definition without hooks.
@@ -54,7 +81,7 @@ impl TypeDef {
             verifier: None,
             asm_format: None,
             alias_hint: None,
-            identified: false,
+            identifier: None,
         }
     }
 
@@ -84,11 +111,11 @@ impl TypeDef {
         }
     }
 
-    /// This definition, declared identified (`design/ir.md` § "식별
-    /// 타입"). Its assembly format must write the body.
-    pub const fn identified(self) -> Self {
+    /// This definition with `T`'s [`IdentifiedType`] impl as its
+    /// identifier. Its assembly format must write the body.
+    pub const fn with_identifier<T: IdentifiedType>(self) -> Self {
         Self {
-            identified: true,
+            identifier: Some(erased_identifier::<T>),
             ..self
         }
     }
@@ -114,10 +141,16 @@ impl Definition for TypeDef {
     }
 }
 
-/// Whether `ty` is an identified type: its definition declares it so
-/// ([`TypeDef::identified`]).
+/// The identifier of `ty`, if its definition reads one from it
+/// ([`IdentifiedType`]).
+pub fn identifier(ctx: &IrContext, ty: TypeRef) -> Option<&str> {
+    let identifier = TypeDef::of(ctx, ty)?.identifier?;
+    identifier(ctx, ty)
+}
+
+/// Whether `ty` is an identified type: it has an [`identifier`].
 pub fn is_identified(ctx: &IrContext, ty: TypeRef) -> bool {
-    TypeDef::of(ctx, ty).is_some_and(|def| def.identified)
+    identifier(ctx, ty).is_some()
 }
 
 /// Inventory entry registering a [`TypeDef`].
@@ -358,7 +391,7 @@ mod tests {
         // Generic syntax cannot write a body.
         for TypeDefRegistration(def) in inventory::iter::<TypeDefRegistration> {
             assert!(
-                !def.identified || def.asm_format.is_some(),
+                def.identifier.is_none() || def.asm_format.is_some(),
                 "{} is identified without an assembly format",
                 def.name.as_str()
             );
@@ -388,15 +421,15 @@ mod tests {
 mod identified_tests {
     use std::fmt::Write as _;
 
-    use crate::asm_format::{TypeAliasHint, TypeAsmFormat};
+    use crate::asm_format::TypeAsmFormat;
     use crate::ops::DialectType;
-    use crate::parser::{AsmParser, ParseResult, parse_module, parse_test_module};
+    use crate::parser::{AsmParser, ParseResult, lexer, parse_module, parse_test_module};
     use crate::printer::AsmPrinter;
     use crate::types::Attribute;
     use crate::validation::validate_type_bodies;
     use crate::{IrContext, TypeBodyError, TypeDataBuilder, TypeRef};
 
-    use super::TypeDef;
+    use super::{IdentifiedType, TypeDef, is_identified};
 
     /// `test.ident<"Key">`, or `test.ident<"Key", BODY>` where it writes its
     /// body: an identified type whose key is its `key` attribute.
@@ -405,8 +438,7 @@ mod identified_tests {
 
     static IDENT_DEF: TypeDef = TypeDef::new("test.ident")
         .with_asm_format::<Ident>()
-        .with_alias_hint::<Ident>()
-        .identified();
+        .with_identifier::<Ident>();
 
     crate::register_type_def!(&IDENT_DEF);
 
@@ -435,8 +467,8 @@ mod identified_tests {
         }
     }
 
-    impl TypeAliasHint for Ident {
-        fn alias_hint<'a>(&self, ctx: &'a IrContext) -> Option<&'a str> {
+    impl IdentifiedType for Ident {
+        fn identifier<'a>(&self, ctx: &'a IrContext) -> Option<&'a str> {
             self.key_text(ctx)
         }
     }
@@ -671,7 +703,9 @@ mod identified_tests {
         let result = validate_type_bodies(&ctx, module);
         assert_eq!(result.errors.len(), 1, "{result}");
         assert!(
-            result.to_string().contains(r#"test.ident<"Orphan">"#),
+            result
+                .to_string()
+                .contains(r#"identified type "Orphan" has no body"#),
             "{result}"
         );
 
@@ -693,5 +727,97 @@ mod identified_tests {
 }"#,
         );
         assert!(!validate_type_bodies(&ctx, module).is_ok());
+    }
+
+    #[crate::dialect]
+    mod layout_test {
+        /// `layout_test.layout<"Name">` and `layout_test.layout<"Name", BODY>`
+        /// name an identified layout; `layout_test.layout<(A, B)>` is a
+        /// literal one.
+        #[identified]
+        #[asm_format]
+        struct Layout<#[rest] Fields> {
+            name: Option<Attr<String>>,
+        }
+    }
+
+    impl IdentifiedType for Layout {
+        fn identifier<'a>(&self, ctx: &'a IrContext) -> Option<&'a str> {
+            self.name(ctx)
+        }
+    }
+
+    impl TypeAsmFormat for Layout {
+        fn print(&self, p: &mut AsmPrinter<'_>) -> std::fmt::Result {
+            let ty = self.as_type_ref();
+            p.write_str("layout_test.layout<")?;
+            if let Some(name) = self.name(p.ctx()) {
+                write!(p, "{name:?}")?;
+                if let Some(body) = p.identified_body(ty) {
+                    p.write_str(", ")?;
+                    p.print_type(body.ty())?;
+                }
+            } else {
+                p.write_char('(')?;
+                for (i, &field) in p.ctx().get_type(ty).params.iter().enumerate() {
+                    if i > 0 {
+                        p.write_str(", ")?;
+                    }
+                    p.print_type(field)?;
+                }
+                p.write_char(')')?;
+            }
+            p.write_char('>')
+        }
+
+        fn parse(p: &mut AsmParser<'_>, _name: &str) -> ParseResult<Option<TypeRef>> {
+            let ty = if let Some(name) = p.parse_optional_token("a string", lexer::string_lit)? {
+                let name = p.ctx_mut().string_attr(&name);
+                let ty = TypeDataBuilder::new("layout_test.layout")
+                    .attr("name", name)
+                    .intern(p.ctx_mut());
+                if p.parse_optional_punct(",") {
+                    let offset = p.offset();
+                    let body = p.parse_type()?;
+                    p.bind_type_body(ty, body, offset)?;
+                }
+                ty
+            } else {
+                let fields = p.parse_delimited("(", ")", |p| p.parse_type())?;
+                TypeDataBuilder::new("layout_test.layout")
+                    .params(fields)
+                    .intern(p.ctx_mut())
+            };
+            p.parse_punct(">")?;
+            Ok(Some(ty))
+        }
+    }
+
+    #[test]
+    fn instances_of_one_definition_are_identified_by_their_identifier() {
+        let text = r#"core.module @test {
+  !Pair = layout_test.layout<"Pair", layout_test.layout<(core.i32, core.i64)>>
+
+  func.func @f(%0: !Pair, %1: layout_test.layout<(!Pair)>) {
+      func.return
+  }
+}
+"#;
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, text);
+        // The literal instance gets no alias; the identified one is aliased
+        // by its identifier, with its body on the alias line.
+        assert_eq!(module.op().display(&ctx).to_string(), text);
+        assert!(validate_type_bodies(&ctx, module).is_ok());
+
+        let pair = ctx.type_alias_by_text("Pair").unwrap();
+        assert!(is_identified(&ctx, pair));
+        let body = ctx.type_body(pair).unwrap();
+        assert!(Layout::from_type_ref(&ctx, body).is_some());
+        assert!(!is_identified(&ctx, body));
+        assert_eq!(
+            ctx.bind_type_body(body, pair),
+            Err(TypeBodyError::NotIdentified)
+        );
     }
 }

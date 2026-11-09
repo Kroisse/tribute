@@ -248,15 +248,19 @@ where
   the type when it generates aliases; a hand-written `TypeDef` adds it with
   `with_alias_hint`. `#[implements(..)]` on a type registers the wrapper's
   [type interfaces](#type-interfaces).
-- A hand-written `TypeDef` declares an
-  [identified type](../../design/ir.md#식별-타입) with `.identified()`:
-  its data is a key, and `IrContext::bind_type_body` binds its body once,
-  which `IrContext::type_body` reads. Its `TypeAsmFormat` writes the body
-  where `AsmPrinter::identified_body` returns one, and reads a written body
-  with `AsmParser::bind_type_body`; the printer gives every identified type
-  a module reaches an alias, named by its alias hint, so register one that
-  names the key. `validation::validate_type_bodies` rejects an identified
-  type without a body.
+- `#[identified]` on a type requires `trunk_ir::type_def::IdentifiedType`,
+  whose `identifier` reads an instance's identifier; a hand-written
+  `TypeDef` adds it with `with_identifier`. An instance with an identifier
+  is an [identified type](../../design/ir.md#식별-타입), and one without is
+  an ordinary type, so one definition can have both, as LLVM's struct type
+  does. An identified type's data is a key, and
+  `IrContext::bind_type_body` binds its body once, which
+  `IrContext::type_body` reads. Its `TypeAsmFormat` writes the body where
+  `AsmPrinter::identified_body` returns one, and reads a written body with
+  `AsmParser::bind_type_body`. The printer gives every identified type a
+  module reaches an alias named by its identifier, which takes precedence
+  over an alias hint. `validation::validate_type_bodies` rejects an
+  identified type without a body.
 - The function syntax `<(inputs) -> results, {attrs}>` belongs to the
   signature types that register it: their `TypeAsmFormat` calls
   `func::print_signature_type` and `func::parse_signature_type`, which
@@ -571,8 +575,8 @@ handle whose `ty()` is the queried type. A method is called on the type's
 wrapper, so query a type interface's methods only on types that pass their
 definition's shape and verifier; a marker interface answers by name alone.
 A hook that core infrastructure reaches through the definition, such as a
-verifier, an assembly format, or an alias hint, belongs on `TypeDef`
-instead.
+verifier, an assembly format, an alias hint, or an identifier, belongs on
+`TypeDef` instead.
 
 ## Working with IR
 

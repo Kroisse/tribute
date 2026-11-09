@@ -54,8 +54,9 @@ mod parse;
 ///
 /// For each type `struct`, a `static` `TypeDef` holding the wrapper's
 /// `trunk_ir::type_verifier::VerifyType` impl for `#[verify]`, its
-/// `trunk_ir::asm_format::TypeAsmFormat` impl for `#[asm_format]`, and its
-/// `trunk_ir::asm_format::TypeAliasHint` impl for `#[alias_hint]`, plus a
+/// `trunk_ir::asm_format::TypeAsmFormat` impl for `#[asm_format]`, its
+/// `trunk_ir::asm_format::TypeAliasHint` impl for `#[alias_hint]`, and its
+/// `trunk_ir::type_def::IdentifiedType` impl for `#[identified]`, plus a
 /// registration of each type interface listed in `#[implements(..)]`.
 #[proc_macro_attribute]
 pub fn dialect(attr: ProcTokenStream, item: ProcTokenStream) -> ProcTokenStream {
