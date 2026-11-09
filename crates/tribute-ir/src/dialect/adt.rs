@@ -1,9 +1,5 @@
 //! Arena-based adt dialect.
 
-mod syntax;
-
-pub use syntax::{FieldNames, VariantNames};
-
 use crate::dialect::tribute_control::{
     ROW_ARGS_ATTR, ROW_PARAMS_ATTR, Row, display_layout_binders, parse_layout_binders,
 };
@@ -213,7 +209,7 @@ mod adt {
     /// The source names of the struct layout `type`.
     ///
     /// ```text
-    /// adt.struct_decl !Point ("x", "y")
+    /// adt.struct_decl !Point ["x", "y"]
     /// ```
     ///
     /// - **Shape:** a module-level operation. `type` is a named `adt.struct`
@@ -228,7 +224,7 @@ mod adt {
     ///   struct; the target pass that lowers `adt` operations erases it
     ///   (`design/ir.md` § "Nominal 선언").
     #[verify]
-    #[asm_format(r#type custom(FieldNames(fields)) attr_dict)]
+    #[asm_format(r#type fields attr_dict)]
     fn struct_decl(r#type: Attr<Type>, fields: Attr<[String]>) {}
 
     /// The source names of the enum layout `type`.
@@ -249,7 +245,7 @@ mod adt {
     ///   enum and each specialized enum instance; the target pass that
     ///   lowers `adt` operations erases it (`design/ir.md` § "Nominal 선언").
     #[verify]
-    #[asm_format(r#type custom(VariantNames(variants)) attr_dict)]
+    #[asm_format(r#type variants attr_dict)]
     fn enum_decl(r#type: Attr<Type>, variants: Attr<[String]>) {}
 
     /// A `length`-element array whose every element is `initial`.
@@ -1459,10 +1455,10 @@ mod tests {
   !Point = adt.struct<"Point", (core.i32, core.i32)>
   !Empty = adt.struct<"Empty", ()>
   !Never = adt.enum<"Never", []>
-  adt.struct_decl !Point ("x", "y")
-  adt.struct_decl !Empty ()
+  adt.struct_decl !Point ["x", "y"]
+  adt.struct_decl !Empty []
   adt.enum_decl !Never []
-  adt.struct_decl adt.struct<"Quoted", (core.i32, core.i32)> ("0", "a b")
+  adt.struct_decl adt.struct<"Quoted", (core.i32, core.i32)> ["0", "a b"]
 }"#,
         );
         assert_roundtrip(&ctx, module.op());
@@ -1488,8 +1484,8 @@ mod tests {
     #[test]
     fn nominal_declarations_must_fit_their_layouts() {
         for decl in [
-            r#"adt.struct_decl adt.struct<"P", (core.i32)> ("x", "y")"#,
-            r#"adt.struct_decl adt.struct<(core.i32)> ("x")"#,
+            r#"adt.struct_decl adt.struct<"P", (core.i32)> ["x", "y"]"#,
+            r#"adt.struct_decl adt.struct<(core.i32)> ["x"]"#,
             r#"adt.enum_decl adt.struct<"P", ()> []"#,
             r#"adt.enum_decl adt.enum<"E", [()]> []"#,
         ] {
