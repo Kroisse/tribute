@@ -115,11 +115,10 @@ pub(super) fn lower_module<'db>(
         root_entry: None,
     };
     prescan_row_binders(&mut ctx, &ast.entries, &declarations);
-    let row_effects = row_effects(&ctx, &ast.entries, &declarations);
     let mut well_known_type_prescan = super::decl::WellKnownTypePrescan::new(well_known_types);
     let mut published_runtime_types = Vec::new();
     collect_logical_nominal_identities(&mut ctx, &ast.entries);
-    prescan_logical_nominal_layouts(
+    let layouts = prescan_logical_nominal_layouts(
         &mut ctx,
         ir,
         &ast.entries,
@@ -128,6 +127,8 @@ pub(super) fn lower_module<'db>(
         &constructor_types,
         &specialized_enum_variants,
     );
+    // Layout fields name abilities too, even ones no expression's type does.
+    let row_effects = row_effects(&ctx, &ast.entries, &declarations, layouts);
     prescan_struct_accessor_signatures(&mut ctx, ir, &ast.entries);
     prescan_source_functions(&mut ctx, &ast.entries);
     let well_known_types = well_known_type_prescan.finish();
@@ -241,7 +242,7 @@ mod tests {
             .build(&mut ir, location);
         ir.push_op(block, value.op_ref());
         let value = value.result(&ir);
-        let parameter = ctx.adt_typeref(&mut ir, &Symbol::new("String"));
+        let parameter = ctx.adt_typeref(&mut ir, &Symbol::new("String"), []);
         let declaration = OperationDeclaration::new(
             SymbolPath::new(["Test"]),
             ir.intern_str("throw"),

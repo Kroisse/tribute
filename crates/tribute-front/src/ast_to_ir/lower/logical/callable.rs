@@ -273,6 +273,7 @@ pub(super) fn row_effects<'db>(
     ctx: &IrLoweringCtx<'db>,
     entries: &[DeclEntry<TypedRef<'db>>],
     declarations: &Declarations<'db>,
+    layouts: impl IntoIterator<Item = crate::ast::TypeScheme<'db>>,
 ) -> Vec<crate::ast::AbilityInstance<'db>> {
     fn visit<'db>(
         db: &'db dyn salsa::Database,
@@ -290,7 +291,15 @@ pub(super) fn row_effects<'db>(
             }
         };
         match ty.kind(db) {
-            TypeKind::Named { args, .. } | TypeKind::Tuple(args) => {
+            TypeKind::Named { row_args, args, .. } => {
+                for row_arg in row_args {
+                    row(*row_arg, found);
+                }
+                for arg in args {
+                    visit(db, *arg, found);
+                }
+            }
+            TypeKind::Tuple(args) => {
                 for arg in args {
                     visit(db, *arg, found);
                 }
@@ -333,6 +342,9 @@ pub(super) fn row_effects<'db>(
     }
     for instance in declarations.function_instances.values() {
         visit(db, instance.callable, &mut found);
+    }
+    for scheme in layouts {
+        visit(db, *scheme.body(db), &mut found);
     }
     found
 }
