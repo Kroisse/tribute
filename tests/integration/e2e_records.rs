@@ -29,8 +29,9 @@ fn main() ->{Io} Nil {
 #[test]
 fn test_mutually_recursive_struct_and_enum() {
     // A struct and an enum that hold each other, each through the other's
-    // layout key (`design/ir.md`, "Nominal 값 타입").
-    assert_output_on_both_targets(
+    // layout key (`design/ir.md`, "Nominal 값 타입"). The native run is
+    // checked under AddressSanitizer.
+    crate::common::assert_output_on_both_targets_with_native_asan(
         "mutually_recursive_records.trb",
         r#"
 use std::io::{Io, print_line}
