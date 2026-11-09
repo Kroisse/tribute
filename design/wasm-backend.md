@@ -601,8 +601,8 @@ WasmGC subtype 관계는 `wasm_gc.struct`의 type 속성 `supertype`으로만 �
 
 ### Closure layout과 subtype
 
-[Closure 저장 layout](ir.md#closure-저장-layout)은 closure base 하나와 capture
-layout들로 이루어진다.
+[Closure 저장 layout](tribute-dialects.md#closure-저장-layout)은 closure base
+하나와 capture layout들로 이루어진다.
 
 - Closure base(`layout = "closure"`)는 예약 index 3의 `{ entries: i32 }`이며 final이
   아니다. Entries 필드는 immutable이며 function table 안의

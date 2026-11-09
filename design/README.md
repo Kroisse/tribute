@@ -28,7 +28,7 @@ Operation 하나의 계약은 그 `#[dialect]` 선언의 doc comment가 정하�
 | 문서 | 범위 |
 | ---- | ---- |
 | [ir.md](ir.md) | TrunkIR core: dialect 계층, legality, 선언적 schema, 타입 모델 |
-| [tribute-dialects.md](tribute-dialects.md) | Tribute 고수준 dialect의 operation 간 규칙 |
+| [tribute-dialects.md](tribute-dialects.md) | Tribute 고수준 dialect의 operation 간 규칙과 타입 규칙 |
 | [cps-effects.md](cps-effects.md) | 직접형 제어의 CPS 변환과 convention class, effect dispatch |
 | [implementation.md](implementation.md) | Compiler phase 책임과 검증 경계 |
 | [lowering.md](lowering.md) | Lowering pass 구조와 pass 순서 |

@@ -16,8 +16,8 @@ nominal 정보는 runtime 타입 descriptor가 소유한다. 값은 자기 descr
 
 - 이름은 IR 타입에서 지워져도 runtime에서 지워지지 않는다. Nominal layout을
   해석하는 단계가 끝나면 IR의 struct 타입은 이름 없는
-  [structural struct](ir.md#nominal-수준과-structural-수준)가 되고, 그 아래에서
-  이름이 필요한 일은 모두 descriptor를 거친다.
+  [structural struct](tribute-dialects.md#nominal-수준과-structural-수준)가 되고,
+  그 아래에서 이름이 필요한 일은 모두 descriptor를 거친다.
 - 저수준 layout 타입이 갖는 identity는 runtime 동작이 달라지는 경우로 한정한다.
   Layout이 같고 runtime 동작이 같은 두 소스 타입은 layout을 공유하며 descriptor로만
   구별된다.
@@ -74,7 +74,8 @@ Descriptor는 runtime에 할당되는 값의 종류마다 하나다.
 - Compiler가 할당하는 값마다 하나. Boxing된 `Bool`, `Nat`, `Int`, `Float`, runtime도
   할당하는 `Bytes`, compiler 소유 layout(closure 등)이 여기에 속한다. RC 객체로
   할당하지 않는 unmanaged 값은 descriptor를 갖지 않는다.
-- Native closure는 [closure 저장 layout](ir.md#closure-저장-layout)마다 하나다.
+- Native closure는
+  [closure 저장 layout](tribute-dialects.md#closure-저장-layout)마다 하나다.
   Capture 타입 목록이 같은 closure는 layout과 descriptor를 공유하고, capture 없는
   closure는 base layout의 descriptor를 쓴다. Convention table 필드의 종류는 unmanaged
   포인터이고, capture 필드의 종류는 다른 할당 필드처럼 의미 타입에서 정한다. 필드
@@ -113,7 +114,8 @@ Descriptor는 runtime에 할당되는 값의 종류마다 하나다.
 
 Nominal IR에는 descriptor 선언이 없다. Descriptor의 identity는 할당 operation이
 가리키는 nominal layout 타입과 variant tag(선언 순서의 variant 위치)의 쌍이다. Source가 선언한 타입의 이름,
-필드 이름, variant 이름의 출처는 그 타입의 [nominal 선언](ir.md#nominal-선언)이다.
+필드 이름, variant 이름의 출처는 그 타입의
+[nominal 선언](tribute-dialects.md#nominal-선언)이다.
 
 - Nominal layout을 마지막으로 해석하는 target 경계가 descriptor를 소유한다. 이
   경계는 `(layout 타입, tag)`마다 번호와 필드 종류를 정해 module 수준
@@ -124,8 +126,8 @@ Nominal IR에는 descriptor 선언이 없다. Descriptor의 identity는 할당 o
   지운다. Native는 RC header의 RTTI index, Wasm은 사용자 struct와 variant 객체의
   첫 필드에 새긴다.
 - 번호와 레코드는 nominal 이름이 지워지기 전에 확정된다. 그 아래의 이름 없는
-  [structural struct](ir.md#nominal-수준과-structural-수준)는 번호만 다루고
-  descriptor를 layout 타입에서 다시 찾지 않는다.
+  [structural struct](tribute-dialects.md#nominal-수준과-structural-수준)는
+  번호만 다루고 descriptor를 layout 타입에서 다시 찾지 않는다.
 - 필드 종류는 target이 의미 타입으로 정한다. Native 해제 정보는 ownership 계획이
   정한 managed 판정을 그대로 쓴다. Wasm은 ownership 계획이 없으므로 필드 타입에서
   managed 참조와 동적 값을 가린다. 저수준에서 필드의 물리 타입만 보고 다시

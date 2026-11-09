@@ -21,8 +21,8 @@ mod adt {
     /// Field types are the type's parameters, in declaration order. A
     /// nominal layout's name is the type's `name` attribute, the key an
     /// `adt.typeref` finds it by; a literal layout has no name and is only its
-    /// fields and attributes (`design/ir.md` § "`adt.struct` nominal layout
-    /// type"). Fields have no names; the source names are the layout's
+    /// fields and attributes (`design/tribute-dialects.md` § "`adt.struct`
+    /// nominal layout type"). Fields have no names; the source names are the layout's
     /// `adt.struct_decl`. A layout whose
     /// declaration has row parameters counts its row binders in `row_params`,
     /// a count without kinds; a row tail inside its field types, in a field's
@@ -222,7 +222,7 @@ mod adt {
     ///   `type` as it converts the types in operation attributes.
     /// - **Location:** the frontend emits it with the layout of each source
     ///   struct; the target pass that lowers `adt` operations erases it
-    ///   (`design/ir.md` § "Nominal 선언").
+    ///   (`design/tribute-dialects.md` § "Nominal 선언").
     #[verify]
     #[asm_format(r#type fields attr_dict)]
     fn struct_decl(r#type: Attr<Type>, fields: Attr<[String]>) {}
@@ -243,7 +243,7 @@ mod adt {
     ///   `type` as it converts the types in operation attributes.
     /// - **Location:** the frontend emits it with the layout of each source
     ///   enum and each specialized enum instance; the target pass that
-    ///   lowers `adt` operations erases it (`design/ir.md` § "Nominal 선언").
+    ///   lowers `adt` operations erases it (`design/tribute-dialects.md` § "Nominal 선언").
     #[verify]
     #[asm_format(r#type variants attr_dict)]
     fn enum_decl(r#type: Attr<Type>, variants: Attr<[String]>) {}
@@ -523,7 +523,7 @@ pub fn nominal_name(ctx: &IrContext, ty: TypeRef) -> Option<&str> {
 
 /// The `adt.struct` or `adt.enum` layout of a value of type `ty`: `ty`
 /// itself when it is a layout, or the layout an `adt.typeref` names
-/// (`design/ir.md` § "`adt.typeref` nominal reference type"), which the
+/// (`design/tribute-dialects.md` § "`adt.typeref` nominal reference type"), which the
 /// frontend publishes as the type alias of that name. `None` for any other
 /// type or a name without a published layout.
 pub fn layout_of(ctx: &IrContext, ty: TypeRef) -> Option<TypeRef> {
@@ -743,7 +743,7 @@ impl trunk_ir::asm_format::TypeAsmFormat for Typeref {
 }
 
 /// The nominal declarations of a module, by the layout each one declares
-/// (`design/ir.md` § "Nominal 선언").
+/// (`design/tribute-dialects.md` § "Nominal 선언").
 #[derive(Debug, Default)]
 pub struct NominalDecls {
     structs: HashMap<TypeRef, StructDecl>,
