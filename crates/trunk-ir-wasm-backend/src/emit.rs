@@ -1357,6 +1357,56 @@ mod tests {
     }
 
     #[test]
+    fn described_subtypes_keep_the_descriptor_immutable() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  !Described = wasm_gc.struct<core.i32, {layout = "described"}>
+  !User = wasm_gc.struct<core.i32, core.i64, {supertype = !Described}>
+
+  wasm.func @main() -> core.nil {
+    %descriptor = wasm.i32_const 5 : core.i32
+    %wide = wasm.i64_const 0 : core.i64
+    %user = wasm_gc.struct_new %descriptor, %wide {type = !User} : !User
+    wasm.return
+  }
+}"#,
+        );
+        crate::passes::wasm_gc_to_wasm::lower(&mut ctx, module);
+        let bytes = crate::emit_module_to_wasm(&mut ctx, module)
+            .expect("valid described subtype module")
+            .bytes;
+        Validator::new()
+            .validate_all(&bytes)
+            .expect("a described subtype must match its supertype");
+
+        let structs: Vec<Option<Vec<bool>>> = Parser::new(0)
+            .parse_all(&bytes)
+            .filter_map(|payload| match payload.unwrap() {
+                Payload::TypeSection(types) => Some(types),
+                _ => None,
+            })
+            .flat_map(|types| types.into_iter().map(Result::unwrap))
+            .flat_map(|group| group.into_types().collect::<Vec<_>>())
+            .map(|ty| match ty.composite_type.inner {
+                wasmparser::CompositeInnerType::Struct(fields) => {
+                    Some(fields.fields.iter().map(|field| field.mutable).collect())
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            structs[crate::gc_types::DESCRIBED_IDX as usize],
+            Some(vec![false])
+        );
+        assert!(
+            structs.contains(&Some(vec![false, true])),
+            "the user struct inherits an immutable descriptor: {structs:?}"
+        );
+    }
+
+    #[test]
     fn encodes_and_validates_return_call_indirect_with_exact_signature() {
         let mut ctx = IrContext::new();
         let module = return_call_indirect_module(&mut ctx);

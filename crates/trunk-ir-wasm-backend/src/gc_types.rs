@@ -164,7 +164,7 @@ pub fn builtin_types() -> Vec<GcTypeDef> {
 pub fn descriptor_field() -> FieldType {
     FieldType {
         element_type: StorageType::Val(ValType::I32),
-        mutable: true,
+        mutable: false,
     }
 }
 

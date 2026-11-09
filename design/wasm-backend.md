@@ -474,10 +474,10 @@ descriptor](runtime-types.md#wasm-배치) index를 두어 runtime identity를 �
   subtype이다. 이 관계는 [`supertype`](#wasm-gc-subtype)으로 명시한다. 사용자
   `adt.struct`를 `wasm_gc.struct`로 바꾸는 단계와 variant lowering이 그
   `wasm_gc.struct`에 `supertype = Described`를 붙이며, backend는 descriptor 필드
-  모양에서 subtype 관계를 추론하지 않는다. Descriptor 필드의 mutability는
-  `Described`와 subtype에서 같다. Builtin layout, 배열, boxing된 scalar는
-  `Described`의 subtype이 아니므로 `anyref`에서 `Described`로의 cast는 실패할 수
-  있다.
+  모양에서 subtype 관계를 추론하지 않는다. Descriptor는 할당할 때 정해지고 바뀌지
+  않으므로 descriptor 필드는 immutable이며, subtype도 이를 따른다. Builtin
+  layout, 배열, boxing된 scalar는 `Described`의 subtype이 아니므로 `anyref`에서
+  `Described`로의 cast는 실패할 수 있다.
 - Variant 판별은 descriptor 필드를 비교한다. Enum 참조를 `Described`로 cast해
   descriptor를 읽고 그 variant의 descriptor 번호와 비교한다. Variant마다 별개의 GC
   타입 index를 두고 `ref.test`로 구별하지 않는다. 프로그램이 할당하지 않는 variant는
