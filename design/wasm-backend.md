@@ -381,12 +381,12 @@ local 배정은 처분이 아니라 그 앞의
 ### 명시적 지역 변수와 stack 계약
 
 Wasm local은 IR이 소유한다. Emission 경계는 `validate_wasm_ir` 뒤에 본문이 있는
-각 `wasm.func`에 `ExplicitLocals` pass를 실행한다. 이 pass는 SSA 값에 local을
-배정하고, 값을 넘기는 모든 경로를 `wasm.local_get`과 `wasm.local_set` operation으로
-IR에 드러낸다. Parameter는 local `0..n`이고, 나머지 local의 IR 타입은 순서대로
-`wasm.func`의 `locals` attribute에 둔다. Local의 타입은 그 local에 담기는 값의 IR
-타입과 같다. Emitter는 local을 배정하지 않고 `locals`를 Wasm 값 타입으로 바꿔
-선언할 뿐이다.
+각 `wasm.func`에 `ExplicitLocals` pass를 실행한다. 이 pass는
+[stack에 남는 값](#stack에-남는-값)을 뺀 SSA 값에 local을 배정하고, local을 거치는
+모든 경로를 `wasm.local_get`과 `wasm.local_set` operation으로 IR에 드러낸다.
+Parameter는 local `0..n`이고, 나머지 local의 IR 타입은 순서대로 `wasm.func`의
+`locals` attribute에 둔다. Local의 타입은 그 local에 담기는 값의 IR 타입과 같다.
+Emitter는 local을 배정하지 않고 `locals`를 Wasm 값 타입으로 바꿔 선언할 뿐이다.
 
 Pass를 거친 IR은 다음 stack 계약을 만족한다.
 
@@ -408,12 +408,39 @@ Stack에 값을 남기는지는 backend 표현 규칙이 정한다. Call과 indi
 `core.nil` 결과 slot, 결과가 `core.nil`인 structured control, 그리고 then region이
 값을 넘기지 않는 `wasm.if`의 결과는 stack에 값을 남기지 않는다. `wasm.nop`은 결과
 타입이 `wasm.func_sig`, `wasm.funcref`, `wasm.anyref`, `wasm.structref`,
-`core.nil`일 때만 그 `ref.null`을 남기고, 다른 타입이면 값을 남기지 않는다. 이런 결과를 읽는 곳은 대입되지 않은 그 결과의
-local, 즉 local의 기본값을 읽는다.
+`core.nil`일 때만 그 `ref.null`을 남기고, 다른 타입이면 값을 남기지 않는다. 이런
+결과를 읽는 곳은 대입되지 않은 그 결과의 local, 즉 local의 기본값을 읽는다.
 
 Emission 경계는 emitter 직전에 이 계약을 한 곳에서 검사하고, 어긋나면 그
 operation을 진단과 함께 거부한다. Emitter는 각 operation의 명령어만 직렬화하며, 값의
 위치를 추론하지 않는다.
+
+### Stack에 남는 값
+
+`ExplicitLocals`는 local을 배정하기 전에 `Stackify` 분석을 읽는다. 이 분석은
+LLVM WebAssembly backend의 RegStackify처럼 어떤 값이 local을 거치지 않고 stack에
+남을지 정하며, IR을 바꾸지 않는다. Operation을 옮기지 않으므로 side effect의 순서는
+그대로이다.
+
+- Operation이 stack에 남기는 결과 하나가 사용이 정확히 하나이고, 그 사용자가 같은
+  block의 뒤쪽 operation이며, 그 사용자가 operand를 꺼낼 때 그 값이 stack에서 제자리에
+  있으면 그 값은 stack에 남는다. 이런 값에는 local이 없고 `wasm.local_set`도
+  `wasm.local_get`도 없다.
+- 사용자의 stack operand는 앞부분이 stack에 남은 값과 local에서 읽는 값이고, 뒷부분이
+  사용자 바로 앞에서 local에서 읽는 값이다. 앞부분은 stack 위쪽부터 차례로 맞춘다.
+  Stack에 남은 값은 stack 맨 위에 순서대로 있어야 하고, 그 사이에 오는 local operand는
+  바로 위 값의 계산이 시작되기 직전으로 `wasm.local_get`을 앞당긴다. 이렇게 맞출 수
+  없으면 그 사용자가 쓰는 값은 모두 local에 둔다.
+- `wasm.local_get`을 앞당겨도 읽는 값은 같다. Local은 그 값의 정의에서 한 번만
+  대입되고, loop body block argument의 local은 loop로 가는 분기에서만 다시 대입되며,
+  그 분기 뒤로는 사용자에게 이르지 않는다. 그래서 앞당긴 local은 같은 block에서 그 앞에
+  정의된 값, block argument, 또는 바깥 region에서 정의된 값의 local뿐이다.
+- `wasm.yield`는 값을 넘길 때 그 값의 사용자이다. Loop로 가는 분기 앞의 yield는 loop의
+  block argument가 하나일 때만 stack의 값을 그 local에 바로 쓴다.
+- Stack에 값을 남기지만 사용이 없는 결과는 local에 쓰지 않고 `wasm.drop`으로 버린다.
+  Yield 없이 마지막 operation의 결과를 region 결과로 넘기는 경우는 예외로, 그 결과는
+  local에 둔다.
+- `wasm.loop`의 init 값은 stack에 남기지 않고 local에서 읽는다.
 
 ---
 

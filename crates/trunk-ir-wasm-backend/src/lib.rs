@@ -27,6 +27,7 @@ pub mod gc_types;
 pub mod passes;
 mod plan;
 mod stack_effect;
+mod stackify;
 mod translate;
 mod validation;
 
