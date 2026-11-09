@@ -109,9 +109,10 @@ dialect lowering은 `effect.*`를 보지 않는다.
 [IR 호출 계약](ir.md#wasmfunc_sig-wasm-호출-계약)을 따른다.
 
 바이너리 코드 생성은 결과 위치의 `core.nil`만 생략하고 나머지 결과의 선언 순서를
-보존한다. 생략되지 않는 각 결과에는 SSA 값과 지역 변수를 할당한다. 다중 결과
-호출 후에는 마지막 결과가 스택 맨 위에 있으므로 지역 변수에 역순으로 저장한다.
-입력이나 값 위치의 `core.nil`은 생략하지 않고 널을 허용하는 참조로 표현한다.
+보존한다. 생략된 slot은 stack에 값을 남기지 않으며, 생략되지 않은 결과는
+[stack 계약](#명시적-지역-변수와-stack-계약)에 따라 소비된다. 다중 결과 호출 후에는
+마지막 결과가 stack 맨 위에 있으므로 결과를 역순으로 소비한다. 입력이나 값 위치의
+`core.nil`은 생략하지 않고 널을 허용하는 참조로 표현한다.
 모든 `wasm.call_indirect`와 `wasm.return_call_indirect`는 exact `wasm.func_sig`를
 필수 attribute로 명시한다. Signature가 없으면 lowering과 emission이 실패하며
 operand/result 타입이나 상위 함수의 return으로 대체 시그니처를 추론하지 않는다.
@@ -274,9 +275,9 @@ operand로 ABI를 재추론하지 않고 이 고정 시그니처를 `wasm.call_i
 ### Nil 값과 callable result의 구분
 
 `Nil`을 값으로 생성하는 Wasm 연산은 `ref.null none`을 포함한 실제 stack 값을
-만들며, emitter는 그 값을 해당 SSA local에 저장한다. 사용되지 않은 Nil 값도
-stack에 남겨 두지 않는다. 반면 callable의 Nil result slot은 기존 ABI에서
-생략하므로 call 결과를 저장할 때만 그 slot을 건너뛴다. 이 구분은 Nil을 인자나
+만들며, 그 값은 다른 결과처럼 [stack 계약](#명시적-지역-변수와-stack-계약)에
+따라 소비된다. 사용되지 않은 Nil 값도 stack에 남겨 두지 않는다. 반면 callable의
+Nil result slot은 기존 ABI에서 생략하므로 stack에 값을 남기지 않는다. 이 구분은 Nil을 인자나
 필드로 전달하는 것과 zero-result call을 모두 보존한다.
 
 ### 올바른 꼬리 호출 계약
@@ -374,6 +375,42 @@ Emitter는 malformed를 먼저 거부한 뒤 IR을 수정하지 않는 read-only
 
 이 처분은 공통 DCE reachability나 인증된 intrinsic 삭제와 별개다. IR을 변경하지
 않고 emission 목록만 좁히며, 대상 심볼 삭제를 다른 pass에 위임하지 않는다.
+
+### 명시적 지역 변수와 stack 계약
+
+Wasm local은 IR이 소유한다. Emission 경계는 `validate_wasm_ir` 뒤에 본문이 있는
+각 `wasm.func`에 `ExplicitLocals` pass를 실행한다. 이 pass는 SSA 값에 local을
+배정하고, 값을 넘기는 모든 경로를 `wasm.local_get`과 `wasm.local_set` operation으로
+IR에 드러낸다. Parameter는 local `0..n`이고, 나머지 local의 IR 타입은 순서대로
+`wasm.func`의 `locals` attribute에 둔다. Local의 타입은 그 local에 담기는 값의 IR
+타입과 같다. Emitter는 local을 배정하지 않고 `locals`를 Wasm 값 타입으로 바꿔
+선언할 뿐이다.
+
+Pass를 거친 IR은 다음 stack 계약을 만족한다.
+
+- 각 operation은 stack operand를 stack 맨 위에서 순서대로 소비한다. 이 순서는
+  `wasm` dialect의 `StackOperandOrder` interface가 정하며, 기본값은 operand
+  순서이다.
+- Operation이 stack에 남기는 결과는 같은 block의 뒤쪽 operation이 정확히 한 번
+  소비한다. Stack에 값을 남기지 않는 결과에는 사용이 없다. Block argument에도 사용이
+  없으며, 그 값은 block argument의 local에서 읽는다.
+- `wasm.yield`는 바로 앞에서 stack 맨 위에 놓인 값을 region의 결과나 뒤따르는
+  `wasm.br`의 값으로 넘긴다. 값을 넘기지 않는 yield는 남기지 않는다.
+- Loop-carried 값은 loop body block argument의 local에 `wasm.local_set`으로
+  쓴다. 그래서 `wasm.loop`에는 init operand가 없고, loop로 가는 분기 앞에는 yield가
+  없다.
+- 무조건 분기, return, tail call, `wasm.unreachable` 뒤에서는 block 끝에 값이
+  남아도 된다. 그 밖의 block 끝에서 stack은 비어 있다.
+
+Stack에 값을 남기는지는 backend 표현 규칙이 정한다. Call과 indirect call의
+`core.nil` 결과 slot, Wasm 값으로 표현하지 않는 타입의 `wasm.nop`, 결과가
+`core.nil`인 structured control, 그리고 then region이 값을 넘기지 않는 `wasm.if`의
+결과는 stack에 값을 남기지 않는다. 이런 결과를 읽는 곳은 대입되지 않은 그 결과의
+local, 즉 local의 기본값을 읽는다.
+
+Emission 경계는 emitter 직전에 이 계약을 한 곳에서 검사하고, 어긋나면 그
+operation을 진단과 함께 거부한다. Emitter는 각 operation의 명령어만 직렬화하며, 값의
+위치를 추론하지 않는다.
 
 ---
 

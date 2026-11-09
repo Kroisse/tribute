@@ -12,31 +12,18 @@ use wasm_encoder::{Function, Instruction};
 
 use crate::{CompilationError, CompilationResult};
 
-use super::super::helpers;
-use super::super::value_emission::{emit_operands, emit_value};
-use super::super::{FunctionEmitContext, ModuleInfo, resolve_callee, set_result_local};
+use super::super::helpers::{self, attr_u32};
+use super::super::{ModuleInfo, resolve_callee};
 
 /// Handle wasm.call operation
 pub(crate) fn handle_call(
     ctx: &IrContext,
     call_op: wasm_dialect::Call,
-    emit_ctx: &FunctionEmitContext,
     module_info: &ModuleInfo,
     function: &mut Function,
 ) -> CompilationResult<()> {
-    let op = call_op.op_ref();
-    let operands = ctx.op_operands(op);
-    let callee = call_op.callee(ctx);
-    let target = resolve_callee(callee, module_info)?;
-
-    // Boxing/unboxing for generic calls is now handled by the boxing pass
-    // (tribute-passes/src/boxing.rs) which inserts explicit tribute_rt.box_*/unbox_* ops.
-    // These are lowered to wasm instructions by tribute_rt_to_wasm.rs.
-    emit_operands(ctx, operands, emit_ctx, function)?;
-
+    let target = resolve_callee(call_op.callee(ctx), module_info)?;
     function.instruction(&Instruction::Call(target));
-
-    set_result_local(ctx, op, emit_ctx, function)?;
     Ok(())
 }
 
@@ -44,18 +31,10 @@ pub(crate) fn handle_call(
 pub(crate) fn handle_call_indirect(
     ctx: &IrContext,
     op: OpRef,
-    emit_ctx: &FunctionEmitContext,
     module_info: &ModuleInfo,
     function: &mut Function,
 ) -> CompilationResult<()> {
-    // wasm.call_indirect: indirect function call via i32 table index
     // All indirect calls use table-based call_indirect (no call_ref).
-    // Operands: [table_idx, arg1, arg2, ..., argN]
-    // WebAssembly expects: [arg1, arg2, ..., argN, table_idx]
-
-    // The callee (i32 table index) is the FIRST operand, followed by args.
-    let (first_operand, args) = helpers::indirect_call_operands(ctx, op);
-
     let signature = helpers::exact_call_indirect_signature(ctx, op)?;
     let type_index = module_info
         .type_idx_by_type
@@ -74,15 +53,10 @@ pub(crate) fn handle_call_indirect(
         .transpose()?
         .unwrap_or(0);
 
-    for &arg in args {
-        emit_value(ctx, arg, emit_ctx, function)?;
-    }
-    emit_value(ctx, first_operand, emit_ctx, function)?;
     function.instruction(&Instruction::CallIndirect {
         type_index,
         table_index,
     });
-    set_result_local(ctx, op, emit_ctx, function)?;
     Ok(())
 }
 
@@ -90,17 +64,10 @@ pub(crate) fn handle_call_indirect(
 pub(crate) fn handle_return_call(
     ctx: &IrContext,
     return_call_op: wasm_dialect::ReturnCall,
-    emit_ctx: &FunctionEmitContext,
     module_info: &ModuleInfo,
     function: &mut Function,
 ) -> CompilationResult<()> {
-    let operands = ctx.op_operands(return_call_op.op_ref());
-    let callee = return_call_op.callee(ctx);
-    let target = resolve_callee(callee, module_info)?;
-
-    // Boxing for generic calls is now handled by the boxing pass
-    emit_operands(ctx, operands, emit_ctx, function)?;
-
+    let target = resolve_callee(return_call_op.callee(ctx), module_info)?;
     function.instruction(&Instruction::ReturnCall(target));
     Ok(())
 }
@@ -109,7 +76,6 @@ pub(crate) fn handle_return_call(
 pub(crate) fn handle_return_call_indirect(
     ctx: &IrContext,
     op: OpRef,
-    emit_ctx: &FunctionEmitContext,
     module_info: &ModuleInfo,
     function: &mut Function,
 ) -> CompilationResult<()> {
@@ -129,22 +95,10 @@ pub(crate) fn handle_return_call_indirect(
         .map(|_| attr_u32(ctx, &ctx.op(op).attributes, "table"))
         .transpose()?
         .unwrap_or(0);
-    let (table_index_value, args) = helpers::indirect_call_operands(ctx, op);
 
-    // WebAssembly evaluates arguments before the table index.
-    for &arg in args {
-        emit_value(ctx, arg, emit_ctx, function)?;
-    }
-    emit_value(ctx, table_index_value, emit_ctx, function)?;
     function.instruction(&Instruction::ReturnCallIndirect {
         type_index,
         table_index,
     });
     Ok(())
 }
-
-// ============================================================================
-// Helper functions
-// ============================================================================
-
-use super::super::helpers::attr_u32;
