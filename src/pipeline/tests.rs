@@ -62,10 +62,10 @@ fn declaration_with_name<'a, 'db>(
 
 fn source_logical_cps_root_module(body: &str) -> (IrContext, Module) {
     let mut ctx = IrContext::new();
-    let source = r#"core.module @test {tribute.entry = @main} {
+    let source = r#"core.module @test {tribute.entry = @main, tribute.types = {"std::runtime::evidence::Marker" = adt.struct<"std::runtime::evidence::Marker">}} {
             !"std::runtime::evidence::Marker" = adt.struct<"std::runtime::evidence::Marker", (core.i32, core.i32)>
-            !Evidence = adt.array<adt.typeref<{name = "std::runtime::evidence::Marker"}>>
-            !Frame = adt.typeref<{name = "__tribute_continuation_frame_root_nil", tribute.cps_continuation_frame_result = core.nil}>
+            !Evidence = adt.array<adt.struct<"std::runtime::evidence::Marker">>
+            !Frame = adt.struct<"__tribute_continuation_frame_root_nil", {tribute.cps_continuation_frame_result = core.nil}>
             !Done = closure.closure<func.func_sig<(core.nil) -> core.never>>
             !Resume = closure.closure<func.func_sig<(!Evidence, !Frame, tribute_rt.anyref) -> core.never>>
             !Dispatch = closure.closure<func.func_sig<(!Evidence, !Resume, core.i32, core.i32, core.i32, tribute_rt.anyref) -> core.never>>
@@ -1736,17 +1736,18 @@ fn specialized_enum_schemas_and_dependencies_reach_logical_cps(db: &salsa::Datab
         let ty = ir
             .type_alias_by_name(&name)
             .expect("dependency layout is published");
+        // A layout that holds a converted layout gets a new key, tagged by
+        // the conversion.
+        let key = ir.type_attrs(ty).get_str("name").expect("a named layout");
         assert!(
-            ir.type_attrs(ty)
-                .get_str("name")
-                .is_some_and(|text| name == text)
+            name == key || key.starts_with(&format!("{name}$")),
+            "{name} is published as {key}"
         );
         ty
     }
     fn target(ir: &IrContext, ty: TypeRef) -> TypeRef {
-        assert!(tribute_ir::dialect::adt::Typeref::matches(ir, ty));
-        ir.type_alias_by_text(ir.type_attrs(ty).get_str("name").unwrap())
-            .expect("referenced layout")
+        assert!(tribute_ir::dialect::adt::is_nominal_value(ir, ty));
+        tribute_ir::dialect::adt::layout_of(ir, ty).expect("referenced layout")
     }
     let source = source_from_str(
         "specialized_enum_dependencies.trb",
@@ -1937,27 +1938,12 @@ fn logical_nominal_layouts_are_published_through_cps(db: &salsa::DatabaseImpl) {
             name == key || key.starts_with(&format!("{name}$")),
             "{name} is published as {key}"
         );
-        // A typeref of the name resolves to the published layout.
-        let typeref = tribute_ir::dialect::adt::Typeref::from_type_ref(
-            ir,
-            ir.types()
-                .iter()
-                .find_map(|(typeref, data)| {
-                    (data.name == tribute_ir::dialect::adt::Typeref::NAME
-                        && ir.type_attrs(typeref).get_str("name") == Some(name.as_str()))
-                    .then_some(typeref)
-                })
-                .expect("a typeref of the layout"),
-        )
-        .expect("a typeref");
-        assert_eq!(typeref.layout(ir), Some(ty));
         ty
     }
 
     fn reference_name(ir: &IrContext, ty: TypeRef) -> Symbol {
-        let data = ir.get_type(ty);
-        assert!(data.name == tribute_ir::dialect::adt::Typeref::NAME);
-        Symbol::new(ir.type_attrs(ty).get_str("name").expect("nominal identity"))
+        assert!(tribute_ir::dialect::adt::is_nominal_value(ir, ty));
+        Symbol::new(tribute_ir::dialect::adt::nominal_name(ir, ty).expect("nominal identity"))
     }
 
     // These specializations occur only in signatures, never in allocations.
@@ -2032,7 +2018,8 @@ fn main() -> Nil {}
                 .expect("signature-only specialization");
             let name = reference_name(&ir, parameter);
             assert_eq!(name, Symbol::new(nominal));
-            layout(&ir, &name, kind);
+            // A value of a layout without row parameters has its key as type.
+            assert_eq!(layout(&ir, &name, kind), parameter);
         }
         assert_ne!(
             layout(&ir, &Symbol::new("pkg::A::Token$Nat"), STRUCT),
@@ -2047,11 +2034,12 @@ fn main() -> Nil {}
             let field = get_struct_fields(&ir, owner).unwrap()[0];
             let name = reference_name(&ir, field);
             assert_eq!(name, Symbol::new(target));
-            layout(&ir, &name, STRUCT);
+            assert_eq!(layout(&ir, &name, STRUCT), field);
         }
         let holder = layout(&ir, &Symbol::new("pkg::Holder"), STRUCT);
         let pair = get_struct_fields(&ir, holder).unwrap()[0];
-        let tuple = layout(&ir, &reference_name(&ir, pair), STRUCT);
+        reference_name(&ir, pair);
+        let tuple = tribute_ir::dialect::adt::layout_of(&ir, pair).expect("tuple layout");
         let fields = get_struct_fields(&ir, tuple).unwrap();
         let callback = ir.get_type(fields[1]);
         if after_cps {

@@ -157,7 +157,9 @@ fn enclosing_callable_evidence(ctx: &IrContext, op: OpRef) -> Option<ValueRef> {
             }
             let entry = *ctx.region(ctx.op_region(parent, 0)?).blocks.first()?;
             let &evidence = ctx.block_args(entry).first()?;
-            return ability::is_evidence_type_ref(ctx, ctx.value_ty(evidence)).then_some(evidence);
+            // The convention places the evidence; its exact marker is the
+            // module's, which validation has checked.
+            return ability::is_evidence_shaped(ctx, ctx.value_ty(evidence)).then_some(evidence);
         }
         current = parent;
     }
@@ -176,7 +178,7 @@ mod tests {
 
     /// Build the canonical evidence type string for use in test IR.
     fn evidence_type_str() -> &'static str {
-        "adt.array<adt.typeref<{name = \"std::runtime::evidence::Marker\"}>>"
+        "adt.array<adt.struct<\"std::runtime::evidence::Marker\">>"
     }
 
     #[test]

@@ -71,7 +71,11 @@ pub fn lower_continuation_frames(
         .and_then(|body| ctx.region(body).blocks.first().copied())
         .ok_or_else(|| TributeControlToCpsError::post_at(location, "module has no body block"))?;
 
-    let layouts = frame_layouts(ctx, module);
+    let has_frames = !frame_answers(ctx, module).is_empty();
+    let evidence = has_frames.then(|| ability::evidence_type(ctx, module));
+    let layouts = evidence
+        .map(|evidence| frame_layouts(ctx, module, evidence))
+        .unwrap_or_default();
     let replacements: HashMap<_, _> = layouts
         .iter()
         .map(|(frame, types)| (*frame, types.reference))
@@ -157,6 +161,8 @@ struct FrameTypes {
     layout: TypeRef,
     done: TypeRef,
     dispatch: TypeRef,
+    /// The module's evidence type, which the dispatch takes first.
+    evidence: TypeRef,
 }
 
 /// Choose and register the layout of each `ability.frame<R>` of the module,
@@ -165,7 +171,11 @@ struct FrameTypes {
 ///
 /// A layout holds the answer type after its own frames are converted, so an
 /// answer that mentions frames resolves them first.
-fn frame_layouts(ctx: &mut IrContext, module: Module) -> Vec<(TypeRef, FrameTypes)> {
+fn frame_layouts(
+    ctx: &mut IrContext,
+    module: Module,
+    evidence: TypeRef,
+) -> Vec<(TypeRef, FrameTypes)> {
     let answers = frame_answers(ctx, module);
     let names: HashMap<TypeRef, String> = answers
         .iter()
@@ -175,7 +185,6 @@ fn frame_layouts(ctx: &mut IrContext, module: Module) -> Vec<(TypeRef, FrameType
             (*answer, name)
         })
         .collect();
-    let evidence = ability::evidence_adt_type_ref(ctx);
     let anyref = tribute_rt::Anyref::params().intern(ctx).as_type_ref();
     let i32_type = TypeDataBuilder::new("core.i32").intern(ctx);
     let mut resolved = HashMap::default();
@@ -197,6 +206,7 @@ fn frame_layouts(ctx: &mut IrContext, module: Module) -> Vec<(TypeRef, FrameType
             layout,
             done,
             dispatch,
+            evidence,
         };
         layouts.push((
             ability::Frame::params(source_answer)
@@ -210,9 +220,10 @@ fn frame_layouts(ctx: &mut IrContext, module: Module) -> Vec<(TypeRef, FrameType
 
 /// The frame reference of `answer`, an answer whose own frames are already
 /// references: the layout frame expansion registered for it, or one
-/// registered now in the same numbering. A pass after frame expansion that
-/// makes a `Cps` entry signature takes its frame from here.
-pub(crate) fn frame_reference(ctx: &mut IrContext, answer: TypeRef) -> TypeRef {
+/// registered now in the same numbering, whose dispatch takes `evidence`. A
+/// pass after frame expansion that makes a `Cps` entry signature takes its
+/// frame from here.
+pub(crate) fn frame_reference(ctx: &mut IrContext, evidence: TypeRef, answer: TypeRef) -> TypeRef {
     let mut registered = 0;
     for (name, layout) in ctx.type_aliases().to_vec() {
         let name = name.to_string();
@@ -226,7 +237,6 @@ pub(crate) fn frame_reference(ctx: &mut IrContext, answer: TypeRef) -> TypeRef {
     }
     let name = format!("{}{registered}", continuation_frame::NAME_PREFIX);
     let reference = continuation_frame::ref_type(ctx, name.clone(), answer);
-    let evidence = ability::evidence_adt_type_ref(ctx);
     let anyref = tribute_rt::Anyref::params().intern(ctx).as_type_ref();
     let i32_type = TypeDataBuilder::new("core.i32").intern(ctx);
     let done = cps_done_type(ctx, answer);
@@ -397,9 +407,9 @@ fn reject_abstract_frames(ctx: &IrContext, module: Module) -> Result<(), Tribute
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::parse_with_evidence_marker;
     use tribute_ir::dialect::effect;
     use trunk_ir::dialect::func;
-    use trunk_ir::parser::parse_test_module;
     use trunk_ir::types::Attribute;
 
     const MODULE: &str = "core.module @m {
@@ -408,7 +418,7 @@ mod tests {
 
     fn parse(text: &str) -> (IrContext, Module) {
         let mut ctx = IrContext::new();
-        let module = parse_test_module(&mut ctx, text);
+        let module = parse_with_evidence_marker(&mut ctx, text);
         (ctx, module)
     }
 
@@ -474,7 +484,7 @@ mod tests {
                     .intern(&mut ctx);
             }
             frame_of_answer(&mut ctx, second);
-            let module = parse_test_module(
+            let module = parse_with_evidence_marker(
                 &mut ctx,
                 &format!(
                     "core.module @m {{
@@ -501,7 +511,7 @@ mod tests {
         assert_eq!(answers(0, "core.i64", "core.i32"), [i64, i32]);
     }
 
-    const TYPES: &str = r#"  !marker = adt.typeref<{name = "std::runtime::evidence::Marker"}>
+    const TYPES: &str = r#"  !marker = adt.struct<"std::runtime::evidence::Marker">
   !ev = adt.array<!marker>
   !frame = ability.frame<core.i32>
   !resume = closure.closure<func.func_sig<(!ev, !frame, core.i32) -> core.never>>

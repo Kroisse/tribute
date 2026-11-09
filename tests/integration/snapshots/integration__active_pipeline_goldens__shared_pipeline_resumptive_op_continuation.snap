@@ -2,7 +2,7 @@
 source: tests/integration/active_pipeline_goldens.rs
 expression: "pipeline_contract_summary(&ir_text, false)"
 ---
-pkg::bump: Some(Cps) (adt.array<adt.typeref<std::runtime::evidence::Marker>>, Frame<core.i32>) -> (core.never)
+pkg::bump: Some(Cps) (adt.array<adt.struct<std::runtime::evidence::Marker>>, Frame<core.i32>) -> (core.never)
   effect.dispatch_cps operands=4 results=0: 1
 pkg::main: Some(Direct) () -> (core.nil)
   func.call operands=0 results=1: 1

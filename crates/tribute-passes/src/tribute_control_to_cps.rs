@@ -70,6 +70,9 @@ struct CallableInfo {
 
 struct Converter<'a> {
     ctx: &'a mut IrContext,
+    /// The source module, whose `tribute.types` publishes the evidence
+    /// marker.
+    module: Module,
     module_block: BlockRef,
     /// Every source callable, by its defining operation.
     funcs: HashMap<OpRef, CallableInfo>,
@@ -83,7 +86,9 @@ struct Converter<'a> {
     /// Source operations whose references are looked up in a nested module.
     converted_types: HashMap<TypeRef, TypeRef>,
     helper_index: u32,
-    tables: ConventionTables<AbstractFrames>,
+    /// The convention tables, made with the converted evidence type when
+    /// first needed.
+    tables: Option<ConventionTables<AbstractFrames>>,
 }
 
 /// How a `resume` in the body of a handler arm reaches its continuation.
@@ -149,9 +154,15 @@ struct TailJoin {
 }
 
 impl<'a> Converter<'a> {
-    fn new(ctx: &'a mut IrContext, module_block: BlockRef, graph: CallableGraph) -> Self {
+    fn new(
+        ctx: &'a mut IrContext,
+        module: Module,
+        module_block: BlockRef,
+        graph: CallableGraph,
+    ) -> Self {
         Self {
             ctx,
+            module,
             module_block,
             funcs: graph.funcs,
             targets: graph.targets,
@@ -159,7 +170,15 @@ impl<'a> Converter<'a> {
             table_entries: HashMap::default(),
             converted_types: HashMap::default(),
             helper_index: 0,
-            tables: ConventionTables::new(AbstractFrames),
+            tables: None,
+        }
+    }
+
+    /// Make the convention tables if they do not exist yet.
+    fn ensure_tables(&mut self) {
+        if self.tables.is_none() {
+            let evidence = self.evidence_type();
+            self.tables = Some(ConventionTables::new(AbstractFrames { evidence }));
         }
     }
 
@@ -509,6 +528,7 @@ pub fn tribute_control_to_cps(
     let module_location = ctx.op(module.op()).location;
     let source_aliases = ctx.type_aliases().to_vec();
     let mut converted_aliases = Vec::with_capacity(source_aliases.len());
+    let mut converted_module_attrs = Vec::new();
     let new_block = ctx.create_block(BlockData {
         location: ctx.block(source_blocks[0]).location,
         args: vec![],
@@ -520,7 +540,7 @@ pub fn tribute_control_to_cps(
         .chain(source_aliases.iter().map(|&(_, ty)| ty))
         .collect();
     {
-        let mut converter = Converter::new(ctx, new_block, graph);
+        let mut converter = Converter::new(ctx, module, new_block, graph);
         let Ok(_) =
             tribute_ir::dialect::adt::convert::convert_layouts(&mut converter, layout_roots, "cps");
         let mut mapping = HashMap::default();
@@ -549,6 +569,20 @@ pub fn tribute_control_to_cps(
                 .iter()
                 .map(|(name, ty)| (name.clone(), converter.convert_type(*ty))),
         );
+        // The module's own attributes, such as the published runtime types,
+        // follow the converted layouts too.
+        let module_attrs: Vec<_> = converter
+            .ctx
+            .op(module.op())
+            .attributes
+            .iter()
+            .map(|(name, value)| (name, value.clone()))
+            .collect();
+        converted_module_attrs.extend(
+            module_attrs
+                .into_iter()
+                .map(|(name, value)| (name, converter.convert_attribute(&value))),
+        );
     }
     let new_region = ctx.create_region(RegionData {
         location: ctx.region(source_region).location,
@@ -576,6 +610,9 @@ pub fn tribute_control_to_cps(
             ctx.register_type_alias(name.clone(), *ty);
         }
         return Err(error);
+    }
+    for (name, value) in converted_module_attrs {
+        ctx.op_attrs_mut(module.op()).insert(name, value);
     }
     Ok(())
 }

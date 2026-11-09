@@ -29,7 +29,8 @@ fn is_adt_typeref(ctx: &IrContext, ty: TypeRef) -> bool {
     data.name == crate::dialect::adt::Typeref::NAME
 }
 
-pub(super) fn contains_adt_typeref(
+/// Whether `ty` is or holds a nominal value type, a managed reference.
+pub(super) fn contains_nominal_value(
     ctx: &IrContext,
     ty: TypeRef,
     visiting: &mut HashSet<TypeRef>,
@@ -38,28 +39,28 @@ pub(super) fn contains_adt_typeref(
         return false;
     }
     let data = ctx.get_type(ty);
-    let contains = is_adt_typeref(ctx, ty)
+    let contains = adt::is_nominal_value(ctx, ty)
         || data
             .params
             .iter()
             .copied()
-            .any(|param| contains_adt_typeref(ctx, param, visiting))
+            .any(|param| contains_nominal_value(ctx, param, visiting))
         || data
             .attrs
             .values()
-            .any(|attribute| attribute_contains_adt_typeref(ctx, attribute, visiting));
+            .any(|attribute| attribute_contains_nominal_value(ctx, attribute, visiting));
     visiting.remove(&ty);
     contains
 }
 
-fn attribute_contains_adt_typeref(
+fn attribute_contains_nominal_value(
     ctx: &IrContext,
     attribute: &Attribute,
     visiting: &mut HashSet<TypeRef>,
 ) -> bool {
     let mut contains = false;
     attribute.visit_types(&mut |ty| {
-        contains = contains || contains_adt_typeref(ctx, ty, visiting);
+        contains = contains || contains_nominal_value(ctx, ty, visiting);
     });
     contains
 }
@@ -298,12 +299,12 @@ pub(super) fn validate_managed_reference_boundaries(
                 push_op_error(ctx, op, errors, "adt.ref_null requires one typed result");
                 return;
             };
-            if *result != declared || !is_adt_typeref(ctx, *result) {
+            if *result != declared || !adt::is_nominal_value(ctx, *result) {
                 push_op_error(
                     ctx,
                     op,
                     errors,
-                    "adt.ref_null result and type attribute must be the same managed adt.typeref",
+                    "adt.ref_null result and type attribute must be the same managed nominal value type",
                 );
             }
         }
@@ -325,8 +326,8 @@ pub(super) fn validate_managed_reference_boundaries(
             let source = nominal_identity(ctx, operand_type);
             let target = nominal_identity(ctx, *result);
             if declared != *result
-                || !is_adt_typeref(ctx, operand_type)
-                || !is_adt_typeref(ctx, *result)
+                || !adt::is_nominal_value(ctx, operand_type)
+                || !adt::is_nominal_value(ctx, *result)
                 || source.is_none()
                 || source != target
             {
@@ -339,14 +340,14 @@ pub(super) fn validate_managed_reference_boundaries(
             }
         }
         for result in ctx.op_results(op) {
-            if is_adt_typeref(ctx, ctx.value_ty(*result))
+            if adt::is_nominal_value(ctx, ctx.value_ty(*result))
                 && raw_pointer_cast_origin(ctx, *result, &mut HashSet::default())
             {
                 push_op_error(
                     ctx,
                     op,
                     errors,
-                    "core.ptr cast chain cannot produce a managed adt.typeref",
+                    "core.ptr cast chain cannot produce a managed nominal value",
                 );
             }
         }

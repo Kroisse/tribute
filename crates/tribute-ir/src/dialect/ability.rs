@@ -467,44 +467,58 @@ use trunk_ir::ops::DialectType;
 use trunk_ir::refs::TypeRef;
 use trunk_ir::types::{Attribute, Location};
 
-/// The evidence marker: a nominal reference to the prelude's
-/// `std::runtime::evidence::Marker`, whose layout the root module publishes
-/// in `tribute.types` (`design/cps-effects.md`).
-pub fn marker_adt_type_ref(ctx: &mut IrContext) -> TypeRef {
-    let name = crate::runtime_items::runtime_symbol(crate::runtime_items::evidence::MARKER);
-    let name = ctx.intern_symbol_text(&name);
-    crate::dialect::adt::Typeref::named(ctx, name, []).as_type_ref()
+/// The evidence marker: the layout of the prelude's
+/// `std::runtime::evidence::Marker` the root module `module` publishes in
+/// `tribute.types` (`design/cps-effects.md`).
+///
+/// # Panics
+///
+/// If `module` publishes no marker.
+pub fn marker_type(ctx: &IrContext, module: trunk_ir::rewrite::Module) -> TypeRef {
+    crate::runtime_items::runtime_type(ctx, module, crate::runtime_items::evidence::MARKER)
+        .expect("the root module publishes the evidence marker in tribute.types")
 }
 
-/// The evidence type: `Slots(Marker)`, an `adt.array` of markers.
-pub fn evidence_adt_type_ref(ctx: &mut IrContext) -> TypeRef {
-    let marker_ty = marker_adt_type_ref(ctx);
+/// The evidence type of the root module `module`: `Slots(Marker)`, an
+/// `adt.array` of its [`marker_type`].
+pub fn evidence_type(ctx: &mut IrContext, module: trunk_ir::rewrite::Module) -> TypeRef {
+    let marker_ty = marker_type(ctx, module);
     crate::dialect::adt::Array::params(marker_ty)
         .intern(ctx)
         .as_type_ref()
 }
 
-/// Whether a type is the evidence marker: a reference to, or the layout
-/// of, the declaration `std::runtime::evidence::Marker`.
-pub fn is_marker_type_ref(ctx: &IrContext, ty: TypeRef) -> bool {
-    let is_nominal = crate::dialect::adt::Typeref::matches(ctx, ty)
-        || crate::dialect::adt::Struct::matches(ctx, ty);
-    is_nominal
-        && ctx.type_attrs(ty).get_str("name").is_some_and(|name| {
-            itertools::equal(
-                name.split("::"),
-                crate::runtime_items::evidence::MARKER.iter().copied(),
-            )
-        })
+/// Whether `ty` is a value of the evidence marker of the root module
+/// `module`: its layout is the [`marker_type`].
+pub fn is_marker_type(ctx: &IrContext, module: trunk_ir::rewrite::Module, ty: TypeRef) -> bool {
+    let marker =
+        crate::runtime_items::runtime_type(ctx, module, crate::runtime_items::evidence::MARKER);
+    marker.is_some() && crate::dialect::adt::layout_of(ctx, ty) == marker
 }
 
-/// Whether a type is the evidence type: an `adt.array` of markers.
-pub fn is_evidence_type_ref(ctx: &IrContext, ty: TypeRef) -> bool {
+/// Whether `ty` is the evidence type of the root module `module`: an
+/// `adt.array` of its markers.
+pub fn is_evidence_type(ctx: &IrContext, module: trunk_ir::rewrite::Module, ty: TypeRef) -> bool {
     crate::dialect::adt::Array::from_type_ref(ctx, ty)
-        .is_some_and(|array| is_marker_type_ref(ctx, array.element(ctx)))
+        .is_some_and(|array| is_marker_type(ctx, module, array.element(ctx)))
 }
 
-/// The evidence type, identified by its marker declaration.
+/// Whether `ty` has the shape of the evidence type: an `adt.array` of
+/// values of a nominal struct. Which struct is the marker is the root
+/// module's, which [`is_evidence_type`] checks.
+pub fn is_evidence_shaped(ctx: &IrContext, ty: TypeRef) -> bool {
+    crate::dialect::adt::Array::from_type_ref(ctx, ty).is_some_and(|array| {
+        let element = array.element(ctx);
+        crate::dialect::adt::layout_of(ctx, element)
+            .and_then(|layout| crate::dialect::adt::Struct::from_type_ref(ctx, layout))
+            .is_some_and(|layout| layout.is_nominal(ctx))
+            || crate::dialect::adt::Typeref::matches(ctx, element)
+    })
+}
+
+/// A value of the evidence type, by its shape: the schema cannot see the
+/// root module, so the passes that hold it check the exact marker
+/// (`design/cps-effects.md`).
 pub struct Evidence;
 
 impl trunk_ir::type_constraint::TypeConstraint for Evidence {
@@ -513,7 +527,7 @@ impl trunk_ir::type_constraint::TypeConstraint for Evidence {
             name: "Evidence",
             exact: false,
             projections: &[],
-            matches: is_evidence_type_ref,
+            matches: is_evidence_shaped,
             project: |_, _, _| None,
             fixed: None,
         };
@@ -524,32 +538,33 @@ mod tests {
     use super::*;
 
     #[test]
-    fn evidence_is_identified_by_its_marker_declaration() {
+    fn evidence_is_identified_by_the_published_marker() {
         let mut ctx = IrContext::new();
-        let marker = marker_adt_type_ref(&mut ctx);
-        let evidence = evidence_adt_type_ref(&mut ctx);
-        assert!(is_marker_type_ref(&ctx, marker));
-        assert!(is_evidence_type_ref(&ctx, evidence));
-        assert_eq!(evidence, evidence_adt_type_ref(&mut ctx));
+        let module = trunk_ir::parser::parse_test_module(
+            &mut ctx,
+            r#"core.module @test {tribute.types = {"std::runtime::evidence::Marker" = adt.struct<"std::runtime::evidence::Marker">}} {
+  !Marker = adt.struct<"std::runtime::evidence::Marker", (core.i32)>
+  !Lookalike = adt.struct<"_Marker", (core.i32)>
+}"#,
+        );
+        let marker = marker_type(&ctx, module);
+        assert_eq!(Some(marker), ctx.type_alias_by_text("Marker"));
+        let evidence = evidence_type(&mut ctx, module);
+        assert!(is_marker_type(&ctx, module, marker));
+        assert!(is_evidence_type(&ctx, module, evidence));
+        assert!(is_evidence_shaped(&ctx, evidence));
+        assert_eq!(evidence, evidence_type(&mut ctx, module));
 
-        let layout = crate::dialect::adt::Struct::params([])
-            .name("std::runtime::evidence::Marker")
-            .intern(&mut ctx)
-            .unwrap()
-            .as_type_ref();
-        assert!(is_marker_type_ref(&ctx, layout));
-
-        let lookalike = crate::dialect::adt::Struct::params([])
-            .name("_Marker")
-            .intern(&mut ctx)
-            .unwrap()
-            .as_type_ref();
+        // Another struct of the same shape is not the marker, although the
+        // schema's shape check cannot tell them apart.
+        let lookalike = ctx.type_alias_by_text("Lookalike").unwrap();
         let lookalike_array = crate::dialect::adt::Array::params(lookalike)
             .intern(&mut ctx)
             .as_type_ref();
-        assert!(!is_marker_type_ref(&ctx, lookalike));
-        assert!(!is_evidence_type_ref(&ctx, lookalike_array));
-        assert!(!is_evidence_type_ref(&ctx, marker));
+        assert!(!is_marker_type(&ctx, module, lookalike));
+        assert!(!is_evidence_type(&ctx, module, lookalike_array));
+        assert!(is_evidence_shaped(&ctx, lookalike_array));
+        assert!(!is_evidence_type(&ctx, module, marker));
     }
 
     use trunk_ir::op_interface::DynCallableExit;

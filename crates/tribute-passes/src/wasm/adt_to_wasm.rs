@@ -91,11 +91,11 @@ fn canonical_enum_type(ctx: &IrContext, attr_ty: TypeRef) -> Option<TypeRef> {
     get_enum_variants(ctx, attr_ty).map(|_| attr_ty)
 }
 
-/// Resolve a logical ADT reference to the enum layout it names. A typeref's
-/// `name` attribute is its nominal declaration link; do not fall back to
+/// Resolve a logical nominal value type to the enum layout it names: the
+/// layout a key, row instance, or typeref denotes. Do not fall back to
 /// structural or same-name equivalence here.
-fn canonical_typeref_enum_type(ctx: &IrContext, ty: TypeRef) -> Option<TypeRef> {
-    if !adt::Typeref::matches(ctx, ty) {
+fn canonical_reference_enum_type(ctx: &IrContext, ty: TypeRef) -> Option<TypeRef> {
+    if !adt::is_nominal(ctx, ty) {
         return None;
     }
     canonical_enum_type(ctx, adt::layout_of(ctx, ty)?)
@@ -104,8 +104,7 @@ fn canonical_typeref_enum_type(ctx: &IrContext, ty: TypeRef) -> Option<TypeRef> 
 /// Convert a logical ADT reference that remains in enum attributes to its
 /// Wasm physical representation.
 fn physical_variant_field_type(ctx: &mut IrContext, ty: TypeRef) -> TypeRef {
-    let data = ctx.get_type(ty);
-    if data.name == tribute_ir::dialect::adt::Typeref::NAME {
+    if adt::is_nominal_value(ctx, ty) {
         return wasm_dialect::Structref::params().intern(ctx).as_type_ref();
     }
     ty
@@ -544,11 +543,10 @@ impl OpRewritePattern for VariantGetPattern {
         let variant_type = variant_type(ctx, enum_type, tag)?;
         // A logical reference must name this enum.
         let operand_ty = ctx.value_ty(ref_val);
-        let operand_data = ctx.get_type(operand_ty);
         rewriter.ensure(
-            !(operand_data.name == tribute_ir::dialect::adt::Typeref::NAME
-                && canonical_typeref_enum_type(ctx, operand_ty) != Some(enum_type)),
-            "operand typeref names another enum",
+            !adt::is_nominal_value(ctx, operand_ty)
+                || canonical_reference_enum_type(ctx, operand_ty) == Some(enum_type),
+            "operand reference names another enum",
         )?;
 
         // `struct.get` reads a reference of the variant's own struct type. A

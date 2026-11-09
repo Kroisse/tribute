@@ -23,7 +23,9 @@
 //! a base enum type to a variant type), the converter can insert `wasm.ref_cast`
 //! operations.
 
-use tribute_ir::dialect::ability::is_evidence_type_ref;
+// The conversion rules see no module, so they recognize the evidence by its
+// shape; the module's exact marker is checked where the module is held.
+use tribute_ir::dialect::ability::{is_evidence_shaped, is_evidence_type};
 use tribute_ir::dialect::adt;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::core;
@@ -83,7 +85,7 @@ pub fn evidence_wasm_type(ctx: &mut IrContext) -> TypeRef {
 pub(crate) fn convert_evidence_arrays(ctx: &mut IrContext, module: trunk_ir::rewrite::Module) {
     let evidence = evidence_wasm_type(ctx);
     crate::closure_lower::substitute_module_types(ctx, module, "evidence", |ctx, ty| {
-        is_evidence_type_ref(ctx, ty).then_some(evidence)
+        is_evidence_type(ctx, module, ty).then_some(evidence)
     });
 }
 
@@ -94,7 +96,7 @@ pub(crate) fn convert_evidence_arrays(ctx: &mut IrContext, module: trunk_ir::rew
 pub fn gc_array_type(ctx: &mut IrContext, ty: TypeRef) -> TypeRef {
     use tribute_ir::runtime_layout::LAYOUT_ATTR;
 
-    if is_evidence_type_ref(ctx, ty) {
+    if is_evidence_shaped(ctx, ty) {
         return evidence_wasm_type(ctx);
     }
     let Some(array) = tribute_ir::dialect::adt::Array::from_type_ref(ctx, ty) else {
@@ -120,15 +122,10 @@ fn is_adt_struct_type(ctx: &IrContext, ty: TypeRef) -> bool {
     tribute_ir::dialect::adt::Struct::matches(ctx, ty)
 }
 
-/// Check if a type is an `adt.typeref` type.
-fn is_adt_typeref(ctx: &IrContext, ty: TypeRef) -> bool {
-    tribute_ir::dialect::adt::Typeref::matches(ctx, ty)
-}
-
 /// Check if a type is a struct-like reference type.
 ///
-/// This includes `wasm.structref`, `wasm.anyref`, ADT struct/typeref types,
-/// and the structural `wasm_gc.struct` of user structs and variants.
+/// This includes `wasm.structref`, `wasm.anyref`, ADT structs, nominal
+/// values, and the structural `wasm_gc.struct` of user structs and variants.
 fn is_struct_like(ctx: &IrContext, ty: TypeRef) -> bool {
     // wasm.structref or wasm.anyref
     if trunk_ir::dialect::wasm::Structref::matches(ctx, ty)
@@ -137,8 +134,8 @@ fn is_struct_like(ctx: &IrContext, ty: TypeRef) -> bool {
         return true;
     }
 
-    // adt.typeref (generic struct references)
-    if is_adt_typeref(ctx, ty) {
+    // Nominal values (generic struct references)
+    if adt::is_nominal_value(ctx, ty) {
         return true;
     }
 
@@ -389,9 +386,11 @@ pub fn wasm_type_converter(ctx: &mut IrContext) -> TypeConverter {
         }
     });
 
-    // Convert adt.typeref -> wasm.structref (generic struct reference)
+    // Convert a nominal value, a layout's key, row instance or adt.typeref,
+    // -> wasm.structref (generic struct reference). A nominal layout may
+    // hold itself, so its value is not its structural type.
     tc.add_conversion(move |ctx, ty| {
-        if is_adt_typeref(ctx, ty) {
+        if adt::is_nominal_value(ctx, ty) {
             Some(structref_ty)
         } else {
             None
@@ -416,7 +415,7 @@ pub fn wasm_type_converter(ctx: &mut IrContext) -> TypeConverter {
     // every operation that reads it as one; `convert-evidence-arrays` then
     // replaces it with its GC array everywhere, as `convert-struct-layouts`
     // does for user structs.
-    tc.add_conversion(move |ctx, ty| is_evidence_type_ref(ctx, ty).then_some(ty));
+    tc.add_conversion(move |ctx, ty| is_evidence_shaped(ctx, ty).then_some(ty));
 
     // The bytes backing array keeps its layout identifier rather than
     // becoming an erased `wasm.arrayref`.
@@ -587,7 +586,7 @@ pub fn wasm_type_converter(ctx: &mut IrContext) -> TypeConverter {
 
         let from_is_any = trunk_ir::dialect::wasm::Anyref::matches(ctx, from_ty)
             || tribute_ir::dialect::tribute_rt::Anyref::matches(ctx, from_ty);
-        if from_is_any && is_evidence_type_ref(ctx, to_ty) {
+        if from_is_any && is_evidence_shaped(ctx, to_ty) {
             let cast_op = wasm_gc_dialect::RefCast::operands(value)
                 .target_type(to_ty)
                 .results(to_ty)

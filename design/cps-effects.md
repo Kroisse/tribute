@@ -1088,9 +1088,11 @@ Marker의 source 선언이 필드 순서와 타입의 유일한 정의다. Marke
 `std::runtime::evidence::Marker`이며 root module의 `tribute.types` 속성에서 이
 경로의 항목이 그 IR 타입을 게시한다.
 Hidden evidence parameter나 frame field처럼 evidence 타입이 필요한 shared pass는
-이 경로를 이름으로 가진 `adt.typeref`를 원소로 하는 `adt.array`를 만들며, 이
-타입이 evidence 타입이다. 이 이름은 게시된 marker 타입을 가리키므로 타입을 만드는
-데 module 접근이 필요 없다. Marker를 만들고 필드를 읽는
+root module의 `tribute.types`에서 marker 타입을 읽고, 그 marker를 원소로 하는
+`adt.array`를 evidence 타입으로 쓴다. Layout 변환이 module 속성의 타입도 변환하므로
+게시된 marker는 변환된 layout을 따라간다. Module을 볼 수 없는 operation schema는
+evidence를 nominal struct 값의 `adt.array`라는 모양으로만 확인하고, 정확한 marker는
+module을 가진 pass가 확인한다. Marker를 만들고 필드를 읽는
 code는 runtime 모듈 안에만 있으며, effect lowering과 그 밖의 pass는 marker를 직접
 만들거나 읽지 않는다.
 

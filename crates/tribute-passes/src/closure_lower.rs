@@ -1033,7 +1033,7 @@ mod tests {
     }
 
     fn evidence_type_str() -> &'static str {
-        "adt.array<adt.typeref<{name = \"std::runtime::evidence::Marker\"}>>"
+        "adt.array<adt.struct<\"std::runtime::evidence::Marker\">>"
     }
 
     fn closure_test_module(ctx: &mut IrContext) -> Module {

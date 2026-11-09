@@ -163,11 +163,12 @@ tail을 가질 수 없다.
 
 [Row 매개변수](types.md#row-매개변수)를 가진 struct·enum의 layout
 (`adt.struct`, `adt.enum`)은 자기 row binder를 type 속성 `row_params`로
-선언하고, 그 선언의 값 type인 `adt.typeref`는 row 매개변수마다 row 하나를 type
-속성 `row_args`로 가진다. 두 속성의 저장 형식, textual form, typeref 정체성
-규칙은 [`adt` dialect 선언](../crates/tribute-ir/src/dialect/adt.rs)이 정한다.
-Layout의 binder는 layout 안의 type에만 미치고, `row_args`의 tail은 그 type을 쓴
-정의의 [binder](#row-binder) index다.
+선언하고, 그 선언의 값 type인 [row 인스턴스](ir.md#nominal-값-타입)(또는
+`adt.typeref`)는 row 매개변수마다 row 하나를 type 속성 `row_args`로 가진다. 속성의
+저장 형식, textual form, 정체성 규칙은
+[`adt` dialect 선언](../crates/tribute-ir/src/dialect/adt.rs)이 정한다. Layout의
+binder는 layout 안의 type에만 미치고, `row_args`의 tail은 그 type을 쓴 정의의
+[binder](#row-binder) index다.
 
 Nominal layout은 row 인자와 상관없이 하나다.
 [Tuple layout](#compiler-generated-tuple-layout)은 row를 layout 이름에 담고
@@ -175,18 +176,19 @@ Nominal layout은 row 인자와 상관없이 하나다.
 
 ```text
 adt.struct<"Callback"['a0], (tribute_control.func_sig<(core.i64) -> core.i64 row(| 'a0)>)>
-adt.typeref<"Callback"[row(@"<State(Int)>")]>
-adt.typeref<"Callback"[row(| 'a2)]>
-adt.typeref<"Callback"[row()]>
+adt.struct<"Callback"[row(@"<State(Int)>")]>
+adt.struct<"Callback"[row(| 'a2)]>
+adt.struct<"Callback"[row()]>
 ```
 
 - `adt` 생성·접근 operation이 보는 필드 type은 layout의 필드 type에서 layout
-  binder를 그 operation이 다루는 값의 typeref `row_args`로
+  binder를 그 operation이 다루는 값의 `row_args`로
   [치환](#row-인자와-치환)한 것이다. Frontend는 `struct_get`, `variant_get`
   결과와 `struct_new`, `variant_new` 피연산자의 type을 이 치환으로 쓴다.
 - Row 인자는 다른 row와 같이 source-logical 경계 안에만 있다. CPS
   legalization은 `row_args`와 `row_params`를 버리고, 바뀐 layout을
-  [nominal layout 변환](ir.md#nominal-layout-변환) 규칙으로 새 키로 만든다.
+  [nominal layout 변환](ir.md#nominal-layout-변환) 규칙으로 새 키로 만든다. Row
+  인스턴스는 그 `def`의 새 키가 된다.
   Representation/ABI 경계의 출구는 `row_args`와 `row_params`를 거부한다.
 
 ### Tail의 합집합
@@ -775,12 +777,13 @@ specialization에 대응해야 한다.
 
 ## Nominal layout의 게시
 
-Source-logical frontend는 nominal layout을 생성할 때 실제 `adt.struct` 또는
-`adt.enum`의 키에 몸체를 묶고, 그 키를 normalized nominal symbol의 IR type
-alias로 게시한다. Frontend가 만드는 `adt.typeref`의 `name`, layout의 `name`(둘 다
-문자열), 게시된 alias의 이름은 텍스트가 일치해야 한다. `adt.typeref`는 이 alias로
-layout을 찾으며, layout이 [변환](ir.md#nominal-layout-변환)으로 tag 붙은 새 키를
-가지면 alias가 새 키를 가리킨다.
+Source-logical frontend는 nominal layout마다 몸체 없는 키를 먼저 만들고, 필드
+타입을 다 만든 뒤 그 키에 몸체를 묶는다. 그래서 필드는 재귀나 전방 참조인
+layout도 그 키나 [row 인스턴스](ir.md#nominal-값-타입)로 가리킨다. 키는
+normalized nominal symbol의 IR type alias로 게시하며, layout의 `name`(문자열)과
+게시된 alias의 이름은 텍스트가 일치해야 한다. `adt.typeref`는 이 alias로 layout을
+찾으며, layout이 [변환](ir.md#nominal-layout-변환)으로 tag 붙은 새 키를 가지면
+alias가 새 키를 가리킨다.
 생성 연산 없이 signature에만 등장하는 특수화도 같은 계약을 따르며, 필드에서
 참조하는 compiler-generated nominal tuple layout도 게시한다. 몸체가 묶이지 않은
 키는 정의가 아니다.

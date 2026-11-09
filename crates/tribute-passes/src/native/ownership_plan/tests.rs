@@ -453,7 +453,7 @@ fn native_evidence_hands_the_dispatcher_to_the_runtime_as_a_managed_value() {
         r#"core.module @test {
   !_closure = adt.struct<(tribute_rt.convention_table_ref), {layout = "closure"}>
   !"std::runtime::evidence::Marker" = adt.struct<"std::runtime::evidence::Marker", (core.i32, core.i32)>
-  !Evidence = adt.array<adt.typeref<{name = "std::runtime::evidence::Marker"}>>
+  !Evidence = adt.array<adt.struct<"std::runtime::evidence::Marker">>
   !"std::Option$std::runtime::Dispatch" = adt.enum<"std::Option$std::runtime::Dispatch", [(), (!_closure)]>
   !OptionRef = adt.typeref<{name = "std::Option$std::runtime::Dispatch"}>
   adt.enum_decl "std::Option$std::runtime::Dispatch" !"std::Option$std::runtime::Dispatch" ["None", "Some"]

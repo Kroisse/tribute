@@ -26,7 +26,7 @@ fn resume_block(
     location: Location,
     frame: &FrameTypes,
 ) -> (BlockRef, TypeRef) {
-    let evidence_type = ability::evidence_adt_type_ref(ctx);
+    let evidence_type = frame.evidence;
     let anyref = tribute_rt::Anyref::params().intern(ctx).as_type_ref();
     let block = make_block(ctx, location, &[evidence_type, frame.reference, anyref]);
     let resume_type = cps_resume_type(ctx, evidence_type, frame.reference, anyref);
@@ -78,7 +78,7 @@ fn push_one_shot_resume(
         let unit = core::NilValue::operands().build(ctx, location);
         ctx.push_op(wrapper_block, unit.op_ref());
         unit.result(ctx)
-    } else if input_data.name == tribute_ir::dialect::adt::Typeref::NAME {
+    } else if tribute_ir::dialect::adt::is_nominal_value(ctx, input_type) {
         // Dynamic effect values recover nominal references only through
         // their declared type, preserving the typed ownership boundary.
         let recovered = adt::RefCast::operands(args[2])

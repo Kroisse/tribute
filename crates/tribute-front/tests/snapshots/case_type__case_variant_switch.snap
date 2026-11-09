@@ -4,13 +4,12 @@ expression: ir_text
 ---
 core.module @test {
   !"pkg::Shape" = adt.enum<"pkg::Shape", [(core.i32), (core.i32, core.i32), (), (core.i32, core.i32)]>
+  !t0 = tribute_control.func_sig<(!"pkg::Shape") -> core.i32 row(| 'a0)>
   !t1 = tribute_control.func_sig<(core.i32, core.i32) -> core.i32>
-  !"pkg::Shape_1" = adt.typeref<"pkg::Shape">
-  !t0 = tribute_control.func_sig<(!"pkg::Shape_1") -> core.i32 row(| 'a0)>
 
   adt.enum_decl "pkg::Shape" !"pkg::Shape" ["Circle", "Rect", "Dot", "Line"]
   tribute_control.func @"std::Nat::*"(%arg0: core.i32, %arg1: core.i32) -> core.i32
-  tribute_control.func @"pkg::area"['a0](%0: !"pkg::Shape_1") -> core.i32 row(| 'a0) inferred {
+  tribute_control.func @"pkg::area"['a0](%0: !"pkg::Shape") -> core.i32 row(| 'a0) inferred {
       %1 = adt.variant_tag %0 {type = !"pkg::Shape"}
       %2 = scf.index_switch %1 : (core.index) -> core.i32
       case 0 {
@@ -37,7 +36,7 @@ core.module @test {
       tribute_control.return %2
   }
   tribute_control.func @"std::Nat::+"(%arg0: core.i32, %arg1: core.i32) -> core.i32
-  tribute_control.func @"pkg::kind"['a0](%0: !"pkg::Shape_1") -> core.i32 row(| 'a0) inferred {
+  tribute_control.func @"pkg::kind"['a0](%0: !"pkg::Shape") -> core.i32 row(| 'a0) inferred {
       %1 = adt.variant_tag %0 {type = !"pkg::Shape"}
       %2 = scf.index_switch %1 : (core.index) -> core.i32
       case 2 {

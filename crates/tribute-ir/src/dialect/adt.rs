@@ -528,8 +528,13 @@ pub mod layout;
 /// string.
 pub const STRUCT_NAME_ATTR: &str = "name";
 
+/// Type attribute of a row instance holding the key of the layout it
+/// applies (`design/ir.md` § "Nominal 값 타입").
+pub const DEF_ATTR: &str = "def";
+
 /// Whether `ty` is an `adt.struct`, `adt.enum` or `adt.typeref`. A nominal
-/// one is named by its `name` attribute; a literal `adt.struct` has none.
+/// one is named by its `name` attribute, or by its `def`'s for a row
+/// instance; a literal `adt.struct` has none.
 pub fn is_nominal(ctx: &IrContext, ty: TypeRef) -> bool {
     let name = ctx.get_type(ty).name;
     name == <Struct as DialectType>::NAME
@@ -537,12 +542,23 @@ pub fn is_nominal(ctx: &IrContext, ty: TypeRef) -> bool {
         || name == Typeref::NAME
 }
 
+/// Whether `ty` is a nominal value type: a nominal layout's key, a row
+/// instance, or an `adt.typeref`, rather than a literal layout.
+pub fn is_nominal_value(ctx: &IrContext, ty: TypeRef) -> bool {
+    Typeref::matches(ctx, ty)
+        || row_instance_def(ctx, ty).is_some()
+        || Struct::from_type_ref(ctx, ty).is_some_and(|layout| layout.is_nominal(ctx))
+        || Enum::from_type_ref(ctx, ty).is_some_and(|layout| layout.is_nominal(ctx))
+}
+
 /// The nominal name of an `adt.struct`, `adt.enum` or `adt.typeref`: its
-/// `name` type attribute.
+/// `name` type attribute, or the name of a row instance's `def`.
 pub fn nominal_name_ref(ctx: &IrContext, ty: TypeRef) -> Option<StringRef> {
-    is_nominal(ctx, ty)
-        .then(|| ctx.type_attrs(ty).get_string_ref(STRUCT_NAME_ATTR))
-        .flatten()
+    if !is_nominal(ctx, ty) {
+        return None;
+    }
+    let ty = row_instance_def(ctx, ty).unwrap_or(ty);
+    ctx.type_attrs(ty).get_string_ref(STRUCT_NAME_ATTR)
 }
 
 /// The text of [`nominal_name_ref`].
@@ -551,14 +567,131 @@ pub fn nominal_name(ctx: &IrContext, ty: TypeRef) -> Option<&str> {
 }
 
 /// The `adt.struct` or `adt.enum` layout of a value of type `ty`: `ty`
-/// itself when it is a layout, or the layout an `adt.typeref` refers to
-/// ([`Typeref::layout`]). `None` for any other type or a typeref without a
-/// layout.
+/// itself when it is a layout, a row instance's `def`, or the layout an
+/// `adt.typeref` refers to ([`Typeref::layout`]). `None` for any other type
+/// or a typeref without a layout.
 pub fn layout_of(ctx: &IrContext, ty: TypeRef) -> Option<TypeRef> {
+    if let Some(def) = row_instance_def(ctx, ty) {
+        return Some(def);
+    }
     if Struct::matches(ctx, ty) || Enum::matches(ctx, ty) {
         return Some(ty);
     }
     Typeref::from_type_ref(ctx, ty)?.layout(ctx)
+}
+
+/// The layout key a row instance `ty` applies, its `def`; `None` for any
+/// other type (`design/ir.md` § "Nominal 값 타입").
+pub fn row_instance_def(ctx: &IrContext, ty: TypeRef) -> Option<TypeRef> {
+    let name = ctx.get_type(ty).name;
+    if name != <Struct as DialectType>::NAME && name != <Enum as DialectType>::NAME {
+        return None;
+    }
+    ctx.type_attrs(ty).get_type(DEF_ATTR)
+}
+
+/// The value type of the nominal layout `key` applied to `rows`, one for
+/// each of its row parameters: the key itself without rows, or its row
+/// instance (`design/ir.md` § "Nominal 값 타입").
+///
+/// # Panics
+///
+/// If `rows` does not have one row for each row parameter of `key`.
+pub fn value_type(
+    ctx: &mut IrContext,
+    key: TypeRef,
+    rows: impl IntoIterator<Item = Row>,
+) -> TypeRef {
+    let rows: Vec<_> = rows.into_iter().map(|row| row.to_attribute(ctx)).collect();
+    if rows.is_empty() {
+        return key;
+    }
+    let name = ctx.get_type(key).name;
+    let ty = TypeDataBuilder::new(name)
+        .attr(DEF_ATTR, Attribute::Type(key))
+        .attr(ROW_ARGS_ATTR, Attribute::List(rows))
+        .intern(ctx);
+    verify_row_instance(ctx, ty).unwrap_or_else(|error| panic!("row instance: {error}"));
+    ty
+}
+
+/// The row arguments a value of type `ty` passes to its layout's row
+/// parameters: those of a row instance or an `adt.typeref`; empty for any
+/// other type.
+pub fn value_rows(ctx: &IrContext, ty: TypeRef) -> Vec<Row> {
+    if !is_nominal(ctx, ty) {
+        return Vec::new();
+    }
+    match ctx.type_attrs(ty).get(ROW_ARGS_ATTR) {
+        Some(Attribute::List(rows)) => rows
+            .iter()
+            .map(|row| Row::from_attribute(ctx, row).expect("verified row argument"))
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// A malformed row instance.
+#[derive(Clone, Debug, PartialEq, Eq, derive_more::Display, derive_more::Error)]
+pub enum RowInstanceError {
+    #[display("a row instance has only `{DEF_ATTR}` and `{ROW_ARGS_ATTR}`")]
+    Shape,
+    #[display("`{DEF_ATTR}` is not a nominal layout key of the same kind with row parameters")]
+    Def,
+    #[display("`{ROW_ARGS_ATTR}` must be a list of rows")]
+    MalformedRowArgs,
+    #[display("row argument {index} is malformed: {reason}")]
+    MalformedRowArg { index: usize, reason: String },
+    #[display("{args} row argument(s) for a layout with {params} row parameter(s)")]
+    Arity { args: usize, params: i128 },
+}
+
+/// Check the row instance `ty`: no name or parameters, a `def` that is a
+/// key of the same kind named only by its name and row binders, and one
+/// row argument for each binder.
+fn verify_row_instance(ctx: &IrContext, ty: TypeRef) -> Result<(), RowInstanceError> {
+    let data = ctx.get_type(ty);
+    let only_instance_attrs = data
+        .attrs
+        .iter()
+        .all(|(key, _)| [DEF_ATTR, ROW_ARGS_ATTR].contains(&ctx.str(key)));
+    if !data.params.is_empty() || !only_instance_attrs {
+        return Err(RowInstanceError::Shape);
+    }
+    let def = ctx
+        .type_attrs(ty)
+        .get_type(DEF_ATTR)
+        .ok_or(RowInstanceError::Shape)?;
+    let def_data = ctx.get_type(def);
+    let only_name_and_binders = def_data
+        .attrs
+        .iter()
+        .all(|(key, _)| [STRUCT_NAME_ATTR, ROW_PARAMS_ATTR].contains(&ctx.str(key)));
+    let params = match ctx.type_attrs(def).get(ROW_PARAMS_ATTR) {
+        Some(Attribute::Int(count)) if *count > 0 => *count,
+        _ => return Err(RowInstanceError::Def),
+    };
+    if def_data.name != data.name
+        || !def_data.params.is_empty()
+        || ctx.type_attrs(def).get_str(STRUCT_NAME_ATTR).is_none()
+        || !only_name_and_binders
+    {
+        return Err(RowInstanceError::Def);
+    }
+    let Some(Attribute::List(rows)) = ctx.type_attrs(ty).get(ROW_ARGS_ATTR) else {
+        return Err(RowInstanceError::MalformedRowArgs);
+    };
+    for (index, row) in rows.iter().enumerate() {
+        Row::from_attribute(ctx, row)
+            .map_err(|reason| RowInstanceError::MalformedRowArg { index, reason })?;
+    }
+    if i128::try_from(rows.len()).ok() != Some(params) {
+        return Err(RowInstanceError::Arity {
+            args: rows.len(),
+            params,
+        });
+    }
+    Ok(())
 }
 
 // === Nominal reference type ===
@@ -686,7 +819,7 @@ pub fn field_type(ctx: &mut IrContext, value_ty: TypeRef, field: usize) -> Optio
 /// `ty`, written in a layout with `row_params` binders, as seen through a
 /// value of type `value_ty`: the layout's binders replaced by the value
 /// type's row arguments. `None` when the layout has binders and `value_ty`
-/// is not a typeref.
+/// carries no row arguments.
 pub fn substitute_layout_binders(
     ctx: &mut IrContext,
     row_params: Option<u32>,
@@ -696,7 +829,10 @@ pub fn substitute_layout_binders(
     if row_params.is_none() {
         return Some(ty);
     }
-    let rows = Typeref::from_type_ref(ctx, value_ty)?.rows(ctx);
+    let rows = value_rows(ctx, value_ty);
+    if rows.is_empty() {
+        return None;
+    }
     crate::dialect::tribute_control::substitute_rows(ctx, ty, &rows)
 }
 
@@ -737,7 +873,10 @@ fn find_layout_binders(
     if row_params.is_none() {
         return Some(ty);
     }
-    let rows = Typeref::from_type_ref(ctx, value_ty)?.rows(ctx);
+    let rows = value_rows(ctx, value_ty);
+    if rows.is_empty() {
+        return None;
+    }
     crate::dialect::tribute_control::find_substituted_rows(ctx, ty, &rows)
 }
 
@@ -988,6 +1127,10 @@ impl trunk_ir::type_verifier::VerifyType for Struct {
                 return Ok(Self(ty));
             }
             Some(_) => return Err(StructTypeError::MalformedName.into()),
+            None if attrs.contains_key(DEF_ATTR) => {
+                verify_row_instance(ctx, ty)?;
+                return Ok(Self(ty));
+            }
             // A row binder is bound by the declaration a nominal layout has.
             None if attrs.contains_key(ROW_PARAMS_ATTR) => {
                 return Err(StructTypeError::LiteralRowParams.into());
@@ -1124,8 +1267,12 @@ impl Struct {
     }
 
     /// The literal layout holding the fields: the body of a nominal layout,
-    /// which must have one, or a literal layout itself.
+    /// which must have one, that of a row instance's `def`, or a literal
+    /// layout itself.
     pub fn literal_layout(self, ctx: &IrContext) -> Struct {
+        if let Some(def) = row_instance_def(ctx, self.0) {
+            return Struct(def).literal_layout(ctx);
+        }
         if self.is_nominal(ctx) {
             let body = ctx.type_body(self.0).unwrap_or_else(|| {
                 panic!(
@@ -1292,6 +1439,9 @@ fn write_struct_type(
     let s = p.state();
     let ctx = s.ctx();
     p.write_str("adt.struct<")?;
+    if row_instance_def(ctx, adt_struct.as_type_ref()).is_some() {
+        return write_row_instance(p, adt_struct.as_type_ref());
+    }
     if let Some(name) = adt_struct.name(ctx) {
         write!(
             p,
@@ -1345,19 +1495,90 @@ fn parse_field_list(
     p.parse_delimited("(", ")", |p| p.parse_param())
 }
 
-/// Parse a layout's quoted name and its binder list, if any, when the text
-/// after the opening bracket begins with a string; `None`, reading nothing,
-/// otherwise. The generic spelling begins with a type or a dictionary.
+/// What follows a layout's quoted name: its binder list, possibly empty, or
+/// the row arguments of a row instance.
+enum NameSuffix {
+    Binders(u32),
+    RowArgs(Vec<Row>),
+}
+
+/// Parse a layout's quoted name and what follows it, when the text after
+/// the opening bracket begins with a string; `None`, reading nothing,
+/// otherwise. The generic spelling begins with a type or a dictionary. A
+/// list whose first element begins with `row(` is a row instance's row
+/// arguments; any other list is the binder list.
 fn parse_layout_name(
     p: &mut trunk_ir::parser::AsmParser<'_>,
     what: &'static str,
-) -> trunk_ir::parser::ParseResult<Option<(String, u32)>> {
+) -> trunk_ir::parser::ParseResult<Option<(String, NameSuffix)>> {
     if !p.peek().starts_with('"') {
         return Ok(None);
     }
     let layout_name = p.parse_token(what, trunk_ir::parser::lexer::string_lit)?;
-    let binders = parse_layout_binders(p)?;
-    Ok(Some((layout_name, binders)))
+    let rest = p.peek();
+    let row_args = rest
+        .strip_prefix('[')
+        .is_some_and(|rest| rest.trim_start().starts_with("row("));
+    if !row_args {
+        let binders = parse_layout_binders(p)?;
+        return Ok(Some((layout_name, NameSuffix::Binders(binders))));
+    }
+    p.parse_punct("[")?;
+    let mut rows = Vec::new();
+    loop {
+        rows.push(crate::dialect::tribute_control::parse_row_argument(p)?);
+        if !p.parse_optional_punct(",") {
+            break;
+        }
+    }
+    p.parse_punct("]")?;
+    Ok(Some((layout_name, NameSuffix::RowArgs(rows))))
+}
+
+/// Intern the row instance of type `name` applying the layout named
+/// `layout_name` to `rows`, after its `>`: its `def` is the key of that
+/// name with one row binder for each row.
+fn build_row_instance(
+    p: &mut trunk_ir::parser::AsmParser<'_>,
+    name: &str,
+    layout_name: &str,
+    rows: Vec<Row>,
+) -> trunk_ir::parser::ParseResult<TypeRef> {
+    p.parse_punct(">")?;
+    let binders = u32::try_from(rows.len()).map_err(|_| p.expected("fewer row arguments"))?;
+    let attrs = named(p, AttributeMap::new(), layout_name)?;
+    let attrs = with_binders(p, attrs, binders)?;
+    let key = p.build_type(name, Vec::new(), attrs)?;
+    let ctx = p.ctx_mut();
+    let rows = rows.iter().map(|row| row.to_attribute(ctx)).collect();
+    let attrs = AttributeMap::from_entries(
+        ctx,
+        [
+            (DEF_ATTR, Attribute::Type(key)),
+            (ROW_ARGS_ATTR, Attribute::List(rows)),
+        ],
+    );
+    p.build_type(name, Vec::new(), attrs)
+}
+
+/// `"Name"[row(..), ..]>`, the rest of a row instance after its opening
+/// bracket: the name of its `def` and its row arguments.
+fn write_row_instance(
+    p: &mut trunk_ir::printer::AsmPrinter<'_>,
+    instance: TypeRef,
+) -> std::fmt::Result {
+    use itertools::Itertools as _;
+    use std::fmt::Write;
+    use trunk_ir::printer::display_string;
+
+    let ctx = p.state().ctx();
+    let name = nominal_name(ctx, instance).expect("a row instance's def is named");
+    let rows = value_rows(ctx, instance);
+    let rows = rows
+        .iter()
+        .map(crate::dialect::tribute_control::display_row_argument)
+        .format(", ");
+    write!(p, "{}[{rows}]>", display_string(name))
 }
 
 /// Parse the rest of a nominal layout after its name and binders: the
@@ -1429,8 +1650,14 @@ fn parse_struct_type(
         }
         return p.build_type(name, params, attrs).map(Some);
     }
-    let Some((struct_name, binders)) = parse_layout_name(p, "a struct name")? else {
+    let Some((struct_name, suffix)) = parse_layout_name(p, "a struct name")? else {
         return Ok(None);
+    };
+    let binders = match suffix {
+        NameSuffix::Binders(binders) => binders,
+        NameSuffix::RowArgs(rows) => {
+            return build_row_instance(p, name, &struct_name, rows).map(Some);
+        }
     };
     let (body, attrs) = parse_nominal_rest(p, "(", parse_field_list)?;
     build_nominal_layout(p, name, &struct_name, binders, body, attrs).map(Some)
@@ -1523,6 +1750,10 @@ impl trunk_ir::type_verifier::VerifyType for Enum {
                 return Ok(Self(ty));
             }
             Some(_) => return Err(EnumTypeError::MalformedName.into()),
+            None if attrs.contains_key(DEF_ATTR) => {
+                verify_row_instance(ctx, ty)?;
+                return Ok(Self(ty));
+            }
             None if !data.attrs.is_empty() => {
                 return Err(EnumTypeError::LiteralAttributes.into());
             }
@@ -1552,8 +1783,12 @@ impl Enum {
     }
 
     /// The literal enum holding the variants: the body of a named enum,
-    /// which must have one, or a literal enum itself.
+    /// which must have one, that of a row instance's `def`, or a literal
+    /// enum itself.
     pub fn literal_layout(self, ctx: &IrContext) -> Enum {
+        if let Some(def) = row_instance_def(ctx, self.0) {
+            return Enum(def).literal_layout(ctx);
+        }
         if self.is_nominal(ctx) {
             let body = ctx.type_body(self.0).unwrap_or_else(|| {
                 panic!(
@@ -1702,6 +1937,9 @@ fn write_enum_type(p: &mut trunk_ir::printer::AsmPrinter<'_>, adt_enum: Enum) ->
             })
     };
     p.write_str("adt.enum<")?;
+    if row_instance_def(ctx, adt_enum.as_type_ref()).is_some() {
+        return write_row_instance(p, adt_enum.as_type_ref());
+    }
     if let Some(name) = adt_enum.name(ctx) {
         write!(
             p,
@@ -1751,8 +1989,14 @@ fn parse_enum_type(
         p.parse_punct(">")?;
         return p.build_type(name, params, AttributeMap::new()).map(Some);
     }
-    let Some((enum_name, binders)) = parse_layout_name(p, "an enum name")? else {
+    let Some((enum_name, suffix)) = parse_layout_name(p, "an enum name")? else {
         return Ok(None);
+    };
+    let binders = match suffix {
+        NameSuffix::Binders(binders) => binders,
+        NameSuffix::RowArgs(rows) => {
+            return build_row_instance(p, name, &enum_name, rows).map(Some);
+        }
     };
     let (body, attrs) = parse_nominal_rest(p, "[", parse_variant_list)?;
     build_nominal_layout(p, name, &enum_name, binders, body, attrs).map(Some)
@@ -2209,6 +2453,92 @@ mod tests {
             assert!(printed.contains(expected), "{expected}\n{printed}");
         }
         assert_roundtrip(&ctx, module.op());
+    }
+
+    #[test]
+    fn row_instances_apply_a_layout_to_its_row_arguments() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  !Callback = adt.struct<"Callback"['a0], (tribute_control.func_sig<(core.i64) -> core.i64 row(@Log | 'a0)>)>
+  !Step = adt.enum<"Step"['a0], [(tribute_control.func_sig<() -> adt.enum<"Step"[row(| 'a0)]> row(| 'a0)>), ()]>
+  !Node = adt.struct<"Node", (core.i32, adt.struct<"Node">)>
+  !Ticked = adt.struct<"Callback"[row(@Tick)]>
+  !Open = adt.enum<"Step"[row(@A | 'a0)]>
+}"#,
+        );
+        let alias = |ctx: &IrContext, name| ctx.type_alias_by_text(name).expect("fixture alias");
+        let [callback, step, node, ticked, open] =
+            ["Callback", "Step", "Node", "Ticked", "Open"].map(|name| alias(&ctx, name));
+
+        // An instance is a type of the layout's kind with no identifier,
+        // whose layout is its `def`.
+        assert!(Struct::from_type_ref(&ctx, ticked).is_some());
+        assert!(!trunk_ir::type_def::is_identified(&ctx, ticked));
+        assert_eq!(layout_of(&ctx, ticked), Some(callback));
+        assert_eq!(layout_of(&ctx, open), Some(step));
+        assert_eq!(nominal_name(&ctx, open), Some("Step"));
+        assert_eq!(
+            value_rows(&ctx, ticked),
+            [Row::new([SymbolPath::new(["Tick"])], None)]
+        );
+        assert_eq!(
+            Struct::from_type_ref(&ctx, ticked).unwrap().fields(&ctx),
+            Struct::from_type_ref(&ctx, callback).unwrap().fields(&ctx)
+        );
+        // A field reads through the instance with its rows substituted.
+        let field = field_type(&mut ctx, ticked, 0).unwrap();
+        let row = crate::dialect::tribute_control::FuncSig::from_type_ref(&ctx, field)
+            .unwrap()
+            .row(&ctx);
+        assert_eq!(
+            row,
+            Row::new([SymbolPath::new(["Log"]), SymbolPath::new(["Tick"])], None)
+        );
+        // A layout holds its own key.
+        let node_body = Struct::from_type_ref(&ctx, node).unwrap().fields(&ctx)[1];
+        assert_eq!(node_body, node);
+        // The constructor makes the instance the text spells.
+        let rows = value_rows(&ctx, ticked);
+        assert_eq!(value_type(&mut ctx, callback, rows), ticked);
+        assert_eq!(value_type(&mut ctx, node, []), node);
+
+        let printed = module.op().display(&ctx).to_string();
+        for expected in [
+            "adt.struct<\"Callback\"[row(@Tick)]>",
+            "adt.enum<\"Step\"[row(@A | 'a0)]>",
+            "adt.enum<\"Step\"[row(| 'a0)]>",
+            "!Node = adt.struct<\"Node\", (core.i32, adt.struct<\"Node\">)>",
+        ] {
+            assert!(printed.contains(expected), "{expected}\n{printed}");
+        }
+        assert_roundtrip(&ctx, module.op());
+    }
+
+    #[test]
+    fn malformed_row_instances_fail_validation() {
+        for spelling in [
+            // Too many or too few row arguments.
+            "adt.struct<{def = adt.struct<\"C\"['a0], ()>, row_args = [{}, {}]}>",
+            "adt.struct<{def = adt.struct<\"C\"['a0], ()>, row_args = []}>",
+            // A `def` without binders, of another kind, or with a field.
+            "adt.struct<{def = adt.struct<\"P\", ()>, row_args = [{}]}>",
+            "adt.enum<{def = adt.struct<\"C\"['a0], ()>, row_args = [{}]}>",
+            "adt.struct<core.i32, {def = adt.struct<\"C\"['a0], ()>, row_args = [{}]}>",
+        ] {
+            let mut ctx = IrContext::new();
+            let input = format!("core.module @test {{ !bad = {spelling} }}");
+            let module = parse_module(&mut ctx, &input).expect(spelling);
+            let alias = ctx.type_aliases()[0].1;
+            assert!(
+                Struct::from_type_ref(&ctx, alias).is_none()
+                    && Enum::from_type_ref(&ctx, alias).is_none(),
+                "{spelling}"
+            );
+            let result = validate_operation_verifiers(&ctx, Module::new(&ctx, module).unwrap());
+            assert!(!result.is_ok(), "{spelling}");
+        }
     }
 
     #[test]

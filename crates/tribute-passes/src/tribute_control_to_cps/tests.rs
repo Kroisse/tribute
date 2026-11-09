@@ -9,7 +9,7 @@ use trunk_ir::parser::parse_test_module;
 use trunk_ir::symbol_table::nearest_table;
 
 use crate::lower_continuation_frames::lower_continuation_frames;
-use crate::test_support::assert_unchanged_on_error;
+use crate::test_support::{assert_unchanged_on_error, publish_evidence_marker};
 
 /// Run the conversion without operation declarations or intrinsics.
 fn run_pre_cps(ctx: &mut IrContext, module: Module) -> Result<(), TributeControlToCpsError> {
@@ -17,9 +17,12 @@ fn run_pre_cps(ctx: &mut IrContext, module: Module) -> Result<(), TributeControl
     lower_continuation_frames(ctx, module)
 }
 
+/// Parse `input` and publish the evidence marker, as the frontend does for
+/// every module.
 fn parse(input: &str) -> (IrContext, Module) {
     let mut ctx = IrContext::new();
     let module = parse_test_module(&mut ctx, input);
+    publish_evidence_marker(&mut ctx, module);
     (ctx, module)
 }
 
@@ -36,7 +39,7 @@ fn shared_function_conversion_preserves_lists_and_nested_attributes() {
             AttributeMap::from_entries(&mut ctx, [("nested", Attribute::Type(source_callable))]);
         let source = func::func_sig_with_attrs(&mut ctx, [source_callable], results.clone(), attrs)
             .as_type_ref();
-        let mut converter = Converter::new(&mut ctx, block, CallableGraph::default());
+        let mut converter = Converter::new(&mut ctx, module, block, CallableGraph::default());
         let converted = converter.convert_type(source);
         assert_eq!(
             converter.convert_type(source),
@@ -865,7 +868,7 @@ fn named_boundaries_report_local_and_core_validation_errors() {
     );
 
     let malformed_delimiter = r#"core.module @test {
-  !evidence = adt.array<adt.typeref<{name = "std::runtime::evidence::Marker"}>>
+  !evidence = adt.array<adt.struct<"std::runtime::evidence::Marker">>
   func.func @broken(%ev: !evidence, %prompt: core.i32) -> core.never attributes {tribute.calling_convention = "cps"} {
     ability.handle_dispatch %ev, %prompt [] {
       ^body:
@@ -1026,7 +1029,7 @@ fn post_boundary_rejects_malformed_physical_callable_transfers() {
 #[test]
 fn post_boundary_rejects_nonphysical_dispatchers_and_residual_control_ops() {
     let dispatcher_input = r#"core.module @test {
-  !evidence = adt.array<adt.typeref<{name = "std::runtime::evidence::Marker"}>>
+  !evidence = adt.array<adt.struct<"std::runtime::evidence::Marker">>
   !tr = closure.closure<func.func_sig<(!evidence, core.i32, tribute_rt.anyref) -> tribute_rt.anyref>>
   func.func @caller(%ev: !evidence, %prompt: core.i32, %tr: !tr) -> core.never attributes {tribute.calling_convention = "cps"} {
     ability.handle_dispatch %ev, %prompt [@State: %tr] {
@@ -1045,7 +1048,7 @@ fn post_boundary_rejects_nonphysical_dispatchers_and_residual_control_ops() {
     );
 
     let wrong_abi_input = r#"core.module @test {
-  !evidence = adt.array<adt.typeref<{name = "std::runtime::evidence::Marker"}>>
+  !evidence = adt.array<adt.struct<"std::runtime::evidence::Marker">>
   func.func @caller(%ev: !evidence, %prompt: core.i32) -> core.never attributes {tribute.calling_convention = "cps"} {
     %tr = closure.lambda evidence_direct(%inner: !evidence) -> tribute_rt.anyref {
       func.unreachable
@@ -1065,7 +1068,7 @@ fn post_boundary_rejects_nonphysical_dispatchers_and_residual_control_ops() {
     );
 
     let wrong_metadata_input = r#"core.module @test {
-  !evidence = adt.array<adt.typeref<{name = "std::runtime::evidence::Marker"}>>
+  !evidence = adt.array<adt.struct<"std::runtime::evidence::Marker">>
   func.func @caller(%ev: !evidence, %prompt: core.i32) -> core.never attributes {tribute.calling_convention = "cps"} {
     %tr = closure.lambda direct(%inner: !evidence, %op_idx: core.i32, %payload: tribute_rt.anyref) -> tribute_rt.anyref {
       func.unreachable

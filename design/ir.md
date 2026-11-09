@@ -1437,10 +1437,11 @@ identified struct와 literal struct). Nominal layout은
 
 ```text
 adt.struct<"Point", (core.i32, core.i32)>
-adt.struct<"Node", (core.i32 {k = "v"}, adt.typeref<"Node">)>
+adt.struct<"Node", (core.i32 {k = "v"}, adt.struct<"Node">)>
 adt.struct<"Empty", ()>
 adt.struct<"geo::Point", (core.f64, core.f64)>
 adt.struct<"Point">
+adt.struct<"Callback"[row(@"<State(Int)>")]>
 adt.struct<(core.ptr), {layout = "closure"}>
 adt.struct<(core.ptr, core.i32),
   {layout = "closure_captures",
@@ -1456,8 +1457,9 @@ adt.struct<(core.ptr, core.i32),
   literal `adt.struct`다. 필드 접근과 layout 계산은 몸체의 필드를 읽는다.
 - Nominal layout은 source가 선언한 struct, compiler가 만든
   [tuple layout](tribute-dialects.md#compiler-generated-tuple-layout), continuation
-  frame처럼 `adt.typeref`가 가리키는 layout이다.
-- Literal layout은 typeref가 가리킬 일이 없는 compiler 저장 layout이다. Closure
+  frame처럼 값이 nominal 타입으로 가리키는 layout이다. 그 값의 타입은
+  [nominal 값 타입](#nominal-값-타입)이다.
+- Literal layout은 nominal 타입으로 가리킬 일이 없는 compiler 저장 layout이다. Closure
   저장, list node, ability payload, completion cell 같은 layout이며, 정체는 필드
   타입과 type 속성뿐이다. 필드가 같은 두 literal layout은 같은 타입이다. Compiler
   소유 layout은 이름이 아니라 [`layout`](#runtime-layout-식별자) 속성으로 식별한다.
@@ -1474,11 +1476,14 @@ adt.struct<(core.ptr, core.i32),
   도달한다. Nominal layout의 필드는 몸체에 있으므로, 필드 타입을 바꾸는 변환은
   아래 규칙으로 새 키를 만든다. 필드 수를 유지하는 변환은 필드 속성을 위치 그대로
   둔다.
-- 재귀 참조는 같은 layout을 가리키는 `adt.typeref`로 표현한다.
+- 재귀 참조는 몸체가 자기 키를 담아 표현한다. 몸체는 정체에 들어가지 않으므로
+  재귀는 [식별 타입](#식별-타입)의 키에서 끝난다.
 - Row 매개변수를 가진 선언의 layout은 type 속성 `row_params`를 가지며, 필드 type의
   tail은 그 binder의 index다
   ([Nominal row 인자](tribute-dialects.md#nominal-row-인자)). Textual form은
   binder를 이름 바로 뒤에 쓴다: `adt.struct<"Callback"['a0], (...)>`.
+- 이름도 매개변수도 없이 `def`와 `row_args`만 가진 `adt.struct`는 row 인스턴스다.
+  [Nominal 값 타입](#nominal-값-타입)에서 정한다.
 
 #### Nominal layout 변환
 
@@ -1488,10 +1493,10 @@ adt.struct<(core.ptr, core.i32),
 변환하는 pass가 함께 쓴다.
 
 - 변환은 module과 게시된 alias가 닿는 nominal layout을 모두 본다. 키 속성이
-  바뀌거나 몸체의 필드 타입이 바뀌는 layout, 그리고 키나 몸체가 그런 layout을 타입
-  자체로 담는 layout이 바뀐다. `adt.typeref`는 layout을 이름으로 가리킬 뿐이므로,
-  typeref로 가리키는 layout이 바뀌어도 typeref와 그것을 담은 layout은 바뀌지
-  않는다. 나머지 layout은 키와 몸체를 그대로 둔다.
+  바뀌거나 몸체의 필드 타입이 바뀌는 layout, 그리고 키나 몸체가 그런 layout의 키나
+  row 인스턴스를 담는 layout이 바뀐다. `adt.typeref`는 layout을 이름으로 가리킬
+  뿐이므로, typeref로 가리키는 layout이 바뀌어도 typeref와 그것을 담은 layout은
+  바뀌지 않는다. 나머지 layout은 키와 몸체를 그대로 둔다.
 - 바뀌는 layout의 새 키는 변환한 키 속성이다. 키 속성이 그대로이면 새 키의 이름은
   옛 이름 뒤에 `$`와 변환의 tag를 붙인 것이다(`"Point$abi"`).
 - 새 키를 모두 정한 뒤에 몸체를 변환해 묶고, 옛 layout을 가리키던 alias를 새 키로
@@ -1646,7 +1651,7 @@ textual 문법을 쓴다. Variant 이름과 필드 이름은 source 선언의
 
 ```text
 adt.enum<"Option", [(), (T)]>
-adt.enum<"List", [(), (core.i32, adt.typeref<"List">)]>
+adt.enum<"List", [(), (core.i32, adt.enum<"List">)]>
 adt.enum<"geo::Shape", [(), (core.f64, core.f64 {k = 1})], {k = "x"}>
 adt.enum<"Never", []>
 adt.enum<"Option">
@@ -1676,14 +1681,47 @@ adt.enum<[(), (core.i32)]>
 - `adt.variant`는 literal `adt.enum`의 매개변수로만 쓴다. 값의 타입이나 연산의
   타입 속성이 되지 않으며, 연산은 이름 있는 enum 타입과 선언 순서의 variant
   위치(`tag`)로 variant를 가리킨다. 위치는 `adt.variant_tag`가 내는 값과 같다.
-- 재귀 참조는 같은 layout을 가리키는 `adt.typeref`로 표현한다.
+- 재귀 참조는 `adt.struct`처럼 몸체가 자기 키를 담아 표현한다.
 - Row 매개변수를 가진 선언의 layout은 `adt.struct`와 같이 `row_params`를 가지며,
   binder를 이름 바로 뒤에 쓴다: `adt.enum<"Step"['a0], [...]>`.
+
+### Nominal 값 타입
+
+Nominal layout의 값은 managed 참조이며, 그 타입은 layout을 가리키는 nominal 값
+타입이다. 값이 있는 위치(operation 결과와 피연산자, block 인자, 함수 signature,
+다른 layout의 필드)는 이 타입을 쓴다.
+
+```text
+adt.struct<"Point">
+adt.enum<"Shape">
+adt.struct<"Callback"[row(@"<State(Int)>")]>
+adt.enum<"Step"[row(| 'a0)]>
+```
+
+- Row 매개변수가 없는 layout의 값 타입은 layout의 키 자체다.
+- Row 매개변수를 가진 layout의 값 타입은 그 layout의 row 인스턴스다. Row
+  인스턴스는 이름과 매개변수 없이 type 속성 `def`(layout의 키)와 `row_args`(row
+  매개변수마다 row 하나)를 가진, 같은 종류의 `adt.struct` 또는 `adt.enum`이다. 식별
+  타입이 아니며 내용으로 정체가 정해진다. `row_args`의 형식과 tail 규칙은
+  [`adt.typeref`](#adttyperef-nominal-reference-type)의 `row_args`와 같고, 수는
+  `def`의 `row_params`와 같다. Row 매개변수를 가진 키를 그대로 값 타입으로 쓰지
+  않는다.
+- Textual form은 키의 이름 뒤에 row 인자를 쓴다: `adt.struct<"Callback"[row(..)]>`.
+  Binder 목록(`['a0]`)과 달리 원소가 `row(`로 시작한다. Parser는 이름으로
+  [`adt.typeref`와 같은 규칙](#adttyperef-nominal-reference-type)에 따라 키를 찾아
+  `def`로 삼는다.
+- 값 타입이 가리키는 layout은 키 자체이거나 row 인스턴스의 `def`다. 필드와 variant의
+  타입은 그 layout에서 읽고, row 인스턴스이면 layout binder를 `row_args`로
+  치환한다([Nominal row 인자](tribute-dialects.md#nominal-row-인자)).
+- Nominal 값 타입은 이름으로 다른 layout을 찾지 않는다. Compiler가 아는 layout의
+  값 타입(evidence marker 등)은 [`tribute.types`](tribute-dialects.md#tributetypes)에서
+  키를 읽는다.
 
 ### `adt.typeref` nominal reference type
 
 `adt.typeref`는 이름으로 nominal layout을 가리키는 값 type이며 전용 textual 문법을
-쓴다. `adt.struct`처럼 이름은 언제나 따옴표로 감싼 문자열로 쓴다.
+쓴다. `adt.struct`처럼 이름은 언제나 따옴표로 감싼 문자열로 쓴다. Nominal 값
+타입과 같은 값을 가리키며, pass는 둘을 같은 layout의 값으로 다룬다.
 
 ```text
 adt.typeref<"Point">

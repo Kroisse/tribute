@@ -2,7 +2,7 @@
 //! enums, the row binders of the definition being lowered, and the
 //! conversion of source types at the source-logical boundary.
 
-use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
+use rustc_hash::FxHashMap as HashMap;
 use tribute_ir::dialect::adt;
 use tribute_ir::dialect::tribute_control::{self, Row, RowUnion};
 use tribute_ir::dialect::tribute_rt;
@@ -68,10 +68,10 @@ pub(crate) struct NominalTypes<'db> {
     /// Type map: type name → arena TypeRef for adt.struct / adt.enum.
     /// Used for named structs, tuples, and (future) enum variants.
     type_map: HashMap<Symbol, TypeRef>,
-    /// All source nominal identities collected before source-logical layouts
-    /// are built. This lets recursive and forward fields retain `adt.typeref`
-    /// while their layout is still incomplete.
-    logical_nominal_declarations: HashSet<Symbol>,
+    /// The key of each source nominal layout, made before any layout's body
+    /// is built, so recursive and forward fields name a layout whose body is
+    /// still incomplete.
+    logical_nominal_declarations: HashMap<Symbol, TypeRef>,
     /// The row binders of each function definition of the module.
     row_binders: HashMap<SymbolPath, RowBinders>,
     /// The row binders of the definition whose types are being read.
@@ -86,7 +86,7 @@ impl<'db> NominalTypes<'db> {
             variant_field_names: HashMap::default(),
             variant_positions: HashMap::default(),
             type_map: HashMap::default(),
-            logical_nominal_declarations: HashSet::default(),
+            logical_nominal_declarations: HashMap::default(),
             row_binders: HashMap::default(),
             current_row_binders: Vec::new(),
         }
@@ -222,9 +222,10 @@ impl<'db> NominalTypes<'db> {
         self.type_map.get(name).copied()
     }
 
-    /// Mark a nominal source type as known before its layout is complete.
-    pub(crate) fn declare_logical_nominal(&mut self, name: Symbol) {
-        self.logical_nominal_declarations.insert(name);
+    /// Record `key`, the layout key of the nominal source type `name`, before
+    /// its layout's body is built.
+    pub(crate) fn declare_logical_nominal(&mut self, name: Symbol, key: TypeRef) {
+        self.logical_nominal_declarations.insert(name, key);
     }
 
     /// Get the type of an AST node by NodeId.
@@ -268,13 +269,14 @@ impl<'db> NominalTypes<'db> {
                     .as_type_ref()
             }
             TypeKind::Named { id, row_args, .. }
-                if self.get_type(&id.qualified(self.db)).is_some()
-                    || self
-                        .logical_nominal_declarations
-                        .contains(&id.qualified(self.db)) =>
+                if let Some(key) = self.get_type(&id.qualified(self.db)).or_else(|| {
+                    self.logical_nominal_declarations
+                        .get(&id.qualified(self.db))
+                        .copied()
+                }) =>
             {
-                let row_args = row_args.iter().map(|row| self.ability_row(*row));
-                self.adt_typeref(ir, &id.qualified(self.db), row_args)
+                let row_args: Vec<_> = row_args.iter().map(|row| self.ability_row(*row)).collect();
+                adt::value_type(ir, key, row_args)
             }
             TypeKind::Named { .. } => self.anyref_type(ir),
             TypeKind::Func {
@@ -594,16 +596,30 @@ impl<'db> NominalTypes<'db> {
         adt::Enum::from_variants(ir, name, variants, attrs).as_type_ref()
     }
 
-    /// Create an `adt.typeref` type — a reference to a named type, passing
-    /// `row_args` to its row parameters.
-    pub(crate) fn adt_typeref(
+    /// The key of the `adt.struct` layout named `name` with `row_params` row
+    /// binders, whose body [`Self::adt_struct_type`] binds later.
+    pub(crate) fn adt_struct_key(
         &self,
         ir: &mut IrContext,
         name: &Symbol,
-        row_args: impl IntoIterator<Item = Row>,
+        row_params: u32,
     ) -> TypeRef {
         let name = ir.intern_symbol_text(name);
-        adt::Typeref::named(ir, name, row_args).as_type_ref()
+        let attrs = Self::layout_attrs(ir, row_params, AttributeMap::new());
+        adt::Struct::key(ir, name, attrs).as_type_ref()
+    }
+
+    /// The key of the `adt.enum` layout named `name` with `row_params` row
+    /// binders, whose body [`Self::adt_enum_type`] binds later.
+    pub(crate) fn adt_enum_key(
+        &self,
+        ir: &mut IrContext,
+        name: &Symbol,
+        row_params: u32,
+    ) -> TypeRef {
+        let name = ir.intern_symbol_text(name);
+        let attrs = Self::layout_attrs(ir, row_params, AttributeMap::new());
+        adt::Enum::key(ir, name, attrs).as_type_ref()
     }
 }
 
@@ -611,6 +627,7 @@ impl<'db> NominalTypes<'db> {
 mod tests {
     use super::*;
     use crate::ast::{AbilityId, Type as AstType};
+    use rustc_hash::FxHashSet as HashSet;
 
     fn test_db() -> salsa::DatabaseImpl {
         salsa::DatabaseImpl::new()
