@@ -1722,6 +1722,9 @@ adt.enum_decl "Shape" !Shape ["Dot", "Rect"]
 - `adt.struct_decl`은 struct의 source 이름과 필드 이름을, `adt.enum_decl`은
   enum의 source 이름과 variant 이름을 선언 순서대로 담는다. 이름 목록의 수는
   layout의 필드 수, variant 수와 같다. Variant의 필드 이름은 담지 않는다.
+- Source 이름은 출력을 위한 표기다. 특수화되지 않은 선언은 식별 경로 그대로
+  쓰고(`"std::io::ReadLineResult"`), 특수화된 선언은 layout 이름의 mangling 대신
+  식별 경로에 타입 인자를 source 문법으로 붙여 쓴다(`"pkg::Option(Nat)"`).
 - 선언은 이름 붙이는 layout을 type 속성 `type`으로 가리킨다. 선언과 layout의
   대응은 이 타입의 정체이며, layout의 `name` 문자열을 비교해 찾지 않는다. 필드와
   variant의 타입은 layout이 소유한다. 텍스트 형식은 source 이름, layout 타입,

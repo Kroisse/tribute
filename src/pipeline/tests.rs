@@ -446,47 +446,45 @@ fn main() -> Nil {
     let block = module.first_block(&ctx).expect("module body");
     let mut declared = Vec::new();
     // Each declaration follows its layout through the conversions: its
-    // `type` is the layout published under its source name, whatever key
-    // the conversions gave the layout.
+    // `type` is a published layout, whatever key the conversions gave it,
+    // and its name is the source spelling of its type.
     for &op in &ctx.block(block).ops {
         if let Ok(decl) = adt::StructDecl::from_op(&ctx, op) {
             let layout = adt::Struct::from_type_ref(&ctx, decl.r#type(&ctx)).unwrap();
-            let name = decl.name(&ctx);
-            assert_eq!(ctx.type_alias_by_text(name), Some(decl.r#type(&ctx)));
+            assert!(ctx.type_alias_by_type(decl.r#type(&ctx)).is_some());
             assert_eq!(decl.fields(&ctx).len(), layout.fields(&ctx).len());
-            declared.push(name.to_owned());
+            declared.push((decl.name(&ctx).to_owned(), decl.r#type(&ctx)));
         } else if let Ok(decl) = adt::EnumDecl::from_op(&ctx, op) {
             let layout = adt::Enum::from_type_ref(&ctx, decl.r#type(&ctx)).unwrap();
-            let name = decl.name(&ctx);
-            assert_eq!(ctx.type_alias_by_text(name), Some(decl.r#type(&ctx)));
+            assert!(ctx.type_alias_by_type(decl.r#type(&ctx)).is_some());
             assert_eq!(decl.variants(&ctx).len(), layout.variant_count(&ctx));
-            declared.push(name.to_owned());
+            declared.push((decl.name(&ctx).to_owned(), decl.r#type(&ctx)));
         }
     }
     let declared_as = |name: &str| {
         declared
             .iter()
-            .find(|declared| declared.rsplit("::").next() == Some(name))
+            .find(|(declared, _)| declared.rsplit("::").next() == Some(name))
             .unwrap_or_else(|| panic!("{name} is declared: {declared:?}"))
-            .clone()
+            .1
     };
     let decls = adt::NominalDecls::collect(&ctx, module);
     for name in ["Point", "Handler"] {
-        let layout = ctx.type_alias_by_text(&declared_as(name)).unwrap();
-        let layout = adt::Struct::from_type_ref(&ctx, layout).unwrap();
+        let layout = adt::Struct::from_type_ref(&ctx, declared_as(name)).unwrap();
         assert!(decls.of_struct(layout).is_some(), "{name}");
     }
-    for name in ["Shape", "Maybe$Int"] {
-        let layout = ctx.type_alias_by_text(&declared_as(name)).unwrap();
-        let layout = adt::Enum::from_type_ref(&ctx, layout).unwrap();
+    // A specialization is named by its source spelling, not its mangled
+    // layout name.
+    for name in ["Shape", "Maybe(Int)"] {
+        let layout = adt::Enum::from_type_ref(&ctx, declared_as(name)).unwrap();
         assert!(decls.of_enum(layout).is_some(), "{name}");
     }
 
     // The RTTI table takes its field and variant names from the
     // declarations: renamed there, the names reach the table although the
     // layouts are unchanged.
-    let point = ctx.type_alias_by_text(&declared_as("Point")).unwrap();
-    let shape = ctx.type_alias_by_text(&declared_as("Shape")).unwrap();
+    let point = declared_as("Point");
+    let shape = declared_as("Shape");
     for &op in &ctx.block(block).ops.clone() {
         if adt::StructDecl::from_op(&ctx, op).is_ok_and(|decl| decl.r#type(&ctx) == point) {
             let fields = ["declared_x", "declared_y"].map(|name| ctx.string_attr(name));
@@ -524,7 +522,12 @@ fn main() -> Nil {
         })
         .expect("the RTTI table");
     let bytes = table.bytes(&ctx);
-    for name in ["declared_x", "declared_y", "DeclaredCircle"] {
+    for name in [
+        "declared_x",
+        "declared_y",
+        "DeclaredCircle",
+        "pkg::Maybe(Int)",
+    ] {
         assert!(
             bytes
                 .windows(name.len())

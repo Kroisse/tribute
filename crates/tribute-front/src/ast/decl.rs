@@ -206,6 +206,10 @@ pub struct StructDecl {
     pub type_params: Vec<TypeParamDecl>,
     /// Struct fields.
     pub fields: Vec<FieldDecl>,
+    /// The source spelling of a specialized declaration's type, such as
+    /// `pkg::Pair(Int, Bool)`, which output names it by; `None` for a
+    /// source declaration, whose qualified name is its spelling.
+    pub spelling: Option<Symbol>,
 }
 
 /// The functions each named struct field `f` of `T` has in the namespace
@@ -245,6 +249,9 @@ pub struct EnumDecl {
     pub type_params: Vec<TypeParamDecl>,
     /// Enum variants.
     pub variants: Vec<VariantDecl>,
+    /// The source spelling of a specialized declaration's type, such as
+    /// `pkg::Option(Nat)`, as for [`StructDecl::spelling`].
+    pub spelling: Option<Symbol>,
 }
 
 /// Variant declaration in an enum.
@@ -446,6 +453,7 @@ mod tests {
             row_params: vec![],
             type_params: vec![],
             fields: vec![],
+            spelling: None,
         })
         .into()
     }
