@@ -231,7 +231,9 @@ pub(super) fn generate_struct_specializations_with_index<'db>(
 
         for type_args in type_arg_sets {
             let path = mangle_type_path(db, *id, type_args);
-            let specialized = specialize_struct_decl(db, decl, type_args, path.to_symbol());
+            let spelling = source_spelling(db, *id, type_args);
+            let specialized =
+                specialize_struct_decl(db, decl, type_args, path.to_symbol(), spelling);
             entries.push((Placement::at(path), specialized));
         }
     }
@@ -272,7 +274,8 @@ pub(super) fn generate_enum_specializations_with_index<'db>(
 
         for type_args in type_arg_sets {
             let path = mangle_type_path(db, *id, type_args);
-            let specialized = specialize_enum_decl(db, decl, type_args, path.to_symbol());
+            let spelling = source_spelling(db, *id, type_args);
+            let specialized = specialize_enum_decl(db, decl, type_args, path.to_symbol(), spelling);
             entries.push((Placement::at(path), specialized));
         }
     }
@@ -281,11 +284,31 @@ pub(super) fn generate_enum_specializations_with_index<'db>(
     entries
 }
 
+/// The source spelling of the nominal type `id` applied to `type_args`, such
+/// as `pkg::Option(Nat)`: the name a specialized declaration records for
+/// output, spelled whole as identity paths are
+/// (`design/tribute-dialects.md` § "Nominal 선언").
+fn source_spelling<'db>(
+    db: &'db dyn salsa::Database,
+    id: TypeDefId<'db>,
+    type_args: &[Type<'db>],
+) -> Symbol {
+    use itertools::Itertools as _;
+
+    let names = crate::resolve::NameDisplay::identity();
+    let args = type_args
+        .iter()
+        .map(|ty| ty.display(db, &names))
+        .format(", ");
+    Symbol::new(&format!("{}({args})", id.path(db)))
+}
+
 fn specialize_struct_decl<'db>(
     db: &'db dyn salsa::Database,
     decl: &StructDecl,
     type_args: &[Type<'db>],
     mangled_name: Symbol,
+    spelling: Symbol,
 ) -> StructDecl {
     let variant = type_args_variant(type_args);
     let param_names: Vec<Symbol> = decl.type_params.iter().map(|p| p.name.clone()).collect();
@@ -308,6 +331,7 @@ fn specialize_struct_decl<'db>(
                 ty: substitute_annotation(db, &f.ty, &param_names, type_args),
             })
             .collect(),
+        spelling: Some(spelling),
     }
 }
 
@@ -316,6 +340,7 @@ fn specialize_enum_decl<'db>(
     decl: &EnumDecl,
     type_args: &[Type<'db>],
     mangled_name: Symbol,
+    spelling: Symbol,
 ) -> EnumDecl {
     let variant = type_args_variant(type_args);
     let param_names: Vec<Symbol> = decl.type_params.iter().map(|p| p.name.clone()).collect();
@@ -346,6 +371,7 @@ fn specialize_enum_decl<'db>(
                     .collect(),
             })
             .collect(),
+        spelling: Some(spelling),
     }
 }
 
@@ -1204,12 +1230,16 @@ mod tests {
                     },
                 },
             ],
+            spelling: None,
         };
 
         let mangled = mangle_name(&db, &Symbol::new("Pair"), &[int, bool_ty]);
-        let specialized = specialize_struct_decl(&db, &decl, &[int, bool_ty], mangled);
+        let spelling = Symbol::new("Pair(Int, Bool)");
+        let specialized =
+            specialize_struct_decl(&db, &decl, &[int, bool_ty], mangled, spelling.clone());
 
         assert_eq!(specialized.name.to_string(), "Pair$Int$Bool");
+        assert_eq!(specialized.spelling, Some(spelling));
         assert!(specialized.type_params.is_empty());
         assert_eq!(specialized.fields.len(), 2);
 
@@ -1281,10 +1311,12 @@ mod tests {
                     },
                 },
             ],
+            spelling: None,
         };
 
         let mangled = mangle_name(&db, &Symbol::new("Holder"), &[thunk]);
-        let specialized = specialize_struct_decl(&db, &decl, &[thunk], mangled);
+        let spelling = Symbol::new("Holder");
+        let specialized = specialize_struct_decl(&db, &decl, &[thunk], mangled, spelling);
 
         // `value: Thunk({Log})`
         let TypeAnnotationKind::App {
@@ -1357,10 +1389,12 @@ mod tests {
                     fields: vec![],
                 },
             ],
+            spelling: None,
         };
 
         let mangled = mangle_name(&db, &Symbol::new("Option"), &[int]);
-        let specialized = specialize_enum_decl(&db, &decl, &[int], mangled);
+        let spelling = Symbol::new("Option(Int)");
+        let specialized = specialize_enum_decl(&db, &decl, &[int], mangled, spelling);
 
         assert_eq!(specialized.name.to_string(), "Option$Int");
         assert!(specialized.type_params.is_empty());

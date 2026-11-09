@@ -497,7 +497,8 @@ impl<'a> Verifier<'a> {
             }
             self.attribute_violations(value, &location, &mut found);
         }
-        for &parameter in data.params.iter() {
+        // A nominal layout's fields are in its body.
+        for parameter in data.params.iter().copied().chain(ctx.type_body(ty)) {
             found.extend(self.type_violations(parameter).iter().cloned());
         }
         self.computing.remove(&ty);

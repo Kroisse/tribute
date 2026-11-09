@@ -1195,8 +1195,9 @@ conventions. `List` is an opaque nominal builtin whose shared construction and
 sequence-view observations use `list.*`; target-specific passes choose and
 eliminate its private representation.
 
-Tribute dialect 타입의 규칙(`adt.*` layout과 reference, closure 저장 layout)은
-[tribute-dialects.md](tribute-dialects.md#adt)가 정한다.
+Tribute dialect 타입의 규칙은 tribute-dialects.md가 정한다: `adt.*` layout과
+reference는 [`adt` 절](tribute-dialects.md#adt)이, closure 저장 layout은
+[`closure` 절](tribute-dialects.md#closure-저장-layout)이 정한다.
 
 Dialect 타입의 정의는 그 타입의 type verifier, 전용 textual 문법, printer가
 자동 type alias를 만들 때 쓰는 alias 이름 제안을 함께 소유한다. Alias 이름 제안은

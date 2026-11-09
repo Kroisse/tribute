@@ -597,7 +597,7 @@ pub fn logical_tuple_elements(ctx: &IrContext, ty: TypeRef) -> Option<&[TypeRef]
         return None;
     }
     let layout = adt::layout_of(ctx, ty)?;
-    adt::Struct::from_type_ref(ctx, layout).map(|layout| layout.field_types(ctx))
+    adt::Struct::from_type_ref(ctx, layout).map(|layout| layout.fields(ctx))
 }
 
 /// Where substitution finds or makes the types it produces.

@@ -1000,6 +1000,7 @@ mod tests {
                     kind: TypeAnnotationKind::Named(Symbol::new("Int")),
                 },
             }],
+            spelling: None,
         }
     }
 
@@ -1020,6 +1021,7 @@ mod tests {
                     fields: vec![],
                 })
                 .collect(),
+            spelling: None,
         }
     }
 
@@ -1313,6 +1315,7 @@ mod tests {
                         },
                     },
                 ],
+                spelling: None,
             })],
         );
 

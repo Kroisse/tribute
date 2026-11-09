@@ -14,51 +14,63 @@ mod adt {
     ///
     /// ```text
     /// adt.struct<"Point", (core.i32, core.i32)>
+    /// adt.struct<"Point">
     /// adt.struct<"Callback"['a0], (tribute_control.func_sig<(core.i64) -> core.i64 row(| 'a0)>)>
     /// adt.struct<(core.ptr), {layout = "closure"}>
     /// ```
     ///
-    /// Field types are the type's parameters, in declaration order. A
-    /// nominal layout's name is the type's `name` attribute, the key an
-    /// `adt.typeref` finds it by; a literal layout has no name and is only its
-    /// fields and attributes (`design/tribute-dialects.md` § "`adt.struct`
-    /// nominal layout type"). Fields have no names; the source names are the layout's
-    /// `adt.struct_decl`. A layout whose
-    /// declaration has row parameters counts its row binders in `row_params`,
-    /// a count without kinds; a row tail inside its field types, in a field's
-    /// callable type or in the row arguments of a nested `adt.typeref`, is
-    /// the index of one of them, and the binders do not leave the layout. The
-    /// text writes the binders right after the name, before the fields, as
-    /// `['a0, 'a1, ...]`, numbered from `'a0` in order with no kind keyword
-    /// or union; the layout is one for every row argument
+    /// A nominal layout is an identified type whose identifier is its
+    /// `name`: its key has only type attributes, which an `adt.typeref` to
+    /// it also has, and its body is a literal `adt.struct` without
+    /// attributes holding its fields. A literal layout has no name and is
+    /// its fields, its type parameters in declaration order, and its
+    /// attributes (`design/tribute-dialects.md` § "`adt.struct` nominal layout type").
+    /// [`Struct::fields`] reads either; `param_fields` reads only the type's
+    /// own parameters, which a key has none of. The text writes a key as its name,
+    /// and the fields of its body where it writes the body. Fields have no
+    /// names; the source names are the layout's `adt.struct_decl`. A layout
+    /// whose declaration has row parameters counts its row binders in
+    /// `row_params`, a count without kinds; a row tail inside its field types,
+    /// in a field's callable type or in the row arguments of a nested
+    /// `adt.typeref`, is the index of one of them, and the binders do not
+    /// leave the layout. The text writes the binders right after the name,
+    /// before the fields, as `['a0, 'a1, ...]`, numbered from `'a0` in order
+    /// with no kind keyword or union; the layout is one for every row argument
     /// (`design/tribute-dialects.md` § "Nominal row 인자").
     #[verify]
     #[asm_format]
     #[alias_hint]
+    #[identified]
     #[implements(ManagedRefType)]
-    struct Struct<#[rest] FieldTypes> {
+    struct Struct<#[rest] ParamFields> {
         name: Option<Attr<String>>,
         row_params: Option<Attr<u32>>,
     }
 
-    /// Validated wrapper for a nominal `adt.enum` layout type.
+    /// Validated wrapper for an `adt.enum` layout type.
     ///
     /// ```text
     /// adt.enum<"Option", [(), (core.i32)]>
+    /// adt.enum<"Option">
     /// adt.enum<"Step"['a0], [(tribute_control.func_sig<() -> core.i64 row(| 'a0)>), ()]>
+    /// adt.enum<[(), (core.i32)]>
     /// ```
     ///
-    /// Each variant is one type parameter, in declaration order: an
-    /// `adt.variant` whose parameters are the variant's field types. The
-    /// enum's name is the type's `name` attribute. Variants and fields have no
-    /// names; the source names are the layout's `adt.enum_decl`. Its
-    /// `row_params` are those of [`Struct`].
+    /// A named enum is an identified type like a nominal [`Struct`], whose
+    /// body is a literal `adt.enum`. A literal enum has no attributes; each
+    /// of its variants is one type parameter, in declaration order: an
+    /// `adt.variant` whose parameters are the variant's field types.
+    /// [`Enum::variants`] reads either; `param_variants` reads only the
+    /// type's own parameters, which a key has none of. Variants and fields have no names;
+    /// the source names are the layout's `adt.enum_decl`. Its `row_params`
+    /// are those of [`Struct`].
     #[verify]
     #[asm_format]
     #[alias_hint]
+    #[identified]
     #[implements(ManagedRefType)]
-    struct Enum<#[rest] VariantTypes> {
-        name: Attr<String>,
+    struct Enum<#[rest] ParamVariants> {
+        name: Option<Attr<String>>,
         row_params: Option<Attr<u32>>,
     }
 
@@ -209,44 +221,48 @@ mod adt {
     /// The source names of the struct layout `type`.
     ///
     /// ```text
-    /// adt.struct_decl !Point ["x", "y"]
+    /// adt.struct_decl "Point" !Point ["x", "y"]
     /// ```
     ///
-    /// - **Shape:** a module-level operation. `type` is a named `adt.struct`
-    ///   layout, and `fields` has one name per field of that layout, in
-    ///   declaration order.
+    /// - **Shape:** a module-level operation. `name` is the struct's source
+    ///   name, `type` is a nominal `adt.struct` layout, and `fields` has one
+    ///   name per field of that layout, in declaration order.
     /// - **Meaning:** names only; no value depends on it. Native RTTI
     ///   records the struct's name and field names from it. It belongs to
     ///   the layout that is its `type`, not to a layout of the same name.
     /// - **Ownership and value flow:** a pass that converts layouts converts
-    ///   `type` as it converts the types in operation attributes.
+    ///   `type` as it converts the types in operation attributes, and keeps
+    ///   `name` when the converted layout's name has a tag.
     /// - **Location:** the frontend emits it with the layout of each source
     ///   struct; the target pass that lowers `adt` operations erases it
     ///   (`design/tribute-dialects.md` § "Nominal 선언").
     #[verify]
-    #[asm_format(r#type fields attr_dict)]
-    fn struct_decl(r#type: Attr<Type>, fields: Attr<[String]>) {}
+    #[asm_format(name r#type fields attr_dict)]
+    fn struct_decl(name: Attr<String>, r#type: Attr<Type>, fields: Attr<[String]>) {}
 
     /// The source names of the enum layout `type`.
     ///
     /// ```text
-    /// adt.enum_decl !Shape ["Dot", "Rect"]
+    /// adt.enum_decl "Shape" !Shape ["Dot", "Rect"]
     /// ```
     ///
-    /// - **Shape:** a module-level operation. `type` is an `adt.enum` layout,
-    ///   and `variants` has one name per variant of that layout, in
-    ///   declaration order.
+    /// - **Shape:** a module-level operation. `name` is the enum's source
+    ///   name, `type` is a named `adt.enum` layout, and `variants` has one
+    ///   name per variant of that layout, in declaration order.
     /// - **Meaning:** names only; no value depends on it. Native RTTI
     ///   records the enum's name and its variants' names from it. It belongs
     ///   to the layout that is its `type`, not to a layout of the same name.
+    ///   `tribute.definition`, when present, is the declaration's source
+    ///   location.
     /// - **Ownership and value flow:** a pass that converts layouts converts
-    ///   `type` as it converts the types in operation attributes.
+    ///   `type` as it converts the types in operation attributes, and keeps
+    ///   `name` when the converted layout's name has a tag.
     /// - **Location:** the frontend emits it with the layout of each source
     ///   enum and each specialized enum instance; the target pass that
     ///   lowers `adt` operations erases it (`design/tribute-dialects.md` § "Nominal 선언").
     #[verify]
-    #[asm_format(r#type variants attr_dict)]
-    fn enum_decl(r#type: Attr<Type>, variants: Attr<[String]>) {}
+    #[asm_format(name r#type variants attr_dict)]
+    fn enum_decl(name: Attr<String>, r#type: Attr<Type>, variants: Attr<[String]>) {}
 
     /// A `length`-element array whose every element is `initial`.
     #[flags(Pure)]
@@ -352,7 +368,19 @@ impl TypeAliasHint for Struct {
 
 impl TypeAliasHint for Enum {
     fn alias_hint<'a>(&self, ctx: &'a IrContext) -> Option<&'a str> {
-        Some(self.name(ctx))
+        self.name(ctx)
+    }
+}
+
+impl trunk_ir::type_def::IdentifiedType for Struct {
+    fn identifier<'a>(&self, ctx: &'a IrContext) -> Option<&'a str> {
+        self.name(ctx)
+    }
+}
+
+impl trunk_ir::type_def::IdentifiedType for Enum {
+    fn identifier<'a>(&self, ctx: &'a IrContext) -> Option<&'a str> {
+        self.name(ctx)
     }
 }
 
@@ -493,6 +521,7 @@ use trunk_ir::types::{
     Attribute, AttributeMap, PARAM_ATTRS_ATTR, StringArg, StringRef, TypeDataBuilder,
 };
 
+pub mod convert;
 pub mod layout;
 
 /// Type attribute holding a nominal layout's or an `adt.typeref`'s name, a
@@ -522,20 +551,14 @@ pub fn nominal_name(ctx: &IrContext, ty: TypeRef) -> Option<&str> {
 }
 
 /// The `adt.struct` or `adt.enum` layout of a value of type `ty`: `ty`
-/// itself when it is a layout, or the layout an `adt.typeref` names
-/// (`design/tribute-dialects.md` § "`adt.typeref` nominal reference type"), which the
-/// frontend publishes as the type alias of that name. `None` for any other
-/// type or a name without a published layout.
+/// itself when it is a layout, or the layout an `adt.typeref` refers to
+/// ([`Typeref::layout`]). `None` for any other type or a typeref without a
+/// layout.
 pub fn layout_of(ctx: &IrContext, ty: TypeRef) -> Option<TypeRef> {
-    let is_layout = |ty: TypeRef| Struct::matches(ctx, ty) || Enum::matches(ctx, ty);
-    if is_layout(ty) {
+    if Struct::matches(ctx, ty) || Enum::matches(ctx, ty) {
         return Some(ty);
     }
-    if !Typeref::matches(ctx, ty) {
-        return None;
-    }
-    let layout = ctx.type_alias_by_text(nominal_name(ctx, ty)?)?;
-    is_layout(layout).then_some(layout)
+    Typeref::from_type_ref(ctx, ty)?.layout(ctx)
 }
 
 // === Nominal reference type ===
@@ -585,6 +608,44 @@ impl Typeref {
         builder
             .intern(ctx)
             .unwrap_or_else(|error| panic!("adt.typeref: {error}"))
+    }
+
+    /// The nominal layout this typeref refers to: the `adt.struct` or
+    /// `adt.enum` published as the type alias of its `name`, which a pass
+    /// that gives the layout a new key publishes again, or without such an
+    /// alias the layout whose key this typeref's attributes spell, with
+    /// `row_args` replaced by their number as `row_params`
+    /// (`design/tribute-dialects.md` § "`adt.typeref` nominal reference type").
+    pub fn layout(self, ctx: &IrContext) -> Option<TypeRef> {
+        let is_layout = |ty: TypeRef| Struct::matches(ctx, ty) || Enum::matches(ctx, ty);
+        if let Some(layout) = ctx
+            .type_alias_by_text(self.name(ctx))
+            .filter(|&alias| is_layout(alias))
+        {
+            return Some(layout);
+        }
+        let mut entries = Vec::new();
+        for (key, value) in ctx.get_type(self.0).attrs.iter() {
+            if ctx.str(key) != ROW_ARGS_ATTR {
+                entries.push((key, value.clone()));
+            }
+        }
+        if let Some(Attribute::List(rows)) = ctx.type_attrs(self.0).get(ROW_ARGS_ATTR) {
+            // A layout with binders has interned the key.
+            let key = ctx.lookup_str(ROW_PARAMS_ATTR)?;
+            entries.push((key, Attribute::Int(rows.len() as i128)));
+        }
+        let attrs = AttributeMap::from_refs(ctx, entries);
+        [<Struct as DialectType>::NAME, <Enum as DialectType>::NAME]
+            .into_iter()
+            .find_map(|name| {
+                ctx.types().lookup(&trunk_ir::types::TypeData {
+                    name,
+                    params: Default::default(),
+                    attrs: attrs.clone(),
+                })
+            })
+            .filter(|&layout| ctx.type_body(layout).is_some())
     }
 
     /// The row arguments, one for each row parameter of the layout; empty
@@ -788,9 +849,9 @@ impl NominalDecls {
 /// A nominal declaration that does not fit its layout.
 #[derive(Debug, derive_more::Display, derive_more::Error)]
 pub enum NominalDeclError {
-    #[display("`type` is not a named `adt.struct` layout")]
+    #[display("`type` is not a nominal `adt.struct` layout with a body")]
     NotANamedStruct,
-    #[display("`type` is not an `adt.enum` layout")]
+    #[display("`type` is not a named `adt.enum` layout with a body")]
     NotAnEnum,
     #[display("{names} name(s) for a layout with {positions} position(s)")]
     CountMismatch { names: usize, positions: usize },
@@ -799,7 +860,7 @@ pub enum NominalDeclError {
 impl trunk_ir::ops::Verify for StructDecl {
     fn verify(&self, ctx: &IrContext) -> Result<(), trunk_ir::ops::VerificationError> {
         let layout = Struct::from_type_ref(ctx, self.r#type(ctx))
-            .filter(|layout| layout.name(ctx).is_some())
+            .filter(|layout| layout.body(ctx).is_some())
             .ok_or(NominalDeclError::NotANamedStruct)?;
         let (names, positions) = (self.fields(ctx).len(), layout.field_count(ctx));
         if names != positions {
@@ -811,8 +872,9 @@ impl trunk_ir::ops::Verify for StructDecl {
 
 impl trunk_ir::ops::Verify for EnumDecl {
     fn verify(&self, ctx: &IrContext) -> Result<(), trunk_ir::ops::VerificationError> {
-        let layout =
-            Enum::from_type_ref(ctx, self.r#type(ctx)).ok_or(NominalDeclError::NotAnEnum)?;
+        let layout = Enum::from_type_ref(ctx, self.r#type(ctx))
+            .filter(|layout| layout.body(ctx).is_some())
+            .ok_or(NominalDeclError::NotAnEnum)?;
         let (names, positions) = (self.variants(ctx).len(), layout.variant_count(ctx));
         if names != positions {
             return Err(NominalDeclError::CountMismatch { names, positions }.into());
@@ -899,6 +961,8 @@ pub enum StructTypeError {
     MalformedName,
     #[display("a literal `adt.struct` has no `{ROW_PARAMS_ATTR}`")]
     LiteralRowParams,
+    #[display("a nominal `adt.struct` has no type parameters; its fields are in its body")]
+    NominalParams,
     #[display("`fields` is not an `adt.struct` attribute; fields are type parameters")]
     FieldsAttribute,
     #[display("closure base fields are not a prefix of the closure capture layout")]
@@ -906,7 +970,8 @@ pub enum StructTypeError {
 }
 
 impl trunk_ir::type_verifier::VerifyType for Struct {
-    /// Validate a name-matching `adt.struct`.
+    /// Validate a name-matching `adt.struct`: a nominal layout's key, or a
+    /// literal layout. A key's body is checked when it is bound.
     fn verify(ctx: &IrContext, ty: TypeRef) -> Result<Self, trunk_ir::ops::VerificationError> {
         let data = ctx.get_type(ty);
         debug_assert!(Self::matches(ctx, ty));
@@ -915,7 +980,13 @@ impl trunk_ir::type_verifier::VerifyType for Struct {
         }
         let attrs = ctx.type_attrs(ty);
         match attrs.get(STRUCT_NAME_ATTR) {
-            Some(Attribute::String(_)) => {}
+            Some(Attribute::String(_)) if !data.params.is_empty() => {
+                return Err(StructTypeError::NominalParams.into());
+            }
+            Some(Attribute::String(_)) => {
+                row_binders(ctx, ty)?;
+                return Ok(Self(ty));
+            }
             Some(_) => return Err(StructTypeError::MalformedName.into()),
             // A row binder is bound by the declaration a nominal layout has.
             None if attrs.contains_key(ROW_PARAMS_ATTR) => {
@@ -938,7 +1009,6 @@ impl trunk_ir::type_verifier::VerifyType for Struct {
                 return Err(StructTypeError::ClosureBasePrefix.into());
             }
         }
-        verify_row_params(ctx, ty, data.params.iter().copied())?;
         Ok(Self(ty))
     }
 }
@@ -954,20 +1024,79 @@ pub enum LayoutRowError {
     MalformedRow(#[error(not(source))] String),
 }
 
-/// Check that a layout with `row_params` binders writes only those binders
+/// The number of row binders the nominal layout `layout` declares, `0`
+/// without `row_params`.
+fn row_binders(ctx: &IrContext, layout: TypeRef) -> Result<i128, LayoutRowError> {
+    match ctx.type_attrs(layout).get(ROW_PARAMS_ATTR) {
+        None => Ok(0),
+        Some(Attribute::Int(count)) if *count > 0 => Ok(*count),
+        Some(_) => Err(LayoutRowError::NoBinders),
+    }
+}
+
+/// A body that cannot be bound to a nominal layout.
+#[derive(
+    Clone, Debug, PartialEq, Eq, derive_more::Display, derive_more::Error, derive_more::From,
+)]
+pub enum LayoutBodyError {
+    #[display(
+        "the body of a nominal layout is a literal layout of the same kind without attributes"
+    )]
+    NotALiteral,
+    #[display("{_0}")]
+    Rows(LayoutRowError),
+    #[display("the layout already has a different body")]
+    Conflicting,
+}
+
+/// Bind `body` to the nominal layout `key` after checking that it is a
+/// literal layout of `key`'s kind without attributes whose row tails name
+/// binders of `key` (`design/tribute-dialects.md` § "`adt.struct` nominal layout type").
+fn bind_layout_body(
+    ctx: &mut IrContext,
+    key: TypeRef,
+    body: TypeRef,
+) -> Result<(), LayoutBodyError> {
+    check_layout_body(ctx, key, body)?;
+    ctx.bind_type_body(key, body)
+        .map_err(|_| LayoutBodyError::Conflicting)
+}
+
+fn check_layout_body(ctx: &IrContext, key: TypeRef, body: TypeRef) -> Result<(), LayoutBodyError> {
+    let (key_data, body_data) = (ctx.get_type(key), ctx.get_type(body));
+    let literal = body_data.name == key_data.name
+        && body_data
+            .attrs
+            .iter()
+            .all(|(name, _)| ctx.str(name) == PARAM_ATTRS_ATTR);
+    if !literal {
+        return Err(LayoutBodyError::NotALiteral);
+    }
+    let fields = if Enum::matches(ctx, body) {
+        body_data
+            .params
+            .iter()
+            .flat_map(|&variant| ctx.get_type(variant).params.iter().copied())
+            .collect()
+    } else {
+        body_data.params.to_vec()
+    };
+    // Without binders, a tail names a binder of the definition that writes
+    // the layout, as in a tuple layout.
+    let binders = row_binders(ctx, key)?;
+    if binders > 0 {
+        verify_row_params(ctx, binders, fields)?;
+    }
+    Ok(())
+}
+
+/// Check that a layout with `binders` row binders writes only those binders
 /// as tails in `fields` (`design/tribute-dialects.md` § "Nominal row 인자").
 fn verify_row_params(
     ctx: &IrContext,
-    layout: TypeRef,
-    fields: impl Iterator<Item = TypeRef>,
+    binders: i128,
+    fields: Vec<TypeRef>,
 ) -> Result<(), LayoutRowError> {
-    let Some(binders) = ctx.type_attrs(layout).get(ROW_PARAMS_ATTR) else {
-        return Ok(());
-    };
-    let binders = match binders {
-        Attribute::Int(count) if *count > 0 => *count,
-        _ => return Err(LayoutRowError::NoBinders),
-    };
     let mut error = None;
     for field in fields {
         crate::dialect::tribute_control::visit_rows(ctx, field, &mut |row| {
@@ -988,27 +1117,56 @@ fn verify_row_params(
 }
 
 impl Struct {
+    /// Whether this is a nominal layout, an identified type, rather than a
+    /// literal one.
+    pub fn is_nominal(self, ctx: &IrContext) -> bool {
+        self.name(ctx).is_some()
+    }
+
+    /// The literal layout holding the fields: the body of a nominal layout,
+    /// which must have one, or a literal layout itself.
+    pub fn literal_layout(self, ctx: &IrContext) -> Struct {
+        if self.is_nominal(ctx) {
+            let body = ctx.type_body(self.0).unwrap_or_else(|| {
+                panic!(
+                    "nominal adt.struct {:?} has no body",
+                    self.name(ctx).unwrap_or_default()
+                )
+            });
+            Struct(body)
+        } else {
+            self
+        }
+    }
+
+    /// The body of a nominal layout, if it has one.
+    pub fn body(self, ctx: &IrContext) -> Option<Struct> {
+        ctx.type_body(self.0).map(Struct)
+    }
+
     pub fn field_count(self, ctx: &IrContext) -> usize {
-        ctx.get_type(self.0).params.len()
+        self.fields(ctx).len()
     }
 
     /// The type of field `index`, if it exists.
     pub fn field_type(self, ctx: &IrContext, index: usize) -> Option<TypeRef> {
-        ctx.get_type(self.0).params.get(index).copied()
+        self.fields(ctx).get(index).copied()
     }
 
     /// Each field's type, in declaration order.
     pub fn fields(self, ctx: &IrContext) -> &[TypeRef] {
-        &ctx.get_type(self.0).params
+        &ctx.get_type(self.literal_layout(ctx).0).params
     }
 
     /// The attributes of field `index`.
     pub fn field_attrs(self, ctx: &IrContext, index: usize) -> &AttributeMap {
-        ctx.get_type(self.0).param_attrs(ctx, index)
+        ctx.get_type(self.literal_layout(ctx).0)
+            .param_attrs(ctx, index)
     }
 
     /// The type attributes other than the name, the row binders, and the
-    /// field attributes.
+    /// field attributes: a nominal layout's other key attributes, or a
+    /// literal layout's attributes.
     pub fn extra_attrs(
         self,
         ctx: &IrContext,
@@ -1021,21 +1179,43 @@ impl Struct {
 
 impl Struct {
     /// Construct the nominal `adt.struct` named `name` with `fields` in
-    /// declaration order.
-    ///
-    /// `attrs` holds the remaining type attributes.
+    /// declaration order: the key with `attrs` as its other key attributes,
+    /// bound to the literal body of `fields`.
     ///
     /// # Panics
     ///
-    /// If `attrs` has a `fields` attribute.
+    /// If the key is malformed or already has another body.
     pub fn from_fields(
         ctx: &mut IrContext,
         name: impl Into<StringArg>,
         fields: impl IntoIterator<Item = TypeRef>,
         attrs: AttributeMap,
     ) -> Self {
+        let key = Self::key(ctx, name, attrs);
+        let body = Self::literal(ctx, fields, AttributeMap::new());
+        key.bind_body(ctx, body).unwrap_or_else(|error| {
+            panic!(
+                "adt.struct {:?}: {error}",
+                key.name(ctx).unwrap_or_default()
+            )
+        });
+        key
+    }
+
+    /// The key of the nominal `adt.struct` named `name` with `attrs` as its
+    /// other key attributes, without binding a body.
+    ///
+    /// # Panics
+    ///
+    /// If the key is malformed.
+    pub fn key(ctx: &mut IrContext, name: impl Into<StringArg>, attrs: AttributeMap) -> Self {
         let name = ctx.intern_string_arg(name.into());
-        Self::build(ctx, Some(name), fields, attrs)
+        Self::build(ctx, Some(name), [], attrs)
+    }
+
+    /// Bind the literal layout `body` to this nominal layout's key.
+    pub fn bind_body(self, ctx: &mut IrContext, body: Struct) -> Result<(), LayoutBodyError> {
+        bind_layout_body(ctx, self.0, body.0)
     }
 
     /// Construct the literal `adt.struct` of `fields` in declaration order,
@@ -1077,20 +1257,17 @@ impl Struct {
         for (key, value) in attrs {
             builder = builder.attr(key, value);
         }
-        let data = builder.build(ctx);
-        assert!(
-            !data.attrs.view(ctx).contains_key("fields"),
-            "adt.struct: {}",
-            StructTypeError::FieldsAttribute
-        );
-        Struct(ctx.intern_type(data))
+        let ty = builder.intern(ctx);
+        <Struct as trunk_ir::type_verifier::VerifyType>::verify(ctx, ty)
+            .unwrap_or_else(|error| panic!("adt.struct: {error}"))
     }
 }
 
 // === Textual syntax: `adt.struct<"Name", (type {attrs}, ...), {attrs}>` ===
 //
-// The name is always a quoted string. A literal layout writes no name:
-// `adt.struct<(type {attrs}, ...), {attrs}>`.
+// The name is always a quoted string. A nominal layout's key writes no field
+// list where its body is not written: `adt.struct<"Name", {attrs}>`. A
+// literal layout writes no name: `adt.struct<(type {attrs}, ...), {attrs}>`.
 
 impl trunk_ir::asm_format::TypeAsmFormat for Struct {
     fn print(&self, p: &mut trunk_ir::printer::AsmPrinter<'_>) -> std::fmt::Result {
@@ -1114,17 +1291,24 @@ fn write_struct_type(
 
     let s = p.state();
     let ctx = s.ctx();
-    let data = ctx.get_type(adt_struct.as_type_ref());
     p.write_str("adt.struct<")?;
     if let Some(name) = adt_struct.name(ctx) {
         write!(
             p,
-            "{}{}, ",
+            "{}{}",
             display_string(name),
             display_layout_binders(adt_struct.row_params(ctx).unwrap_or(0))
         )?;
+        if let Some(body) = p.identified_body(adt_struct.as_type_ref()) {
+            write!(p, ", ({})", param_list(s, ctx.get_type(body.ty())))?;
+        }
+    } else {
+        write!(
+            p,
+            "({})",
+            param_list(s, ctx.get_type(adt_struct.as_type_ref()))
+        )?;
     }
-    write!(p, "({})", param_list(s, data))?;
     let mut attrs = adt_struct.extra_attrs(ctx).peekable();
     if attrs.peek().is_some() {
         write!(p, ", {}", s.attr_dict(attrs))?;
@@ -1161,10 +1345,9 @@ fn parse_field_list(
     p.parse_delimited("(", ")", |p| p.parse_param())
 }
 
-/// Parse a layout's quoted name, its binder list, if any, and the `,` after
-/// them, when the text after the opening bracket begins with a string;
-/// `None`, reading nothing, otherwise. The generic spelling begins with a
-/// type or a dictionary.
+/// Parse a layout's quoted name and its binder list, if any, when the text
+/// after the opening bracket begins with a string; `None`, reading nothing,
+/// otherwise. The generic spelling begins with a type or a dictionary.
 fn parse_layout_name(
     p: &mut trunk_ir::parser::AsmParser<'_>,
     what: &'static str,
@@ -1174,16 +1357,66 @@ fn parse_layout_name(
     }
     let layout_name = p.parse_token(what, trunk_ir::parser::lexer::string_lit)?;
     let binders = parse_layout_binders(p)?;
-    p.parse_punct(",")?;
     Ok(Some((layout_name, binders)))
 }
 
+/// Parse the rest of a nominal layout after its name and binders: the
+/// parameters of its body, which `parse_body` reads where the text begins
+/// with `open`, if the text writes the body, and then its key attributes
+/// and `>`. Returns the parameters with the offset they begin at.
+#[expect(clippy::type_complexity)]
+fn parse_nominal_rest(
+    p: &mut trunk_ir::parser::AsmParser<'_>,
+    open: &str,
+    parse_body: impl FnOnce(
+        &mut trunk_ir::parser::AsmParser<'_>,
+    ) -> trunk_ir::parser::ParseResult<Vec<(TypeRef, AttributeMap)>>,
+) -> trunk_ir::parser::ParseResult<(Option<(usize, Vec<(TypeRef, AttributeMap)>)>, AttributeMap)> {
+    if !p.parse_optional_punct(",") {
+        p.parse_punct(">")?;
+        return Ok((None, AttributeMap::new()));
+    }
+    if !p.peek().starts_with(open) {
+        let attrs = p.parse_attr_dict()?;
+        p.parse_punct(">")?;
+        return Ok((None, attrs));
+    }
+    let offset = p.offset();
+    let params = parse_body(p)?;
+    let attrs = parse_layout_attrs(p)?;
+    Ok((Some((offset, params)), attrs))
+}
+
+/// Intern the key of the nominal layout of type `name` named `layout_name`
+/// with `binders` and `attrs`, and bind the literal body of `body`, written
+/// at its offset, when the text writes one.
+fn build_nominal_layout(
+    p: &mut trunk_ir::parser::AsmParser<'_>,
+    name: &str,
+    layout_name: &str,
+    binders: u32,
+    body: Option<(usize, Vec<(TypeRef, AttributeMap)>)>,
+    attrs: AttributeMap,
+) -> trunk_ir::parser::ParseResult<TypeRef> {
+    let attrs = named(p, attrs, layout_name)?;
+    let attrs = with_binders(p, attrs, binders)?;
+    let key = p.build_type(name, Vec::new(), attrs)?;
+    if let Some((offset, params)) = body {
+        let body = p.build_type(name, params, AttributeMap::new())?;
+        check_layout_body(p.ctx(), key, body)
+            .map_err(|error| p.error_at(offset, error.to_string()))?;
+        p.bind_type_body(key, body, offset)?;
+    }
+    Ok(key)
+}
+
 /// Parse the rest of `adt.struct<"Name"['a0], (type {attrs}, ...), {attrs}>`
-/// after its opening bracket. The struct's name becomes the type's `name`
+/// after its opening bracket. The struct's name becomes the key's `name`
 /// attribute and its binder list, if any, its `row_params`; the type
-/// dictionary may hold neither. A literal layout begins with its field list
-/// and its dictionary may hold no `name`. Text that begins with neither a
-/// string nor `(` is the generic spelling.
+/// dictionary may hold neither. The field list, when written, is the body
+/// bound to the key. A literal layout begins with its field list and its
+/// dictionary may hold no `name`. Text that begins with neither a string
+/// nor `(` is the generic spelling.
 fn parse_struct_type(
     p: &mut trunk_ir::parser::AsmParser<'_>,
     name: &str,
@@ -1199,11 +1432,8 @@ fn parse_struct_type(
     let Some((struct_name, binders)) = parse_layout_name(p, "a struct name")? else {
         return Ok(None);
     };
-    let params = parse_field_list(p)?;
-    let attrs = parse_layout_attrs(p)?;
-    let attrs = named(p, attrs, &struct_name)?;
-    let attrs = with_binders(p, attrs, binders)?;
-    p.build_type(name, params, attrs).map(Some)
+    let (body, attrs) = parse_nominal_rest(p, "(", parse_field_list)?;
+    build_nominal_layout(p, name, &struct_name, binders, body, attrs).map(Some)
 }
 
 /// `attrs` with the `row_params` a layout's binder list writes, which
@@ -1256,8 +1486,12 @@ fn named(
 /// A malformed `adt.enum` type.
 #[derive(Clone, Debug, PartialEq, Eq, derive_more::Display, derive_more::Error)]
 pub enum EnumTypeError {
-    #[display("missing `{STRUCT_NAME_ATTR}` string")]
-    MissingName,
+    #[display("`{STRUCT_NAME_ATTR}` is not a string")]
+    MalformedName,
+    #[display("a literal `adt.enum` has no type attributes")]
+    LiteralAttributes,
+    #[display("a named `adt.enum` has no type parameters; its variants are in its body")]
+    NominalParams,
     #[display("variant {_0} is not an `adt.variant`")]
     MalformedVariant(#[error(not(source))] usize),
     #[display("`variants` is not an `adt.enum` attribute; variants are type parameters")]
@@ -1267,7 +1501,8 @@ pub enum EnumTypeError {
 }
 
 impl trunk_ir::type_verifier::VerifyType for Enum {
-    /// Validate a name-matching `adt.enum`.
+    /// Validate a name-matching `adt.enum`: a named enum's key, or a
+    /// literal enum. A key's body is checked when it is bound.
     fn verify(ctx: &IrContext, ty: TypeRef) -> Result<Self, trunk_ir::ops::VerificationError> {
         let data = ctx.get_type(ty);
         debug_assert!(Self::matches(ctx, ty));
@@ -1279,8 +1514,19 @@ impl trunk_ir::type_verifier::VerifyType for Enum {
         if attrs.contains_key(PARAM_ATTRS_ATTR) {
             return Err(EnumTypeError::VariantAttributes.into());
         }
-        if attrs.get_string_ref(STRUCT_NAME_ATTR).is_none() {
-            return Err(EnumTypeError::MissingName.into());
+        match attrs.get(STRUCT_NAME_ATTR) {
+            Some(Attribute::String(_)) if !data.params.is_empty() => {
+                return Err(EnumTypeError::NominalParams.into());
+            }
+            Some(Attribute::String(_)) => {
+                row_binders(ctx, ty)?;
+                return Ok(Self(ty));
+            }
+            Some(_) => return Err(EnumTypeError::MalformedName.into()),
+            None if !data.attrs.is_empty() => {
+                return Err(EnumTypeError::LiteralAttributes.into());
+            }
+            None => {}
         }
         for (index, &variant) in data.params.iter().enumerate() {
             // The syntax writes a variant as its fields and their attributes
@@ -1294,30 +1540,57 @@ impl trunk_ir::type_verifier::VerifyType for Enum {
                 return Err(EnumTypeError::MalformedVariant(index).into());
             }
         }
-        verify_row_params(ctx, ty, data.params.iter().copied())?;
         Ok(Self(ty))
     }
 }
 
 impl Enum {
+    /// Whether this is a named enum, an identified type, rather than a
+    /// literal one.
+    pub fn is_nominal(self, ctx: &IrContext) -> bool {
+        self.name(ctx).is_some()
+    }
+
+    /// The literal enum holding the variants: the body of a named enum,
+    /// which must have one, or a literal enum itself.
+    pub fn literal_layout(self, ctx: &IrContext) -> Enum {
+        if self.is_nominal(ctx) {
+            let body = ctx.type_body(self.0).unwrap_or_else(|| {
+                panic!(
+                    "named adt.enum {:?} has no body",
+                    self.name(ctx).unwrap_or_default()
+                )
+            });
+            Enum(body)
+        } else {
+            self
+        }
+    }
+
+    /// The body of a named enum, if it has one.
+    pub fn body(self, ctx: &IrContext) -> Option<Enum> {
+        ctx.type_body(self.0).map(Enum)
+    }
+
+    /// The `adt.variant` types, in declaration order.
+    fn variant_types(self, ctx: &IrContext) -> &[TypeRef] {
+        &ctx.get_type(self.literal_layout(ctx).0).params
+    }
+
     pub fn variant_count(self, ctx: &IrContext) -> usize {
-        ctx.get_type(self.0).params.len()
+        self.variant_types(ctx).len()
     }
 
     /// Each variant's field types, in declaration order.
     pub fn variants(self, ctx: &IrContext) -> impl ExactSizeIterator<Item = &[TypeRef]> + '_ {
-        ctx.get_type(self.0)
-            .params
+        self.variant_types(ctx)
             .iter()
             .map(|&variant| &ctx.get_type(variant).params[..])
     }
 
     /// The field types of the variant at position `tag`.
     pub fn variant_fields(self, ctx: &IrContext, tag: u32) -> Option<&[TypeRef]> {
-        let variant = *ctx
-            .get_type(self.0)
-            .params
-            .get(usize::try_from(tag).ok()?)?;
+        let variant = *self.variant_types(ctx).get(usize::try_from(tag).ok()?)?;
         Some(&ctx.get_type(variant).params[..])
     }
 
@@ -1334,27 +1607,37 @@ impl Enum {
 }
 
 impl Enum {
-    /// Construct an `adt.enum` named `name` with `variants` in declaration
-    /// order, each its field types.
-    ///
-    /// `attrs` holds the remaining type attributes.
+    /// Construct the `adt.enum` named `name` with `variants` in declaration
+    /// order, each its field types: the key with `attrs` as its other key
+    /// attributes, bound to the literal body of `variants`.
     ///
     /// # Panics
     ///
-    /// If `attrs` has a `variants` or parameter attribute entry.
+    /// If the key is malformed or already has another body.
     pub fn from_variants<F: IntoIterator<Item = TypeRef>>(
         ctx: &mut IrContext,
         name: impl Into<StringArg>,
         variants: impl IntoIterator<Item = F>,
-        mut attrs: AttributeMap,
+        attrs: AttributeMap,
     ) -> Self {
-        let mut builder = TypeDataBuilder::new(<Enum as DialectType>::NAME);
-        for fields in variants {
-            let variant = Variant::params(fields).intern(ctx);
-            builder = builder.param(variant.as_type_ref());
-        }
+        let key = Self::key(ctx, name, attrs);
+        let body = Self::literal(ctx, variants);
+        key.bind_body(ctx, body).unwrap_or_else(|error| {
+            panic!("adt.enum {:?}: {error}", key.name(ctx).unwrap_or_default())
+        });
+        key
+    }
+
+    /// The key of the `adt.enum` named `name` with `attrs` as its other key
+    /// attributes, without binding a body.
+    ///
+    /// # Panics
+    ///
+    /// If the key is malformed.
+    pub fn key(ctx: &mut IrContext, name: impl Into<StringArg>, mut attrs: AttributeMap) -> Self {
         let name = ctx.intern_string_arg(name.into());
         attrs.view_mut(ctx).insert(STRUCT_NAME_ATTR, name);
+        let mut builder = TypeDataBuilder::new(<Enum as DialectType>::NAME);
         for (key, value) in attrs {
             builder = builder.attr(key, value);
         }
@@ -1362,11 +1645,33 @@ impl Enum {
         <Enum as trunk_ir::type_verifier::VerifyType>::verify(ctx, ty)
             .unwrap_or_else(|error| panic!("adt.enum: {error}"))
     }
+
+    /// The literal `adt.enum` of `variants` in declaration order, each its
+    /// field types: the body of a named enum.
+    pub fn literal<F: IntoIterator<Item = TypeRef>>(
+        ctx: &mut IrContext,
+        variants: impl IntoIterator<Item = F>,
+    ) -> Self {
+        let mut builder = TypeDataBuilder::new(<Enum as DialectType>::NAME);
+        for fields in variants {
+            let variant = Variant::params(fields).intern(ctx);
+            builder = builder.param(variant.as_type_ref());
+        }
+        Enum(builder.intern(ctx))
+    }
+
+    /// Bind the literal enum `body` to this named enum's key.
+    pub fn bind_body(self, ctx: &mut IrContext, body: Enum) -> Result<(), LayoutBodyError> {
+        bind_layout_body(ctx, self.0, body.0)
+    }
 }
 
 // === Textual syntax: `adt.enum<"Name", [(type {attrs}, ...), ...], {attrs}>` ===
 //
-// Each variant is its field list, as an `adt.struct` writes its fields.
+// Each variant is its field list, as an `adt.struct` writes its fields. A
+// named enum's key writes no variant list where its body is not written:
+// `adt.enum<"Name", {attrs}>`. A literal enum writes no name:
+// `adt.enum<[(type {attrs}, ...), ...]>`.
 
 impl trunk_ir::asm_format::TypeAsmFormat for Enum {
     fn print(&self, p: &mut trunk_ir::printer::AsmPrinter<'_>) -> std::fmt::Result {
@@ -1388,16 +1693,28 @@ fn write_enum_type(p: &mut trunk_ir::printer::AsmPrinter<'_>, adt_enum: Enum) ->
 
     let s = p.state();
     let ctx = s.ctx();
-    let data = ctx.get_type(adt_enum.as_type_ref());
-    let variants = data.params.iter().format_with(", ", |&variant, f| {
-        f(&format_args!("({})", param_list(s, ctx.get_type(variant))))
-    });
-    write!(
-        p,
-        "adt.enum<{}{}, [{variants}]",
-        display_string(adt_enum.name(ctx)),
-        display_layout_binders(adt_enum.row_params(ctx).unwrap_or(0)),
-    )?;
+    let variants = |literal: TypeRef| {
+        ctx.get_type(literal)
+            .params
+            .iter()
+            .format_with(", ", |&variant, f| {
+                f(&format_args!("({})", param_list(s, ctx.get_type(variant))))
+            })
+    };
+    p.write_str("adt.enum<")?;
+    if let Some(name) = adt_enum.name(ctx) {
+        write!(
+            p,
+            "{}{}",
+            display_string(name),
+            display_layout_binders(adt_enum.row_params(ctx).unwrap_or(0)),
+        )?;
+        if let Some(body) = p.identified_body(adt_enum.as_type_ref()) {
+            write!(p, ", [{}]", variants(body.ty()))?;
+        }
+    } else {
+        write!(p, "[{}]", variants(adt_enum.as_type_ref()))?;
+    }
     let mut attrs = adt_enum.extra_attrs(ctx).peekable();
     if attrs.peek().is_some() {
         write!(p, ", {}", s.attr_dict(attrs))?;
@@ -1405,28 +1722,40 @@ fn write_enum_type(p: &mut trunk_ir::printer::AsmPrinter<'_>, adt_enum: Enum) ->
     p.write_char('>')
 }
 
-/// Parse the rest of `adt.enum<"Name", [(type {attrs}, ...), ...], {attrs}>`
-/// after its opening bracket: each field list becomes an `adt.variant`
-/// parameter. The enum's name becomes the type's `name` attribute, which the
-/// type dictionary may not hold. Text that does not begin with a string is
-/// the generic spelling.
-fn parse_enum_type(
+/// Parse a variant list, `[(type {attrs}, ...), ...]`: each field list
+/// becomes an `adt.variant` parameter.
+fn parse_variant_list(
     p: &mut trunk_ir::parser::AsmParser<'_>,
-    name: &str,
-) -> trunk_ir::parser::ParseResult<Option<TypeRef>> {
-    let Some((enum_name, binders)) = parse_layout_name(p, "an enum name")? else {
-        return Ok(None);
-    };
+) -> trunk_ir::parser::ParseResult<Vec<(TypeRef, AttributeMap)>> {
     let variants = p.parse_delimited("[", "]", parse_field_list)?;
-    let attrs = parse_layout_attrs(p)?;
     let mut params = Vec::with_capacity(variants.len());
     for fields in variants {
         let ty = p.build_type("adt.variant", fields, AttributeMap::new())?;
         params.push((ty, AttributeMap::new()));
     }
-    let attrs = named(p, attrs, &enum_name)?;
-    let attrs = with_binders(p, attrs, binders)?;
-    p.build_type(name, params, attrs).map(Some)
+    Ok(params)
+}
+
+/// Parse the rest of `adt.enum<"Name", [(type {attrs}, ...), ...], {attrs}>`
+/// after its opening bracket. The enum's name becomes the key's `name`
+/// attribute, which the type dictionary may not hold, and the variant list,
+/// when written, is the body bound to the key. A literal enum begins with
+/// its variant list. Text that begins with neither a string nor `[` is the
+/// generic spelling.
+fn parse_enum_type(
+    p: &mut trunk_ir::parser::AsmParser<'_>,
+    name: &str,
+) -> trunk_ir::parser::ParseResult<Option<TypeRef>> {
+    if p.peek().starts_with('[') {
+        let params = parse_variant_list(p)?;
+        p.parse_punct(">")?;
+        return p.build_type(name, params, AttributeMap::new()).map(Some);
+    }
+    let Some((enum_name, binders)) = parse_layout_name(p, "an enum name")? else {
+        return Ok(None);
+    };
+    let (body, attrs) = parse_nominal_rest(p, "[", parse_variant_list)?;
+    build_nominal_layout(p, name, &enum_name, binders, body, attrs).map(Some)
 }
 
 #[cfg(test)]
@@ -1455,10 +1784,13 @@ mod tests {
   !Point = adt.struct<"Point", (core.i32, core.i32)>
   !Empty = adt.struct<"Empty", ()>
   !Never = adt.enum<"Never", []>
-  adt.struct_decl !Point ["x", "y"]
-  adt.struct_decl !Empty []
-  adt.enum_decl !Never []
-  adt.struct_decl adt.struct<"Quoted", (core.i32, core.i32)> ["0", "a b"]
+  !Quoted = adt.struct<"Quoted", (core.i32, core.i32)>
+  !"Shape$abi" = adt.struct<"Shape$abi", (core.i32)>
+  adt.struct_decl "Point" !Point ["x", "y"]
+  adt.struct_decl "Empty" !Empty []
+  adt.enum_decl "Never" !Never []
+  adt.struct_decl "Quoted" !Quoted ["0", "a b"]
+  adt.struct_decl "Shape" !"Shape$abi" ["x"]
 }"#,
         );
         assert_roundtrip(&ctx, module.op());
@@ -1467,6 +1799,7 @@ mod tests {
         let alias = |ctx: &IrContext, name| ctx.type_alias_by_text(name).expect("fixture alias");
         let point = Struct::from_type_ref(&ctx, alias(&ctx, "Point")).unwrap();
         let point = decls.of_struct(point).expect("Point is declared");
+        assert_eq!(point.name(&ctx), "Point");
         assert_eq!(point.fields(&ctx).collect::<Vec<_>>(), ["x", "y"]);
         let empty = Struct::from_type_ref(&ctx, alias(&ctx, "Empty")).unwrap();
         let empty = decls.of_struct(empty).expect("Empty is declared");
@@ -1475,19 +1808,26 @@ mod tests {
         let never = decls.of_enum(never).expect("Never is declared");
         assert_eq!(never.variants(&ctx).len(), 0);
 
+        // A converted layout keeps its source name in its declaration.
+        let shape = Struct::key(&mut ctx, "Shape$abi", AttributeMap::new());
+        let shape = decls.of_struct(shape).expect("Shape is declared");
+        assert_eq!(shape.name(&ctx), "Shape");
+
         // A layout that only shares the name of a declared one has no
         // declaration.
-        let other = Struct::from_fields(&mut ctx, "Point", [], AttributeMap::new());
+        let mut attrs = AttributeMap::new();
+        attrs.view_mut(&mut ctx).insert("k", Attribute::Int(1));
+        let other = Struct::from_fields(&mut ctx, "Point", [], attrs);
         assert!(decls.of_struct(other).is_none());
     }
 
     #[test]
     fn nominal_declarations_must_fit_their_layouts() {
         for decl in [
-            r#"adt.struct_decl adt.struct<"P", (core.i32)> ["x", "y"]"#,
-            r#"adt.struct_decl adt.struct<(core.i32)> ["x"]"#,
-            r#"adt.enum_decl adt.struct<"P", ()> []"#,
-            r#"adt.enum_decl adt.enum<"E", [()]> []"#,
+            r#"adt.struct_decl "P" adt.struct<"P", (core.i32)> ["x", "y"]"#,
+            r#"adt.struct_decl "P" adt.struct<(core.i32)> ["x"]"#,
+            r#"adt.enum_decl "P" adt.struct<"P", ()> []"#,
+            r#"adt.enum_decl "E" adt.enum<"E", [()]> []"#,
         ] {
             let mut ctx = IrContext::new();
             let module =
@@ -1640,7 +1980,8 @@ mod tests {
   !point = adt.struct<"Point", (core.i32, core.i32 {k = @v})>
   !closure = adt.struct<"Nested::Closure", (func.func_sig<(core.i32) -> core.i32, {k = 1}> {}, core.tuple<core.ptr>), {layout = "closure"}>
   !empty = adt.struct<"Empty", ()>
-  !nested = adt.struct<"Outer", (adt.struct<"Inner", (core.i32), {layout = "closure"}> {m = 1})>
+  !Inner = adt.struct<"Inner", (core.i32), {layout = "closure"}>
+  !nested = adt.struct<"Outer", (adt.struct<"Inner", {layout = "closure"}> {m = 1})>
   !escaped = adt.struct<"say \"hi\"", ()>
   !literal = adt.struct<(core.ptr, core.i32 {k = 1}), {layout = "closure"}>
   !literal_empty = adt.struct<()>
@@ -1679,7 +2020,10 @@ mod tests {
             "!point = adt.struct<\"Point\", (core.i32, core.i32 {k = @v})>",
             "adt.struct<\"Nested::Closure\", (func.func_sig<(core.i32) -> core.i32, {k = 1}>, core.tuple<core.ptr>), {layout = \"closure\"}>",
             "!empty = adt.struct<\"Empty\", ()>",
-            ", (adt.struct<\"Inner\", (core.i32), {layout = \"closure\"}> {m = 1})>",
+            // A body writes the nominal layouts in it as keys; each one's
+            // own alias writes its body.
+            ", (adt.struct<\"Inner\", {layout = \"closure\"}> {m = 1})>",
+            "!Inner = adt.struct<\"Inner\", (core.i32), {layout = \"closure\"}>",
             "adt.struct<\"say \\\"hi\\\"\", ()>",
             "adt.struct<(core.ptr, core.i32 {k = 1}), {layout = \"closure\"}>",
             "adt.struct<()>",
@@ -1733,20 +2077,24 @@ mod tests {
         let i32_ty = TypeDataBuilder::new("core.i32").intern(&mut ctx);
 
         let option = Enum::from_type_ref(&ctx, aliases["option"]).unwrap();
-        assert_eq!(option.name(&ctx), "Option");
+        assert_eq!(option.name(&ctx), Some("Option"));
         let variants: Vec<_> = option.variants(&ctx).map(<[TypeRef]>::to_vec).collect();
         assert_eq!(variants, [vec![], vec![i32_ty]]);
         assert_eq!(option.variant_fields(&ctx, 1), Some(&[i32_ty][..]));
         assert_eq!(option.variant_fields(&ctx, 2), None);
-        // A variant is one type parameter, so type traversal reaches fields.
-        assert_eq!(ctx.get_type(aliases["option"]).params.len(), 2);
+        // The key has no parameters; a variant is one type parameter of the
+        // literal body.
+        assert!(ctx.get_type(aliases["option"]).params.is_empty());
+        let body = option.body(&ctx).expect("the alias binds the body");
+        assert_eq!(ctx.get_type(body.as_type_ref()).params.len(), 2);
 
         let never = Enum::from_type_ref(&ctx, aliases["never"]).unwrap();
         assert_eq!(never.variant_count(&ctx), 0);
 
         // Variants with the same fields are one `adt.variant` type, told apart
         // by position.
-        let same = ctx.get_type(aliases["same"]);
+        let same = Enum::from_type_ref(&ctx, aliases["same"]).unwrap();
+        let same = ctx.get_type(same.body(&ctx).unwrap().as_type_ref());
         assert_eq!(same.params[0], same.params[1]);
         assert_eq!(
             Enum::from_type_ref(&ctx, aliases["same"])
@@ -1796,8 +2144,11 @@ mod tests {
             "adt.enum<{name = \"E\", variants = [[\"A\", []]]}>",
             "adt.enum<core.i32, {name = \"E\"}>",
             "adt.enum<adt.variant<{name = \"A\"}>, {name = \"E\"}>",
-            "adt.enum<adt.variant<core.i32>>",
             "adt.enum<adt.variant<core.i32>, {name = @E}>",
+            // A named enum's variants are in its body; a literal enum has no
+            // attributes.
+            "adt.enum<adt.variant<core.i32>, {name = \"E\"}>",
+            "adt.enum<adt.variant<core.i32>, {k = 1}>",
             // The syntax cannot print a variant parameter's attributes.
             "adt.enum<adt.variant<core.i32> {k = 1}, {name = \"E\"}>",
         ] {
@@ -1897,9 +2248,17 @@ mod tests {
 
     #[test]
     fn malformed_row_binders_and_row_arguments_fail_validation() {
+        // A tail inside a layout's body names one of its binders, which the
+        // body is checked against when it is bound.
+        let mut ctx = IrContext::new();
+        let error = parse_module(
+            &mut ctx,
+            "core.module @test { !bad = adt.struct<\"C\"['a0], (tribute_control.func_sig<() -> core.i64 row(| 'a1)>)> }",
+        )
+        .expect_err("an unbound tail");
+        assert!(error.message.contains("'a1"), "{}", error.message);
+
         for spelling in [
-            // A tail inside a layout names one of its binders.
-            "adt.struct<\"C\"['a0], (tribute_control.func_sig<() -> core.i64 row(| 'a1)>)>",
             "adt.struct<{name = \"C\", row_params = 0}>",
             "adt.enum<{name = \"E\", row_params = 0}>",
             "adt.typeref<{name = \"C\", row_args = []}>",
@@ -1955,8 +2314,10 @@ mod tests {
     #[test]
     fn test_malformed_adt_struct_parses_but_fails_validation() {
         for spelling in [
-            "adt.struct<\"P\", (), {fields = []}>",
+            "adt.struct<\"P\", {fields = []}>",
             "adt.struct<core.i32, {name = @P}>",
+            // A nominal layout's fields are in its body.
+            "adt.struct<core.i32, {name = \"P\"}>",
         ] {
             let mut ctx = IrContext::new();
             let input = format!("core.module @test {{ !bad = {spelling} }}");

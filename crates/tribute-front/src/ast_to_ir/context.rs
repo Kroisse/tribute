@@ -533,19 +533,6 @@ impl<'db> IrLoweringCtx<'db> {
         self.nominal.adt_enum_type(ir, name, variants, row_params)
     }
 
-    /// Create an `adt.enum` type that records where it was declared.
-    pub fn adt_enum_type_with_definition(
-        &self,
-        ir: &mut IrContext,
-        name: &Symbol,
-        variants: &[Vec<TypeRef>],
-        row_params: u32,
-        definition: Location,
-    ) -> TypeRef {
-        self.nominal
-            .adt_enum_type_with_definition(ir, name, variants, row_params, definition)
-    }
-
     /// Create an `adt.typeref` type — a reference to a named type, passing
     /// `row_args` to its row parameters.
     pub fn adt_typeref(

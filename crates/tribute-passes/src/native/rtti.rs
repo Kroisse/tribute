@@ -1024,9 +1024,19 @@ fn gen_dealloc_and_return_with_size(
 /// Build an `adt.struct` type with `fields` (for testing and internal use).
 #[cfg(test)]
 pub(crate) fn make_struct_type(ctx: &mut IrContext, fields: &[TypeRef]) -> TypeRef {
+    make_named_struct_type(ctx, "Test", fields)
+}
+
+/// A nominal layout of `fields` named `name`; a name keys one layout.
+#[cfg(test)]
+pub(crate) fn make_named_struct_type(
+    ctx: &mut IrContext,
+    name: &'static str,
+    fields: &[TypeRef],
+) -> TypeRef {
     tribute_ir::dialect::adt::Struct::from_fields(
         ctx,
-        "Test",
+        name,
         fields.iter().copied(),
         trunk_ir::types::AttributeMap::new(),
     )
@@ -1454,8 +1464,8 @@ mod tests {
         let i32_ty = core::I32::type_ref(&mut ctx);
         let ptr_ty = core::Ptr::params().intern(&mut ctx).as_type_ref();
 
-        let point_ty = make_struct_type(&mut ctx, &[i32_ty, i32_ty]);
-        let node_ty = make_struct_type(&mut ctx, &[i32_ty, ptr_ty]);
+        let point_ty = make_named_struct_type(&mut ctx, "Point", &[i32_ty, i32_ty]);
+        let node_ty = make_named_struct_type(&mut ctx, "Node", &[i32_ty, ptr_ty]);
 
         // Build module with two struct_new ops
         let func_ty = func::func_sig(&mut ctx, [i32_ty, i32_ty, ptr_ty], [node_ty]).as_type_ref();

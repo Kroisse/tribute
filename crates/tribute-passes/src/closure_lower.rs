@@ -713,7 +713,7 @@ fn rewrite_validated_closures_in_func(
 /// identities and are removed.
 pub(crate) fn finalize_closure_storage_layout(ctx: &mut IrContext, module: Module) {
     let closure_struct = closure_struct_type_ref(ctx);
-    substitute_module_types(ctx, module, move |ctx, ty| {
+    substitute_module_types(ctx, module, "closure", move |ctx, ty| {
         closure::Closure::matches(ctx, ty).then_some(closure_struct)
     });
 }
@@ -746,16 +746,20 @@ impl Pass for FinalizeClosureStorageLayout {
 }
 
 /// Replace every type `substitute` maps, wherever it occurs in `module`:
-/// aliases, nested type parameters and attributes, type-bearing operation
-/// attributes, results, and block arguments. The plan is complete before any
-/// update applies. Casts that the replacement turns into identities are
-/// removed.
+/// aliases, nested type parameters and attributes, the fields of nominal
+/// layouts, type-bearing operation attributes, results, and block arguments.
+/// A nominal layout whose fields change gets a new key, tagged with `tag`
+/// when its key attributes stay (`design/tribute-dialects.md` § "Nominal
+/// layout 변환").
+/// The plan is complete before any update applies. Casts that the
+/// replacement turns into identities are removed.
 pub(crate) fn substitute_module_types(
     ctx: &mut IrContext,
     module: Module,
+    tag: &str,
     substitute: impl FnMut(&mut IrContext, TypeRef) -> Option<TypeRef>,
 ) {
-    substitute_module_types_keeping_casts(ctx, module, substitute);
+    substitute_module_types_keeping_casts(ctx, module, tag, substitute);
     erase_identity_casts(ctx, module);
 }
 
@@ -764,11 +768,18 @@ pub(crate) fn substitute_module_types(
 pub(crate) fn substitute_module_types_keeping_casts(
     ctx: &mut IrContext,
     module: Module,
+    tag: &str,
     substitute: impl FnMut(&mut IrContext, TypeRef) -> Option<TypeRef>,
 ) {
     let ops = collect_ops(ctx, module.op());
     let aliases = ctx.type_aliases().to_vec();
+    let layout_roots: Vec<_> = trunk_ir::walk::reachable_types(ctx, module.op())
+        .into_iter()
+        .chain(aliases.iter().map(|&(_, ty)| ty))
+        .collect();
     let mut physicalizer = TypeSubstitution::new(ctx, substitute);
+    let Ok(_) =
+        tribute_ir::dialect::adt::convert::convert_layouts(&mut physicalizer, layout_roots, tag);
     let mut alias_updates = Vec::new();
     let mut attribute_updates = Vec::new();
     let mut result_updates = Vec::new();
@@ -911,6 +922,32 @@ impl<'a, F: FnMut(&mut IrContext, TypeRef) -> Option<TypeRef>> TypeSubstitution<
 
     fn convert_attribute(&mut self, attribute: Attribute) -> Attribute {
         attribute.map_types(|ty| self.convert_type(ty))
+    }
+}
+
+impl<F: FnMut(&mut IrContext, TypeRef) -> Option<TypeRef>>
+    tribute_ir::dialect::adt::convert::LayoutBlindConversion for TypeSubstitution<'_, F>
+{
+    type Error = std::convert::Infallible;
+
+    fn ctx(&self) -> &IrContext {
+        self.ctx
+    }
+
+    fn ctx_mut(&mut self) -> &mut IrContext {
+        self.ctx
+    }
+
+    fn convert(&mut self, ty: TypeRef) -> Result<TypeRef, Self::Error> {
+        Ok(self.convert_type(ty))
+    }
+
+    fn fix(&mut self, from: TypeRef, to: TypeRef) {
+        self.cache.insert(from, to);
+    }
+
+    fn reset(&mut self) {
+        self.cache.clear();
     }
 }
 

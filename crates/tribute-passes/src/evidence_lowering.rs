@@ -471,7 +471,7 @@ mod tests {
   !Closure = adt.struct<(tribute_rt.convention_table_ref), {layout = "closure"}>
   !"std::Option$std::runtime::Dispatch" = adt.enum<"std::Option$std::runtime::Dispatch", [(), (!Closure)]>
   !OptionRef = adt.typeref<{name = "std::Option$std::runtime::Dispatch"}>
-  adt.enum_decl !"std::Option$std::runtime::Dispatch" ["None", "Some"]
+  adt.enum_decl "std::Option$std::runtime::Dispatch" !"std::Option$std::runtime::Dispatch" ["None", "Some"]
   func.func @"std::runtime::evidence::lookup"(%ev: !Evidence, %id: core.i32) -> core.i32 {
     func.return %id
   }

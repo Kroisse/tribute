@@ -95,11 +95,13 @@ pub(super) fn contains_unresolved_type(
         return false;
     }
     let data = ctx.get_type(ty);
+    // A nominal layout's fields are in its body.
     let unresolved = is_unresolved_type(ctx, ty)
         || data
             .params
             .iter()
             .copied()
+            .chain(ctx.type_body(ty))
             .any(|param| contains_unresolved_type(ctx, param, visiting));
     visiting.remove(&ty);
     unresolved
@@ -122,6 +124,7 @@ fn contains_forbidden_logical_component(
             .params
             .iter()
             .copied()
+            .chain(ctx.type_body(ty))
             .any(|param| contains_forbidden_logical_component(ctx, param, visiting));
     visiting.remove(&ty);
     forbidden
