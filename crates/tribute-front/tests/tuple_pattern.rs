@@ -157,6 +157,51 @@ fn test() -> Nat {
     assert_snapshot!(ir_text);
 }
 
+/// Destructuring a `let`-bound call result projects the tuple layout the call
+/// returns: the binding's uses share the call's rows.
+#[salsa_test]
+fn test_tuple_let_destructure_shares_call_rows(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+fn pair(f: fn() ->{e} Nat) -> #(fn() ->{e} Nat, Nat) { #(f, 1) }
+
+fn test() -> Nat {
+    let p = pair(fn() { 2 })
+    let #(f, n) = p
+    f() + n
+}
+"#,
+    );
+
+    let ir_text = run_ast_pipeline_with_ir(db, source);
+    let test_body = ir_text
+        .split("@\"pkg::test\"")
+        .nth(1)
+        .expect("the module defines test");
+    let call = test_body
+        .lines()
+        .find(|line| line.contains("@\"pkg::pair\""))
+        .expect("test calls pair");
+    let result_ty = call.rsplit("-> ").next().unwrap().trim();
+    for line in test_body
+        .lines()
+        .filter(|line| line.contains("adt.struct_get"))
+    {
+        let layout = line
+            .split("type = ")
+            .nth(1)
+            .and_then(|rest| rest.split('}').next())
+            .expect("struct_get names its layout");
+        assert!(
+            result_ty.starts_with(layout),
+            "projection layout {layout} differs from the call result {result_ty}"
+        );
+    }
+    assert_snapshot!(ir_text);
+}
+
 /// A constructor pattern inside a tuple projects the tuple field at the
 /// layout's field type, not at the constructor's callable type.
 #[salsa_test]
