@@ -5,22 +5,35 @@ use trunk_ir::op_flag::Pure;
 
 #[trunk_ir::dialect]
 mod list {
+    /// The empty `List(a)` whose element type is `element_type`.
     #[flags(Pure)]
     #[asm_format(attr_dict_bare ":" type(result))]
     fn empty(element_type: Attr<Type>) -> Value<_> {}
 
+    /// The list whose head is `element` and whose rest is `tail`. It is
+    /// persistent: it returns a new sequence and leaves `tail` unchanged.
     #[flags(Pure)]
     #[asm_format(element "," tail attr_dict_bare ":" type(result))]
     fn prepend<L>(element_type: Attr<Type>, element: Value<_>, tail: Value<L>) -> Value<L> {}
 
+    /// Whether `list` has no elements.
     #[flags(Pure)]
     #[asm_format(list attr_dict_bare ":" type(result))]
     fn is_empty(element_type: Attr<Type>, list: Value<_>) -> Value<_> {}
 
+    /// The first element of `list`, whose type is `element_type`. An
+    /// internal observation with the precondition that `list` is not empty:
+    /// compiler-generated uses establish that before executing it, and a
+    /// backend traps on a violation instead of returning a fallback such as
+    /// the type's default value.
     #[flags(Pure)]
     #[asm_format(list attr_dict_bare ":" type(result))]
     fn head<T>(element_type: Attr<TypeOf<T>>, list: Value<_>) -> Value<T> {}
 
+    /// `list` without its first element. An internal observation with the
+    /// precondition that `list` is not empty: compiler-generated uses
+    /// establish that before executing it, and a backend traps on a
+    /// violation instead of returning a fallback such as a null tail.
     #[flags(Pure)]
     #[asm_format(list attr_dict_bare ":" type(result))]
     fn tail<L>(element_type: Attr<Type>, list: Value<L>) -> Value<L> {}

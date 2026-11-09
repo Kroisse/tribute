@@ -195,6 +195,19 @@ pub struct SourceTailCallIndirect;
 #[trunk_ir::dialect]
 mod tribute_control {
     // Types
+    /// The affine resumption a resumptive general handler arm receives.
+    ///
+    /// ```text
+    /// tribute_control.resume_token<InputType, AnswerType>
+    /// ```
+    ///
+    /// `Input` is the value the suspended operation continuation receives,
+    /// and `Answer` is the logical result of running that continuation to
+    /// the enclosing handle. The type is opaque: it is not a source type, a
+    /// callable ABI, or a backend carrier, and it grants no right to inspect
+    /// the continuation representation. Its only producer is the last block
+    /// argument of a resumptive `op` arm of `tribute_control.handle`, and
+    /// its only consumer is `tribute_control.resume`.
     struct ResumeToken<Input, Answer>;
 
     // FuncSig operations
@@ -208,6 +221,15 @@ mod tribute_control {
     ///   ...
     ///   tribute_control.return %value
     /// }
+    ///
+    /// tribute_control.func @decl(%x: T) -> R
+    ///
+    /// tribute_control.func @map['a0](%xs: !List, %f: !F) -> !List row(| 'a0)
+    ///     attributes {visibility = "private"} {
+    ///   ...
+    /// }
+    ///
+    /// tribute_control.func @join['a0 = 'a1 | 'a2, 'a1, 'a2](%x: T) -> T row(| 'a0)
     /// ```
     ///
     /// - **Shape:** no operands or results. `sym_name: String` and
@@ -226,8 +248,46 @@ mod tribute_control {
     ///   the definition is in the range of `row_binders`, that the indices of
     ///   `row_unions` are in range, and that each row instance resolves to an
     ///   `ability.decl`.
-    /// - **Row attributes:** optional `row_binders`, `row_unions`, and
-    ///   `inferred_row` (`design/tribute-dialects.md`, "Ability row").
+    /// - **Row binders:** the optional `row_binders` list declares the
+    ///   definition's row binders; without it the definition has none. Each
+    ///   element is the kind of one binder, a string: `param`, a row
+    ///   variable the definition's scheme quantifies; `ability_arg`, one the
+    ///   scheme quantifies that occurs inside an ability argument of the
+    ///   signature or body; `local`, one the local scheme of a lambda-valued
+    ///   `let` quantifies, which that lambda owns and lists in its
+    ///   `quantified_rows`; and `body`, one no scheme quantifies, or one a
+    ///   local scheme quantifies without a lambda that quantifies it. The
+    ///   quantified binders (`param`, `ability_arg`) come first in the
+    ///   scheme's binder order, and their positions are the positions of a
+    ///   reference's `row_args`; the rest follow in order of first
+    ///   occurrence in the definition. Every row tail in the definition is an
+    ///   index into this list. The instances of one definition share only the
+    ///   quantified binders; class specialization appends a new `local`
+    ///   binder when a lambda in an entry body it makes quantifies a row.
+    ///   The kinds record the row's structure only; how the CPS strategy
+    ///   reads each kind's class is in `design/tribute-dialects.md`, "Row
+    ///   binder".
+    /// - **Row unions:** the optional `row_unions` list declares each tail
+    ///   that is the union of other tails, as `{result = i, sources = [j, k,
+    ///   ...]}`: `sources` lists the open sources' tails in declaration order
+    ///   and never holds `result`. The order of `sources` numbers the
+    ///   evidence tail slots (`design/tribute-dialects.md`, "Tail의 합집합").
+    /// - **Inferred row:** `inferred_row`, `false` by default, marks a
+    ///   definition whose row was inferred rather than annotated.
+    /// - **Format:** hand-written, shared with `tribute_cps.func`. After the
+    ///   symbol, the binder list `[...]` declares the binders in order, each
+    ///   named by its position as `'a0`, `'a1`, ..., preceded by its kind
+    ///   keyword unless it is `param`, and followed by `= 'aj | 'ak` when it
+    ///   is a union's result; the parser rejects the `i`th binder named other
+    ///   than `'ai`, and the list is absent without binders. This notation
+    ///   stands for `row_binders` and `row_unions`. Then come the parameters
+    ///   as the entry block arguments, `-> Result`, the signature's `row(..)`
+    ///   clause when its row is not closed and empty, `inferred` when
+    ///   `inferred_row` is set, ` attributes {..}` for any other attribute,
+    ///   and the body, whose entry block label is elided; a declaration ends
+    ///   without a body. The concise form is used only while the signature
+    ///   has no type attribute other than `ability_row`; otherwise the
+    ///   operation prints generically with its complete `type` attribute.
     /// - **Ownership and value flow:** the body is isolated from above. Only
     ///   source locals and parameters enter as block arguments.
     /// - **Symbol:** a `SymbolDefinition`. A definition with a body and a
@@ -265,6 +325,11 @@ mod tribute_control {
     ///   ...
     ///   tribute_control.return %value
     /// }
+    ///
+    /// %step = tribute_control.lambda['a1](%m: core.i32) -> core.i32 row(| 'a1)
+    ///     captures [] attributes {debug_name = "step"} {
+    ///   ...
+    /// }
     /// ```
     ///
     /// - **Shape:** the operands are the typechecked captures in source
@@ -273,6 +338,20 @@ mod tribute_control {
     ///   parameters as block arguments and ends in `tribute_control.return`.
     /// - **Meaning:** creates a source lambda. The body uses the lexical
     ///   captures and the parameters.
+    /// - **Format:** hand-written, shared with `tribute_cps.lambda`. After
+    ///   the operation name, the list `[...]` names the `local` binders of
+    ///   the enclosing `func` that the lambda quantifies, in instantiation
+    ///   order, and stands for `quantified_rows`; it is absent when the
+    ///   lambda quantifies none, and unlike a `func` header it writes no
+    ///   kind or union and checks no positional names. Then come the
+    ///   parameters as the entry block arguments, `-> Result`, the result
+    ///   signature's `row(..)` clause when its row is not closed and empty
+    ///   (its tail names a binder of the enclosing `func`), `captures [..]`,
+    ///   always written even as `captures []`, ` attributes {..}` for any
+    ///   other attribute, and the body with its entry block label elided.
+    ///   The concise form is used only while the result signature has no
+    ///   type attribute other than `ability_row`; otherwise the operation
+    ///   prints generically.
     /// - **Verification:** the local verifier matches the result signature,
     ///   block arguments, and return type. Whole-IR verification checks that
     ///   the body's external SSA references are exactly the captures, that
@@ -556,8 +635,10 @@ mod tribute_control {
     ///   declaration order. The values keep their logical types; conversion
     ///   handles tuple packing and erasure.
     /// - **Results:** exactly one logical operation result. A source `Never`
-    ///   result is `core.never`, and does not select a physical `Never`
-    ///   control carrier.
+    ///   result is the canonical `core.never`, and does not select a
+    ///   physical `Never` control carrier; such an operation makes no
+    ///   resumption and exposes no `resume_token`, and an `anyref`
+    ///   placeholder for `Never` is invalid at this boundary.
     /// - **Attributes:** `ability: SymbolRef`, `op_name: String`, and
     ///   `operation_kind: OperationKind` are required. `operation_kind` is exactly
     ///   `fn` or `op`, copied from the typechecked operation declaration. It

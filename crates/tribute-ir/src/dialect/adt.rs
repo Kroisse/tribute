@@ -29,8 +29,13 @@ mod adt {
     /// type"). Fields have no names; the source names are the layout's
     /// `adt.struct_decl`. A layout whose
     /// declaration has row parameters counts its row binders in `row_params`,
-    /// written after the name; a row tail inside its field types is the index
-    /// of one of them (`design/tribute-dialects.md` § "Nominal row 인자").
+    /// a count without kinds; a row tail inside its field types, in a field's
+    /// callable type or in the row arguments of a nested `adt.typeref`, is
+    /// the index of one of them, and the binders do not leave the layout. The
+    /// text writes the binders right after the name, before the fields, as
+    /// `['a0, 'a1, ...]`, numbered from `'a0` in order with no kind keyword
+    /// or union; the layout is one for every row argument
+    /// (`design/tribute-dialects.md` § "Nominal row 인자").
     #[verify]
     #[asm_format]
     #[alias_hint]
@@ -61,14 +66,29 @@ mod adt {
         row_params: Option<Attr<u32>>,
     }
 
-    /// `adt.typeref`: a reference to a nominal layout by its `name`.
+    /// `adt.typeref`: a nominal managed reference to the layout named
+    /// `name`.
+    ///
+    /// A valid value is managed by this type alone; no pass decides whether
+    /// it is managed from pointer provenance. `adt.ref_null` makes its null
+    /// inhabitant and `adt.ref_cast` converts between references of the
+    /// same nominal identity.
     ///
     /// When the layout has row parameters, `row_args` holds one row for each
-    /// of them in order, each in the form of a callable's ability row. A
-    /// tail names a row binder of the definition that writes the type, or of
-    /// the layout inside a layout. Row arguments are part of the type's
-    /// identity, but the layout is one for all of them
-    /// (`design/tribute-dialects.md` § "Nominal row 인자").
+    /// of them in declaration order, each in the form of a callable's
+    /// `ability_row`. A tail names a row binder of the definition that writes
+    /// the type, or of the layout inside a layout. A typeref of a declaration
+    /// without row parameters omits the attribute. Row arguments are part of
+    /// the type's identity: two typerefs of one layout with different row
+    /// arguments are different types, while the layout's name and published
+    /// alias carry no row argument, so they share the one layout. The text
+    /// writes the arguments right after the name as `[row(...), ...]`, each
+    /// in the `row(..)` form of a callable's row except that the empty row
+    /// is written as `row()` and never omitted; without row parameters the
+    /// `[...]` is absent. An attribute value this syntax cannot write prints
+    /// in the generic form. How row arguments reach the field types and when
+    /// legalization drops them is in `design/tribute-dialects.md` § "Nominal
+    /// row 인자".
     ///
     /// ```text
     /// adt.typeref<"Point">
@@ -86,8 +106,12 @@ mod adt {
 
     /// `adt.array`: a managed reference to an array object whose elements
     /// are `Element` values in order. An element is a scalar, a pointer, or a
-    /// managed reference; see `design/tribute-dialects.md` § "`adt` 배열". The unmanaged
-    /// linear array is `core.array`, which no `adt` array operation accepts.
+    /// managed reference, one machine value each; an aggregate such as a
+    /// struct, variant, or closure is held as a managed reference to its
+    /// object, never inlined. The unmanaged linear array is `core.array`,
+    /// which no `adt` array operation accepts. The index and trap rules the
+    /// array operations share are in `design/tribute-dialects.md` § "`adt`
+    /// 배열".
     #[implements(ManagedRefType)]
     struct Array<Element>;
 
@@ -279,6 +303,8 @@ mod adt {
     #[asm_format(r#ref attr_dict_bare ":" type(result))]
     fn array_len(r#ref: Value<impl Array>) -> Value<Index> {}
 
+    /// The null inhabitant of exactly the `adt.typeref` `type`, which is
+    /// also the result type. Retaining or releasing it is a no-op.
     #[flags(Pure)]
     #[asm_format(attr_dict_bare ":" type(result))]
     fn ref_null(r#type: Attr<Type>) -> Value<_> {}
@@ -287,6 +313,10 @@ mod adt {
     #[asm_format(r#ref attr_dict_bare ":" type(result))]
     fn ref_is_null(r#ref: Value<_>) -> Value<_> {}
 
+    /// `ref` as the `adt.typeref` `type`, which is also the result type. It
+    /// is allowed only between managed references whose nominal identity has
+    /// been established to be the same; it does not convert between
+    /// different layouts or recover a reference from an erased value.
     #[implements(Fold)]
     #[flags(Pure)]
     #[asm_format(r#ref attr_dict_bare ":" type(result))]

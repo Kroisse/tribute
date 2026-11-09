@@ -97,31 +97,24 @@ Legalization은 알려진 target에 `func.tail_call`, closure, continuation과
 `done_k` target에 새 `func.tail_call_indirect`를 만들 수 있다.
 
 이 dialect는 opaque type `tribute_control.resume_token<input, answer>`도
-소유한다. `input`은 중단된 operation continuation이 받는 값이고, `answer`는
-그 continuation을 enclosing handle까지 실행한 logical result다. 이 type은 source
-type, callable ABI, backend carrier가 아니며 continuation representation을
-검사할 권한도 아니다.
-
-Logical result가 `Never`인 source general operation은 canonical `core.never`
-TypeRef를 사용한다. 이 operation은 resumption을 만들지 않으며 `resume_token`도
-노출하지 않는다. `Never`용 `anyref` placeholder는 이 경계에서 valid하지 않다.
+소유한다. 그 계약과, logical result가 `Never`인 general operation이 resumption을
+만들지 않는다는 규칙은
+[`resume_token`과 `perform`의 선언](../crates/tribute-ir/src/dialect/tribute_control.rs)이
+정한다.
 
 ## Ability row
 
 `tribute_control.func_sig`는 callable의 ability row를 `ability_row` type 속성으로
-가진다. 함수 형태에서는 결과 뒤의 `row(..)` 절로 쓴다. `|` 앞은 `instances`이고,
-뒤의 `'aN`은 `tail = N`이다. 아래 타입의 저장 표현은
-`{ability_row = {instances = [@"<instance A>", @"<instance B>"], tail = 1}}`이다.
+가진다. 속성의 저장 형식과 함수 형태의 `row(..)` 절은
+[`FuncSig` 선언](../crates/tribute-ir/src/dialect/tribute_control/func_sig.rs)이
+정한다. Row의 `instances`는
+[`ability.decl`](../crates/tribute-ir/src/dialect/ability.rs)에 대한 symbol
+참조이고, `tail`은 둘러싼 정의의 [row binder](#row-binder) index다.
 
 ```text
 tribute_control.func_sig<(T) -> R row(@"<instance A>", @"<instance B>" | 'a1)>
 ```
 
-- **값:** `instances`는
-  [`ability.decl`](../crates/tribute-ir/src/dialect/ability.rs)에 대한 symbol
-  참조 목록이고, `tail`은 둘러싼 정의의 [row binder](#row-binder) index다.
-  둘 다 없으면 닫힌 빈 row이며 속성을 생략해 쓴다. `instances`는 symbol 경로
-  순서로 정렬하며 같은 instance를 한 번만 둔다.
 - **의미:** Row는 [instance의 집합](type-inference.md#기본-규칙)이다. 명시
   label과 tail이 같은 instance를 담는 호출에서 어느 위치가 어느 handler를
   받는지는 type이 담지 않는다. Typechecking이 인스턴스화에서 계산한
@@ -137,24 +130,13 @@ tribute_control.func_sig<(T) -> R row(@"<instance A>", @"<instance B>" | 'a1)>
 
 ### Row binder
 
-두 dialect의 `func`는 자기 row binder를 `row_binders` 속성으로 선언한다. 원소는
-binder의 종류를 나타내는 문자열이다. 속성이 없으면 binder가 없다.
-
-| 종류 | 뜻 |
-| ---- | ---- |
-| `param` | 정의의 scheme이 양화한(∀로 묶은) row 변수 |
-| `ability_arg` | scheme이 양화했고 signature나 본문의 ability 인자 안에 나타나는 row 변수 |
-| `local` | 값이 람다인 `let`의 지역 scheme이 양화한 row 변수. 그 람다의 type이 적는 변수이며 람다가 [소유](#지역-람다의-양화와-인스턴스화)한다 |
-| `body` | 어느 scheme도 양화하지 않은 row 변수, 또는 지역 scheme이 양화했지만 [양화하는 람다가 없는](#지역-람다의-양화와-인스턴스화) row 변수 |
-
-값이 람다가 아닌 binding은 그 지역 scheme의 변수를 인스턴스화하는 사용이 없고,
-그 변수는 `body`다.
-
-양화된 binder(`param`, `ability_arg`)가 scheme의 binder 순서로 먼저 오며, 그
-위치가 row 인자의 위치다. 나머지는 정의 안에 처음 나타난 순서로 뒤에 온다.
-Class 특수화가 람다의 entry 본문을 만들 때, 그 본문 안에서 row를 양화하는
-람다는 새 `local` binder를 목록 끝에 받는다. 한 정의의 인스턴스들은 양화된
-binder만 공유하고, 나머지 binder 목록은 서로 다를 수 있다.
+두 dialect의 `func`는 자기 row binder를 `row_binders` 속성으로 선언한다. 네
+종류 `param`, `ability_arg`, `local`, `body`의 뜻과 목록의 순서는
+[`tribute_control.func` 선언](../crates/tribute-ir/src/dialect/tribute_control.rs)이
+정한다. 양화한(∀로 묶은) binder는 `param`과 `ability_arg`이고, `local`은 값이
+람다인 `let`의 지역 scheme이 양화한 변수로 그 람다가
+[소유](#지역-람다의-양화와-인스턴스화)한다. 값이 람다가 아닌 binding은 그 지역
+scheme의 변수를 인스턴스화하는 사용이 없고, 그 변수는 `body`다.
 
 Binder 종류는 row의 구조만 기록하며 실행 전략을 담지 않는다. CPS 전략의 class
 특수화는 tail의 class를 binder 종류에 따라 읽는다.
@@ -180,10 +162,12 @@ tail을 가질 수 없다.
 ### Nominal row 인자
 
 [Row 매개변수](types.md#row-매개변수)를 가진 struct·enum의 layout
-(`adt.struct`, `adt.enum`)은 자기 row binder를 type 속성 `row_params`(개수)로
-선언한다. `func`의 `row_binders`와 달리 종류 없이 개수만 둔다. Layout 안의 필드
-type, 곧 필드의 callable type과 중첩된 `adt.typeref`의 row 인자가 쓰는 tail은 이
-binder의 index다. 이 binder는 layout 밖으로 나가지 않는다.
+(`adt.struct`, `adt.enum`)은 자기 row binder를 type 속성 `row_params`로
+선언하고, 그 선언의 값 type인 `adt.typeref`는 row 매개변수마다 row 하나를 type
+속성 `row_args`로 가진다. 두 속성의 저장 형식, textual form, typeref 정체성
+규칙은 [`adt` dialect 선언](../crates/tribute-ir/src/dialect/adt.rs)이 정한다.
+Layout의 binder는 layout 안의 type에만 미치고, `row_args`의 tail은 그 type을 쓴
+정의의 [binder](#row-binder) index다.
 
 Nominal layout은 row 인자와 상관없이 하나다.
 [Tuple layout](#compiler-generated-tuple-layout)은 row를 layout 이름에 담고
@@ -196,23 +180,6 @@ adt.typeref<"Callback"[row(| 'a2)]>
 adt.typeref<"Callback"[row()]>
 ```
 
-Textual form은 layout의 binder를 이름 바로 뒤에
-[정의 header의 binder 목록](#row-binder)과 같은 `['a0, 'a1, ...]`로 쓴다. Binder
-목록은 필드보다 먼저 온다. Binder는 종류 keyword와 합집합(`=`)을 쓰지 않으며
-`'a0`부터 차례로 번호를 붙인다.
-
-Typeref의 row 인자는 이름 바로 뒤에 `[row(...), ...]`로 쓴다. Row 인자 하나는
-`func_sig`의 row와 같은 `row(...)`이지만, 빈 row도 생략하지 않고 `row()`로 쓴다.
-Row 매개변수가 없으면 `[...]`를 쓰지 않는다. 이 문법으로 쓸 수 없는 속성 값은
-일반 형태로 출력한다.
-
-- 그 선언의 값 type인 `adt.typeref`는 row 매개변수마다 row 하나를 type 속성
-  `row_args`에 선언 순서대로 가진다. 각 row는 `ability_row`와 같은 형식이며,
-  tail은 그 type을 쓴 정의의 binder index다. Layout 안에서는 layout의 binder
-  index다. Row 매개변수가 없는 선언의 typeref는 속성을 생략한다.
-- `row_args`는 typeref의 정체성에 들어간다. 같은 layout을 가리키며 row 인자만
-  다른 두 typeref는 다른 type이다. Layout의 이름과 게시된 alias는 row 인자를
-  담지 않으므로 그런 typeref들은 layout 하나를 공유한다.
 - `adt` 생성·접근 operation이 보는 필드 type은 layout의 필드 type에서 layout
   binder를 그 operation이 다루는 값의 typeref `row_args`로
   [치환](#row-인자와-치환)한 것이다. Frontend는 `struct_get`, `variant_get`
@@ -225,9 +192,9 @@ Row 매개변수가 없으면 `[...]`를 쓰지 않는다. 이 문법으로 쓸 
 ### Tail의 합집합
 
 Row tail이 여러 tail의 합집합으로 선언된 정의는 `row_unions` 속성으로 그
-합집합을 적는다. 원소는 `{result = i, sources = [j, k, ...]}`이며 `sources`는
-열린 source의 tail을 선언 순서로 담는다. `result`와 같은 tail은 `sources`에
-넣지 않는다.
+합집합을 적는다. 원소의 형식은
+[`tribute_control.func` 선언](../crates/tribute-ir/src/dialect/tribute_control.rs)이
+정하며, 각 합집합은 열린 source의 tail을 선언 순서로 담는다.
 
 이 순서가 evidence tail 칸의 번호다. 정의 안의
 [`{select = i}`](#evidence-선택-속성)는 자기 row tail을 결과로 하는 합집합의
@@ -455,92 +422,29 @@ managed 참조를 담지 않는다.
 
 ## 사용자 정의 어셈블리 형식
 
-두 dialect의 `func`와 `lambda`만 custom parse/print를 요구한다. 두 dialect는 같은
-형식을 쓴다. `func_ref`, `instantiate`, `call`, `call_indirect`, `return`은 custom
-format을 만들지 않는다.
-
-`tribute_control`의 두 operation은 convention을 쓰지 않는다. `tribute_cps.func`는
-`convention(direct)`, `convention(evidence_direct)`, `convention(cps)` 가운데
-하나를 반드시 쓴다. 이 표기는 그 operation의 convention으로 round trip한다.
-Callable type에는 convention을 쓰지 않는다. 출력기는 body에서 convention을
-추론하지 않는다.
-
-`func` 형식은 `func.func`처럼 symbol, 분해된 logical parameter/result, 선택적
-추가 attribute와 선택적 body를 출력한다. Body가 있으면 entry block label을
-생략하고 signature parameter를 entry argument로 복원한다. Declaration은 body가
-없다.
-
-`lambda` 형식은 `closure.lambda`처럼 SSA result, 분해된 source
-parameter/result, 명시적 `captures [...]`, 선택적 추가 attribute와 body 또는
-entry 목록을 출력한다. `lambda` 형식도 entry label을 생략한다.
-`captures [...]`는 capture가 없어도 `captures []`로 항상 출력한다. Canonical
-순서는 captures, 선택적 attributes, body 또는 `entries`다.
-
-`tribute_control.lambda`는 본문 하나를 가진다. `tribute_cps.lambda`는
-`captures [...]` 뒤에 `entries`와 본문 목록을 쓴다. 본문마다 convention keyword
-뒤에 본문을 쓴다. 본문은 convention 순서이고, convention마다 많아야 하나다.
-Adapter와 trap entry는 쓰지 않는다. 본문이 없는 convention entry는
-legalization이 [채우기](#convention-entry) 규칙으로 정한다.
+두 dialect의 `func`와 `lambda`만 손으로 쓴 parse/print를 가지며, 두 dialect는
+같은 형식을 쓴다. 나머지 operation은 선언적 형식을 쓴다. 각 형식은 해당
+선언이 정한다: row binder header와 `row(..)` 절, `inferred`, `attributes {..}`,
+body를 쓰는 `func` 형식은
+[`tribute_control.func`](../crates/tribute-ir/src/dialect/tribute_control.rs)가,
+양화 binder 목록과 `captures [..]`를 쓰는 `lambda` 형식은
+`tribute_control.lambda`가, `convention(..)`과 `entries`는
+[`tribute_cps.func`와 `tribute_cps.lambda`](../crates/tribute-ir/src/dialect/tribute_cps.rs)가,
+row 절 자체는
+[`FuncSig`](../crates/tribute-ir/src/dialect/tribute_control/func_sig.rs)가 정한다.
 
 ```text
-tribute_cps.func @f(%x: T) -> R convention(cps)
-    attributes {visibility = "private"} {
-  ...
-}
-
-tribute_cps.func @decl(%x: T) -> R convention(direct)
-
-%f = tribute_control.lambda(%x: T) -> R
-    captures [%captured] attributes {debug_name = "apply"} {
-  ...
-}
-
-%g = tribute_cps.lambda(%k: !K) -> R row(| 'a1) captures [] entries {
-  direct {
-    ...
-  }
-  evidence_direct {
-    ...
-  }
-}
-```
-
-Row binder는 위치로 이름을 붙여 `'a0`, `'a1`, …로 쓴다. `func`는 symbol 바로
-뒤의 `[...]`에 binder를 순서대로 선언한다. 종류가 `param`이 아니면 이름 앞에
-`ability_arg`, `local`, `body` 중 하나를 쓴다. 합집합의 결과인 binder는
-`'a0 = 'a1 | 'a2`처럼 source를 선언 순서로 적는다. Binder가 없으면 `[...]`를
-생략한다. Parser는 `i`번째 binder의 이름이 `'ai`가 아니면 거부한다. 이 표기가
-`row_binders`와 `row_unions` 속성을 대신한다.
-
-Row는 convention 앞에 `row(@A, @B | 'a1)` 형식으로 쓴다. Instance 목록 뒤에
-`|`와 tail binder를 쓴다. Instance가 없으면 `row(| 'a1)`, tail이 없으면
-`row(@A)`다. 닫힌 빈 row는 쓰지 않는다. Type alias 안의 tail도 같은 뜻이다.
-
-```text
-tribute_cps.func @map['a0](%xs: !List, %f: !F) -> !List row(| 'a0) convention(cps) {
-  ...
-}
-
 tribute_cps.func @join['a0 = 'a1 | 'a2, 'a1, 'a2](%x: T) -> T row(| 'a0) convention(cps)
 
-tribute_cps.func @main['a0]() -> core.nil row(| 'a0) convention(direct) {
-  ...
-}
-```
-
-`lambda`는 operation 이름 바로 뒤, 매개변수 앞의 `[...]`에 자기가 양화하는
-binder를 인스턴스화 순서로 적는다. 이 목록은 둘러싼 `func`의 `local` binder
-이름을 나열할 뿐이다. `func`의 header와 달리 종류나 합집합을 쓰지 않으며 위치
-이름 검사도 하지 않는다. 이 표기가 `quantified_rows` 속성을 대신한다.
-`lambda`의 row tail은 둘러싼 `func`의 binder 이름을 쓴다.
-
-```text
 %step = tribute_control.lambda['a1](%m: core.i32) -> core.i32 row(| 'a1)
     captures [] {
   ...
 }
 %s = tribute_control.instantiate %step {row_args = [{tail = 0}]} : !Step0
 ```
+
+Convention은 operation의 표기이며 callable type에는 쓰지 않는다. Type alias
+안의 row tail은 inline으로 쓴 것과 같은 뜻이다.
 
 간결한 형식은 `ability_row` 외의 non-reserved type attribute가 없는 source
 signature에만 쓴다. 그런 attribute가 있으면 `func`/`lambda`는 generic assembly를
@@ -730,14 +634,13 @@ operation이며, 각각의 형상은
 [`ability` dialect 선언](../crates/tribute-ir/src/dialect/ability.rs)이 정한다.
 
 - **`effect.delimit`:** Frame 펼치기가 `ability.delimit`을 같은 operand와 결과를
-  가진 `effect.delimit`으로 낮추고, target ABI 경계가 그것을 소비한다.
-  `effect.delimit`도 같은 관계를 선언하되 body의 frame은 답 타입을 가진 layout
-  참조다. 물리화가 그 답 타입과 `core.never` 결과를 지우므로, target ABI 경계는
-  물리화 직후 다른 검증 지점 없이 `effect.delimit`을 소비한다.
+  가진 `effect.delimit`으로 낮추고, target ABI 경계가 물리화 직후 다른 검증
+  지점 없이 그것을 소비한다. 두 operation의 계약은 각 선언이 정한다.
 - **검증:** Operation verifier는 선언의 타입 관계, frame과 closure의 `R` 일치,
-  arm 표와 arm closure의 일치, closure의 calling convention을 검사한다.
-  Terminator 위치와 enclosing callable이 `Cps`인지는 whole-IR 검증이 확인한다.
-  `ability.delimit`을 제외한 operation은 `Cps` flow에만 온다.
+  arm 표와 arm closure의 일치, arm closure의 형상을 검사한다. Closure type은
+  convention을 적지 않으므로 convention은 검사하지 않는다. Terminator 위치와
+  enclosing callable이 `Cps`인지는 whole-IR 검증이 확인한다. `ability.delimit`을
+  제외한 operation은 `Cps` flow에만 온다.
 - **소유권과 값 흐름:** 모든 operand는 일반 SSA use다. Frame 값은 불변이며 여러
   번 쓸 수 있다. Resumption의 affine 사용은 펼치기가 runtime 상태로 강제한다.
 - **위치:** suffix와 frame operation은 그것을 만든 source operation의 span을,
@@ -792,16 +695,12 @@ struct나 nominal reference의 일반 변환 정책을 바꾸지 않으며, sema
 `adt.*`는 target에 독립적인 product, sum, array, reference, literal
 operation을 나타낸다.
 
-`adt.typeref`는 nominal managed reference type이다. 유효한 값은 이 type
-자체로 managed이며 pointer provenance로 managed 여부를 다시 판정하지 않는다.
-`adt.ref_null`은 정확히 지정한 `adt.typeref`의 null inhabitant이고, null에
-대한 retain/release는 no-op이다. `adt.ref_cast`는 확인된 같은 nominal
-identity의 managed reference 사이에서만 허용한다.
-
-`core.ptr`는 항상 unmanaged다. Raw pointer, allocator result, code address,
-Evidence, borrowed buffer와 이를 통과하는 cast chain은 `adt.typeref`가 될 수
-없다. 위 두 문단의 규칙은 typed frontend 경계에서 reachable IR을 바꾸기 전에
-검사한다.
+`adt.typeref`는 nominal managed reference type이며, 그 계약과 `adt.ref_null`,
+`adt.ref_cast`의 계약은 [`adt` dialect 선언](../crates/tribute-ir/src/dialect/adt.rs)이
+정한다. `core.ptr`는 항상 unmanaged다. Raw pointer, allocator result, code
+address, Evidence, borrowed buffer와 이를 통과하는 cast chain은 `adt.typeref`가
+될 수 없다. Managed 여부에 관한 이 규칙은 typed frontend 경계에서 reachable
+IR을 바꾸기 전에 검사한다.
 
 Dynamic `tribute_rt.anyref`에서 `adt.typeref`로 복원하는 명시적인
 `core.unrealized_conversion_cast`는 generic cleanup에서 no-op으로 소거하지
@@ -813,9 +712,8 @@ Native는 이를 pointer 표현으로 물리화하고 Wasm은 concrete `ref.cast
 ### `adt` 배열
 
 `adt.array<E>`는 원소 타입 `E`의 값을 순서대로 담는 배열 object에 대한 managed
-참조다. `E`는 scalar, pointer, managed 참조 중 하나이며 원소 하나는 machine 값
-하나다. Struct, variant, closure 같은 aggregate는 그 object에 대한 managed
-참조로 담고 inline으로 펼치지 않는다.
+참조이며, 원소가 될 수 있는 타입은
+[`adt` dialect 선언](../crates/tribute-ir/src/dialect/adt.rs)이 정한다.
 
 `core.array<E>`는 이와 다른 unmanaged linear array다. 연속된 memory에 놓인 `E`
 값의 나열일 뿐 object가 아니며, 소유권이나 회수 방식을 갖지 않는다. `adt` 배열
@@ -825,9 +723,7 @@ operation은 `core.array`를 받지 않으며, 어느 target도 `core.array`를 
 배열을 만드는 operation은 `adt.array_new`, `adt.array_of`, `adt.array_splice`
 셋이며, 각각 결과 배열의 원소를 정하는 방법이 하나로 고정되어 있다. Operand
 개수나 모양으로 operation의 뜻을 고르지 않는다. 각 operation의 결과와 전제는
-[`adt` dialect 선언](../crates/tribute-ir/src/dialect/adt.rs)이 정한다. 세
-operation의 결과 타입은 `type` 속성의 `adt.array<E>`이고, `initial`과
-`elements`는 `E` 타입이다. `adt.array_splice`의 `source`는 결과와 같은 타입이다.
+그 선언이 정한다.
 
 `adt`의 배열 operation은 target이 객체를 회수하는 방식을 가정하지 않는다.
 Native RC가 배열 operation에 두는 ownership 규칙과 제자리 쓰기의 순환 제약은
@@ -851,14 +747,9 @@ trap이다.
 쓴다. 이 operation은 element/result type을 갖지만 variant tag, node field
 index, allocation size, target layout metadata는 갖지 않는다.
 
-`list.prepend`는 의미상 persistent다. 새 sequence를 반환하며 tail을 변경하지
-않는다. Shared lowering은 literal을 만들 때 모든 원소를 왼쪽에서 오른쪽으로
+각 operation의 계약은 [`list` dialect 선언](../crates/tribute-ir/src/dialect/list.rs)이
+정한다. Shared lowering은 literal을 만들 때 모든 원소를 왼쪽에서 오른쪽으로
 먼저 평가한 뒤 값의 역순으로 `list.prepend`를 적용할 수 있다.
-
-`list.head`와 `list.tail`은 입력이 비어 있지 않다는 전제를 갖는 내부 관찰
-operation이다. Compiler가 생성한 사용은 둘 중 하나를 실행하기 전에 non-empty를
-확립해야 한다. 전제를 어기면 backend는 trap해야 하며, type 기본값 head, null
-tail을 비롯한 어떤 fallback 값도 반환하지 않는다.
 
 Package `std`의 public `List::prepend(value, tail)` wrapper는 registry로
 검증된 private compiler intrinsic에 위임하고, 그 호출은 같은 `list.prepend`로
