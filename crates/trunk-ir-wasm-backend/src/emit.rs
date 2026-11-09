@@ -293,27 +293,28 @@ struct FunctionEmitContext {
     effective_types: HashMap<ValueRef, TypeRef>,
 }
 
-/// `fields` with each field its supertype also declares taking the
-/// supertype's mutability.
+/// `fields` of the struct at `index` with each field an ancestor also declares
+/// taking the mutability of the outermost ancestor that declares it, so every
+/// level of a supertype chain agrees.
 fn inherit_field_mutability(
     fields: &[FieldType],
-    supertype: Option<u32>,
+    index: usize,
     gc_types: &[GcTypeDef],
+    supertypes: &[Option<u32>],
 ) -> Vec<FieldType> {
-    let inherited = match supertype.and_then(|index| gc_types.get(index as usize)) {
-        Some(GcTypeDef::Struct(inherited)) => inherited.as_slice(),
-        _ => &[],
-    };
+    let mut fields = fields.to_vec();
+    let mut ancestor = supertypes.get(index).copied().flatten();
+    // A supertype chain is at most as long as the type list.
+    for _ in 0..gc_types.len() {
+        let Some(current) = ancestor else { break };
+        if let Some(GcTypeDef::Struct(inherited)) = gc_types.get(current as usize) {
+            for (field, inherited) in fields.iter_mut().zip(inherited) {
+                field.mutable = inherited.mutable;
+            }
+        }
+        ancestor = supertypes.get(current as usize).copied().flatten();
+    }
     fields
-        .iter()
-        .enumerate()
-        .map(|(index, field)| FieldType {
-            mutable: inherited
-                .get(index)
-                .map_or(field.mutable, |inherited| inherited.mutable),
-            ..*field
-        })
-        .collect()
 }
 
 pub(crate) fn emit_wasm(ctx: &mut IrContext, module: IrModule) -> CompilationResult<Vec<u8>> {
@@ -362,8 +363,9 @@ pub(crate) fn emit_wasm(ctx: &mut IrContext, module: IrModule) -> CompilationRes
                     inner: CompositeInnerType::Struct(StructType {
                         fields: inherit_field_mutability(
                             fields,
-                            supertypes.get(index).copied().flatten(),
+                            index,
                             &module_info.gc_types,
+                            supertypes,
                         )
                         .into_boxed_slice(),
                     }),
@@ -1353,6 +1355,63 @@ mod tests {
                 .iter()
                 .all(|ty| ty.is_final),
             "no builtin is a supertype here"
+        );
+    }
+
+    #[test]
+    fn described_subtypes_keep_the_descriptor_immutable() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  !Described = wasm_gc.struct<core.i32, {layout = "described"}>
+  !User = wasm_gc.struct<core.i32, core.i64, {supertype = !Described}>
+  !Leaf = wasm_gc.struct<core.i32, core.i64, core.f64, {supertype = !User}>
+
+  wasm.func @main() -> core.nil {
+    %descriptor = wasm.i32_const 5 : core.i32
+    %wide = wasm.i64_const 0 : core.i64
+    %float = wasm.f64_const 0.0 : core.f64
+    %user = wasm_gc.struct_new %descriptor, %wide {type = !User} : !User
+    %leaf = wasm_gc.struct_new %descriptor, %wide, %float {type = !Leaf} : !Leaf
+    wasm.return
+  }
+}"#,
+        );
+        crate::passes::wasm_gc_to_wasm::lower(&mut ctx, module);
+        let bytes = crate::emit_module_to_wasm(&mut ctx, module)
+            .expect("valid described subtype module")
+            .bytes;
+        Validator::new()
+            .validate_all(&bytes)
+            .expect("a described subtype must match its supertype");
+
+        let structs: Vec<Option<Vec<bool>>> = Parser::new(0)
+            .parse_all(&bytes)
+            .filter_map(|payload| match payload.unwrap() {
+                Payload::TypeSection(types) => Some(types),
+                _ => None,
+            })
+            .flat_map(|types| types.into_iter().map(Result::unwrap))
+            .flat_map(|group| group.into_types().collect::<Vec<_>>())
+            .map(|ty| match ty.composite_type.inner {
+                wasmparser::CompositeInnerType::Struct(fields) => {
+                    Some(fields.fields.iter().map(|field| field.mutable).collect())
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            structs[crate::gc_types::DESCRIBED_IDX as usize],
+            Some(vec![false])
+        );
+        assert!(
+            structs.contains(&Some(vec![false, true])),
+            "the user struct inherits an immutable descriptor: {structs:?}"
+        );
+        assert!(
+            structs.contains(&Some(vec![false, true, true])),
+            "a subtype of a subtype inherits it too: {structs:?}"
         );
     }
 

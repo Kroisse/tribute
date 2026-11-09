@@ -585,7 +585,12 @@ fn main() ->{std::io::Io} Nil {
             "struct types with equal fields are one type"
         );
     }
-    let int_payload = [descriptor, descriptor];
+    assert!(!descriptor.mutable, "the descriptor never changes");
+    let int_field = wasmparser::FieldType {
+        mutable: true,
+        ..descriptor
+    };
+    let int_payload = [descriptor, int_field];
     assert!(
         user_structs
             .iter()
