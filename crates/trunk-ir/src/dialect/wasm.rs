@@ -104,11 +104,12 @@ mod wasm {
     ///   result, `value` is that region's result. Followed by a `wasm.br`,
     ///   `value` is the branch's value, or, for a branch to a `wasm.loop`,
     ///   the loop's next block arguments.
-    /// - **Value flow:** after `ExplicitLocals`, `value` is the value the
-    ///   operation right before it left on top of the stack, and emission
-    ///   writes no instruction for the yield. A yield that passes no value,
-    ///   or that precedes a branch to a loop, does not remain
-    ///   (`design/wasm-backend.md`, "명시적 지역 변수와 stack 계약").
+    /// - **Value flow:** after `ExplicitLocals`, `value` is either the value
+    ///   the operations before it left on top of the stack, or a function
+    ///   parameter, which emission reads from its local right before the
+    ///   yield. Emission writes no instruction for the yield itself. A yield
+    ///   that passes no value, or that precedes a branch to a loop, does not
+    ///   remain (`design/wasm-backend.md`, "명시적 지역 변수와 stack 계약").
     #[asm_format(value attr_dict_bare)]
     fn r#yield(value: Value<_>) {}
     #[asm_format(value attr_dict_bare)]
