@@ -25,7 +25,8 @@ mod adt {
     /// attributes holding its fields. A literal layout has no name and is
     /// its fields, its type parameters in declaration order, and its
     /// attributes (`design/ir.md` § "`adt.struct` nominal layout type").
-    /// [`Struct::fields`] reads either. The text writes a key as its name,
+    /// [`Struct::fields`] reads either; `param_fields` reads only the type's
+    /// own parameters, which a key has none of. The text writes a key as its name,
     /// and the fields of its body where it writes the body. Fields have no
     /// names; the source names are the layout's `adt.struct_decl`. A layout
     /// whose declaration has row parameters counts its row binders in
@@ -41,7 +42,7 @@ mod adt {
     #[alias_hint]
     #[identified]
     #[implements(ManagedRefType)]
-    struct Struct<#[rest] LiteralFields> {
+    struct Struct<#[rest] ParamFields> {
         name: Option<Attr<String>>,
         row_params: Option<Attr<u32>>,
     }
@@ -59,7 +60,8 @@ mod adt {
     /// body is a literal `adt.enum`. A literal enum has no attributes; each
     /// of its variants is one type parameter, in declaration order: an
     /// `adt.variant` whose parameters are the variant's field types.
-    /// [`Enum::variants`] reads either. Variants and fields have no names;
+    /// [`Enum::variants`] reads either; `param_variants` reads only the
+    /// type's own parameters, which a key has none of. Variants and fields have no names;
     /// the source names are the layout's `adt.enum_decl`. Its `row_params`
     /// are those of [`Struct`].
     #[verify]
@@ -67,7 +69,7 @@ mod adt {
     #[alias_hint]
     #[identified]
     #[implements(ManagedRefType)]
-    struct Enum<#[rest] LiteralVariants> {
+    struct Enum<#[rest] ParamVariants> {
         name: Option<Attr<String>>,
         row_params: Option<Attr<u32>>,
     }
