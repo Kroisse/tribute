@@ -280,7 +280,7 @@ pub(crate) fn generate_rtti(
             DescriptorRecord::of_layout(ctx, &decls, ty, tag, fields),
         ));
     }
-    descriptor_records::generate(ctx, &decls, module_block, records, &release_fns, loc);
+    descriptor_records::generate(ctx, module_block, records, &release_fns, loc);
 
     let deep_release = generate_deep_release_function(ctx, loc);
     ctx.push_op(module_block, deep_release);

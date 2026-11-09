@@ -1674,21 +1674,21 @@ Source가 선언한 struct와 enum은 각각 module 최상위의 선언 operatio
 이름을 읽는다. LLVM의 debug metadata가 source 이름을 타입과 따로 두는 것과 같다.
 
 ```text
-adt.struct_decl "geo::Point" (x, y)
-adt.enum_decl "geo::Shape" [Dot, Rect]
+adt.struct_decl !Point ["x", "y"]
+adt.enum_decl !Shape ["Dot", "Rect"]
 ```
 
 - `adt.struct_decl`은 struct의 필드 이름을, `adt.enum_decl`은 enum의 variant
   이름을 선언 순서대로 담는다. 그 수는 layout의 필드 수, variant 수와 같다.
   Variant의 필드 이름은 담지 않는다.
-- 선언은 이름만 담고 타입은 담지 않는다. 필드와 variant의 타입은 layout이 소유하며,
-  layout을 변환하는 pass는 선언을 고치지 않는다. 텍스트 형식은 이름 목록을 그것이
-  이름 붙이는 layout의 위치 목록과 같은 괄호로 쓴다. 필드는 `(..)`, variant는
-  `[..]`로 쓰며, 식별자가 아닌 이름은 따옴표로 쓴다.
-- 선언은 layout을 그 이름으로 가리킨다. 이름은 frontend가 게시한 alias와 layout의
-  `name`, 그 layout을 가리키는 `adt.typeref`의 `name`과 같다. Layout을 변환하는
-  pass가 변환한 layout을 같은 이름으로 다시 게시하므로 선언은 변환을 따라갈 필요가
-  없다.
+- 선언은 이름 붙이는 layout을 type 속성 `type`으로 가리킨다. 선언과 layout의
+  대응은 이 타입의 정체이며, layout의 `name` 문자열을 비교해 찾지 않는다. 필드와
+  variant의 타입은 layout이 소유한다. 텍스트 형식은 layout 타입 뒤에 이름 목록을
+  문자열 list 속성의 일반 문법으로 쓴다. 이름은 layout 이름처럼 식별자 여부와
+  상관없이 항상 따옴표 문자열이다.
+- Layout을 변환하는 pass는 operation 속성 안의 타입을 변환하듯 선언의 `type`도
+  변환한다. 그래서 선언은 변환된 layout을 가리키며, 같은 layout을 `type`으로 쓰는
+  operation과 일치한다.
 - Frontend는 nominal layout을 게시할 때 그 선언을 함께 내보낸다. 특수화된 enum은
   인스턴스마다 layout과 선언을 가진다. Compiler가 만든 layout(closure 저장,
   continuation frame, tuple layout 등)은 선언이 없다.

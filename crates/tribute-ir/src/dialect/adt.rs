@@ -1,9 +1,5 @@
 //! Arena-based adt dialect.
 
-mod syntax;
-
-pub use syntax::{FieldNames, VariantNames};
-
 use crate::dialect::tribute_control::{
     ROW_ARGS_ATTR, ROW_PARAMS_ATTR, Row, display_layout_binders, parse_layout_binders,
 };
@@ -210,41 +206,47 @@ mod adt {
     ) -> Value<_> {
     }
 
-    /// The source names of the struct layout named `name`.
+    /// The source names of the struct layout `type`.
     ///
     /// ```text
-    /// adt.struct_decl "geo::Point" (x, y)
+    /// adt.struct_decl !Point ["x", "y"]
     /// ```
     ///
-    /// - **Shape:** a module-level operation. `name` is the `name` of the
-    ///   `adt.struct` layout the frontend publishes under that alias, and
-    ///   `fields` has one name per field of that layout, in declaration
-    ///   order.
+    /// - **Shape:** a module-level operation. `type` is a named `adt.struct`
+    ///   layout, and `fields` has one name per field of that layout, in
+    ///   declaration order.
     /// - **Meaning:** names only; no value depends on it. Native RTTI
-    ///   records the struct's name and field names from it.
+    ///   records the struct's name and field names from it. It belongs to
+    ///   the layout that is its `type`, not to a layout of the same name.
+    /// - **Ownership and value flow:** a pass that converts layouts converts
+    ///   `type` as it converts the types in operation attributes.
     /// - **Location:** the frontend emits it with the layout of each source
     ///   struct; the target pass that lowers `adt` operations erases it
     ///   (`design/ir.md` § "Nominal 선언").
-    #[asm_format(name custom(FieldNames(fields)) attr_dict)]
-    fn struct_decl(name: Attr<String>, fields: Attr<[String]>) {}
+    #[verify]
+    #[asm_format(r#type fields attr_dict)]
+    fn struct_decl(r#type: Attr<Type>, fields: Attr<[String]>) {}
 
-    /// The source names of the enum layout named `name`.
+    /// The source names of the enum layout `type`.
     ///
     /// ```text
-    /// adt.enum_decl "geo::Shape" [Dot, Rect]
+    /// adt.enum_decl !Shape ["Dot", "Rect"]
     /// ```
     ///
-    /// - **Shape:** a module-level operation. `name` is the `name` of the
-    ///   `adt.enum` layout the frontend publishes under that alias, and
-    ///   `variants` has one name per variant of that layout, in declaration
-    ///   order.
+    /// - **Shape:** a module-level operation. `type` is an `adt.enum` layout,
+    ///   and `variants` has one name per variant of that layout, in
+    ///   declaration order.
     /// - **Meaning:** names only; no value depends on it. Native RTTI
-    ///   records the enum's name and its variants' names from it.
+    ///   records the enum's name and its variants' names from it. It belongs
+    ///   to the layout that is its `type`, not to a layout of the same name.
+    /// - **Ownership and value flow:** a pass that converts layouts converts
+    ///   `type` as it converts the types in operation attributes.
     /// - **Location:** the frontend emits it with the layout of each source
     ///   enum and each specialized enum instance; the target pass that
     ///   lowers `adt` operations erases it (`design/ir.md` § "Nominal 선언").
-    #[asm_format(name custom(VariantNames(variants)) attr_dict)]
-    fn enum_decl(name: Attr<String>, variants: Attr<[String]>) {}
+    #[verify]
+    #[asm_format(r#type variants attr_dict)]
+    fn enum_decl(r#type: Attr<Type>, variants: Attr<[String]>) {}
 
     /// A `length`-element array whose every element is `initial`.
     #[flags(Pure)]
@@ -740,12 +742,12 @@ impl trunk_ir::asm_format::TypeAsmFormat for Typeref {
     }
 }
 
-/// The nominal declarations of a module, by the name of the layout each one
-/// declares (`design/ir.md` § "Nominal 선언").
+/// The nominal declarations of a module, by the layout each one declares
+/// (`design/ir.md` § "Nominal 선언").
 #[derive(Debug, Default)]
 pub struct NominalDecls {
-    structs: HashMap<StringRef, StructDecl>,
-    enums: HashMap<StringRef, EnumDecl>,
+    structs: HashMap<TypeRef, StructDecl>,
+    enums: HashMap<TypeRef, EnumDecl>,
 }
 
 impl NominalDecls {
@@ -757,29 +759,65 @@ impl NominalDecls {
         };
         for &op in &ctx.block(block).ops {
             if let Ok(decl) = StructDecl::from_op(ctx, op) {
-                decls.structs.insert(decl.name_ref(ctx), decl);
+                decls.structs.insert(decl.r#type(ctx), decl);
             } else if let Ok(decl) = EnumDecl::from_op(ctx, op) {
-                decls.enums.insert(decl.name_ref(ctx), decl);
+                decls.enums.insert(decl.r#type(ctx), decl);
             }
         }
         decls
     }
 
     /// The declaration of the struct layout `layout`.
-    pub fn of_struct(&self, ctx: &IrContext, layout: Struct) -> Option<StructDecl> {
-        self.structs.get(&layout.name_ref(ctx)?).copied()
+    pub fn of_struct(&self, layout: Struct) -> Option<StructDecl> {
+        self.structs.get(&layout.as_type_ref()).copied()
     }
 
     /// The declaration of the enum layout `layout`.
-    pub fn of_enum(&self, ctx: &IrContext, layout: Enum) -> Option<EnumDecl> {
-        self.enums.get(&layout.name_ref(ctx)).copied()
+    pub fn of_enum(&self, layout: Enum) -> Option<EnumDecl> {
+        self.enums.get(&layout.as_type_ref()).copied()
     }
 
     /// The position of the variant the declaration of `layout` names
     /// `variant`, for a pass that builds a variant of a compiler-owned enum
     /// by its source name.
     pub fn variant_position(&self, ctx: &IrContext, layout: Enum, variant: &str) -> Option<u32> {
-        self.of_enum(ctx, layout)?.position_of(ctx, variant)
+        self.of_enum(layout)?.position_of(ctx, variant)
+    }
+}
+
+/// A nominal declaration that does not fit its layout.
+#[derive(Debug, derive_more::Display, derive_more::Error)]
+pub enum NominalDeclError {
+    #[display("`type` is not a named `adt.struct` layout")]
+    NotANamedStruct,
+    #[display("`type` is not an `adt.enum` layout")]
+    NotAnEnum,
+    #[display("{names} name(s) for a layout with {positions} position(s)")]
+    CountMismatch { names: usize, positions: usize },
+}
+
+impl trunk_ir::ops::Verify for StructDecl {
+    fn verify(&self, ctx: &IrContext) -> Result<(), trunk_ir::ops::VerificationError> {
+        let layout = Struct::from_type_ref(ctx, self.r#type(ctx))
+            .filter(|layout| layout.name(ctx).is_some())
+            .ok_or(NominalDeclError::NotANamedStruct)?;
+        let (names, positions) = (self.fields(ctx).len(), layout.field_count(ctx));
+        if names != positions {
+            return Err(NominalDeclError::CountMismatch { names, positions }.into());
+        }
+        Ok(())
+    }
+}
+
+impl trunk_ir::ops::Verify for EnumDecl {
+    fn verify(&self, ctx: &IrContext) -> Result<(), trunk_ir::ops::VerificationError> {
+        let layout =
+            Enum::from_type_ref(ctx, self.r#type(ctx)).ok_or(NominalDeclError::NotAnEnum)?;
+        let (names, positions) = (self.variants(ctx).len(), layout.variant_count(ctx));
+        if names != positions {
+            return Err(NominalDeclError::CountMismatch { names, positions }.into());
+        }
+        Ok(())
     }
 }
 
@@ -1409,7 +1447,7 @@ mod tests {
     }
 
     #[test]
-    fn nominal_declarations_are_found_by_their_layout_names() {
+    fn nominal_declarations_are_found_by_their_layouts() {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
             &mut ctx,
@@ -1417,24 +1455,48 @@ mod tests {
   !Point = adt.struct<"Point", (core.i32, core.i32)>
   !Empty = adt.struct<"Empty", ()>
   !Never = adt.enum<"Never", []>
-  adt.struct_decl "Point" (x, y)
-  adt.struct_decl "Empty" ()
-  adt.enum_decl "Never" []
-  adt.struct_decl "Quoted" ("0", "a b")
+  adt.struct_decl !Point ["x", "y"]
+  adt.struct_decl !Empty []
+  adt.enum_decl !Never []
+  adt.struct_decl adt.struct<"Quoted", (core.i32, core.i32)> ["0", "a b"]
 }"#,
         );
         assert_roundtrip(&ctx, module.op());
+        assert!(validate_operation_verifiers(&ctx, module).is_ok());
         let decls = NominalDecls::collect(&ctx, module);
         let alias = |ctx: &IrContext, name| ctx.type_alias_by_text(name).expect("fixture alias");
         let point = Struct::from_type_ref(&ctx, alias(&ctx, "Point")).unwrap();
-        let point = decls.of_struct(&ctx, point).expect("Point is declared");
+        let point = decls.of_struct(point).expect("Point is declared");
         assert_eq!(point.fields(&ctx).collect::<Vec<_>>(), ["x", "y"]);
         let empty = Struct::from_type_ref(&ctx, alias(&ctx, "Empty")).unwrap();
-        let empty = decls.of_struct(&ctx, empty).expect("Empty is declared");
+        let empty = decls.of_struct(empty).expect("Empty is declared");
         assert_eq!(empty.fields(&ctx).len(), 0);
         let never = Enum::from_type_ref(&ctx, alias(&ctx, "Never")).unwrap();
-        let never = decls.of_enum(&ctx, never).expect("Never is declared");
+        let never = decls.of_enum(never).expect("Never is declared");
         assert_eq!(never.variants(&ctx).len(), 0);
+
+        // A layout that only shares the name of a declared one has no
+        // declaration.
+        let other = Struct::from_fields(&mut ctx, "Point", [], AttributeMap::new());
+        assert!(decls.of_struct(other).is_none());
+    }
+
+    #[test]
+    fn nominal_declarations_must_fit_their_layouts() {
+        for decl in [
+            r#"adt.struct_decl adt.struct<"P", (core.i32)> ["x", "y"]"#,
+            r#"adt.struct_decl adt.struct<(core.i32)> ["x"]"#,
+            r#"adt.enum_decl adt.struct<"P", ()> []"#,
+            r#"adt.enum_decl adt.enum<"E", [()]> []"#,
+        ] {
+            let mut ctx = IrContext::new();
+            let module =
+                parse_test_module(&mut ctx, &format!("core.module @test {{\n  {decl}\n}}"));
+            assert!(
+                !validate_operation_verifiers(&ctx, module).is_ok(),
+                "{decl} should be rejected"
+            );
+        }
     }
 
     #[test]

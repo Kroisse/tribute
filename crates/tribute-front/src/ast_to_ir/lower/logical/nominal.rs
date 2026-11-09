@@ -58,7 +58,7 @@ pub(super) fn prescan_logical_nominal_layouts<'db>(
                     .map(|(field, _)| ir.intern_symbol_text(field))
                     .collect();
                 let decl = adt::StructDecl::operands()
-                    .name(ir.intern_symbol_text(&name))
+                    .r#type(layout)
                     .fields(field_names)
                     .build(ir, ctx.location(structure.id));
                 declare(ctx, ir, decl.op_ref());
@@ -146,7 +146,7 @@ pub(super) fn prescan_logical_nominal_layouts<'db>(
                     .map(|(variant, _)| ir.intern_symbol_text(variant))
                     .collect();
                 let decl = adt::EnumDecl::operands()
-                    .name(ir.intern_symbol_text(&name))
+                    .r#type(layout)
                     .variants(variant_names)
                     .build(ir, location);
                 declare(ctx, ir, decl.op_ref());

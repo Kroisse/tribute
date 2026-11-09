@@ -926,25 +926,6 @@ pub fn display_string(text: &str) -> impl fmt::Display + '_ {
     })
 }
 
-/// `name` bare when it is an identifier (`[A-Za-z_][A-Za-z0-9_]*`), and as
-/// a quoted string otherwise.
-pub fn display_name(name: &str) -> impl fmt::Display + '_ {
-    fmt::from_fn(move |f| {
-        let mut chars = name.chars();
-        let is_ident = chars
-            .next()
-            .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
-            && chars.all(|c| c.is_ascii_alphanumeric() || c == '_');
-        if is_ident {
-            f.write_str(name)
-        } else {
-            f.write_char('"')?;
-            write_escaped_string(f, name)?;
-            f.write_char('"')
-        }
-    })
-}
-
 /// Write a symbol path as `@outer::@name`, each component quoted when
 /// needed.
 fn write_symbol_path(f: &mut dyn Write, path: &crate::symbol::SymbolPath) -> fmt::Result {

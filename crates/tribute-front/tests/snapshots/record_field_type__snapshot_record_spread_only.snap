@@ -10,7 +10,7 @@ core.module @test {
   !t0 = tribute_control.func_sig<(!"pkg::Config_1", !t2) -> !"pkg::Config_1" row(| 'a0)>
   !t3 = tribute_control.func_sig<(!"pkg::Config_1") -> core.i1>
 
-  adt.struct_decl "pkg::Config" (debug, verbose)
+  adt.struct_decl !"pkg::Config" ["debug", "verbose"]
   tribute_control.func @"pkg::Config::debug"(%0: !"pkg::Config_1") -> core.i1 {
       %1 = adt.struct_get %0 {field = 0, type = !"pkg::Config"} : core.i1
       tribute_control.return %1

@@ -372,8 +372,8 @@ fn print(&self, p: &mut OpAsmPrinter<'_>) -> fmt::Result {
 ```
 
 `AsmState` offers `ty`, `attr`, `attr_dict`, `value`, `values`, `block`,
-and `entry_args`; `printer::display_symbol_ref`, `display_symbol_text`, and
-`display_name` need no state. A format names nothing while printing. The
+and `entry_args`; `printer::display_symbol_ref` and `display_symbol_text`
+need no state. A format names nothing while printing. The
 pre-pass, `printer::AsmNamer`, names each operation as its format writes it:
 generic form names the results, then each region; a declarative format
 follows its elements; a hand-written format names by default its results,
