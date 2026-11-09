@@ -315,8 +315,7 @@ mod adt {
 
     /// `ref` as the `adt.typeref` `type`, which is also the result type. It
     /// is allowed only between managed references whose nominal identity has
-    /// been established to be the same; it does not convert between
-    /// different layouts or recover a reference from an erased value.
+    /// been established to be the same.
     #[implements(Fold)]
     #[flags(Pure)]
     #[asm_format(r#ref attr_dict_bare ":" type(result))]

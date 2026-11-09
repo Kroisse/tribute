@@ -206,8 +206,9 @@ mod tribute_control {
     /// the enclosing handle. The type is opaque: it is not a source type, a
     /// callable ABI, or a backend carrier, and it grants no right to inspect
     /// the continuation representation. Its only producer is the last block
-    /// argument of a resumptive `op` arm of `tribute_control.handle`, and
-    /// its only consumer is `tribute_control.resume`.
+    /// argument of a resumptive `op` arm of `tribute_control.handle`. A
+    /// `tribute_control.lambda` may capture it along one static ownership
+    /// path, and its only consumer is `tribute_control.resume`.
     struct ResumeToken<Input, Answer>;
 
     // FuncSig operations
