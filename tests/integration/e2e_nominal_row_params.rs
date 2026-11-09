@@ -65,6 +65,57 @@ fn main() ->{Io} Nil {
     );
 }
 
+/// Values whose row arguments are closed, read and built in definitions
+/// that have no row binders: a record spread, a pattern, and a variant.
+#[test]
+fn closed_row_arguments_run_on_both_targets() {
+    assert_output_on_both_targets(
+        "nominal_closed_row_args.trb",
+        r#"
+use std::io::{Io, print_line}
+
+ability Tick {
+    op tick() -> Nil
+}
+
+struct Box({e}, a) { run: fn(a) ->{e} a, label: Nat }
+
+enum Step({e}) { Next(fn() ->{e} Step({e})), Done }
+
+fn relabel(b: Box({}, Nat)) ->{} Box({}, Nat) { Box { label: 7, ..b } }
+
+fn steps(s: Step({Tick})) ->{Tick} Nat {
+    case s {
+        .Next(next) -> 1 + steps(next())
+        .Done -> 0
+    }
+}
+
+fn twice() ->{} Step({Tick}) {
+    .Next(fn() {
+        Tick::tick()
+        .Next(fn() { .Done })
+    })
+}
+
+fn count(comp: fn() ->{e, Tick} Nat) ->{e} Nat {
+    handle comp() {
+        do result { result }
+        op Tick::tick() { 10 + count(fn() { resume Nil }) }
+    }
+}
+
+fn main() ->{Io} Nil {
+    let b = relabel(Box { run: fn(x: Nat) { x + 1 }, label: 0 })
+    let f = b.run
+    print_line(f(b.label).to_string)
+    print_line(count(fn() { steps(twice()) }).to_string)
+}
+"#,
+        "8\n12",
+    );
+}
+
 /// The generated setter and modifier keep the receiver's row argument.
 #[test]
 fn row_parameterized_field_lenses_run_on_both_targets() {

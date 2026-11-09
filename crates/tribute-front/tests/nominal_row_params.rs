@@ -278,6 +278,30 @@ fn quiet(x: Nil) ->{} Nil { run_twice(Callback { run: fn(y) { y } }, x) }
     }
 }
 
+/// A field read out of a value or written into one takes the value's row
+/// arguments in place of the layout's binders, also in a definition that has
+/// no binders, where a leaked binder fails validation.
+#[salsa_test]
+fn extracted_fields_take_the_values_row_arguments(db: &salsa::DatabaseImpl) {
+    let text = format!(
+        "{CALLBACK}{}",
+        r#"
+fn copy(cb: Callback({}, Nil)) ->{} Callback({}, Nil) { Callback { ..cb } }
+fn advance(s: Step({Log})) ->{Log} Nil {
+    case s {
+        .Next(next) -> advance(next())
+        .Done -> Nil
+    }
+}
+fn start() ->{} Step({Log}) { .Next(fn() { .Done }) }
+"#
+    );
+    let source = SourceCst::from_source_str(db, "rows.trb", &text);
+    let ir = run_ast_pipeline_with_ir(db, source);
+    let expected = "adt.struct_get %0 {field = 0, type = !\"pkg::Callback$Nil\"} : tribute_control.func_sig<(core.nil) -> core.nil>";
+    assert!(ir.contains(expected), "missing `{expected}`:\n{ir}");
+}
+
 #[salsa_test]
 fn row_parameter_lists_are_checked_before_resolution(db: &salsa::DatabaseImpl) {
     let text = r#"
