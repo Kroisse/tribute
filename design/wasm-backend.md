@@ -383,7 +383,8 @@ local 배정은 처분이 아니라 그 앞의
 Wasm local은 IR이 소유한다. Emission 경계는 `validate_wasm_ir` 뒤에 본문이 있는
 각 `wasm.func`에 `ExplicitLocals` pass를 실행한다. 이 pass는
 [stack에 남는 값](#stack에-남는-값)을 뺀 SSA 값에 local을 배정하고, local을 거치는
-모든 경로를 `wasm.local_get`과 `wasm.local_set` operation으로 IR에 드러낸다.
+경로를 `wasm.local_get`과 `wasm.local_set` operation으로 IR에 드러낸다. 다만 사용자
+바로 앞에서 읽는 함수 parameter는 아래 계약대로 operand로 그대로 둔다.
 Parameter는 local `0..n`이고, 나머지 local의 IR 타입은 순서대로 `wasm.func`의
 `locals` attribute에 둔다. Local의 타입은 그 local에 담기는 값의 IR 타입과 같다.
 Emitter는 local을 배정하지 않고 `locals`를 Wasm 값 타입으로 바꿔 선언할 뿐이다.
@@ -393,9 +394,13 @@ Pass를 거친 IR은 다음 stack 계약을 만족한다.
 - 각 operation은 stack operand를 stack 맨 위에서 순서대로 소비한다. 이 순서는
   `wasm` dialect의 `StackOperandOrder` interface가 정하며, 기본값은 operand
   순서이다.
+- 함수 parameter, 즉 `wasm.func` 입구 block의 argument는 stack operand의 마지막
+  연속 구간에 그대로 쓸 수 있다. Emitter는 그 operation 바로 앞에서 이 operand를
+  차례로 parameter의 local에서 읽는다. 그보다 앞에서 읽어야 하는 parameter는
+  `wasm.local_get`으로 쓴다.
 - Operation이 stack에 남기는 결과는 같은 block의 뒤쪽 operation이 정확히 한 번
-  소비한다. Stack에 값을 남기지 않는 결과에는 사용이 없다. Block argument에도 사용이
-  없으며, 그 값은 block argument의 local에서 읽는다.
+  소비한다. Stack에 값을 남기지 않는 결과에는 사용이 없다. 그 밖의 block argument에도
+  사용이 없으며, 그 값은 block argument의 local에서 읽는다.
 - `wasm.yield`는 바로 앞에서 stack 맨 위에 놓인 값을 region의 결과나 뒤따르는
   `wasm.br`의 값으로 넘긴다. 값을 넘기지 않는 yield는 남기지 않는다.
 - Loop-carried 값은 loop body block argument의 local에 `wasm.local_set`으로
@@ -412,8 +417,8 @@ Stack에 값을 남기는지는 backend 표현 규칙이 정한다. Call과 indi
 결과를 읽는 곳은 대입되지 않은 그 결과의 local, 즉 local의 기본값을 읽는다.
 
 Emission 경계는 emitter 직전에 이 계약을 한 곳에서 검사하고, 어긋나면 그
-operation을 진단과 함께 거부한다. Emitter는 각 operation의 명령어만 직렬화하며, 값의
-위치를 추론하지 않는다.
+operation을 진단과 함께 거부한다. Emitter는 각 operation의 명령어와 그 바로 앞의
+parameter 읽기만 직렬화하며, 그 밖의 값의 위치를 추론하지 않는다.
 
 ### Stack에 남는 값
 

@@ -12,7 +12,7 @@
 use trunk_ir::IrContext;
 use trunk_ir::dialect::wasm;
 use trunk_ir::ops::{DialectOp, DialectType};
-use trunk_ir::refs::{OpRef, RegionRef, TypeRef, ValueRef};
+use trunk_ir::refs::{OpRef, RegionRef, TypeRef, ValueDef, ValueRef};
 use trunk_ir::smallvec::SmallVec;
 use wasm_encoder::AbstractHeapType;
 
@@ -110,6 +110,31 @@ pub(crate) fn stack_operand_slots(ctx: &IrContext, op: OpRef) -> SmallVec<[(Valu
             (value, slot as u32)
         })
         .collect()
+}
+
+/// The local of a function parameter: `value`'s position when it is an
+/// argument of a `wasm.func` body's entry block.
+pub(crate) fn parameter_local(ctx: &IrContext, value: ValueRef) -> Option<u32> {
+    let ValueDef::BlockArg(block, index) = ctx.value_def(value) else {
+        return None;
+    };
+    let region = ctx.block(block).parent_region?;
+    let func = ctx.region(region).parent_op?;
+    (wasm::Func::matches(ctx, func) && ctx.region(region).blocks.first() == Some(&block))
+        .then_some(index)
+}
+
+/// The function parameters `op` reads right before it: the last stack
+/// operands that are parameters, in the order its instruction takes them.
+pub(crate) fn trailing_parameters(ctx: &IrContext, op: OpRef) -> SmallVec<[u32; 4]> {
+    let operands = wasm::DynStackOperandOrder::of(ctx, op);
+    let mut locals: SmallVec<[u32; 4]> = operands
+        .iter()
+        .rev()
+        .map_while(|&value| parameter_local(ctx, value))
+        .collect();
+    locals.reverse();
+    locals
 }
 
 /// Where a `wasm.yield` passes its value.

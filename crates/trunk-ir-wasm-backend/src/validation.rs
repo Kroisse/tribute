@@ -19,7 +19,7 @@ use trunk_ir::refs::{OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::symbol_table::{SymbolTable, qualified_name};
 use trunk_ir::walk::{WalkAction, walk_op};
 
-use crate::stack_effect::{ends_block, pushed_results};
+use crate::stack_effect::{ends_block, parameter_local, pushed_results, trailing_parameters};
 use crate::{CompilationError, CompilationResult};
 
 /// Validation error details.
@@ -106,7 +106,11 @@ fn validate_stack_region(
     errors: &mut Vec<String>,
 ) {
     for &block in &ctx.region(region).blocks {
-        if ctx.block_args(block).iter().any(|&arg| ctx.has_uses(arg)) {
+        if ctx
+            .block_args(block)
+            .iter()
+            .any(|&arg| ctx.has_uses(arg) && parameter_local(ctx, arg).is_none())
+        {
             errors.push(format!(
                 "@{func}: a block argument is used instead of read from its local"
             ));
@@ -122,8 +126,10 @@ fn validate_stack_region(
                     name.display(ctx)
                 ));
             }
-            match stack.len().checked_sub(operands.len()) {
-                Some(base) if stack[base..] == operands[..] => stack.truncate(base),
+            // The trailing parameters are read right before the operation.
+            let on_stack = &operands[..operands.len() - trailing_parameters(ctx, op).len()];
+            match stack.len().checked_sub(on_stack.len()) {
+                Some(base) if stack[base..] == on_stack[..] => stack.truncate(base),
                 _ => {
                     errors.push(format!(
                         "@{func}: the operands of {} are not on top of the stack in order",
@@ -576,15 +582,51 @@ mod tests {
     }
 
     #[test]
-    fn stack_contract_rejects_a_used_block_argument() {
+    fn stack_contract_rejects_a_used_loop_argument() {
         let error = stack_error(
             r#"core.module @test {
-  wasm.func @f(%x: core.i32) -> core.i32 {
-    wasm.return %x
+  wasm.func @f() -> core.i32 {
+    wasm.loop() {
+      ^body(%i: core.i32):
+        wasm.return %i
+    }
+    wasm.unreachable
   }
 }"#,
         );
         assert!(error.contains("a block argument is used"), "{error}");
+    }
+
+    #[test]
+    fn stack_contract_reads_trailing_parameters_before_their_user() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  wasm.func @f(%x: core.i32, %y: core.i32) -> core.i32 {
+    %one = wasm.i32_const 1 : core.i32
+    %sum = wasm.i32_add %one, %x : core.i32
+    %diff = wasm.i32_sub %x, %y : core.i32
+    %all = wasm.i32_add %sum, %diff : core.i32
+    wasm.return %all
+  }
+}"#,
+        );
+        validate_wasm_stack(&ctx, module).expect("trailing parameters are read in place");
+    }
+
+    #[test]
+    fn stack_contract_rejects_a_parameter_below_a_stack_value() {
+        let error = stack_error(
+            r#"core.module @test {
+  wasm.func @f(%x: core.i32) -> core.i32 {
+    %one = wasm.i32_const 1 : core.i32
+    %sum = wasm.i32_add %x, %one : core.i32
+    wasm.return %sum
+  }
+}"#,
+        );
+        assert!(error.contains("wasm.i32_add are not on top"), "{error}");
     }
 
     #[test]

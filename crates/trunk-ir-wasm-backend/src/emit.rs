@@ -791,8 +791,9 @@ fn emit_function(
 }
 
 /// Write the instructions of a region's operations. Values pass on the Wasm
-/// stack as the stack contract lays them out, so a `wasm.yield` writes no
-/// instruction.
+/// stack as the stack contract lays them out: each operation's trailing
+/// function-parameter operands are read from their locals right before it,
+/// and a `wasm.yield` writes no instruction of its own.
 fn emit_region_ops(
     ctx: &IrContext,
     region: RegionRef,
@@ -804,6 +805,9 @@ fn emit_region_ops(
         return Err(CompilationError::unsupported_feature("multi-block regions"));
     }
     for &op in &ctx.block(blocks[0]).ops {
+        for local in crate::stack_effect::trailing_parameters(ctx, op) {
+            function.instruction(&Instruction::LocalGet(local));
+        }
         if !wasm_dialect::Yield::matches(ctx, op) {
             emit_op_nested(ctx, op, module_info, function)?;
         }

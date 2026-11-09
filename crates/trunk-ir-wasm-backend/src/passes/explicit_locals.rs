@@ -26,7 +26,8 @@ use trunk_ir::{
 };
 
 use crate::stack_effect::{
-    YieldTransfer, pushed_results, stack_operand_slots, structured_result_type, yield_transfer,
+    YieldTransfer, parameter_local, pushed_results, stack_operand_slots, structured_result_type,
+    yield_transfer,
 };
 use crate::stackify::Stackify;
 use crate::{CompilationError, CompilationResult};
@@ -221,12 +222,15 @@ impl Rewrite<'_> {
                                 rewritten.push(local_set(ctx, arg_local, value, location));
                             }
                         } else {
-                            let local = self.locals.of(ctx, value, op)?;
                             for &arg_local in &arg_locals {
-                                let get = local_get(ctx, local, ctx.value_ty(value), location);
-                                rewritten.push(get);
-                                let got = ctx.op_result(get, 0);
-                                rewritten.push(local_set(ctx, arg_local, got, location));
+                                self.copy_to_local(
+                                    ctx,
+                                    value,
+                                    arg_local,
+                                    op,
+                                    location,
+                                    &mut rewritten,
+                                )?;
                             }
                         }
                         erased.push(op);
@@ -245,15 +249,7 @@ impl Rewrite<'_> {
                     ));
                 }
                 for (&value, &arg_local) in init.iter().zip(&arg_locals) {
-                    let get = local_get(
-                        ctx,
-                        self.locals.of(ctx, value, op)?,
-                        ctx.value_ty(value),
-                        location,
-                    );
-                    rewritten.push(get);
-                    let got = ctx.op_result(get, 0);
-                    rewritten.push(local_set(ctx, arg_local, got, location));
+                    self.copy_to_local(ctx, value, arg_local, op, location, &mut rewritten)?;
                 }
                 for index in (0..init.len()).rev() {
                     ctx.remove_op_operand(op, index as u32);
@@ -319,6 +315,34 @@ impl Rewrite<'_> {
         Ok(())
     }
 
+    /// Write `value`, read from its local, to local `target`. A function
+    /// parameter stays the `wasm.local_set`'s operand, which the emitter
+    /// reads.
+    fn copy_to_local(
+        &self,
+        ctx: &mut IrContext,
+        value: ValueRef,
+        target: u32,
+        user: OpRef,
+        location: Location,
+        rewritten: &mut OpList,
+    ) -> CompilationResult<()> {
+        let source = if parameter_local(ctx, value).is_some() {
+            value
+        } else {
+            let get = local_get(
+                ctx,
+                self.locals.of(ctx, value, user)?,
+                ctx.value_ty(value),
+                location,
+            );
+            rewritten.push(get);
+            ctx.op_result(get, 0)
+        };
+        rewritten.push(local_set(ctx, target, source, location));
+        Ok(())
+    }
+
     /// Emit the local reads `Stackify` placed before `op`.
     fn read_hoisted(
         &mut self,
@@ -343,7 +367,8 @@ impl Rewrite<'_> {
     }
 
     /// Read each stack operand of `op` that is neither on the stack nor read
-    /// earlier from its local, right before `op`.
+    /// earlier from its local, right before `op`. The function parameters
+    /// among the last of them stay operands, which the emitter reads.
     fn read_stack_operands(
         &mut self,
         ctx: &mut IrContext,
@@ -351,8 +376,17 @@ impl Rewrite<'_> {
         location: Location,
         rewritten: &mut OpList,
     ) -> CompilationResult<()> {
-        for (value, slot) in stack_operand_slots(ctx, op) {
-            if self.hoisted.contains(&(op, slot)) || self.stackify.is_stacked(value) {
+        let slots = stack_operand_slots(ctx, op);
+        let read_here = |&(value, slot): &(ValueRef, u32)| {
+            !self.hoisted.contains(&(op, slot)) && !self.stackify.is_stacked(value)
+        };
+        let implicit = slots
+            .iter()
+            .rev()
+            .take_while(|operand| read_here(operand) && parameter_local(ctx, operand.0).is_some())
+            .count();
+        for &(value, slot) in &slots[..slots.len() - implicit] {
+            if !read_here(&(value, slot)) {
                 continue;
             }
             let get = local_get(
@@ -548,27 +582,26 @@ mod tests {
             r#"core.module @test {
   wasm.func @count(%0: core.i32) -> core.i32 attributes {locals = [core.i32]} {
       %1 = wasm.block -> (core.i32) {
-          %2 = wasm.local_get {index = 0} : core.i32
-          wasm.local_set %2 {index = 1}
+          wasm.local_set %0 {index = 1}
           wasm.loop() {
-            ^bb2(%3: core.i32):
-              %4 = wasm.local_get {index = 1} : core.i32
-              %5 = wasm.i32_const 100 : core.i32
-              %6 = wasm.local_get {index = 1} : core.i32
-              %7 = wasm.i32_const 5 : core.i32
-              %8 = wasm.i32_lt_s %6, %7 : core.i32
-              wasm.if %8 {
-                  %9 = wasm.local_get {index = 1} : core.i32
-                  %10 = wasm.i32_const 1 : core.i32
-                  %11 = wasm.i32_add %9, %10 : core.i32
-                  wasm.local_set %11 {index = 1}
+            ^bb2(%2: core.i32):
+              %3 = wasm.local_get {index = 1} : core.i32
+              %4 = wasm.i32_const 100 : core.i32
+              %5 = wasm.local_get {index = 1} : core.i32
+              %6 = wasm.i32_const 5 : core.i32
+              %7 = wasm.i32_lt_s %5, %6 : core.i32
+              wasm.if %7 {
+                  %8 = wasm.local_get {index = 1} : core.i32
+                  %9 = wasm.i32_const 1 : core.i32
+                  %10 = wasm.i32_add %8, %9 : core.i32
+                  wasm.local_set %10 {index = 1}
                   wasm.br {target = 1}
               } else {
-                  %12 = wasm.i32_const 0 : core.i32
-                  wasm.drop %12
+                  %11 = wasm.i32_const 0 : core.i32
+                  wasm.drop %11
               }
-              %13 = wasm.i32_add %4, %5 : core.i32
-              wasm.yield %13
+              %12 = wasm.i32_add %3, %4 : core.i32
+              wasm.yield %12
               wasm.br {target = 1}
           }
           wasm.unreachable
@@ -757,10 +790,8 @@ mod tests {
             ir,
             r#"core.module @test {
   wasm.func @f(%0: core.i32, %1: core.i32) -> core.i32 {
-      %2 = wasm.local_get {index = 1} : core.i32
-      %3 = wasm.local_get {index = 0} : core.i32
-      %4 = wasm.call_indirect %3(%2) : (core.i32) -> core.i32
-      wasm.return %4
+      %2 = wasm.call_indirect %0(%1) : (core.i32) -> core.i32
+      wasm.return %2
   }
 }
 "#
@@ -789,14 +820,12 @@ mod tests {
             r#"core.module @test {
   wasm.func @f(%0: core.i32) -> core.nil attributes {locals = [core.i32]} {
       wasm.block {
-          %1 = wasm.local_get {index = 0} : core.i32
-          wasm.local_set %1 {index = 1}
+          wasm.local_set %0 {index = 1}
           wasm.loop() {
-            ^bb2(%2: core.i32):
-              %3 = wasm.local_get {index = 1} : core.i32
-              %4 = wasm.local_get {index = 0} : core.i32
-              %5 = wasm.i32_sub %3, %4 : core.i32
-              wasm.local_set %5 {index = 1}
+            ^bb2(%1: core.i32):
+              %2 = wasm.local_get {index = 1} : core.i32
+              %3 = wasm.i32_sub %2, %0 : core.i32
+              wasm.local_set %3 {index = 1}
               wasm.br {target = 0}
           }
       }
@@ -808,7 +837,7 @@ mod tests {
     }
 
     #[test]
-    fn passes_a_region_result_from_a_local_right_before_the_yield() {
+    fn passes_parameters_and_a_region_result_without_locals() {
         let ir = explicit(
             r#"core.module @test {
   wasm.func @f(%c: core.i32, %a: core.i32, %b: core.i32) -> core.i32 {
@@ -825,15 +854,12 @@ mod tests {
             ir,
             r#"core.module @test {
   wasm.func @f(%0: core.i32, %1: core.i32, %2: core.i32) -> core.i32 {
-      %3 = wasm.local_get {index = 0} : core.i32
-      %4 = wasm.if %3 -> (core.i32) {
-          %5 = wasm.local_get {index = 1} : core.i32
-          wasm.yield %5
+      %3 = wasm.if %0 -> (core.i32) {
+          wasm.yield %1
       } else {
-          %6 = wasm.local_get {index = 2} : core.i32
-          wasm.yield %6
+          wasm.yield %2
       }
-      wasm.return %4
+      wasm.return %3
   }
 }
 "#
