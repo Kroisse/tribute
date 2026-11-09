@@ -87,11 +87,15 @@ pub fn convert_layouts<C: LayoutBlindConversion>(
         }
     }
 
-    // The new keys, then the bodies.
-    conversion.reset();
-    for &layout in &layouts {
-        if !changed.contains(&layout) {
-            conversion.fix(layout, layout);
+    // The new keys, then the bodies. A blind conversion stays right unless
+    // it holds a changed layout as a type, which only a layout holding one
+    // does; otherwise the conversions made so far are kept.
+    if dependents.keys().any(|layout| changed.contains(layout)) {
+        conversion.reset();
+        for &layout in &layouts {
+            if !changed.contains(&layout) {
+                conversion.fix(layout, layout);
+            }
         }
     }
     let mut settler = Settler {
