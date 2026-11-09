@@ -6,6 +6,7 @@
 //! - wasm.loop (loop construct)
 //! - wasm.br (unconditional branch)
 //! - wasm.br_if (conditional branch)
+//! - wasm.br_table (indexed branch)
 
 use tracing::debug;
 use trunk_ir::IrContext;
@@ -288,6 +289,22 @@ pub(crate) fn handle_br(
 ) -> CompilationResult<()> {
     let depth = br_op.target(ctx);
     function.instruction(&Instruction::Br(depth));
+    Ok(())
+}
+
+/// Handle wasm.br_table operation
+pub(crate) fn handle_br_table(
+    ctx: &IrContext,
+    br_table_op: wasm_dialect::BrTable,
+    emit_ctx: &FunctionEmitContext,
+    function: &mut Function,
+) -> CompilationResult<()> {
+    emit_operands(ctx, &[br_table_op.index(ctx)], emit_ctx, function)?;
+    let targets: Vec<u32> = br_table_op.targets(ctx).collect();
+    function.instruction(&Instruction::BrTable(
+        targets.into(),
+        br_table_op.default(ctx),
+    ));
     Ok(())
 }
 

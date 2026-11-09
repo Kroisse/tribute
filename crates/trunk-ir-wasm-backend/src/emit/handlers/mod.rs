@@ -23,7 +23,7 @@ pub(super) use const_handlers::{
     handle_f32_const, handle_f64_const, handle_i32_const, handle_i64_const,
 };
 pub(super) use control_flow_handlers::{
-    handle_block, handle_br, handle_br_if, handle_if, handle_loop,
+    handle_block, handle_br, handle_br_if, handle_br_table, handle_if, handle_loop,
 };
 pub(super) use local_global_handlers::{
     handle_global_get, handle_global_set, handle_local_get, handle_local_set, handle_local_tee,

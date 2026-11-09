@@ -2,6 +2,8 @@
 //!
 //! This pass converts structured control flow operations to wasm control:
 //! - `scf.if` -> `wasm.if`
+//! - `scf.index_switch` -> one `wasm.br_table` in nested `wasm.block`s when
+//!   dense, otherwise nested `wasm.if` comparisons
 //! - `scf.loop` -> `wasm.block(wasm.loop(...))`
 //! - `scf.yield` -> `wasm.yield` (tracks region result value)
 //! - `scf.continue` -> `wasm.br` to the enclosing `wasm.loop`
@@ -18,9 +20,9 @@ use trunk_ir::context::{BlockData, IrContext, OpList, RegionData};
 use trunk_ir::dialect::core;
 use trunk_ir::dialect::scf;
 use trunk_ir::dialect::wasm as wasm_dialect;
-use trunk_ir::op_interface::DynRegionBranch;
+use trunk_ir::op_interface::{DynRegionBranch, DynRegionBranchTerminator};
 use trunk_ir::ops::{DialectOp, DialectType};
-use trunk_ir::refs::{OpRef, RegionRef, ValueRef};
+use trunk_ir::refs::{OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{
     ConversionError, ConversionTarget, IllegalOp, LegalityCheck, Module, OpRewritePattern,
     PatternApplicator, PatternRewriter, TypeConverter,
@@ -355,7 +357,8 @@ fn take_region_ops(ctx: &mut IrContext, region: RegionRef) -> OpList {
     ops
 }
 
-/// Pattern for an `scf.index_switch` -> nested `wasm.if` comparisons.
+/// Pattern for an `scf.index_switch` -> a `wasm.br_table` dispatch when the
+/// switch is dense, otherwise nested `wasm.if` comparisons.
 struct ScfSwitchPattern<'a>(&'a ScfLoweringPlan);
 
 impl OpRewritePattern for ScfSwitchPattern<'_> {
@@ -419,60 +422,12 @@ impl OpRewritePattern for ScfSwitchPattern<'_> {
             rewriter.insert_op(cast.op_ref());
             discriminant = cast.result(ctx);
         }
-        let discriminant_ty = ctx.value_ty(discriminant);
-        let condition_ty = core::I32::type_ref(ctx);
-        let case_count = arms.cases.len();
-        let mut next = arms.default;
-        let mut outer_ops = None;
-        for (index, (value, body)) in arms.cases.into_iter().rev().enumerate() {
-            let (case, matches) = match arms.width {
-                SwitchWidth::I32 => {
-                    let value = i32::try_from(value)
-                        .expect("i32 switch case values are validated before lowering");
-                    let case = wasm_dialect::I32Const::operands()
-                        .value(value)
-                        .results(discriminant_ty)
-                        .build(ctx, loc);
-                    let case_value = case.result(ctx);
-                    let matches = wasm_dialect::I32Eq::operands(discriminant, case_value)
-                        .results(condition_ty)
-                        .build(ctx, loc);
-                    (case.op_ref(), matches.op_ref())
-                }
-                SwitchWidth::I64 => {
-                    let case = wasm_dialect::I64Const::operands()
-                        .value(value)
-                        .results(discriminant_ty)
-                        .build(ctx, loc);
-                    let case_value = case.result(ctx);
-                    let matches = wasm_dialect::I64Eq::operands(discriminant, case_value)
-                        .results(condition_ty)
-                        .build(ctx, loc);
-                    (case.op_ref(), matches.op_ref())
-                }
-            };
-            let condition = ctx.op_result(matches, 0);
-            let branch = wasm_dialect::If::operands(condition)
-                .results(result_types.clone())
-                .regions(body, next)
-                .build(ctx, loc);
-            let mut ops = vec![case, matches, branch.op_ref()];
-            if index + 1 == case_count {
-                outer_ops = Some((ops, branch.op_ref()));
-            } else {
-                if has_result {
-                    let value = ctx.op_result(branch.op_ref(), 0);
-                    ops.push(
-                        wasm_dialect::Yield::operands(value)
-                            .build(ctx, loc)
-                            .op_ref(),
-                    );
-                }
-                next = region_with_ops(ctx, loc, ops);
-            }
-        }
-
-        let (outer_ops, outer) = outer_ops.expect("nonempty switch cases build an outer dispatch");
+        let (outer_ops, outer) = if let Some(table) = JumpTable::of(arms.width, &arms.cases) {
+            let exit = lower_jump_table(ctx, loc, discriminant, table, &arms, &result_types);
+            (vec![exit], exit)
+        } else {
+            lower_comparison_chain(ctx, loc, discriminant, arms, &result_types, has_result)
+        };
         for inserted in outer_ops {
             rewriter.insert_op(inserted);
         }
@@ -493,6 +448,218 @@ impl OpRewritePattern for ScfSwitchPattern<'_> {
         rewriter.erase_op(values);
         Some(())
     }
+}
+
+/// The `br_table` dispatch of a dense switch: its smallest case value, and
+/// for each value from there the position of the first case with that value,
+/// or `default`, the number of cases, for a value no case has.
+struct JumpTable {
+    min: i32,
+    targets: Vec<u32>,
+    default: u32,
+}
+
+impl JumpTable {
+    /// Binaryen's `RemoveUnusedBrs` thresholds for turning a comparison
+    /// chain into a `br_table`.
+    const MIN_CASES: usize = 3;
+    const MAX_RANGE: i64 = 1024;
+    const MAX_RANGE_PER_CASE: i64 = 3;
+
+    /// Choose a table for an `i32` switch with enough cases that cover a
+    /// small, dense range. Any other switch keeps the comparison chain.
+    fn of(width: SwitchWidth, cases: &[(i64, RegionRef)]) -> Option<Self> {
+        if width != SwitchWidth::I32 || cases.len() < Self::MIN_CASES {
+            return None;
+        }
+        let min = cases.iter().map(|&(value, _)| value).min()?;
+        let max = cases.iter().map(|&(value, _)| value).max()?;
+        let range = max - min + 1;
+        if range > Self::MAX_RANGE || range > Self::MAX_RANGE_PER_CASE * cases.len() as i64 {
+            return None;
+        }
+        let default = u32::try_from(cases.len()).ok()?;
+        let mut targets = vec![default; usize::try_from(range).ok()?];
+        // An earlier case wins a repeated value, as in the comparison chain.
+        for (position, &(value, _)) in cases.iter().enumerate().rev() {
+            targets[usize::try_from(value - min).ok()?] = u32::try_from(position).ok()?;
+        }
+        Some(Self {
+            min: i32::try_from(min).ok()?,
+            targets,
+            default,
+        })
+    }
+}
+
+/// Lower a dense switch to one `br_table` inside a `wasm.block` per case:
+///
+/// ```text
+/// %r = wasm.block -> (T) {          // exit
+///   wasm.block {                     // default label
+///     wasm.block {                   // label of the last case
+///       ...
+///         wasm.block {               // label of the first case
+///           %i = wasm.i32_sub %d, %min
+///           wasm.br_table %i, default n [..]
+///         }
+///         <first case>
+///         wasm.yield %v
+///         wasm.br {target = n}       // to the exit
+///       ...
+///     }
+///     <last case>
+///     wasm.yield %v
+///     wasm.br {target = 1}
+///   }
+///   <default>
+///   wasm.yield %v
+/// }
+/// ```
+///
+/// The index wraps below the smallest case value, so `br_table` sends every
+/// value outside the table to the default label. Each case follows the end
+/// of its own label and branches to the exit with its result; the default
+/// falls through to the end of the exit, which yields its result.
+fn lower_jump_table(
+    ctx: &mut IrContext,
+    loc: trunk_ir::types::Location,
+    discriminant: ValueRef,
+    table: JumpTable,
+    arms: &ScfSwitchArms,
+    result_types: &[TypeRef],
+) -> OpRef {
+    let i32_ty = core::I32::type_ref(ctx);
+    let mut ops = Vec::new();
+    let mut index = discriminant;
+    if table.min != 0 {
+        let min = wasm_dialect::I32Const::operands()
+            .value(table.min)
+            .results(i32_ty)
+            .build(ctx, loc);
+        let sub = wasm_dialect::I32Sub::operands(discriminant, min.result(ctx))
+            .results(i32_ty)
+            .build(ctx, loc);
+        index = sub.result(ctx);
+        ops.extend([min.op_ref(), sub.op_ref()]);
+    }
+    let case_count = table.default;
+    let dispatch = wasm_dialect::BrTable::operands(index)
+        .targets(table.targets)
+        .default(case_count)
+        .build(ctx, loc);
+    ops.push(dispatch.op_ref());
+
+    // A case's result reaches the exit as the branch's operand, which a
+    // result without a Wasm value does not have.
+    let carries_value = result_types
+        .first()
+        .is_some_and(|&ty| !core::Nil::matches(ctx, ty));
+    for (position, &(_, body)) in arms.cases.iter().enumerate() {
+        let label = wasm_dialect::Block::operands()
+            .results(Vec::<TypeRef>::new())
+            .regions(region_with_ops(ctx, loc, ops))
+            .build(ctx, loc);
+        ops = vec![label.op_ref()];
+        ops.extend(take_region_ops(ctx, body));
+        if !carries_value
+            && let Some(&last) = ops.last()
+            && wasm_dialect::Yield::matches(ctx, last)
+        {
+            ops.pop();
+            ctx.remove_op(last);
+        }
+        // A case that leaves through its loop's `scf.continue` or
+        // `scf.break` never reaches the exit.
+        if ops
+            .last()
+            .is_some_and(|&last| DynRegionBranchTerminator::is_implemented(ctx, last))
+        {
+            continue;
+        }
+        let to_exit = wasm_dialect::Br::operands()
+            .target(case_count - position as u32)
+            .build(ctx, loc);
+        ops.push(to_exit.op_ref());
+    }
+    let default_label = wasm_dialect::Block::operands()
+        .results(Vec::<TypeRef>::new())
+        .regions(region_with_ops(ctx, loc, ops))
+        .build(ctx, loc);
+    let mut exit_ops = vec![default_label.op_ref()];
+    exit_ops.extend(take_region_ops(ctx, arms.default));
+    wasm_dialect::Block::operands()
+        .results(result_types.to_vec())
+        .regions(region_with_ops(ctx, loc, exit_ops))
+        .build(ctx, loc)
+        .op_ref()
+}
+
+/// Lower a switch to a `wasm.if` per case, each testing one case value and
+/// holding the rest of the chain in its else region. Returns the operations
+/// that replace the switch and the outermost `wasm.if`.
+fn lower_comparison_chain(
+    ctx: &mut IrContext,
+    loc: trunk_ir::types::Location,
+    discriminant: ValueRef,
+    arms: ScfSwitchArms,
+    result_types: &[TypeRef],
+    has_result: bool,
+) -> (Vec<OpRef>, OpRef) {
+    let discriminant_ty = ctx.value_ty(discriminant);
+    let condition_ty = core::I32::type_ref(ctx);
+    let case_count = arms.cases.len();
+    let mut next = arms.default;
+    let mut outer_ops = None;
+    for (index, (value, body)) in arms.cases.into_iter().rev().enumerate() {
+        let (case, matches) = match arms.width {
+            SwitchWidth::I32 => {
+                let value = i32::try_from(value)
+                    .expect("i32 switch case values are validated before lowering");
+                let case = wasm_dialect::I32Const::operands()
+                    .value(value)
+                    .results(discriminant_ty)
+                    .build(ctx, loc);
+                let case_value = case.result(ctx);
+                let matches = wasm_dialect::I32Eq::operands(discriminant, case_value)
+                    .results(condition_ty)
+                    .build(ctx, loc);
+                (case.op_ref(), matches.op_ref())
+            }
+            SwitchWidth::I64 => {
+                let case = wasm_dialect::I64Const::operands()
+                    .value(value)
+                    .results(discriminant_ty)
+                    .build(ctx, loc);
+                let case_value = case.result(ctx);
+                let matches = wasm_dialect::I64Eq::operands(discriminant, case_value)
+                    .results(condition_ty)
+                    .build(ctx, loc);
+                (case.op_ref(), matches.op_ref())
+            }
+        };
+        let condition = ctx.op_result(matches, 0);
+        let branch = wasm_dialect::If::operands(condition)
+            .results(result_types.to_vec())
+            .regions(body, next)
+            .build(ctx, loc);
+        let mut ops = vec![case, matches, branch.op_ref()];
+        if index + 1 == case_count {
+            outer_ops = Some((ops, branch.op_ref()));
+        } else {
+            if has_result {
+                let value = ctx.op_result(branch.op_ref(), 0);
+                ops.push(
+                    wasm_dialect::Yield::operands(value)
+                        .build(ctx, loc)
+                        .op_ref(),
+                );
+            }
+            next = region_with_ops(ctx, loc, ops);
+        }
+    }
+
+    outer_ops.expect("nonempty switch cases build an outer dispatch")
 }
 
 /// Pattern for `scf.if` -> `wasm.if`
@@ -1392,6 +1559,150 @@ mod tests {
         wasmparser::Validator::new()
             .validate_all(&bytes)
             .expect("lowered loop exits must validate");
+    }
+
+    /// Lower `ir`, then emit it and validate the module with `wasmparser`.
+    fn lower_and_validate(ir: &str) -> String {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, ir);
+        lower(
+            &mut ctx,
+            module,
+            TypeConverter::new(),
+            &mut Default::default(),
+        )
+        .expect("test module should lower to wasm");
+        let output = module.op().display(&ctx).to_string();
+        assert!(!output.contains("scf."), "residual scf:\n{output}");
+        let bytes = crate::emit_module_to_wasm(&mut ctx, module)
+            .expect("lowered module must emit")
+            .bytes;
+        wasmparser::Validator::new()
+            .validate_all(&bytes)
+            .unwrap_or_else(|error| panic!("{error}:\n{output}"));
+        output
+    }
+
+    #[test]
+    fn dense_switch_dispatches_through_one_br_table() {
+        let output = lower_and_validate(
+            r#"core.module @test {
+  wasm.func @pick(%choice: core.i32) -> (core.i32) {
+      %r = scf.index_switch %choice : (core.i32) -> (core.i32)
+      case 1 {
+        %a = wasm.i32_const 10 : core.i32
+        scf.yield %a
+      }
+      case 2 {
+        %b = wasm.i32_const 20 : core.i32
+        scf.yield %b
+      }
+      case 4 {
+        %c = wasm.i32_const 40 : core.i32
+        scf.yield %c
+      }
+      default {
+        %d = wasm.i32_const 0 : core.i32
+        scf.yield %d
+      }
+      wasm.return %r
+  }
+}"#,
+        );
+
+        assert!(!output.contains("wasm.if"), "{output}");
+        assert!(output.contains("wasm.i32_sub"), "{output}");
+        // Values 1, 2, 3, 4 from the smallest case; 3 has no case.
+        assert!(output.contains(", default 3 [0, 1, 3, 2]"), "{output}");
+        // Each case branches past the later case labels and the default
+        // label to the exit; the default falls through to it.
+        assert_eq!(br_targets(&output), ["3", "2", "1"], "{output}");
+    }
+
+    #[test]
+    fn dense_switch_from_zero_indexes_without_subtracting() {
+        let output = lower_and_validate(
+            r#"core.module @test {
+  wasm.func @run(%choice: core.i32) {
+      scf.index_switch %choice : (core.i32) -> ()
+      case 0 {
+        scf.yield
+      }
+      case 1 {
+        scf.yield
+      }
+      case 2 {
+        scf.yield
+      }
+      default {
+        scf.yield
+      }
+      wasm.return
+  }
+}"#,
+        );
+
+        assert!(!output.contains("wasm.i32_sub"), "{output}");
+        assert!(output.contains(", default 3 [0, 1, 2]"), "{output}");
+    }
+
+    #[test]
+    fn sparse_or_small_switches_keep_the_comparison_chain() {
+        for cases in [&[0, 10, 20][..], &[0, 1][..]] {
+            let arms = cases
+                .iter()
+                .map(|value| format!("case {value} {{\n scf.yield\n }}\n"))
+                .collect::<String>();
+            let output = lower_text(&format!(
+                r#"core.module @test {{
+  func.func @main(%choice: core.i32) -> core.nil {{
+    scf.index_switch %choice : (core.i32) -> ()
+    {arms}default {{
+      scf.yield
+    }}
+    func.return
+  }}
+}}"#
+            ));
+
+            assert!(!output.contains("wasm.br_table"), "{cases:?}: {output}");
+            assert!(output.contains("wasm.if"), "{cases:?}: {output}");
+        }
+    }
+
+    #[test]
+    fn loop_exits_in_jump_table_cases_count_the_case_labels() {
+        let output = lower_and_validate(
+            r#"core.module @test {
+  wasm.func @count(%init: core.i32, %choice: core.i32) -> (core.i32) {
+      %r = scf.loop(%init) -> (core.i32) {
+        ^body(%acc: core.i32):
+          scf.index_switch %choice : (core.i32) -> ()
+          case 0 {
+            %one = wasm.i32_const 1 : core.i32
+            %next = "wasm.i32_sub"(%acc, %one) : core.i32
+            scf.continue %next
+          }
+          case 1 {
+            scf.break %acc
+          }
+          case 2 {
+            scf.yield
+          }
+          default {
+            scf.break %acc
+          }
+          scf.continue %acc
+      }
+      wasm.return %r
+  }
+}"#,
+        );
+
+        // Case 0 continues past the later case labels, the default label,
+        // and the exit; case 1 breaks one label further; case 2 leaves the
+        // switch; the default breaks from the exit.
+        assert_eq!(br_targets(&output), ["4", "4", "1", "2", "0"], "{output}");
     }
 
     fn control_fixture(body: &str) -> String {

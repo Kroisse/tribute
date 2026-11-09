@@ -135,8 +135,9 @@ Wasm 구조이고, 안쪽 loop의 탈출은 그 loop가 맡는다.
 
 ### Switch 지원 조건
 
-`scf_to_wasm`은 `scf.index_switch`를 case 순서대로 중첩된 비교와
-`wasm.if`로 낮춘다. Wasm이 정수를 직접 비교하는 폭은 `i32`와 `i64`뿐이므로
+`scf_to_wasm`은 dense switch를 `wasm.br_table` 하나로, 나머지 switch를 case
+순서대로 중첩된 비교와 `wasm.if`로 낮춘다. Wasm이 정수를 직접 비교하는 폭은
+`i32`와 `i64`뿐이므로
 discriminant는 `core.i32`, `core.i64`, `core.index` 중 하나여야 한다.
 `core.i64`는 `wasm.i64_eq`로 비교하고, 나머지는 `wasm.i32_eq`로 비교한다.
 `core.index`는 Wasm에서 `core.i32`이다. 두 비교 모두 `core.i32` 조건을
@@ -146,6 +147,29 @@ discriminant 타입과
 conversion 오류로 거부한다. 결과가 있는 switch는 각 `wasm.if`가 그 결과 타입을
 선언하고, 안쪽 `wasm.if`의 결과를 바깥 region이 `wasm.yield`로 넘긴다.
 `scf.yield` 변환과 같이 결과는 하나까지만 낮춘다.
+
+### Dense switch의 `br_table` 분기
+
+Discriminant가 Wasm `i32`(`core.i32` 또는 `core.index`)이고 case가 3개 이상이며,
+가장 작은 값부터 가장 큰 값까지의 범위가 1024 이하이면서 case 수의 3배 이하인
+switch를 dense switch로 본다. 이 기준은 Binaryen이 비교 연쇄를 `br_table`로
+바꾸는 기준과 같다. `i64` switch는 `br_table`의 index가 `i32`이므로 항상 비교
+연쇄로 낮춘다.
+
+Dense switch는 case마다 하나, default에 하나, 결과를 받는 탈출에 하나씩
+`wasm.block`을 중첩한다. 가장 안쪽 block에서 discriminant에서 가장 작은 case
+값을 뺀 index로 `wasm.br_table` 하나를 실행한다. 표의 각 칸은 그 값을 가진 첫
+case의 label을 가리키고, 어떤 case도 갖지 않는 값은 default label을 가리킨다.
+뺄셈은 `i32`에서 wrap되므로 가장 작은 case 값보다 작거나 가장 큰 값보다 큰
+discriminant는 부호 없는 index로 표 크기 이상이 되어 `br_table`의 default로
+간다. 따라서 별도의 범위 검사를 두지 않는다.
+
+각 case는 자기 label block의 `end` 바로 뒤에 놓이고, 결과를 `wasm.yield`로 표시한
+뒤 `wasm.br`로 탈출 block에 분기한다. Default는 탈출 block의 마지막에 놓여 그
+block의 결과를 그대로 넘긴다. 결과가 없거나 Wasm 값이 없는 `core.nil` 결과의
+switch는 분기에 값을 싣지 않는다. Loop의 `scf.continue`나 `scf.break`로 끝나는
+case는 탈출 block으로 분기하지 않는다. 이 탈출들은 loop를 낮출 때 case label을
+포함한 모든 사이 label을 세어 target을 정한다([Loop 탈출 분기](#loop-탈출-분기)).
 
 ### Terminal structured-control 결과
 
@@ -159,7 +183,7 @@ conversion 오류로 거부한다. 결과가 있는 switch는 각 `wasm.if`가 �
 
 Terminal if는 결과 없는 `wasm.if`, terminal loop는 결과 없는 `wasm.block`과
 `wasm.loop`가 된다. Resultless switch도 블록 마지막에 있고 explicit default를
-포함한 모든 arm이 terminal이면 결과 없는 Wasm 비교 분기들을 만든다. Source
+포함한 모든 arm이 terminal이면 결과 없는 Wasm 분기 구조를 만든다. Source
 switch에 결과를 추가하지 않으며 일반 fallthrough switch의 계약은 유지한다.
 Wasm 검증기는 각 structured block의 `end` 뒤에 branch 내부의 도달 불가능성을
 전파하지 않는다. 따라서 terminal로 증명된 zero-result if/loop/switch 뒤에는
