@@ -62,7 +62,7 @@ pub fn described_adt_type(ctx: &mut IrContext) -> TypeRef {
     attrs
         .view_mut(ctx)
         .insert(tribute_ir::runtime_layout::LAYOUT_ATTR, layout);
-    adt::Struct::from_fields(ctx, "_described", [i32_ty], attrs).as_type_ref()
+    adt::Struct::literal(ctx, [i32_ty], attrs).as_type_ref()
 }
 
 /// Get the Evidence type of the WASM representation.
@@ -675,7 +675,7 @@ mod tests {
         let module = trunk_ir::parser::parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !Closure = adt.struct<"_closure", (tribute_rt.convention_table_ref), {layout = "closure"}>
+  !Closure = adt.struct<(tribute_rt.convention_table_ref), {layout = "closure"}>
   func.func @f(%c: !Closure) {
     %erased = core.unrealized_conversion_cast %c : !Closure to tribute_rt.anyref
     func.call @use(%erased) : (tribute_rt.anyref) -> ()

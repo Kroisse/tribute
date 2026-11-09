@@ -1407,7 +1407,7 @@ Compiler가 소유하는 runtime 저장 layout은 예약 type 속성 `layout`으
   같은 의미의 값이라도 저장 layout이 다르면 이 속성으로 구별하지 않는다.
 - 일반 type 속성처럼 interning identity에 참여한다. `layout`이 없는 같은 모양의
   타입과는 다른 타입이다. Textual form은 일반 type 속성과 같다:
-  `adt.struct<"_closure", (core.ptr), {layout = "closure"}>`.
+  `adt.struct<(core.ptr), {layout = "closure"}>`.
 - 속성은 그 layout을 만드는 compiler의 canonical 생성자만 붙인다. Frontend와
   소스에서 온 타입은 이 속성을 갖지 않는다. 그래서 사용자 타입이 같은 이름이나
   모양을 가져도 compiler layout으로 취급되지 않는다.
@@ -1421,28 +1421,39 @@ Compiler가 소유하는 runtime 저장 layout은 예약 type 속성 `layout`으
 
 ### `adt.struct` nominal layout type
 
-`adt.struct`는 이름 있는 nominal struct layout이다. 이름과 필드 타입의 위치 목록을
-가지며 전용 textual 문법을 쓴다. 필드 이름은 layout이 아니라 source 선언의
-[nominal 선언](#nominal-선언)이 소유하며, 필드는 위치로만
-가리킨다. 이름은 식별자 여부와 상관없이 항상 따옴표 문자열로 쓴다. Struct 이름은
-타입 이름공간의 이름이며 symbol table의 정의가 아니므로 `@`를 붙이지 않는다.
+`adt.struct`는 struct layout이다. 필드 타입의 위치 목록을 가지며 전용 textual
+문법을 쓴다. 필드 이름은 layout이 아니라 source 선언의
+[nominal 선언](#nominal-선언)이 소유하며, 필드는 위치로만 가리킨다.
+
+이름이 있는 layout은 nominal이고, 이름이 없는 layout은 literal이다(LLVM의
+identified struct와 literal struct). 이름은 식별자 여부와 상관없이 항상 따옴표
+문자열로 쓴다. Struct 이름은 타입 이름공간의 이름이며 symbol table의 정의가
+아니므로 `@`를 붙이지 않는다.
 
 ```text
 adt.struct<"Point", (core.i32, core.i32)>
 adt.struct<"Node", (core.i32 {k = "v"}, adt.typeref<"Node">)>
-adt.struct<"_closure", (core.ptr), {layout = "closure"}>
-adt.struct<"_closure_captures", (core.ptr, core.i32),
-  {layout = "closure_captures",
-   closure_base = adt.struct<"_closure", (core.ptr), {layout = "closure"}>}>
 adt.struct<"Empty", ()>
 adt.struct<"geo::Point", (core.f64, core.f64)>
+adt.struct<(core.ptr), {layout = "closure"}>
+adt.struct<(core.ptr, core.i32),
+  {layout = "closure_captures",
+   closure_base = adt.struct<(core.ptr), {layout = "closure"}>}>
 ```
 
 - 저장 표현은 다음과 같다. 필드 타입은 `params`에 선언 순서대로 두고, struct
   이름은 type 속성 `name`(문자열)이다. 필드 하나의 속성은 그 필드의
   [매개변수 속성](#타입-매개변수-속성)이며, textual form은 필드 타입 뒤에 쓴다.
-- 이름은 필수다. 매개변수가 없으면 필드가 없는 struct다. 필드 목록을 담는 별도
-  type 속성은 없다. Type verifier가 이 규칙을 모든 interned `adt.struct`에 적용한다.
+- Nominal layout은 source가 선언한 struct, compiler가 만든
+  [tuple layout](tribute-dialects.md#compiler-generated-tuple-layout), continuation
+  frame처럼 `adt.typeref`가 이름으로 가리키는 layout이다. 이름은 `adt.typeref`가
+  layout을 찾는 키다.
+- Literal layout은 이름으로 가리킬 일이 없는 compiler 저장 layout이다. Closure
+  저장, list node, ability payload, completion cell 같은 layout이며, 정체는 필드
+  타입과 type 속성뿐이다. 필드가 같은 두 literal layout은 같은 타입이다. Compiler
+  소유 layout은 이름이 아니라 [`layout`](#runtime-layout-식별자) 속성으로 식별한다.
+- 매개변수가 없으면 필드가 없는 struct다. 필드 목록을 담는 별도 type 속성은 없다.
+  Type verifier가 이 규칙을 모든 interned `adt.struct`에 적용한다.
 - Type 속성의 `name`과 `param_attrs`는 전용 문법이 소유한다. Textual form의 type
   속성 dictionary에는 쓰지 않는다. `layout` 같은 나머지 type 속성은 `<…>` 안 마지막
   원소로 둔다.
@@ -1557,8 +1568,8 @@ Closure 저장 layout은 두 종류다.
   `closure_base`로만 정하고, 필드 모양이 prefix처럼 보인다는 사실에서 추론하지
   않는다.
 - Capture layout의 identity는 base와 capture 필드 타입 목록이다. Capture 타입 목록이
-  같은 두 closure는 같은 layout을 쓴다. Struct 이름은 canonical 생성자가 정하며
-  의미를 갖지 않는다.
+  같은 두 closure는 같은 layout을 쓴다. Base와 capture layout은 이름 없는
+  [literal layout](#adtstruct-nominal-layout-type)이다.
 - Convention table 필드의 타입은 경계 안에서 `tribute_rt.convention_table_ref`이고,
   target이 자기 정적 table 참조 표현으로 바꾼다. 이 필드는 managed 참조가 아니며
   해제하지 않는다. Target은 closure의 callable type `S`마다 base를
@@ -1682,8 +1693,10 @@ adt.enum_decl "geo::Shape" [Dot, Rect]
   `Option`의 `Some`, `std::io::ReadLineResult`의 각 variant)를 만드는 pass는 그
   위치를 선언에서 이름으로 찾는다.
 - Native RTTI 생성은 struct·enum의 이름, struct의 필드 이름, variant 이름을 선언에서
-  읽는다([RTTI Table](rc.md#rtti-table)). 선언이 없는 layout의 레코드는 layout의
-  이름과 위치 번호(`"0"`, `"1"`, ...)를 필드와 variant의 이름으로 쓴다. 선언은
+  읽는다([RTTI Table](rc.md#rtti-table)). 선언이 없는 layout의 레코드는 위치
+  번호(`"0"`, `"1"`, ...)를 필드와 variant의 이름으로 쓴다. 레코드 이름은 layout의
+  이름이고, 이름이 없는 literal layout이면 `layout` 속성 값, 그것도 없으면
+  `"struct"`다. 선언은
   값의 의미를 바꾸지 않으며, `adt` operation을 내리는 target
   pass가 지운다.
 

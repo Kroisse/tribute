@@ -427,8 +427,8 @@ fn nested_continuation_frame_closure_releases_use_exact_header_inclusive_sizes()
         r#"core.module @test {
   !Frame = adt.struct<"ContinuationFrame",(core.i32)>
   !FrameRef = adt.typeref<{name = "ContinuationFrame"}>
-  !Base = adt.struct<"_closure",(tribute_rt.convention_table_ref), {layout = "closure"}>
-  !_closure = adt.struct<"_closure_captures",(tribute_rt.convention_table_ref, !FrameRef), {closure_base = !Base, layout = "closure_captures"}>
+  !Base = adt.struct<(tribute_rt.convention_table_ref), {layout = "closure"}>
+  !_closure = adt.struct<(tribute_rt.convention_table_ref, !FrameRef), {closure_base = !Base, layout = "closure_captures"}>
   func.func @capture(%frame: !FrameRef) -> core.nil {
     %code = arith.constant 0 : core.i32
     %closure = adt.struct_new %code, %frame {type = !_closure} : !_closure
@@ -451,7 +451,7 @@ fn native_evidence_hands_the_dispatcher_to_the_runtime_as_a_managed_value() {
     let module = parse_test_module(
         &mut ctx,
         r#"core.module @test {
-  !_closure = adt.struct<"_closure",(tribute_rt.convention_table_ref), {layout = "closure"}>
+  !_closure = adt.struct<(tribute_rt.convention_table_ref), {layout = "closure"}>
   !"std::runtime::evidence::Marker" = adt.struct<"std::runtime::evidence::Marker", (core.i32, core.i32)>
   !Evidence = adt.array<adt.typeref<{name = "std::runtime::evidence::Marker"}>>
   !"std::Option$std::runtime::Dispatch" = adt.enum<"std::Option$std::runtime::Dispatch", [(), (!_closure)]>
@@ -493,7 +493,7 @@ fn native_evidence_hands_the_dispatcher_to_the_runtime_as_a_managed_value() {
 fn internal_closure_raw_pointer_handoff_outside_native_evidence_fails_closed() {
     assert_plan_error_unchanged(
         r#"core.module @test {
-  !_closure = adt.struct<"_closure",(tribute_rt.convention_table_ref), {layout = "closure"}>
+  !_closure = adt.struct<(tribute_rt.convention_table_ref), {layout = "closure"}>
   func.func @escape(%value: core.ptr) -> core.nil attributes {abi = "C"} {
     func.unreachable
   }
@@ -514,7 +514,7 @@ fn internal_closure_raw_pointer_handoff_outside_native_evidence_fails_closed() {
 fn into_raw_transfers_one_exact_closure_unit_without_materializing_rc() {
     let (mut ctx, module, plan) = build(
         r#"core.module @test {
-  !_closure = adt.struct<"_closure",(tribute_rt.convention_table_ref), {layout = "closure"}>
+  !_closure = adt.struct<(tribute_rt.convention_table_ref), {layout = "closure"}>
   func.func @install() -> core.nil {
     %code = arith.constant 0 : core.i32
     %env = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
@@ -549,7 +549,7 @@ fn into_raw_transfers_one_exact_closure_unit_without_materializing_rc() {
 fn into_raw_fixture(transfers: &str) -> String {
     [
         r#"core.module @test {
-  !_closure = adt.struct<"_closure",(tribute_rt.convention_table_ref), {layout = "closure"}>
+  !_closure = adt.struct<(tribute_rt.convention_table_ref), {layout = "closure"}>
   func.func @transfers() -> core.nil {
     %code = arith.constant 0 : core.i32
     %env = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
@@ -667,7 +667,7 @@ fn into_raw_grouped_transfers_acquire_exact_extra_units_before_the_first_transfe
 #[test]
 fn into_raw_group_validation_ignores_preserved_field_borrow_acquire() {
     let ir = r#"core.module @test {
-  !_closure = adt.struct<"_closure",(tribute_rt.convention_table_ref), {layout = "closure"}>
+  !_closure = adt.struct<(tribute_rt.convention_table_ref), {layout = "closure"}>
   !Owner = adt.struct<"Owner",(!_closure)>
   func.func @transfers() -> core.nil {
     %code = arith.constant 0 : core.i32
@@ -715,7 +715,7 @@ fn into_raw_group_validation_ignores_preserved_field_borrow_acquire() {
 fn into_raw_rejects_non_transfer_and_cross_block_uses_before_mutation() {
     assert_plan_error_unchanged(
         r#"core.module @test {
-  !_closure = adt.struct<"_closure",(tribute_rt.convention_table_ref), {layout = "closure"}>
+  !_closure = adt.struct<(tribute_rt.convention_table_ref), {layout = "closure"}>
   func.func @later_use() -> !_closure {
     %code = arith.constant 0 : core.i32
     %env = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
@@ -728,7 +728,7 @@ fn into_raw_rejects_non_transfer_and_cross_block_uses_before_mutation() {
     );
     assert_plan_error_unchanged(
         r#"core.module @test {
-  !_closure = adt.struct<"_closure",(tribute_rt.convention_table_ref), {layout = "closure"}>
+  !_closure = adt.struct<(tribute_rt.convention_table_ref), {layout = "closure"}>
   func.func @cross_block() -> core.nil {
     ^entry:
       %code = arith.constant 0 : core.i32
@@ -3134,8 +3134,8 @@ fn closure_rtti_declaration_follows_the_native_closure_layout() {
     let module = parse_test_module(
         &mut ctx,
         r#"core.module @test {
-  !Base = adt.struct<"_closure",(tribute_rt.convention_table_ref), {layout = "closure"}>
-  !Closure = adt.struct<"_closure_captures",(tribute_rt.convention_table_ref, tribute_rt.anyref), {closure_base = !Base, layout = "closure_captures"}>
+  !Base = adt.struct<(tribute_rt.convention_table_ref), {layout = "closure"}>
+  !Closure = adt.struct<(tribute_rt.convention_table_ref, tribute_rt.anyref), {closure_base = !Base, layout = "closure_captures"}>
   func.func @make(%code: core.i32, %env: tribute_rt.anyref) -> !Closure {
     %closure = adt.struct_new %code, %env {type = !Closure} : !Closure
     func.return %closure

@@ -32,13 +32,7 @@ fn node_type(ctx: &mut IrContext, element_ty: TypeRef) -> TypeRef {
     let list_ty = tribute_ir::dialect::tribute_rt::Anyref::params()
         .intern(ctx)
         .as_type_ref();
-    adt::Struct::from_fields(
-        ctx,
-        "__native_list_node",
-        [element_ty, list_ty],
-        AttributeMap::new(),
-    )
-    .as_type_ref()
+    adt::Struct::literal(ctx, [element_ty, list_ty], AttributeMap::new()).as_type_ref()
 }
 
 fn lower_observations(ctx: &mut IrContext, module: Module) {

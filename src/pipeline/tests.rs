@@ -70,7 +70,7 @@ fn source_logical_cps_root_module(body: &str) -> (IrContext, Module) {
             !Resume = closure.closure<func.func_sig<(!Evidence, !Frame, tribute_rt.anyref) -> core.never>>
             !Dispatch = closure.closure<func.func_sig<(!Evidence, !Resume, core.i32, core.i32, core.i32, tribute_rt.anyref) -> core.never>>
             !__tribute_continuation_frame_root_nil = adt.struct<"__tribute_continuation_frame_root_nil", (!Done, !Dispatch), {tribute.cps_continuation_frame_result = core.nil}>
-            !Payload = adt.struct<"__tribute_ability_payload_7590c57e", ()>
+            !Payload = adt.struct<()>
             func.func @main(%evidence: !Evidence, %frame: !Frame) -> core.never attributes {tribute.calling_convention = "cps"} {
                 BODY
             }

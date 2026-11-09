@@ -323,24 +323,17 @@ pub fn compute_op_idx(ability: &SymbolPath, op_name: &str) -> u32 {
     (hasher.finish() % 0x7FFFFFFF) as u32
 }
 
-/// Canonical target-independent payload product for one ability operation.
+/// Canonical target-independent payload product of an ability operation's
+/// operands of types `fields`: a literal `adt.struct`.
 ///
 /// A product is used even for zero and one operand so the effect ABI never
 /// needs a null or another in-band sentinel for an empty payload.
 pub fn operation_payload_type_ref(
     ctx: &mut trunk_ir::IrContext,
-    ability: &SymbolPath,
-    op_name: StringRef,
     fields: impl IntoIterator<Item = trunk_ir::TypeRef>,
 ) -> trunk_ir::TypeRef {
-    let op_idx = compute_op_idx(ability, ctx.str(op_name));
-    crate::dialect::adt::Struct::from_fields(
-        ctx,
-        format!("__tribute_ability_payload_{op_idx:08x}"),
-        fields,
-        trunk_ir::types::AttributeMap::new(),
-    )
-    .as_type_ref()
+    crate::dialect::adt::Struct::literal(ctx, fields, trunk_ir::types::AttributeMap::new())
+        .as_type_ref()
 }
 
 /// The runtime id of the ability instance `ability`: a hash of its symbol,
@@ -472,7 +465,7 @@ use trunk_ir::context::IrContext;
 use trunk_ir::dialect::arith;
 use trunk_ir::ops::DialectType;
 use trunk_ir::refs::TypeRef;
-use trunk_ir::types::{Attribute, Location, StringRef};
+use trunk_ir::types::{Attribute, Location};
 
 /// The evidence marker: a nominal reference to the prelude's
 /// `std::runtime::evidence::Marker`, whose layout the root module publishes
