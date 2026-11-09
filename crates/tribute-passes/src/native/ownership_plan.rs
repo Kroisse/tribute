@@ -20,8 +20,7 @@ use trunk_ir::rewrite::Module;
 use trunk_ir::walk::{WalkAction, walk_op};
 
 use trunk_ir::{
-    Attribute, BlockRef, OpRef, RegionRef, StringRef, Symbol, SymbolPath, TypeRef, ValueDef,
-    ValueRef,
+    Attribute, BlockRef, OpRef, RegionRef, Symbol, SymbolPath, TypeRef, ValueDef, ValueRef,
 };
 
 mod actions;
@@ -432,23 +431,18 @@ fn collect_closure_layouts(
 }
 
 /// Collects the managed nominal layouts reachable from the operations of a
-/// module, then resolves every `adt.typeref` to its unique layout.
+/// module, then resolves every `adt.typeref` to the layout published for it.
 #[derive(Default)]
 struct ManagedLayoutCollector {
     layouts: HashSet<TypeRef>,
-    nominal_layouts: HashMap<StringRef, Vec<TypeRef>>,
     typerefs: HashSet<TypeRef>,
     pending_typerefs: Vec<TypeRef>,
     visited_types: HashSet<TypeRef>,
 }
 
 impl ManagedLayoutCollector {
-    fn new(ctx: &IrContext) -> Self {
-        let mut collector = Self::default();
-        for &(_, ty) in ctx.type_aliases() {
-            collector.index_nominal_layout(ctx, ty);
-        }
-        collector
+    fn new() -> Self {
+        Self::default()
     }
 
     fn visit_op(&mut self, ctx: &IrContext, op: OpRef) {
@@ -494,9 +488,9 @@ impl ManagedLayoutCollector {
                     ctx.str(name)
                 )));
             }
-            let Some(&[layout]) = self.nominal_layouts.get(&name).map(Vec::as_slice) else {
+            let Some(layout) = adt::layout_of(ctx, typeref) else {
                 return Err(OwnershipPlanError::new(format!(
-                    "adt.typeref {:?} has no unique native layout",
+                    "adt.typeref {:?} has no published native layout",
                     ctx.str(name)
                 )));
             };
@@ -506,40 +500,33 @@ impl ManagedLayoutCollector {
         Ok(self.layouts)
     }
 
-    fn index_nominal_layout(&mut self, ctx: &IrContext, ty: TypeRef) {
-        if (tribute_ir::dialect::adt::Struct::matches(ctx, ty)
-            || tribute_ir::dialect::adt::Enum::matches(ctx, ty))
-            && let Some(name) = ctx.type_attrs(ty).get_string_ref("name")
-        {
-            let layouts = self.nominal_layouts.entry(name).or_default();
-            if !layouts.contains(&ty) {
-                layouts.push(ty);
-            }
-        }
-    }
-
     fn visit_type(&mut self, ctx: &IrContext, ty: TypeRef) {
         if !self.visited_types.insert(ty) {
             return;
         }
-        let data = ctx.get_type(ty);
-        self.index_nominal_layout(ctx, ty);
         // An array is an RC object of its own descriptor, identified by its
-        // exact `adt.array` type.
+        // exact `adt.array` type. A nominal layout's body holds its fields.
         if tribute_ir::dialect::adt::Struct::matches(ctx, ty)
             || tribute_ir::dialect::adt::Enum::matches(ctx, ty)
             || tribute_ir::dialect::adt::Array::matches(ctx, ty)
         {
             self.layouts.insert(ty);
         }
-        if data.name == tribute_ir::dialect::adt::Typeref::NAME && self.typerefs.insert(ty) {
+        if tribute_ir::dialect::adt::Typeref::matches(ctx, ty) && self.typerefs.insert(ty) {
             self.pending_typerefs.push(ty);
         }
-        for &parameter in &data.params {
-            self.visit_type(ctx, parameter);
+        // A nominal layout's fields are its body's, which is no allocation
+        // layout of its own.
+        let mut children = Vec::new();
+        for owner in std::iter::once(ty).chain(ctx.type_body(ty)) {
+            let data = ctx.get_type(owner);
+            children.extend_from_slice(&data.params);
+            for attribute in data.attrs.values() {
+                attribute.visit_types(&mut |child| children.push(child));
+            }
         }
-        for attribute in data.attrs.values() {
-            self.visit_attribute(ctx, attribute);
+        for child in children {
+            self.visit_type(ctx, child);
         }
     }
 
@@ -548,12 +535,10 @@ impl ManagedLayoutCollector {
     }
 }
 
+/// Whether two nominal types denote the same layout: a layout itself or the
+/// layout an `adt.typeref` resolves to.
 fn nominal_types_compatible(ctx: &IrContext, left: TypeRef, right: TypeRef) -> bool {
-    let identity = |ty| {
-        let data = ctx.get_type(ty);
-        (data.name.dialect(ctx) == adt::DIALECT_NAME)
-            .then(|| ctx.type_attrs(ty).get_string_ref("name"))?
-    };
+    let identity = |ty| adt::layout_of(ctx, ty).filter(|_| adt::is_nominal(ctx, ty));
     identity(left).is_some() && identity(left) == identity(right)
 }
 
@@ -643,22 +628,11 @@ pub(super) fn allocation_layout(
             "managed release type {ty} ({data:?}) has no exact nominal allocation layout"
         )));
     }
-    let name = ctx.type_attrs(ty).get_string_ref("name").ok_or_else(|| {
-        OwnershipPlanError::new("managed release typeref lacks nominal allocation identity")
-    })?;
-    let mut layouts = managed_layouts
-        .iter()
-        .copied()
-        .filter(|layout| ctx.type_attrs(*layout).get_string_ref("name") == Some(name));
-    let layout = layouts.next().ok_or_else(|| {
-        OwnershipPlanError::new("managed release typeref has no planned allocation layout")
-    })?;
-    if layouts.next().is_some() {
-        return Err(OwnershipPlanError::new(
-            "managed release typeref has ambiguous planned allocation layouts",
-        ));
-    }
-    Ok(layout)
+    adt::layout_of(ctx, ty)
+        .filter(|layout| managed_layouts.contains(layout))
+        .ok_or_else(|| {
+            OwnershipPlanError::new("managed release typeref has no planned allocation layout")
+        })
 }
 
 fn validate_function_contract(

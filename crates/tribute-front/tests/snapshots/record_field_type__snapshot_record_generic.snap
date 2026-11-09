@@ -12,8 +12,8 @@ core.module @test {
   !t0 = tribute_control.func_sig<(!"pkg::Pair_1", !t2) -> !"pkg::Pair_1" row(| 'a0)>
   !t3 = tribute_control.func_sig<(!"pkg::Pair_1") -> tribute_rt.anyref>
 
-  adt.struct_decl !"pkg::Pair" ["first", "second"]
-  adt.struct_decl !"pkg::Pair$Int$Bool" ["first", "second"]
+  adt.struct_decl "pkg::Pair" !"pkg::Pair" ["first", "second"]
+  adt.struct_decl "pkg::Pair$Int$Bool" !"pkg::Pair$Int$Bool" ["first", "second"]
   tribute_control.func @"pkg::Pair::first"(%0: !"pkg::Pair_1") -> tribute_rt.anyref {
       %1 = adt.struct_get %0 {field = 0, type = !"pkg::Pair"} : tribute_rt.anyref
       tribute_control.return %1

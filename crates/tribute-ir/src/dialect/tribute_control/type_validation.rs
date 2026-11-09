@@ -145,12 +145,10 @@ fn collect_reachable_type(ctx: &IrContext, ty: TypeRef, types: &mut HashSet<Type
     if !types.insert(ty) {
         return;
     }
-    let data = ctx.get_type(ty);
-    for parameter in data.params.iter().copied() {
-        collect_reachable_type(ctx, parameter, types);
-    }
-    for attribute in data.attrs.values() {
-        collect_attribute_types(ctx, attribute, types);
+    let mut children = Vec::new();
+    trunk_ir::walk::visit_type_children(ctx, ty, &mut |child| children.push(child));
+    for child in children {
+        collect_reachable_type(ctx, child, types);
     }
 }
 

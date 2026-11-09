@@ -64,7 +64,7 @@ pub fn variant_type(ctx: &mut IrContext, enum_ty: TypeRef, tag: u32) -> Option<T
 /// Replace each user `adt.struct` in `module` with its `wasm_gc.struct`, and
 /// each `adt.typeref` with the type of the layout it names.
 pub(crate) fn convert(ctx: &mut IrContext, module: Module) {
-    crate::closure_lower::substitute_module_types(ctx, module, |ctx, ty| {
+    crate::closure_lower::substitute_module_types(ctx, module, "gc", |ctx, ty| {
         if ctx.get_type(ty).name == tribute_ir::dialect::adt::Typeref::NAME {
             return Some(reference_type(ctx, ty));
         }

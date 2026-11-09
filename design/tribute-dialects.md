@@ -185,8 +185,8 @@ adt.typeref<"Callback"[row()]>
   [치환](#row-인자와-치환)한 것이다. Frontend는 `struct_get`, `variant_get`
   결과와 `struct_new`, `variant_new` 피연산자의 type을 이 치환으로 쓴다.
 - Row 인자는 다른 row와 같이 source-logical 경계 안에만 있다. CPS
-  legalization은 `row_args`와 `row_params`를 버리고 tuple layout을
-  [새 이름](#compiler-generated-tuple-layout)으로 다시 만든다.
+  legalization은 `row_args`와 `row_params`를 버리고, 바뀐 layout을
+  [nominal layout 변환](ir.md#nominal-layout-변환) 규칙으로 새 키로 만든다.
   Representation/ABI 경계의 출구는 `row_args`와 `row_params`를 거부한다.
 
 ### Tail의 합집합
@@ -776,12 +776,14 @@ specialization에 대응해야 한다.
 ## Nominal layout의 게시
 
 Source-logical frontend는 nominal layout을 생성할 때 실제 `adt.struct` 또는
-`adt.enum` 타입을 normalized nominal symbol의 IR type alias로 게시한다.
-`adt.typeref`의 `name`, layout의 `name`(둘 다 문자열), 게시된 alias의 이름은
-텍스트가 일치해야 한다.
+`adt.enum`의 키에 몸체를 묶고, 그 키를 normalized nominal symbol의 IR type
+alias로 게시한다. Frontend가 만드는 `adt.typeref`의 `name`, layout의 `name`(둘 다
+문자열), 게시된 alias의 이름은 텍스트가 일치해야 한다. `adt.typeref`는 이 alias로
+layout을 찾으며, layout이 [변환](ir.md#nominal-layout-변환)으로 tag 붙은 새 키를
+가지면 alias가 새 키를 가리킨다.
 생성 연산 없이 signature에만 등장하는 특수화도 같은 계약을 따르며, 필드에서
-참조하는 compiler-generated nominal tuple layout도 게시한다. Frontend 내부
-type map이나 type interner에만 존재하는 layout은 게시된 정의가 아니다.
+참조하는 compiler-generated nominal tuple layout도 게시한다. 몸체가 묶이지 않은
+키는 정의가 아니다.
 
 <!-- markdownlint-disable-next-line MD033 -->
 <a id="compiler-generated-tuple-layout"></a>
@@ -792,11 +794,11 @@ Compiler-generated tuple layout의 이름은 원소의 logical type에서 정해
 layout을 같은 함수로 다시 만든다. 이 함수는 IR 계층이 소유하며 frontend와
 pass가 함께 쓴다.
 
-Row를 버리는 CPS legalization도 원소를 변환한 tuple layout을 같은 함수로 다시
-만들고, 그 이름을 가리키는 typeref와 게시된 alias를 새 이름으로 바꾼다. Row만
-다른 tuple layout은 legalization 뒤에 하나가 된다. Nominal layout의 필드
-type과, row 인자로 치환한 그 필드 type을 쓰는 `adt` 생성·접근 operation도 같은
-tuple layout을 가리키게 된다.
+Row를 버리는 CPS legalization은 tuple layout도 다른 nominal layout처럼
+[nominal layout 변환](ir.md#nominal-layout-변환) 규칙으로 변환한다. 원소가
+바뀐 tuple layout은 tag를 붙인 새 키를 가지며, 그 tuple 이름의 alias가 새 키를
+가리킨다. Row만 다른 두 tuple layout은 legalization 뒤에도 필드가 같은 서로 다른
+layout으로 남는다.
 
 특수화된 enum의 variant 필드 타입은 해당 인스턴스에 함께 치환된 constructor
 스킴에서 가져온다. 원본 generic 스킴이나 생성·패턴 표현식으로 필드 표현을
@@ -806,11 +808,12 @@ generic layout의 erased 필드는 기존 boxing과 payload recovery를 유지�
 Signature나 필드에서만 참조하는 nominal 인스턴스도 의존 layout을 준비하고
 게시해야 한다. 재귀 참조는 같은 선언 및 타입 인자의 인스턴스를 공유한다.
 
-CPS와 closure 변환은 게시된 alias와 layout 내부 타입을 함께 변환한다.
-Native ownership 검사는 게시된 정의와 IR에서 도달하는 layout만 사용하며,
-각 reachable typeref가 같은 이름의 유일한 layout으로 해석되어야 한다.
-누락되거나 모호한 layout은 거부하고, interner 전체 검색이나 이름의 일부를
-맞추는 방식으로 layout을 추정하지 않는다.
+CPS, closure, target ABI 변환은 layout의 필드 타입을
+[nominal layout 변환](ir.md#nominal-layout-변환) 규칙으로 변환하고, 게시된
+alias도 변환한 키로 바꾼다. Native ownership 검사는 게시된 정의와 IR에서
+도달하는 layout만 사용하며, 각 reachable typeref가 게시된 alias를 통해 몸체가 묶인
+layout으로 해석되어야 한다. 누락된 layout은 거부하고, interner 전체 검색이나
+이름의 일부를 맞추는 방식으로 layout을 추정하지 않는다.
 
 ## `tribute.types`
 

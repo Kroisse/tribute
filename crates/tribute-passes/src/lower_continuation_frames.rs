@@ -76,7 +76,9 @@ pub fn lower_continuation_frames(
         .iter()
         .map(|(frame, types)| (*frame, types.reference))
         .collect();
-    substitute_module_types_keeping_casts(ctx, module, |_, ty| replacements.get(&ty).copied());
+    substitute_module_types_keeping_casts(ctx, module, "frame", |_, ty| {
+        replacements.get(&ty).copied()
+    });
 
     let frames = FrameLayouts(
         layouts
@@ -280,8 +282,9 @@ fn collect_frame_answers(
         answers.push(frame.result(ctx));
     }
     let data = ctx.get_type(ty);
-    for param in data.params.iter() {
-        collect_frame_answers(ctx, *param, seen, answers);
+    // A nominal layout's fields are in its body.
+    for param in data.params.iter().copied().chain(ctx.type_body(ty)) {
+        collect_frame_answers(ctx, param, seen, answers);
     }
     for (_, value) in data.attrs.iter() {
         value.visit_types(&mut |inner| collect_frame_answers(ctx, inner, seen, answers));
@@ -324,10 +327,13 @@ fn type_mentions_frame(ctx: &IrContext, ty: TypeRef, seen: &mut HashSet<TypeRef>
         return true;
     }
     let data = ctx.get_type(ty);
+    // A nominal layout's fields are in its body.
     let mut mentioned = data
         .params
         .iter()
-        .any(|param| type_mentions_frame(ctx, *param, seen));
+        .copied()
+        .chain(ctx.type_body(ty))
+        .any(|param| type_mentions_frame(ctx, param, seen));
     for (_, value) in data.attrs.iter() {
         value.visit_types(&mut |inner| {
             mentioned = mentioned || type_mentions_frame(ctx, inner, seen);

@@ -793,9 +793,10 @@ mod tests {
         assert_eq!(ctx.value_ty(struct_new.fields(&ctx)[2]), evidence);
         assert_eq!(struct_get.field_idx(&ctx), 2);
         assert_eq!(struct_get.result_ty(&ctx), evidence);
+        // Converting the evidence field gives the layout a new key.
         assert_eq!(
             ctx.type_attrs(struct_get.r#type(&ctx)).get_str("name"),
-            Some("Env")
+            Some("Env$evidence")
         );
 
         finalize_wasm_gc_types(&mut ctx, module)
@@ -1120,7 +1121,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   !String = adt.enum<"String", [(core.bytes), (tribute_rt.anyref, tribute_rt.anyref, core.i32)]>
-  adt.enum_decl !String ["Leaf", "Branch"]
+  adt.enum_decl "String" !String ["Leaf", "Branch"]
   func.func @main() -> core.nil {
     %string = adt.string_const {value = "wrong"} : core.i32
     func.return

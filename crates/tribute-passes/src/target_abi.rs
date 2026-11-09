@@ -125,7 +125,12 @@ pub(crate) fn lower_cps_signatures_to_physical(
     validate_root_entry(ctx, module, ContractPhase::Logical)?;
 
     let aliases = ctx.type_aliases().to_vec();
+    let layout_roots: Vec<_> = trunk_ir::walk::reachable_types(ctx, module.op())
+        .into_iter()
+        .chain(aliases.iter().map(|&(_, ty)| ty))
+        .collect();
     let mut converter = PhysicalTypeConverter::new(ctx, never);
+    tribute_ir::dialect::adt::convert::convert_layouts(&mut converter, layout_roots, "abi")?;
     let mut alias_updates = Vec::new();
     let mut function_types = Vec::new();
     let mut result_types = Vec::new();
@@ -1922,6 +1927,31 @@ impl<'a> PhysicalTypeConverter<'a> {
         } else {
             self.ctx.intern_type(data)
         }
+    }
+}
+
+impl tribute_ir::dialect::adt::convert::LayoutBlindConversion for PhysicalTypeConverter<'_> {
+    type Error = TargetAbiError;
+
+    fn ctx(&self) -> &IrContext {
+        self.ctx
+    }
+
+    fn ctx_mut(&mut self) -> &mut IrContext {
+        self.ctx
+    }
+
+    fn convert(&mut self, ty: TypeRef) -> Result<TypeRef, Self::Error> {
+        self.convert_embedded(ty)
+    }
+
+    fn fix(&mut self, from: TypeRef, to: TypeRef) {
+        self.embedded.insert(from, to);
+    }
+
+    fn reset(&mut self) {
+        self.embedded.clear();
+        self.callable.clear();
     }
 }
 

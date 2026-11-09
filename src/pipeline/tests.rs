@@ -446,17 +446,18 @@ fn main() -> Nil {
     let block = module.first_block(&ctx).expect("module body");
     let mut declared = Vec::new();
     // Each declaration follows its layout through the conversions: its
-    // `type` is the layout published under the layout's name.
+    // `type` is the layout published under its source name, whatever key
+    // the conversions gave the layout.
     for &op in &ctx.block(block).ops {
         if let Ok(decl) = adt::StructDecl::from_op(&ctx, op) {
             let layout = adt::Struct::from_type_ref(&ctx, decl.r#type(&ctx)).unwrap();
-            let name = layout.name(&ctx).unwrap();
+            let name = decl.name(&ctx);
             assert_eq!(ctx.type_alias_by_text(name), Some(decl.r#type(&ctx)));
             assert_eq!(decl.fields(&ctx).len(), layout.fields(&ctx).len());
             declared.push(name.to_owned());
         } else if let Ok(decl) = adt::EnumDecl::from_op(&ctx, op) {
             let layout = adt::Enum::from_type_ref(&ctx, decl.r#type(&ctx)).unwrap();
-            let name = layout.name(&ctx);
+            let name = decl.name(&ctx);
             assert_eq!(ctx.type_alias_by_text(name), Some(decl.r#type(&ctx)));
             assert_eq!(decl.variants(&ctx).len(), layout.variant_count(&ctx));
             declared.push(name.to_owned());
@@ -1926,23 +1927,27 @@ fn logical_nominal_layouts_are_published_through_cps(db: &salsa::DatabaseImpl) {
             .type_alias_by_name(name)
             .expect("published nominal layout");
         assert_eq!(ir.get_type(ty).name, kind);
+        // The published layout keeps the source name, or that name with the
+        // tag of a conversion that gave it a new key.
+        let key = ir.type_attrs(ty).get_str("name").expect("a named layout");
         assert!(
-            ir.type_attrs(ty)
-                .get_str("name")
-                .is_some_and(|text| name == text)
+            name == key || key.starts_with(&format!("{name}$")),
+            "{name} is published as {key}"
         );
-        assert_eq!(
-            ir.type_aliases()
+        // A typeref of the name resolves to the published layout.
+        let typeref = tribute_ir::dialect::adt::Typeref::from_type_ref(
+            ir,
+            ir.types()
                 .iter()
-                .filter(|(_, ty)| {
-                    ir.type_attrs(*ty)
-                        .get_str("name")
-                        .is_some_and(|text| name == text)
+                .find_map(|(typeref, data)| {
+                    (data.name == tribute_ir::dialect::adt::Typeref::NAME
+                        && ir.type_attrs(typeref).get_str("name") == Some(name.as_str()))
+                    .then_some(typeref)
                 })
-                .count(),
-            1,
-            "one published layout for {name}"
-        );
+                .expect("a typeref of the layout"),
+        )
+        .expect("a typeref");
+        assert_eq!(typeref.layout(ir), Some(ty));
         ty
     }
 
@@ -2674,10 +2679,21 @@ fn main() -> String { "hello" }
         .string
         .expect("String IR metadata");
 
+    let block = module.first_block(&ctx).expect("module body");
+    let decl = ctx
+        .block(block)
+        .ops
+        .iter()
+        .find_map(|&op| {
+            tribute_ir::dialect::adt::EnumDecl::from_op(&ctx, op)
+                .ok()
+                .filter(|decl| decl.r#type(&ctx) == string_ty)
+        })
+        .expect("String is declared");
     let Some(trunk_ir::Attribute::Location(definition)) =
-        ctx.type_attrs(string_ty).get("tribute.definition")
+        ctx.op_attrs(decl.op_ref()).get("tribute.definition")
     else {
-        panic!("String IR type records its definition location");
+        panic!("String's declaration records its definition location");
     };
     assert_eq!(
         ctx.paths().get(definition.path),

@@ -58,6 +58,7 @@ pub(super) fn prescan_logical_nominal_layouts<'db>(
                     .map(|(field, _)| ir.intern_symbol_text(field))
                     .collect();
                 let decl = adt::StructDecl::operands()
+                    .name(ir.intern_symbol_text(&name))
                     .r#type(layout)
                     .fields(field_names)
                     .build(ir, ctx.location(structure.id));
@@ -125,17 +126,7 @@ pub(super) fn prescan_logical_nominal_layouts<'db>(
                 );
                 let variant_fields: Vec<_> =
                     variants.iter().map(|(_, fields)| fields.clone()).collect();
-                let layout = if well_known_types.is_string(definition) {
-                    ctx.adt_enum_type_with_definition(
-                        ir,
-                        &name,
-                        &variant_fields,
-                        row_params,
-                        location,
-                    )
-                } else {
-                    ctx.adt_enum_type(ir, &name, &variant_fields, row_params)
-                };
+                let layout = ctx.adt_enum_type(ir, &name, &variant_fields, row_params);
                 for (position, (variant, _)) in variants.iter().enumerate() {
                     let position =
                         u32::try_from(position).expect("an enum has fewer than 2^32 variants");
@@ -146,9 +137,16 @@ pub(super) fn prescan_logical_nominal_layouts<'db>(
                     .map(|(variant, _)| ir.intern_symbol_text(variant))
                     .collect();
                 let decl = adt::EnumDecl::operands()
+                    .name(ir.intern_symbol_text(&name))
                     .r#type(layout)
                     .variants(variant_names)
                     .build(ir, location);
+                if well_known_types.is_string(definition) {
+                    ir.op_attrs_mut(decl.op_ref()).insert(
+                        "tribute.definition",
+                        trunk_ir::Attribute::Location(location),
+                    );
+                }
                 declare(ctx, ir, decl.op_ref());
                 ctx.register_type(name.clone(), layout);
                 ir.register_type_alias(name, layout);

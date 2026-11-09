@@ -1430,8 +1430,9 @@ Compiler가 소유하는 runtime 저장 layout은 예약 type 속성 `layout`으
 [nominal 선언](#nominal-선언)이 소유하며, 필드는 위치로만 가리킨다.
 
 이름이 있는 layout은 nominal이고, 이름이 없는 layout은 literal이다(LLVM의
-identified struct와 literal struct). 이름은 식별자 여부와 상관없이 항상 따옴표
-문자열로 쓴다. Struct 이름은 타입 이름공간의 이름이며 symbol table의 정의가
+identified struct와 literal struct). Nominal layout은
+[식별 타입](#식별-타입)이며 식별자는 이름이다. 이름은 식별자 여부와 상관없이 항상
+따옴표 문자열로 쓴다. Struct 이름은 타입 이름공간의 이름이며 symbol table의 정의가
 아니므로 `@`를 붙이지 않는다.
 
 ```text
@@ -1439,42 +1440,69 @@ adt.struct<"Point", (core.i32, core.i32)>
 adt.struct<"Node", (core.i32 {k = "v"}, adt.typeref<"Node">)>
 adt.struct<"Empty", ()>
 adt.struct<"geo::Point", (core.f64, core.f64)>
+adt.struct<"Point">
 adt.struct<(core.ptr), {layout = "closure"}>
 adt.struct<(core.ptr, core.i32),
   {layout = "closure_captures",
    closure_base = adt.struct<(core.ptr), {layout = "closure"}>}>
 ```
 
-- 저장 표현은 다음과 같다. 필드 타입은 `params`에 선언 순서대로 두고, struct
-  이름은 type 속성 `name`(문자열)이다. 필드 하나의 속성은 그 필드의
-  [매개변수 속성](#타입-매개변수-속성)이며, textual form은 필드 타입 뒤에 쓴다.
+- Literal layout의 저장 표현은 다음과 같다. 필드 타입은 `params`에 선언 순서대로
+  둔다. 필드 하나의 속성은 그 필드의 [매개변수 속성](#타입-매개변수-속성)이며,
+  textual form은 필드 타입 뒤에 쓴다.
+- Nominal layout의 키는 매개변수 없이 type 속성만 가진다. Struct 이름인 `name`
+  (문자열), row binder 수인 `row_params`, continuation frame의 결과 타입 같은 그
+  밖의 키 속성이다. [몸체](#식별-타입)는 같은 필드와 필드 속성을 가진 속성 없는
+  literal `adt.struct`다. 필드 접근과 layout 계산은 몸체의 필드를 읽는다.
 - Nominal layout은 source가 선언한 struct, compiler가 만든
   [tuple layout](tribute-dialects.md#compiler-generated-tuple-layout), continuation
-  frame처럼 `adt.typeref`가 이름으로 가리키는 layout이다. 이름은 `adt.typeref`가
-  layout을 찾는 키다.
-- Literal layout은 이름으로 가리킬 일이 없는 compiler 저장 layout이다. Closure
+  frame처럼 `adt.typeref`가 가리키는 layout이다.
+- Literal layout은 typeref가 가리킬 일이 없는 compiler 저장 layout이다. Closure
   저장, list node, ability payload, completion cell 같은 layout이며, 정체는 필드
   타입과 type 속성뿐이다. 필드가 같은 두 literal layout은 같은 타입이다. Compiler
   소유 layout은 이름이 아니라 [`layout`](#runtime-layout-식별자) 속성으로 식별한다.
-- 매개변수가 없으면 필드가 없는 struct다. 필드 목록을 담는 별도 type 속성은 없다.
-  Type verifier가 이 규칙을 모든 interned `adt.struct`에 적용한다.
-- Type 속성의 `name`과 `param_attrs`는 전용 문법이 소유한다. Textual form의 type
-  속성 dictionary에는 쓰지 않는다. `layout` 같은 나머지 type 속성은 `<…>` 안 마지막
-  원소로 둔다.
-- 필드 타입이 매개변수이므로 일반 타입 순회와 변환은 필드 타입에 그대로 도달한다.
-  필드 수를 유지하는 변환은 필드 속성을 위치 그대로 둔다.
-- 재귀 참조는 같은 이름의 `adt.typeref`로 표현한다. `adt.struct`는 자기 자신을
-  매개변수로 갖지 않는다.
+- 필드가 없는 struct는 매개변수가 없는 literal이거나 그런 literal을 몸체로 가진
+  nominal layout이다. 필드 목록을 담는 별도 type 속성은 없다. Type verifier는
+  이름 있는 `adt.struct`의 매개변수와 이름 없는 `adt.struct`의 `row_params`를
+  거부한다.
+- Textual form은 키를 `"이름"`과 binder, `<…>` 안 마지막 원소인 나머지 키
+  속성으로 쓰고, 몸체를 쓰는 자리에서는 이름 뒤에 몸체의 필드 목록을 쓴다.
+  `adt.struct<"Point">`는 키만 쓴 것이다. Type 속성의 `name`, `row_params`,
+  `param_attrs`는 전용 문법이 소유하며 type 속성 dictionary에는 쓰지 않는다.
+  Literal layout은 필드 목록과 `layout` 같은 type 속성을 쓴다.
+- Literal layout의 필드 타입은 매개변수이므로 일반 타입 순회와 변환이 그대로
+  도달한다. Nominal layout의 필드는 몸체에 있으므로, 필드 타입을 바꾸는 변환은
+  아래 규칙으로 새 키를 만든다. 필드 수를 유지하는 변환은 필드 속성을 위치 그대로
+  둔다.
+- 재귀 참조는 같은 layout을 가리키는 `adt.typeref`로 표현한다.
 - Row 매개변수를 가진 선언의 layout은 type 속성 `row_params`를 가지며, 필드 type의
   tail은 그 binder의 index다
   ([Nominal row 인자](tribute-dialects.md#nominal-row-인자)). Textual form은
   binder를 이름 바로 뒤에 쓴다: `adt.struct<"Callback"['a0], (...)>`.
-  `row_params`도 전용 문법이 소유한다.
+
+#### Nominal layout 변환
+
+몸체는 키마다 한 번만 묶이므로, 필드 타입을 바꾸는 변환은 바뀌는 layout마다 새
+키를 만든다. `adt.struct`와 [`adt.enum`](#adtenum-nominal-layout-type)에 같은
+규칙을 적용하며, `adt` dialect가 이 규칙을 하나의 helper로 소유하고 layout을
+변환하는 pass가 함께 쓴다.
+
+- 변환은 module과 게시된 alias가 닿는 nominal layout을 모두 본다. 키 속성이
+  바뀌거나 몸체의 필드 타입이 바뀌는 layout, 그리고 키나 몸체가 그런 layout을 타입
+  자체로 담는 layout이 바뀐다. `adt.typeref`는 layout을 이름으로 가리킬 뿐이므로,
+  typeref로 가리키는 layout이 바뀌어도 typeref와 그것을 담은 layout은 바뀌지
+  않는다. 나머지 layout은 키와 몸체를 그대로 둔다.
+- 바뀌는 layout의 새 키는 변환한 키 속성이다. 키 속성이 그대로이면 새 키의 이름은
+  옛 이름 뒤에 `$`와 변환의 tag를 붙인 것이다(`"Point$abi"`).
+- 새 키를 모두 정한 뒤에 몸체를 변환해 묶고, 옛 layout을 가리키던 alias를 새 키로
+  다시 게시한다. 그래서 typeref는 변환 뒤에 새 키로 해석된다.
+- 이름에서 tag를 떼어 원래 이름을 되찾지 않는다. Source 이름이 필요한 단계는
+  [nominal 선언](#nominal-선언)에서 읽는다.
 
 #### Nominal 수준과 structural 수준
 
 Struct 이름은 IR에서 nominal layout을 해석하는 단계까지만 의미를 가진다.
-`adt.typeref`를 같은 이름의 layout으로 해석하는 단계, ownership 계획, ABI
+`adt.typeref`를 그 layout으로 해석하는 단계, ownership 계획, ABI
 검증, frontend의 record pattern 해석이 여기에 속한다. 그 아래의 target lowering은
 필드의 물리 표현과 순서만 사용한다. 이름이 필요한 runtime 동작(해제, 값 출력,
 variant 판별)은 [runtime 타입 descriptor](runtime-types.md)가 맡는다. Nominal
@@ -1609,39 +1637,46 @@ storage 확정은 다음 변환을 함께 적용한다.
 
 ### `adt.enum` nominal layout type
 
-`adt.enum`은 이름 있는 nominal enum layout이다. 이름과 variant의 위치 목록을
-가지며 전용 textual 문법을 쓴다. Variant 이름과 필드 이름은 source 선언의
+`adt.enum`은 nominal enum layout이다. 이름과 variant의 위치 목록을 가지며 전용
+textual 문법을 쓴다. Variant 이름과 필드 이름은 source 선언의
 [nominal 선언](#nominal-선언)이 소유한다. 이름 표기 규칙은
-`adt.struct`와 같다.
+`adt.struct`와 같다. 이름 있는 `adt.enum`은 `adt.struct`의 nominal layout처럼
+이름을 식별자로 하는 [식별 타입](#식별-타입)이고, 이름 없는 `adt.enum`은 그
+몸체로만 쓰는 literal이다.
 
 ```text
 adt.enum<"Option", [(), (T)]>
 adt.enum<"List", [(), (core.i32, adt.typeref<"List">)]>
-adt.enum<"geo::Shape", [(), (core.f64, core.f64 {k = 1})], {layout = "x"}>
+adt.enum<"geo::Shape", [(), (core.f64, core.f64 {k = 1})], {k = "x"}>
 adt.enum<"Never", []>
+adt.enum<"Option">
+adt.enum<[(), (core.i32)]>
 ```
 
 - Variant는 괄호로 감싼 필드 타입 목록이다. 필드가 없어도 괄호를 쓴다. 필드 타입
   뒤에 그 필드의 속성 dictionary가 뒤따를 수 있다.
-- 저장 표현은 다음과 같다. Variant 하나가 `adt.enum`의 타입 매개변수 하나이며 선언
-  순서대로 놓인다. Variant는 `adt.variant` 타입이고, 그 `params`가 필드 타입이다.
-  필드의 속성은 그 필드의 [매개변수 속성](#타입-매개변수-속성)이다. Enum 이름은
-  `adt.enum`의 type 속성 `name`(문자열)이다. 필드가 같은 두 variant는 같은
-  `adt.variant` 타입이며, variant는 위치로만 구별한다.
-- Enum 이름은 필수다. 매개변수가 없으면 variant가 없는 enum이다. Variant 목록을
-  담는 별도 type 속성은 없다. Type verifier가 이 규칙을 모든 interned `adt.enum`에
-  적용한다.
-- Enum type 속성의 `name`은 전용 문법이 소유한다. Textual form의 속성
-  dictionary에는 쓰지 않는다. 나머지 type 속성은 `<…>` 안 마지막 원소로 둔다.
+- Literal `adt.enum`의 저장 표현은 다음과 같다. Variant 하나가 타입 매개변수
+  하나이며 선언 순서대로 놓인다. Variant는 `adt.variant` 타입이고, 그 `params`가
+  필드 타입이다. 필드의 속성은 그 필드의 [매개변수 속성](#타입-매개변수-속성)이다.
+  필드가 같은 두 variant는 같은 `adt.variant` 타입이며, variant는 위치로만
+  구별한다. 매개변수가 없으면 variant가 없는 enum이다. Variant 목록을 담는 별도
+  type 속성은 없다.
+- 이름 있는 `adt.enum`의 키와 몸체는 `adt.struct`의 nominal layout과 같다. 키는
+  매개변수 없이 `name`, `row_params`와 그 밖의 키 속성을 가지며, 몸체는 속성 없는
+  literal `adt.enum`이다. 이름 없는 `adt.enum`은 type 속성을 갖지 않는다. Type
+  verifier가 이 규칙을 모든 interned `adt.enum`에 적용한다.
+- Textual form은 `adt.struct`와 같이 키를 쓰고, 몸체를 쓰는 자리에서는 이름 뒤에
+  variant 목록을 쓴다. Type 속성의 `name`과 `row_params`는 전용 문법이 소유하며
+  속성 dictionary에는 쓰지 않는다. 나머지 키 속성은 `<…>` 안 마지막 원소로 둔다.
+- 필드 타입을 바꾸는 변환은
+  [nominal layout 변환](#nominal-layout-변환) 규칙을 따른다.
 - Variant 매개변수는 [매개변수 속성](#타입-매개변수-속성)을 갖지 않는다. 전용 문법에
   그것을 쓸 자리가 없으므로 `adt.enum`의 `param_attrs`는 type verifier가 거부한다.
   필드의 속성은 그 variant(`adt.variant`)의 매개변수 속성이다.
-- `adt.variant`는 `adt.enum`의 매개변수로만 쓴다. 값의 타입이나 연산의 타입 속성이
-  되지 않으며, 연산은 enum 타입과 선언 순서의 variant 위치(`tag`)로 variant를
-  가리킨다. 위치는 `adt.variant_tag`가 내는 값과 같다.
-- Variant 필드 타입이 매개변수의 매개변수이므로 일반 타입 순회와 변환은 variant
-  필드 타입에 그대로 도달한다.
-- 재귀 참조는 같은 이름의 `adt.typeref`로 표현한다.
+- `adt.variant`는 literal `adt.enum`의 매개변수로만 쓴다. 값의 타입이나 연산의
+  타입 속성이 되지 않으며, 연산은 이름 있는 enum 타입과 선언 순서의 variant
+  위치(`tag`)로 variant를 가리킨다. 위치는 `adt.variant_tag`가 내는 값과 같다.
+- 재귀 참조는 같은 layout을 가리키는 `adt.typeref`로 표현한다.
 - Row 매개변수를 가진 선언의 layout은 `adt.struct`와 같이 `row_params`를 가지며,
   binder를 이름 바로 뒤에 쓴다: `adt.enum<"Step"['a0], [...]>`.
 
@@ -1661,6 +1696,12 @@ adt.typeref<"Pair"[row(), row(@A | 'a0)]>
   type 속성 `row_args`
   ([Nominal row 인자](tribute-dialects.md#nominal-row-인자))다. 둘 다 전용
   문법이 소유한다. 나머지 type 속성은 `<…>` 안 마지막 원소로 둔다.
+- Typeref가 가리키는 layout은 typeref의 `name`으로
+  [게시된](tribute-dialects.md#nominal-layout의-게시) type alias가 가리키는
+  `adt.struct` 또는 `adt.enum`이다. 그런 alias가 없으면, typeref의 속성에서
+  `row_args`를 그 수인 `row_params`로 바꾼 키가 몸체를 가질 때 그 layout이다.
+  Typeref의 `name`은 source 이름이며, layout의 키가
+  [변환](#nominal-layout-변환)으로 tag 붙은 이름을 가져도 바뀌지 않는다.
 - `row_args`가 없는 typeref는 자기 `name`을 alias 이름으로 제안한다. `row_args`를
   가진 typeref는 row 인자만 다른 typeref끼리 이름이 겹치므로 제안하지 않으며, 다른
   제안 없는 타입처럼 번호 이름을 받을 수 있다. Tail 이름은 위치에서 정해지므로 alias
@@ -1674,21 +1715,24 @@ Source가 선언한 struct와 enum은 각각 module 최상위의 선언 operatio
 이름을 읽는다. LLVM의 debug metadata가 source 이름을 타입과 따로 두는 것과 같다.
 
 ```text
-adt.struct_decl !Point ["x", "y"]
-adt.enum_decl !Shape ["Dot", "Rect"]
+adt.struct_decl "Point" !Point ["x", "y"]
+adt.enum_decl "Shape" !Shape ["Dot", "Rect"]
 ```
 
-- `adt.struct_decl`은 struct의 필드 이름을, `adt.enum_decl`은 enum의 variant
-  이름을 선언 순서대로 담는다. 그 수는 layout의 필드 수, variant 수와 같다.
-  Variant의 필드 이름은 담지 않는다.
+- `adt.struct_decl`은 struct의 source 이름과 필드 이름을, `adt.enum_decl`은
+  enum의 source 이름과 variant 이름을 선언 순서대로 담는다. 이름 목록의 수는
+  layout의 필드 수, variant 수와 같다. Variant의 필드 이름은 담지 않는다.
 - 선언은 이름 붙이는 layout을 type 속성 `type`으로 가리킨다. 선언과 layout의
   대응은 이 타입의 정체이며, layout의 `name` 문자열을 비교해 찾지 않는다. 필드와
-  variant의 타입은 layout이 소유한다. 텍스트 형식은 layout 타입 뒤에 이름 목록을
-  문자열 list 속성의 일반 문법으로 쓴다. 이름은 layout 이름처럼 식별자 여부와
-  상관없이 항상 따옴표 문자열이다.
+  variant의 타입은 layout이 소유한다. 텍스트 형식은 source 이름, layout 타입,
+  이름 목록 순서로 쓰며, 이름 목록은 문자열 list 속성의 일반 문법이다. 이름은
+  layout 이름처럼 식별자 여부와 상관없이 항상 따옴표 문자열이다.
 - Layout을 변환하는 pass는 operation 속성 안의 타입을 변환하듯 선언의 `type`도
   변환한다. 그래서 선언은 변환된 layout을 가리키며, 같은 layout을 `type`으로 쓰는
-  operation과 일치한다.
+  operation과 일치한다. 변환이 layout 이름에 tag를 붙여도
+  ([nominal layout 변환](#nominal-layout-변환)) 선언의 source 이름은 그대로다.
+- 선언이 생긴 source 위치가 필요한 단계는 선언의 `tribute.definition` 속성을
+  읽는다.
 - Frontend는 nominal layout을 게시할 때 그 선언을 함께 내보낸다. 특수화된 enum은
   인스턴스마다 layout과 선언을 가진다. Compiler가 만든 layout(closure 저장,
   continuation frame, tuple layout 등)은 선언이 없다.
@@ -1698,8 +1742,8 @@ adt.enum_decl !Shape ["Dot", "Rect"]
   위치를 선언에서 이름으로 찾는다.
 - Native RTTI 생성은 struct·enum의 이름, struct의 필드 이름, variant 이름을 선언에서
   읽는다([RTTI Table](rc.md#rtti-table)). 선언이 없는 layout의 레코드는 위치
-  번호(`"0"`, `"1"`, ...)를 필드와 variant의 이름으로 쓴다. 레코드 이름은 layout의
-  이름이고, 이름이 없는 literal layout이면 `layout` 속성 값, 그것도 없으면
+  번호(`"0"`, `"1"`, ...)를 필드와 variant의 이름으로 쓰고, 레코드 이름은 layout의
+  이름이다. 이름이 없는 literal layout이면 `layout` 속성 값, 그것도 없으면
   `"struct"`다. 선언은
   값의 의미를 바꾸지 않으며, `adt` operation을 내리는 target
   pass가 지운다.
