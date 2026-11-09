@@ -32,6 +32,11 @@
 //! - `adt.variant_get` -> `wasm.ref_cast` to the variant's struct type and
 //!   `wasm.struct_get` of the field after the descriptor field
 //!
+//! Each pattern casts its own operand. After the patterns, a cast that an
+//! identical cast of the same value dominates reuses that cast's result
+//! (`merge_dominated_casts`), so the field reads of one value under one
+//! variant test share one cast.
+//!
 //! ## Array Operations
 //! - `adt.array_new` -> `wasm.array_new`
 //! - `adt.array_of` -> `wasm.array_new_fixed`
@@ -58,12 +63,13 @@
 use super::type_converter::gc_array_type;
 use tribute_ir::dialect::adt;
 use tribute_ir::dialect::adt::layout::get_enum_variants;
-use trunk_ir::context::IrContext;
+use trunk_ir::context::{IrContext, OpList, RegionList};
 use trunk_ir::dialect::core::{self, IntegerLike};
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::dialect::wasm_gc as wasm_gc_dialect;
-use trunk_ir::ops::DialectType;
-use trunk_ir::refs::{OpRef, TypeRef, ValueRef};
+use trunk_ir::op_flag::{IsolatedFromAbove, OpFlag};
+use trunk_ir::ops::{DialectOp, DialectType};
+use trunk_ir::refs::{OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{
     Module, OpRewritePattern, PatternApplicator, PatternRewriter, TypeConverter,
 };
@@ -166,6 +172,67 @@ pub(crate) fn lower(ctx: &mut IrContext, module: Module, type_converter: TypeCon
     applicator.apply_partial(ctx, module);
     for layout in tribute_rtti::Layout::declared(ctx, module) {
         trunk_ir::rewrite::erase_op(ctx, layout.op_ref());
+    }
+    if let Some(body) = module.body(ctx) {
+        merge_dominated_casts(ctx, body, &mut CastScope::default());
+    }
+}
+
+/// The casts visible at a point of a walk, keyed by operand, target type, and
+/// result type, with the keys each enclosing block added.
+#[derive(Default)]
+struct CastScope {
+    casts: HashMap<(ValueRef, TypeRef, TypeRef), ValueRef>,
+    added: Vec<(ValueRef, TypeRef, TypeRef)>,
+}
+
+/// Replace each `wasm_gc.ref_cast` that an identical cast dominates with that
+/// cast's result.
+///
+/// A cast of the same value to the same type that succeeded earlier proves
+/// the later one succeeds with the same reference, so a variant arm that reads
+/// several fields of one value casts it once. A cast is visible to the ops
+/// after it in its block and to their nested regions, but not to the other
+/// blocks of its region, whose order is not dominance, nor to regions isolated
+/// from above. No cast moves, so none runs before the test that guards it.
+///
+/// This is a local step of this lowering; a general CSE of operations whose
+/// only side effect is a trap would replace it (Kroisse/tribute#1887).
+fn merge_dominated_casts(ctx: &mut IrContext, region: RegionRef, scope: &mut CastScope) {
+    let blocks = ctx.region(region).blocks.clone();
+    for block in blocks {
+        let mark = scope.added.len();
+        let ops: OpList = ctx.block(block).ops.clone();
+        for op in ops {
+            if let Ok(cast) = wasm_gc_dialect::RefCast::from_op(ctx, op) {
+                let result = cast.result(ctx);
+                let key = (cast.r#ref(ctx), cast.target_type(ctx), ctx.value_ty(result));
+                if let Some(&earlier) = scope.casts.get(&key) {
+                    ctx.replace_all_uses(result, earlier);
+                    trunk_ir::rewrite::erase_op(ctx, op);
+                } else {
+                    scope.casts.insert(key, result);
+                    scope.added.push(key);
+                }
+                continue;
+            }
+            let regions: RegionList = ctx.op_regions(op).collect();
+            if regions.is_empty() {
+                continue;
+            }
+            if IsolatedFromAbove::is_set(ctx, op) {
+                for region in regions {
+                    merge_dominated_casts(ctx, region, &mut CastScope::default());
+                }
+            } else {
+                for region in regions {
+                    merge_dominated_casts(ctx, region, scope);
+                }
+            }
+        }
+        for key in scope.added.drain(mark..) {
+            scope.casts.remove(&key);
+        }
     }
 }
 
@@ -1636,5 +1703,110 @@ mod tests {
                 .count(),
             1,
         );
+    }
+
+    /// Lower `body` as the body of `@main(%e: !ERef, %c: core.i32)`, where
+    /// variant 0 of `!E` has the fields `(core.i32, core.f64)`, and return the
+    /// function's casts and field reads.
+    fn lower_variant_reads(
+        body: &str,
+    ) -> (
+        IrContext,
+        Vec<wasm_gc_dialect::RefCast>,
+        Vec<wasm_gc_dialect::StructGet>,
+    ) {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            &format!(
+                r#"core.module @test {{
+  !ERef = adt.typeref<{{name = "E"}}>
+  !E = adt.enum<"E", [(core.i32, core.f64), (core.f64)]>
+
+  wasm.func @main(%e: !ERef, %c: core.i32) -> core.nil {{
+{body}
+  }}
+}}"#
+            ),
+        );
+        lower(&mut ctx, module, TypeConverter::new());
+        let func = module.ops(&ctx)[0];
+        let body = ctx.op_region(func, 0).unwrap();
+        let mut casts = Vec::new();
+        let mut gets = Vec::new();
+        let _ = trunk_ir::walk::walk_region::<()>(&ctx, body, &mut |op| {
+            if let Ok(cast) = wasm_gc_dialect::RefCast::from_op(&ctx, op) {
+                casts.push(cast);
+            }
+            if let Ok(get) = wasm_gc_dialect::StructGet::from_op(&ctx, op) {
+                gets.push(get);
+            }
+            std::ops::ControlFlow::Continue(trunk_ir::walk::WalkAction::Advance)
+        });
+        (ctx, casts, gets)
+    }
+
+    #[test]
+    fn variant_field_reads_share_a_dominating_cast() {
+        let (ctx, casts, gets) = lower_variant_reads(
+            r#"    %x = adt.variant_get %e {type = !E, tag = 0, field = 0} : core.i32
+    %y = adt.variant_get %e {type = !E, tag = 0, field = 1} : core.f64
+    %r = wasm.if %c -> (core.f64) {
+      %z = adt.variant_get %e {type = !E, tag = 0, field = 1} : core.f64
+      wasm.yield %z
+    } else {
+      wasm.yield %y
+    }
+    wasm.return"#,
+        );
+
+        assert_eq!(casts.len(), 1, "one cast serves every read it dominates");
+        let cast = casts[0].result(&ctx);
+        assert_eq!(gets.len(), 3);
+        assert!(gets.iter().all(|get| get.r#ref(&ctx) == cast));
+    }
+
+    #[test]
+    fn variant_field_reads_in_sibling_regions_cast_separately() {
+        let (ctx, casts, gets) = lower_variant_reads(
+            r#"    %r = wasm.if %c -> (core.f64) {
+      %x = adt.variant_get %e {type = !E, tag = 0, field = 0} : core.i32
+      %y = adt.variant_get %e {type = !E, tag = 0, field = 1} : core.f64
+      wasm.yield %y
+    } else {
+      %z = adt.variant_get %e {type = !E, tag = 0, field = 1} : core.f64
+      %w = adt.variant_get %e {type = !E, tag = 1, field = 0} : core.f64
+      wasm.yield %w
+    }
+    wasm.return"#,
+        );
+
+        // One cast per arm for tag 0, and one for tag 1, which has another type.
+        assert_eq!(casts.len(), 3);
+        let uses_of = |cast: &wasm_gc_dialect::RefCast| {
+            let result = cast.result(&ctx);
+            gets.iter().filter(|get| get.r#ref(&ctx) == result).count()
+        };
+        assert_eq!(casts.iter().map(uses_of).collect::<Vec<_>>(), [2, 1, 1]);
+    }
+
+    #[test]
+    fn variant_field_reads_in_other_blocks_cast_separately() {
+        let (ctx, casts, gets) = lower_variant_reads(
+            r#"  ^bb0:
+    %x = adt.variant_get %e {type = !E, tag = 0, field = 0} : core.i32
+    %y = adt.variant_get %e {type = !E, tag = 0, field = 1} : core.f64
+    cf.br [^bb1]
+  ^bb1:
+    %z = adt.variant_get %e {type = !E, tag = 0, field = 1} : core.f64
+    wasm.return"#,
+        );
+
+        // Block order is not dominance, so each block casts once.
+        assert_eq!(casts.len(), 2);
+        assert_eq!(gets.len(), 3);
+        assert_eq!(gets[0].r#ref(&ctx), casts[0].result(&ctx));
+        assert_eq!(gets[1].r#ref(&ctx), casts[0].result(&ctx));
+        assert_eq!(gets[2].r#ref(&ctx), casts[1].result(&ctx));
     }
 }
