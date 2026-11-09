@@ -337,6 +337,79 @@ mod tests {
         module.op().display(&ctx).to_string()
     }
 
+    fn explicit_error(source: &str) -> String {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, source);
+        assign_explicit_locals(&mut ctx, module)
+            .expect_err("ExplicitLocals rejects the body")
+            .to_string()
+    }
+
+    #[test]
+    fn results_that_leave_no_value_are_not_stored() {
+        let ir = explicit(
+            r#"core.module @test {
+  wasm.func @g() -> core.nil {
+    wasm.return
+  }
+  wasm.func @f() -> core.i32 {
+    %unit = wasm.call @g() : () -> core.nil
+    %opaque = wasm.nop : core.i32
+    wasm.return %opaque
+  }
+}"#,
+        );
+        assert_eq!(
+            ir,
+            r#"core.module @test {
+  wasm.func @g() -> core.nil {
+      wasm.return
+  }
+  wasm.func @f() -> core.i32 attributes {locals = [core.nil, core.i32]} {
+      %0 = wasm.call @g() : () -> core.nil
+      %1 = wasm.nop : core.i32
+      %2 = wasm.local_get {index = 1} : core.i32
+      wasm.return %2
+  }
+}
+"#
+        );
+    }
+
+    #[test]
+    fn rejects_a_loop_whose_init_and_arguments_differ() {
+        let error = explicit_error(
+            r#"core.module @test {
+  wasm.func @f() -> core.nil {
+    wasm.loop() {
+      ^body(%i: core.i32):
+        wasm.return
+    }
+    wasm.return
+  }
+}"#,
+        );
+        assert!(error.contains("differ in number"), "{error}");
+    }
+
+    #[test]
+    fn rejects_a_multi_block_region() {
+        let error = explicit_error(
+            r#"core.module @test {
+  wasm.func @f() -> core.nil {
+    wasm.block {
+      ^first:
+        wasm.br {target = 0}
+      ^second:
+        wasm.br {target = 0}
+    }
+    wasm.return
+  }
+}"#,
+        );
+        assert!(error.contains("multi-block regions"), "{error}");
+    }
+
     #[test]
     fn reads_operands_and_stores_results_through_locals() {
         let ir = explicit(

@@ -603,6 +603,25 @@ mod tests {
     }
 
     #[test]
+    fn stack_contract_rejects_a_used_result_that_leaves_no_value() {
+        let error = stack_error(
+            r#"core.module @test {
+  wasm.func @g() -> core.nil {
+    wasm.return
+  }
+  wasm.func @f() -> core.nil {
+    %unit = wasm.call @g() : () -> core.nil
+    wasm.return %unit
+  }
+}"#,
+        );
+        assert!(
+            error.contains("a result of wasm.call that is not left on the stack is used"),
+            "{error}"
+        );
+    }
+
+    #[test]
     fn stack_contract_rejects_loop_init_operands() {
         let error = stack_error(
             r#"core.module @test {
