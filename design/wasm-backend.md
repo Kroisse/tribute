@@ -374,7 +374,9 @@ Emitter는 malformed를 먼저 거부한 뒤 IR을 수정하지 않는 read-only
   `wasm.import_func` 바인딩을 대신하지 않으며, 본문 구조 판정에도 참여하지 않는다.
 
 이 처분은 공통 DCE reachability나 인증된 intrinsic 삭제와 별개다. IR을 변경하지
-않고 emission 목록만 좁히며, 대상 심볼 삭제를 다른 pass에 위임하지 않는다.
+않고 emission 목록만 좁히며, 대상 심볼 삭제를 다른 pass에 위임하지 않는다. 본문의
+local 배정은 처분이 아니라 그 앞의
+[`ExplicitLocals`](#명시적-지역-변수와-stack-계약) pass가 맡는다.
 
 ### 명시적 지역 변수와 stack 계약
 
