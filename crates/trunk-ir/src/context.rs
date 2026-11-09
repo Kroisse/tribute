@@ -1138,6 +1138,32 @@ impl IrContext {
         }
     }
 
+    /// Replace the operation list of `block` with `ops`, in one step.
+    ///
+    /// Operations of the old list that `ops` leaves out are detached, not
+    /// removed. Rebuilding a list this way costs one pass over both lists,
+    /// where inserting operations one by one searches the list each time.
+    ///
+    /// # Panics
+    ///
+    /// Panics if an operation of `ops` belongs to another block or occurs
+    /// twice.
+    pub fn set_block_ops(&mut self, block: BlockRef, ops: OpList) {
+        self.bump_revision();
+        for op in std::mem::take(&mut self.blocks[block].ops) {
+            self.ops[op].parent_block = None;
+        }
+        for &op in &ops {
+            assert!(
+                self.ops[op].parent_block.is_none(),
+                "set_block_ops: operation {op} already belongs to block {:?}",
+                self.ops[op].parent_block.unwrap(),
+            );
+            self.ops[op].parent_block = Some(block);
+        }
+        self.blocks[block].ops = ops;
+    }
+
     /// Detach an operation from its parent block.
     ///
     /// This is a convenience wrapper around `remove_op_from_block` that uses

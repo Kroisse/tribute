@@ -13,29 +13,21 @@ use wasm_encoder::{Function, HeapType, Instruction, StorageType, ValType};
 use crate::CompilationResult;
 use crate::gc_types::GcTypeDef;
 
+use super::super::ModuleInfo;
 use super::super::helpers::{self, value_type};
-use super::super::value_emission::emit_operands;
-use super::super::{FunctionEmitContext, ModuleInfo, set_result_local};
 
 /// Handle struct.new operation
 pub(crate) fn handle_struct_new(
     ctx: &IrContext,
     op: OpRef,
-    emit_ctx: &FunctionEmitContext,
     _module_info: &ModuleInfo,
     function: &mut Function,
 ) -> CompilationResult<()> {
-    let operands = ctx.op_operands(op);
-    // struct_new needs all field values on the stack, including nil types.
-    // emit_operands handles nil types by emitting ref.null none.
-    emit_operands(ctx, operands, emit_ctx, function)?;
-
     let type_idx = wasm_dialect::StructNew::from_op(ctx, op)
         .expect("handler called for wasm.struct_new")
         .type_idx(ctx);
 
     function.instruction(&Instruction::StructNew(type_idx));
-    set_result_local(ctx, op, emit_ctx, function)?;
     Ok(())
 }
 
@@ -43,12 +35,10 @@ pub(crate) fn handle_struct_new(
 pub(crate) fn handle_struct_get(
     ctx: &IrContext,
     op: OpRef,
-    emit_ctx: &FunctionEmitContext,
     module_info: &ModuleInfo,
     function: &mut Function,
 ) -> CompilationResult<()> {
     let operands = ctx.op_operands(op);
-    emit_operands(ctx, operands, emit_ctx, function)?;
 
     // Check if operand is abstract type (anyref/structref) and needs casting to concrete struct type
     // This happens when:
@@ -93,8 +83,7 @@ pub(crate) fn handle_struct_get(
     // Check if boxing is needed: result local expects anyref but struct field is i64
     // This happens when extracting values from structs where the IR uses generic/wrapper
     // types but the actual struct field contains a primitive (i64).
-    let needs_boxing =
-        check_struct_get_needs_boxing(ctx, op, emit_ctx, module_info, type_idx, field_idx);
+    let needs_boxing = check_struct_get_needs_boxing(ctx, op, module_info, type_idx, field_idx);
 
     if needs_boxing {
         debug!("struct_get: boxing i64 to i31ref for anyref local");
@@ -138,7 +127,6 @@ pub(crate) fn handle_struct_get(
         }
     }
 
-    set_result_local(ctx, op, emit_ctx, function)?;
     Ok(())
 }
 
@@ -146,30 +134,15 @@ pub(crate) fn handle_struct_get(
 fn check_struct_get_needs_boxing(
     ctx: &IrContext,
     op: OpRef,
-    emit_ctx: &FunctionEmitContext,
     module_info: &ModuleInfo,
     type_idx: u32,
     field_idx: u32,
 ) -> bool {
-    let result_types = ctx.op_result_types(op);
-    if result_types.is_empty() {
-        return false;
-    }
-
-    let result_value = ctx.op_result(op, 0);
-
-    // Check if the result local would be anyref by examining the effective type
-    let local_type = emit_ctx
-        .effective_types
-        .get(&result_value)
-        .copied()
-        .or_else(|| result_types.first().copied());
-
-    // Check if the result expects anyref
     // Note: type variables are resolved at AST level before IR generation
-    let expects_anyref = local_type
-        .map(|ty| trunk_ir::dialect::wasm::Anyref::matches(ctx, ty))
-        .unwrap_or(false);
+    let expects_anyref = ctx
+        .op_result_types(op)
+        .first()
+        .is_some_and(|&ty| trunk_ir::dialect::wasm::Anyref::matches(ctx, ty));
 
     // Check if the struct field is i64
     let field_is_i64 = module_info
@@ -199,14 +172,9 @@ fn check_struct_get_needs_boxing(
 pub(crate) fn handle_struct_set(
     ctx: &IrContext,
     struct_set_op: wasm_dialect::StructSet,
-    emit_ctx: &FunctionEmitContext,
     _module_info: &ModuleInfo,
     function: &mut Function,
 ) -> CompilationResult<()> {
-    let op = struct_set_op.op_ref();
-    let operands = ctx.op_operands(op);
-    emit_operands(ctx, operands, emit_ctx, function)?;
-
     let type_idx = struct_set_op.type_idx(ctx);
     let field_idx = struct_set_op.field_idx(ctx);
 

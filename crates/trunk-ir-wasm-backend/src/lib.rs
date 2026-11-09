@@ -8,6 +8,8 @@
 //! - `func_to_wasm`: Lowers `func.*` operations to `wasm.*`
 //! - `arith_to_wasm`: Lowers `arith.*` operations to `wasm.*`
 //! - `scf_to_wasm`: Lowers `scf.*` operations to `wasm.*`
+//! - `explicit_locals`: Assigns Wasm locals and writes their accesses as
+//!   operations; emission runs it before the emitter
 //!
 //! ## Emission
 //!
@@ -24,6 +26,7 @@ mod errors;
 pub mod gc_types;
 pub mod passes;
 mod plan;
+mod stack_effect;
 mod translate;
 mod validation;
 

@@ -13,16 +13,12 @@ use wasm_encoder::{Function, HeapType, Instruction, ValType};
 use crate::{CompilationError, CompilationResult};
 
 use super::super::helpers::attr_heap_type;
-use super::super::value_emission::emit_operands;
-use super::super::{
-    ATTR_HEAP_TYPE, ATTR_TARGET_TYPE, FunctionEmitContext, ModuleInfo, set_result_local,
-};
+use super::super::{ATTR_HEAP_TYPE, ATTR_TARGET_TYPE, ModuleInfo};
 
 /// Handle ref.null operation
 pub(crate) fn handle_ref_null(
     ctx: &IrContext,
     op: OpRef,
-    emit_ctx: &FunctionEmitContext,
     _module_info: &ModuleInfo,
     function: &mut Function,
 ) -> CompilationResult<()> {
@@ -35,7 +31,6 @@ pub(crate) fn handle_ref_null(
     };
 
     function.instruction(&Instruction::RefNull(heap_type));
-    set_result_local(ctx, op, emit_ctx, function)?;
     Ok(())
 }
 
@@ -43,14 +38,12 @@ pub(crate) fn handle_ref_null(
 pub(crate) fn handle_ref_func(
     ctx: &IrContext,
     ref_func_op: wasm_dialect::RefFunc,
-    emit_ctx: &FunctionEmitContext,
     module_info: &ModuleInfo,
     function: &mut Function,
 ) -> CompilationResult<()> {
     let func_name = ref_func_op.func_name(ctx);
     let func_idx = resolve_callee(func_name, module_info)?;
     function.instruction(&Instruction::RefFunc(func_idx));
-    set_result_local(ctx, ref_func_op.op_ref(), emit_ctx, function)?;
     Ok(())
 }
 
@@ -58,13 +51,9 @@ pub(crate) fn handle_ref_func(
 pub(crate) fn handle_ref_cast(
     ctx: &IrContext,
     op: OpRef,
-    emit_ctx: &FunctionEmitContext,
     module_info: &ModuleInfo,
     function: &mut Function,
 ) -> CompilationResult<()> {
-    let operands = ctx.op_operands(op);
-    emit_operands(ctx, operands, emit_ctx, function)?;
-
     let ref_cast =
         wasm_dialect::RefCast::from_op(ctx, op).expect("handler called for wasm.ref_cast");
     let heap_type = if let Some(type_idx) = ref_cast.type_idx(ctx) {
@@ -86,7 +75,6 @@ pub(crate) fn handle_ref_cast(
     } else {
         function.instruction(&Instruction::RefCastNullable(heap_type));
     }
-    set_result_local(ctx, op, emit_ctx, function)?;
     Ok(())
 }
 
@@ -94,13 +82,9 @@ pub(crate) fn handle_ref_cast(
 pub(crate) fn handle_ref_test(
     ctx: &IrContext,
     op: OpRef,
-    emit_ctx: &FunctionEmitContext,
     _module_info: &ModuleInfo,
     function: &mut Function,
 ) -> CompilationResult<()> {
-    let operands = ctx.op_operands(op);
-    emit_operands(ctx, operands, emit_ctx, function)?;
-
     let ref_test =
         wasm_dialect::RefTest::from_op(ctx, op).expect("handler called for wasm.ref_test");
     let heap_type = if let Some(type_idx) = ref_test.type_idx(ctx) {
@@ -110,7 +94,6 @@ pub(crate) fn handle_ref_test(
     };
 
     function.instruction(&Instruction::RefTestNullable(heap_type));
-    set_result_local(ctx, op, emit_ctx, function)?;
     Ok(())
 }
 
@@ -156,17 +139,10 @@ mod tests {
             .type_idx(Some(crate::gc_types::BYTES_STRUCT_IDX))
             .results(bytes_ty)
             .build(&mut ctx, location);
-        let cast_result = cast.result(&ctx);
-        let emit_ctx = FunctionEmitContext {
-            value_locals: [(null_result, 0), (cast_result, 1)]
-                .into_iter()
-                .collect::<HashMap<_, _>>(),
-            effective_types: HashMap::default(),
-        };
         let module_info = ModuleInfo::default();
         let mut function = Function::new([(2, ValType::Ref(RefType::ANYREF))]);
 
-        handle_ref_cast(&ctx, cast.op_ref(), &emit_ctx, &module_info, &mut function)
+        handle_ref_cast(&ctx, cast.op_ref(), &module_info, &mut function)
             .expect("non-null ref.cast should emit");
     }
 

@@ -8,18 +8,14 @@ use wasm_encoder::{Function, Instruction};
 
 use crate::CompilationResult;
 
-use super::super::{FunctionEmitContext, set_result_local};
-
 /// Handle i32.const operation
 pub(crate) fn handle_i32_const(
     ctx: &IrContext,
     const_op: wasm_dialect::I32Const,
-    emit_ctx: &FunctionEmitContext,
     function: &mut Function,
 ) -> CompilationResult<()> {
     let value = const_op.value(ctx);
     function.instruction(&Instruction::I32Const(value));
-    set_result_local(ctx, const_op.op_ref(), emit_ctx, function)?;
     Ok(())
 }
 
@@ -27,12 +23,10 @@ pub(crate) fn handle_i32_const(
 pub(crate) fn handle_i64_const(
     ctx: &IrContext,
     const_op: wasm_dialect::I64Const,
-    emit_ctx: &FunctionEmitContext,
     function: &mut Function,
 ) -> CompilationResult<()> {
     let value = const_op.value(ctx);
     function.instruction(&Instruction::I64Const(value));
-    set_result_local(ctx, const_op.op_ref(), emit_ctx, function)?;
     Ok(())
 }
 
@@ -40,12 +34,10 @@ pub(crate) fn handle_i64_const(
 pub(crate) fn handle_f32_const(
     ctx: &IrContext,
     const_op: wasm_dialect::F32Const,
-    emit_ctx: &FunctionEmitContext,
     function: &mut Function,
 ) -> CompilationResult<()> {
     let value = const_op.value(ctx);
     function.instruction(&Instruction::F32Const(value.into()));
-    set_result_local(ctx, const_op.op_ref(), emit_ctx, function)?;
     Ok(())
 }
 
@@ -53,11 +45,9 @@ pub(crate) fn handle_f32_const(
 pub(crate) fn handle_f64_const(
     ctx: &IrContext,
     const_op: wasm_dialect::F64Const,
-    emit_ctx: &FunctionEmitContext,
     function: &mut Function,
 ) -> CompilationResult<()> {
     let value = const_op.value(ctx);
     function.instruction(&Instruction::F64Const(value.into()));
-    set_result_local(ctx, const_op.op_ref(), emit_ctx, function)?;
     Ok(())
 }

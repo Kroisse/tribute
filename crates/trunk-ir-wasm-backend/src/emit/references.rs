@@ -265,8 +265,6 @@ mod tests {
   }
 }"#,
         );
-        let before = module.op().display(&ctx).to_string();
-
         let binary = crate::emit_module_to_wasm(&mut ctx, module)
             .expect("an unused ordinary extern requires no body");
         Validator::new_with_features(WasmFeatures::default())
@@ -283,10 +281,13 @@ mod tests {
             2,
             "only body-bearing definitions are emitted"
         );
-        assert_eq!(
-            module.op().display(&ctx).to_string(),
-            before,
-            "emission disposition must not mutate the IR"
+        assert!(
+            module
+                .op()
+                .display(&ctx)
+                .to_string()
+                .contains("wasm.func @helper("),
+            "emission disposition leaves the omitted declaration in the IR"
         );
     }
 
