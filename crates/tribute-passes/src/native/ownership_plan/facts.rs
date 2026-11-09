@@ -184,7 +184,7 @@ fn compute_module_facts(
         .first_block(ctx)
         .ok_or_else(|| OwnershipPlanError::new("module has no body block"))?;
     let mut function_ops = Vec::new();
-    let mut layouts = ManagedLayoutCollector::new(ctx);
+    let mut layouts = ManagedLayoutCollector::new();
     let mut closure_allocations = Vec::new();
     let mut descriptors = Vec::new();
     let mut written_layouts = HashSet::default();

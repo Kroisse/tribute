@@ -3,7 +3,7 @@
 use tribute_ir::dialect::adt;
 use trunk_ir::context::{BlockData, IrContext, RegionData};
 use trunk_ir::dialect::{arith, core, func, mem, scf};
-use trunk_ir::ops::{DialectOp, DialectType};
+use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{
     ConversionError, ConversionTarget, Module, OpRewritePattern, PatternApplicator,
@@ -52,17 +52,19 @@ struct ReadLineResult {
     system: u32,
 }
 
+/// The layout `std::io` declares as `ReadLineResult`, found by its
+/// declaration's source name, which a conversion's tag on the layout's name
+/// leaves alone (`design/ir.md` § "Nominal 선언").
 fn find_read_line_result(ctx: &IrContext, module: Module) -> Option<ReadLineResult> {
-    let ty = ctx.types().iter().find_map(|(ty, data)| {
-        (data.name == <adt::Enum as DialectType>::NAME
-            && data.attrs.view(ctx).get_str("name") == Some(READ_LINE_RESULT_TYPE))
-        .then_some(ty)
+    let block = module.first_block(ctx)?;
+    let decl = ctx.block(block).ops.iter().find_map(|&op| {
+        adt::EnumDecl::from_op(ctx, op)
+            .ok()
+            .filter(|decl| decl.name(ctx) == READ_LINE_RESULT_TYPE)
     })?;
-    let layout = adt::Enum::from_type_ref(ctx, ty)?;
-    let decls = adt::NominalDecls::collect(ctx, module);
+    let ty = decl.r#type(ctx);
     let position = |variant| {
-        decls
-            .variant_position(ctx, layout, variant)
+        decl.position_of(ctx, variant)
             .unwrap_or_else(|| panic!("std::io declares the `{variant}` of ReadLineResult"))
     };
     Some(ReadLineResult {
@@ -340,7 +342,7 @@ mod tests {
             r#"
             core.module @test {
                 !"std::io::ReadLineResult" = adt.enum<"std::io::ReadLineResult", [(core.bytes), (), (), (core.i32, core.bytes)]>
-                adt.enum_decl !"std::io::ReadLineResult" ["ReadLine", "ReadEndOfFile", "ReadInvalidEncoding", "ReadSystem"]
+                adt.enum_decl "std::io::ReadLineResult" !"std::io::ReadLineResult" ["ReadLine", "ReadEndOfFile", "ReadInvalidEncoding", "ReadSystem"]
 
                 func.func @caller(%0: core.bytes, %1: core.i1) -> tribute_rt.anyref {
                 ^bb0:

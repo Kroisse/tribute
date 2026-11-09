@@ -640,6 +640,7 @@ mod tests {
                         })
                         .collect(),
                     fields: vec![],
+                    spelling: None,
                 }))
             })
             .collect(),

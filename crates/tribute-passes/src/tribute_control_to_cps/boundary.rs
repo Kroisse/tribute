@@ -145,7 +145,8 @@ fn walk_type(
             "forbidden type {ty} is reachable at the named boundary"
         ));
     }
-    for param in data.params.iter().copied() {
+    // A nominal layout's fields are in its body.
+    for param in data.params.iter().copied().chain(ctx.type_body(ty)) {
         walk_type(ctx, param, boundary, seen, errors);
     }
     for attribute in data.attrs.values() {
