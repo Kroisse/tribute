@@ -456,7 +456,7 @@ fn native_evidence_hands_the_dispatcher_to_the_runtime_as_a_managed_value() {
   !Evidence = adt.array<adt.typeref<{name = "std::runtime::evidence::Marker"}>>
   !"std::Option$std::runtime::Dispatch" = adt.enum<"std::Option$std::runtime::Dispatch", [(), (!_closure)]>
   !OptionRef = adt.typeref<{name = "std::Option$std::runtime::Dispatch"}>
-  adt.enum_decl !"std::Option$std::runtime::Dispatch" [None, Some]
+  adt.enum_decl !"std::Option$std::runtime::Dispatch" ["None", "Some"]
   func.func @"std::runtime::evidence::extend"(%ev: !Evidence, %id: core.i32, %prompt: core.i32, %tr: !OptionRef, %outer: !Evidence) -> !Evidence {
     func.return %ev
   }

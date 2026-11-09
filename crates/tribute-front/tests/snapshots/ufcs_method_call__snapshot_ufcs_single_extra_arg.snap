@@ -15,8 +15,8 @@ core.module @test {
   !t5 = tribute_control.func_sig<(!"pkg::Pair_1", core.i32) -> !"pkg::Pair_1">
   !t6 = tribute_control.func_sig<(!"pkg::Pair_1") -> core.i32>
 
-  adt.struct_decl !"pkg::Pair" (x, y)
-  adt.struct_decl !"pkg::Triple" (x, y, z)
+  adt.struct_decl !"pkg::Pair" ("x", "y")
+  adt.struct_decl !"pkg::Triple" ("x", "y", "z")
   tribute_control.func @"pkg::Pair::x"(%0: !"pkg::Pair_1") -> core.i32 {
       %1 = adt.struct_get %0 {field = 0, type = !"pkg::Pair"} : core.i32
       tribute_control.return %1

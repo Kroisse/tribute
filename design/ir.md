@@ -1674,8 +1674,8 @@ Source가 선언한 struct와 enum은 각각 module 최상위의 선언 operatio
 이름을 읽는다. LLVM의 debug metadata가 source 이름을 타입과 따로 두는 것과 같다.
 
 ```text
-adt.struct_decl !Point (x, y)
-adt.enum_decl !Shape [Dot, Rect]
+adt.struct_decl !Point ("x", "y")
+adt.enum_decl !Shape ["Dot", "Rect"]
 ```
 
 - `adt.struct_decl`은 struct의 필드 이름을, `adt.enum_decl`은 enum의 variant
@@ -1685,7 +1685,8 @@ adt.enum_decl !Shape [Dot, Rect]
   대응은 이 타입의 정체이며, layout의 `name` 문자열을 비교해 찾지 않는다. 필드와
   variant의 타입은 layout이 소유한다. 텍스트 형식은 layout 타입 뒤에 이름 목록을
   그것이 이름 붙이는 위치 목록과 같은 괄호로 쓴다. 필드는 `(..)`, variant는
-  `[..]`로 쓰며, 식별자가 아닌 이름은 따옴표로 쓴다.
+  `[..]`로 쓰며, 이름은 layout 이름처럼 식별자 여부와 상관없이 항상 따옴표
+  문자열로 쓴다.
 - Layout을 변환하는 pass는 operation 속성 안의 타입을 변환하듯 선언의 `type`도
   변환한다. 그래서 선언은 변환된 layout을 가리키며, 같은 layout을 `type`으로 쓰는
   operation과 일치한다.

@@ -213,7 +213,7 @@ mod adt {
     /// The source names of the struct layout `type`.
     ///
     /// ```text
-    /// adt.struct_decl !Point (x, y)
+    /// adt.struct_decl !Point ("x", "y")
     /// ```
     ///
     /// - **Shape:** a module-level operation. `type` is a named `adt.struct`
@@ -234,7 +234,7 @@ mod adt {
     /// The source names of the enum layout `type`.
     ///
     /// ```text
-    /// adt.enum_decl !Shape [Dot, Rect]
+    /// adt.enum_decl !Shape ["Dot", "Rect"]
     /// ```
     ///
     /// - **Shape:** a module-level operation. `type` is an `adt.enum` layout,
@@ -1459,7 +1459,7 @@ mod tests {
   !Point = adt.struct<"Point", (core.i32, core.i32)>
   !Empty = adt.struct<"Empty", ()>
   !Never = adt.enum<"Never", []>
-  adt.struct_decl !Point (x, y)
+  adt.struct_decl !Point ("x", "y")
   adt.struct_decl !Empty ()
   adt.enum_decl !Never []
   adt.struct_decl adt.struct<"Quoted", (core.i32, core.i32)> ("0", "a b")
@@ -1488,8 +1488,8 @@ mod tests {
     #[test]
     fn nominal_declarations_must_fit_their_layouts() {
         for decl in [
-            r#"adt.struct_decl adt.struct<"P", (core.i32)> (x, y)"#,
-            "adt.struct_decl adt.struct<(core.i32)> (x)",
+            r#"adt.struct_decl adt.struct<"P", (core.i32)> ("x", "y")"#,
+            r#"adt.struct_decl adt.struct<(core.i32)> ("x")"#,
             r#"adt.enum_decl adt.struct<"P", ()> []"#,
             r#"adt.enum_decl adt.enum<"E", [()]> []"#,
         ] {

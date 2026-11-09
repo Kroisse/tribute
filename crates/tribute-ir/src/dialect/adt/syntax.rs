@@ -1,6 +1,7 @@
 //! The custom syntax that writes a nominal declaration's names as the
-//! positional list they name: `(x, y)` for a struct's fields and
-//! `[Dot, Rect]` for an enum's variants.
+//! positional list they name: `("x", "y")` for a struct's fields and
+//! `["Dot", "Rect"]` for an enum's variants. Each name is a quoted string,
+//! as a layout's name is.
 
 use std::fmt::{self, Write as _};
 
@@ -8,15 +9,15 @@ use itertools::Itertools as _;
 
 use trunk_ir::IrContext;
 use trunk_ir::asm_format::{CustomEntity, OpAsmDirective, ParsedEntity};
-use trunk_ir::parser::lexer::name_token;
+use trunk_ir::parser::lexer::string_lit;
 use trunk_ir::parser::{OpAsmParser, ParseResult};
-use trunk_ir::printer::{OpAsmPrinter, display_name};
+use trunk_ir::printer::{OpAsmPrinter, display_string};
 use trunk_ir::types::Attribute;
 
-/// `adt.struct_decl`'s field names: `(x, y)`.
+/// `adt.struct_decl`'s field names: `("x", "y")`.
 pub struct FieldNames;
 
-/// `adt.enum_decl`'s variant names: `[Dot, Rect]`.
+/// `adt.enum_decl`'s variant names: `["Dot", "Rect"]`.
 pub struct VariantNames;
 
 impl OpAsmDirective for FieldNames {
@@ -78,7 +79,7 @@ fn print_names(
     (open, close): (&str, &str),
     names: Vec<&str>,
 ) -> fmt::Result {
-    let names = names.into_iter().map(display_name).format(", ");
+    let names = names.into_iter().map(display_string).format(", ");
     write!(p, "{open}{names}{close}")
 }
 
@@ -88,7 +89,7 @@ fn parse_names(
     expected: &'static str,
 ) -> ParseResult<Vec<ParsedEntity>> {
     let names = p.parse_delimited(open, close, |p| {
-        let name = p.parse_token(expected, name_token)?;
+        let name = p.parse_token(expected, string_lit)?;
         Ok(p.ctx_mut().string_attr(&name))
     })?;
     Ok(vec![ParsedEntity::Attribute(Some(Attribute::List(names)))])

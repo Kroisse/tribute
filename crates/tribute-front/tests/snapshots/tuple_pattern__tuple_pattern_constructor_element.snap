@@ -8,7 +8,7 @@ core.module @test {
   !"pkg::Item_1" = adt.typeref<"pkg::Item">
   !__logical_tuple_tuple_2_24_named_1_13_pkgZ3aZ3aItem_10_coreZ2ei32_1 = adt.typeref<"__logical_tuple_tuple_2_24_named_1_13_pkgZ3aZ3aItem_10_coreZ2ei32">
 
-  adt.enum_decl !"pkg::Item" [Number, Empty]
+  adt.enum_decl !"pkg::Item" ["Number", "Empty"]
   tribute_control.func @"std::Nat::+"(%arg0: core.i32, %arg1: core.i32) -> core.i32
   tribute_control.func @"pkg::first"['a0](%0: !__logical_tuple_tuple_2_24_named_1_13_pkgZ3aZ3aItem_10_coreZ2ei32_1) -> core.i32 row(| 'a0) inferred {
       %1 = adt.struct_get %0 {field = 0, type = !__logical_tuple_tuple_2_24_named_1_13_pkgZ3aZ3aItem_10_coreZ2ei32} : !"pkg::Item_1"
