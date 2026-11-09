@@ -1209,6 +1209,60 @@ mod tests {
     }
 
     #[test]
+    fn single_use_values_pass_on_the_stack_without_locals() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  wasm.func @inc(%x: core.i32) -> core.i32 {
+    %one = wasm.i32_const 1 : core.i32
+    %sum = wasm.i32_add %x, %one : core.i32
+    wasm.return %sum
+  }
+}"#,
+        );
+        let bytes = crate::emit_module_to_wasm(&mut ctx, module)
+            .expect("the function emits")
+            .bytes;
+        Validator::new_with_features(WasmFeatures::default())
+            .validate_all(&bytes)
+            .expect("the emitted module must validate");
+
+        let body = Parser::new(0)
+            .parse_all(&bytes)
+            .filter_map(Result::ok)
+            .find_map(|payload| match payload {
+                Payload::CodeSectionEntry(body) => Some(body),
+                _ => None,
+            })
+            .expect("one function body");
+        assert_eq!(
+            body.get_locals_reader().expect("locals").get_count(),
+            0,
+            "no local beyond the parameter"
+        );
+        let instructions = body
+            .get_operators_reader()
+            .expect("operators")
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()
+            .expect("decode instructions");
+        assert!(
+            matches!(
+                instructions[..],
+                [
+                    Operator::LocalGet { local_index: 0 },
+                    Operator::I32Const { value: 1 },
+                    Operator::I32Add,
+                    Operator::Return,
+                    Operator::End,
+                ]
+            ),
+            "{instructions:?}"
+        );
+    }
+
+    #[test]
     fn encodes_and_validates_return_call_indirect_with_exact_signature() {
         let mut ctx = IrContext::new();
         let module = return_call_indirect_module(&mut ctx);

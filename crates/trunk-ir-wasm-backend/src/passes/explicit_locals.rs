@@ -607,6 +607,49 @@ mod tests {
     }
 
     #[test]
+    fn does_not_read_a_local_before_its_value_is_defined() {
+        // `%x` is defined after `%a`'s constant, so its read cannot move
+        // before the constant; `%a` goes to a local instead.
+        let ir = explicit(
+            r#"core.module @test {
+  wasm.func @g() -> core.i32 {
+    %v = wasm.i32_const 3 : core.i32
+    wasm.return %v
+  }
+  wasm.func @f() -> core.i32 {
+    %a = wasm.i32_const 1 : core.i32
+    %x = wasm.call @g() : () -> core.i32
+    %r = wasm.i32_add %x, %a : core.i32
+    %s = wasm.i32_add %x, %r : core.i32
+    wasm.return %s
+  }
+}"#,
+        );
+        assert_eq!(
+            ir,
+            r#"core.module @test {
+  wasm.func @g() -> core.i32 {
+      %0 = wasm.i32_const 3 : core.i32
+      wasm.return %0
+  }
+  wasm.func @f() -> core.i32 attributes {locals = [core.i32, core.i32]} {
+      %0 = wasm.i32_const 1 : core.i32
+      wasm.local_set %0 {index = 0}
+      %1 = wasm.call @g() : () -> core.i32
+      wasm.local_set %1 {index = 1}
+      %2 = wasm.local_get {index = 1} : core.i32
+      %3 = wasm.local_get {index = 1} : core.i32
+      %4 = wasm.local_get {index = 0} : core.i32
+      %5 = wasm.i32_add %3, %4 : core.i32
+      %6 = wasm.i32_add %2, %5 : core.i32
+      wasm.return %6
+  }
+}
+"#
+        );
+    }
+
+    #[test]
     fn stores_a_value_used_twice_and_drops_an_unused_one() {
         let ir = explicit(
             r#"core.module @test {
