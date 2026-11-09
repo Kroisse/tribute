@@ -100,7 +100,10 @@ impl<'a> AsmParser<'a> {
                 ),
                 crate::TypeBodyError::Conflicting { .. } => self.error_at(
                     offset,
-                    "the body differs from the one this identified type already has",
+                    format!(
+                        "the body differs from the one identified type {:?} already has",
+                        crate::type_def::identifier(self.ctx, ty).unwrap_or_default()
+                    ),
                 ),
             })
     }

@@ -1,0 +1,13 @@
+error[E0277]: `Layout` is declared with `#[identified]` but does not implement `IdentifiedType`
+ --> tests/ui/identified_missing_impl.rs:3:7
+  |
+3 |     #[identified]
+  |       ^^^^^^^^^^ `#[identified]` requires this implementation
+  |
+help: the trait `trunk_ir::ops::__private::DeclaredIdentifiedType` is not implemented for `Layout`
+ --> tests/ui/identified_missing_impl.rs:1:1
+  |
+1 | #[trunk_ir::dialect]
+  | ^^^^^^^^^^^^^^^^^^^^
+  = note: add `impl IdentifiedType for Layout { fn identifier<'a>(&self, ctx: &'a IrContext) -> Option<&'a str> { .. } }`
+  = note: this error originates in the attribute macro `trunk_ir::dialect` (in Nightly builds, run with -Z macro-backtrace for more info)

@@ -1202,6 +1202,16 @@ fn gen_type_struct_and_trait(
         }
         None => quote!(None),
     };
+    let identifier = match td.identified {
+        Some(span) => {
+            let mut sname = sname.clone();
+            sname.set_span(span);
+            quote_spanned!(span=> Some(
+                <#sname as #crate_path::ops::__private::DeclaredIdentifiedType>::IDENTIFIER
+            ))
+        }
+        None => quote!(None),
+    };
     let interfaces = gen_interface_registrations(crate_path, &sname, &td.implements);
 
     let shape_ok = gen_type_shape_check(crate_path, td);
@@ -1218,7 +1228,7 @@ fn gen_type_struct_and_trait(
             verifier: #verifier,
             asm_format: #asm_format,
             alias_hint: #alias_hint,
-            identified: false,
+            identifier: #identifier,
         };
 
         #crate_path::__private::inventory::submit! {

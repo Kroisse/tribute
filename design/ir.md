@@ -1284,8 +1284,12 @@ func.func_sig<(core.i32 {tribute.ownership = "consumed"}) -> core.i64, {call_con
 
 식별 타입(identified type)은 키로 정체성이 정해지고, 몸체를 키와 따로 갖는
 타입이다. MLIR의 mutable type storage와 LLVM의 identified struct에 해당한다.
-타입 정의가 식별 타입임을 선언하며, 어느 타입이 식별 타입인지는 정의만 정한다.
 
+- **식별자.** 어느 타입이 식별 타입인지는 타입 정의가 인스턴스마다 정한다.
+  정의는 인스턴스의 저장 표현에서 식별자(이름)를 읽어 돌려주며, 식별자가 있는
+  인스턴스가 식별 타입이다. 식별자가 없는 인스턴스는 내용으로 정체성이 정해지는
+  보통 타입이다. 그래서 한 정의가 LLVM의 struct처럼 식별 타입과 literal 타입을
+  함께 가질 수 있다. 판정은 정의만 하며, 다른 dialect가 붙이거나 바꿀 수 없다.
 - **키.** 식별 타입의 저장 표현(이름, 매개변수, 속성)이 키다. 같은 키는
   같은 타입이며, 몸체는 정체성에 들어가지 않는다. 그래서 몸체가 자기 키를 담아
   재귀할 수 있다.
@@ -1299,8 +1303,8 @@ func.func_sig<(core.i32 {tribute.ownership = "consumed"}) -> core.i64, {call_con
 - **Textual form.** 식별 타입은 자기 type assembly format을 등록해야 한다. 일반
   형식은 몸체를 표현하지 못하기 때문이다. 형식은 키만 쓰거나, 키 뒤에 몸체를
   쓴다. 몸체를 쓴 등장은 그 몸체를 묶고, 이미 묶인 몸체와 다르면 parse 오류다.
-  Printer는 module이 닿는 식별 타입마다 alias를 정의하고, 몸체를 그 alias의 정의
-  줄에 쓴다. 그 alias가 아직 정의되지 않은 자리, 곧 앞선 alias 정의에 나오는
+  Printer는 module이 닿는 식별 타입마다 식별자를 이름으로 하는 alias를 정의하고,
+  몸체를 그 alias의 정의 줄에 쓴다. 그 alias가 아직 정의되지 않은 자리, 곧 앞선 alias 정의에 나오는
   자리에도 몸체를 쓰며, parser는 같은 몸체를 다시 묶는다. 나머지 자리에서는 alias로
   쓴다. 식별 타입의 몸체를 쓰는 동안 그 안에 다시 나오는 식별 타입은 키만 쓴다.
   그래서 재귀와 상호 재귀가 끝나며, 식별 타입 사이에는 alias 정의 순서의 제약이

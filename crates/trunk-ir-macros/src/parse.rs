@@ -76,6 +76,8 @@ pub struct TypeDefData {
     pub asm_format: Option<proc_macro2::Span>,
     /// `#[alias_hint]`: suggest printer alias names through the wrapper's `TypeAliasHint` impl. Holds the attribute's span for diagnostics.
     pub alias_hint: Option<proc_macro2::Span>,
+    /// `#[identified]`: read each instance's identifier through the wrapper's `IdentifiedType` impl. Holds the attribute's span for diagnostics.
+    pub identified: Option<proc_macro2::Span>,
     /// `#[implements(..)]`: the type interfaces the wrapper implements.
     pub implements: Vec<PathEntry>,
     /// Doc comments, forwarded to the wrapper struct.
@@ -233,13 +235,14 @@ fn parse_item(iter: &mut TokenIter) -> Result<DialectItem, String> {
     let mut verify = None;
     let mut asm_format = None;
     let mut alias_hint = None;
+    let mut identified = None;
     let mut implements: Option<Vec<PathEntry>> = None;
     let mut flags: Option<Vec<PathEntry>> = None;
     let mut format: Option<proc_macro2::TokenStream> = None;
     let mut docs = Vec::new();
 
     // Collect outer attributes: #[doc = "..."], #[verify], #[asm_format],
-    // #[alias_hint], #[implements(..)], #[flags(..)],
+    // #[alias_hint], #[identified], #[implements(..)], #[flags(..)],
     // and the legacy #[attr(...)] and #[rest_results], rejected below
     while peek_punct(iter, '#') {
         let attr = parse_outer_attr(iter)?;
@@ -270,6 +273,12 @@ fn parse_item(iter: &mut TokenIter) -> Result<DialectItem, String> {
                     return Err("duplicate #[alias_hint] on the same type".into());
                 }
                 alias_hint = Some(span);
+            }
+            OuterAttr::Identified(span) => {
+                if identified.is_some() {
+                    return Err("duplicate #[identified] on the same type".into());
+                }
+                identified = Some(span);
             }
             OuterAttr::Implements(entries) => {
                 if implements.is_some() {
@@ -304,6 +313,11 @@ fn parse_item(iter: &mut TokenIter) -> Result<DialectItem, String> {
                 return Err(
                     "#[alias_hint] suggests type alias names and is not allowed on operations"
                         .into(),
+                );
+            }
+            if identified.is_some() {
+                return Err(
+                    "#[identified] marks identified types and is not allowed on operations".into(),
                 );
             }
             let mut op = parse_operation(iter)?;
@@ -395,6 +409,7 @@ fn parse_item(iter: &mut TokenIter) -> Result<DialectItem, String> {
                 (verify, "#[verify]", &["verify"][..]),
                 (asm_format, "#[asm_format]", &["print", "parse"][..]),
                 (alias_hint, "#[alias_hint]", &["alias_hint"][..]),
+                (identified, "#[identified]", &["identifier"][..]),
             ] {
                 if span.is_some()
                     && let Some(name) = accessors.iter().find(|name| names.contains(&name.as_str()))
@@ -407,6 +422,7 @@ fn parse_item(iter: &mut TokenIter) -> Result<DialectItem, String> {
             td.verify = verify;
             td.asm_format = asm_format;
             td.alias_hint = alias_hint;
+            td.identified = identified;
             td.implements = implements.unwrap_or_default();
             td.docs = docs;
             Ok(DialectItem::TypeDef(td))
@@ -425,6 +441,7 @@ enum OuterAttr {
     /// `#[asm_format]`, with the format elements of `#[asm_format(..)]`.
     AsmFormat(proc_macro2::Span, Option<proc_macro2::TokenStream>),
     AliasHint(proc_macro2::Span),
+    Identified(proc_macro2::Span),
     Implements(Vec<PathEntry>),
     Flags(Vec<PathEntry>),
 }
@@ -465,8 +482,8 @@ fn entity_names(op: &OperationDef) -> impl Iterator<Item = &str> {
 }
 
 /// Parse `#[...]` — `#[doc = "..."]`, `#[attr(...)]`, `#[rest_results]`,
-/// `#[verify]`, `#[asm_format]`, `#[alias_hint]`, `#[implements(..)]`, or
-/// `#[flags(..)]`.
+/// `#[verify]`, `#[asm_format]`, `#[alias_hint]`, `#[identified]`,
+/// `#[implements(..)]`, or `#[flags(..)]`.
 fn parse_outer_attr(iter: &mut TokenIter) -> Result<OuterAttr, String> {
     expect_punct(iter, '#')?;
     let bracket = expect_group(iter, Delimiter::Bracket)?;
@@ -502,6 +519,10 @@ fn parse_outer_attr(iter: &mut TokenIter) -> Result<OuterAttr, String> {
             expect_consumed(&inner, "#[alias_hint]")?;
             Ok(OuterAttr::AliasHint(ident.span()))
         }
+        "identified" => {
+            expect_consumed(&inner, "#[identified]")?;
+            Ok(OuterAttr::Identified(ident.span()))
+        }
         "implements" => Ok(OuterAttr::Implements(parse_path_list(
             &mut inner,
             "implements",
@@ -511,7 +532,7 @@ fn parse_outer_attr(iter: &mut TokenIter) -> Result<OuterAttr, String> {
             &mut inner, "flags", "Flag",
         )?)),
         other => Err(format!(
-            "unexpected attribute `{other}`, expected `doc`, `attr`, `rest_results`, `verify`, `asm_format`, `alias_hint`, `implements`, or `flags`"
+            "unexpected attribute `{other}`, expected `doc`, `attr`, `rest_results`, `verify`, `asm_format`, `alias_hint`, `identified`, `implements`, or `flags`"
         )),
     }
 }
@@ -691,6 +712,7 @@ fn parse_struct_def(iter: &mut TokenIter) -> Result<TypeDefData, String> {
         verify: None,
         asm_format: None,
         alias_hint: None,
+        identified: None,
         implements: Vec::new(),
         docs: Vec::new(),
     })
@@ -1800,6 +1822,36 @@ mod tests {
             (
                 quote!(
                     mod test {
+                        #[identified]
+                        #[identified]
+                        struct Ty;
+                    }
+                ),
+                "duplicate #[identified]",
+            ),
+            (
+                quote!(
+                    mod test {
+                        #[identified]
+                        fn op() {}
+                    }
+                ),
+                "#[identified] marks identified types and is not allowed on operations",
+            ),
+            (
+                quote!(
+                    mod test {
+                        #[identified]
+                        struct Ty {
+                            identifier: Attr<String>,
+                        }
+                    }
+                ),
+                "#[identified] reserves the name `identifier`",
+            ),
+            (
+                quote!(
+                    mod test {
                         #[flags(Pure)]
                         struct Ty;
                     }
@@ -1823,11 +1875,13 @@ mod tests {
                 #[alias_hint]
                 #[implements(Managed, crate::Sized)]
                 struct Named;
+                #[identified]
+                struct Keyed;
                 struct Plain;
             }
         })
         .unwrap();
-        let flags: Vec<(bool, bool, bool, usize)> = module
+        let flags: Vec<(bool, bool, bool, bool, usize)> = module
             .items
             .iter()
             .map(|item| match item {
@@ -1835,6 +1889,7 @@ mod tests {
                     td.verify.is_some(),
                     td.asm_format.is_some(),
                     td.alias_hint.is_some(),
+                    td.identified.is_some(),
                     td.implements.len(),
                 ),
                 DialectItem::Operation(_) => unreachable!(),
@@ -1843,10 +1898,11 @@ mod tests {
         assert_eq!(
             flags,
             [
-                (true, false, false, 0),
-                (false, true, false, 0),
-                (false, false, true, 2),
-                (false, false, false, 0),
+                (true, false, false, false, 0),
+                (false, true, false, false, 0),
+                (false, false, true, false, 2),
+                (false, false, false, true, 0),
+                (false, false, false, false, 0),
             ]
         );
 
@@ -1859,6 +1915,10 @@ mod tests {
         }
         assert!(
             out.contains("alias_hint : Some (< Named as :: trunk_ir :: ops :: __private :: DeclaredTypeAliasHint > :: ALIAS_HINT)"),
+            "got: {out}"
+        );
+        assert!(
+            out.contains("identifier : Some (< Keyed as :: trunk_ir :: ops :: __private :: DeclaredIdentifiedType > :: IDENTIFIER)"),
             "got: {out}"
         );
     }

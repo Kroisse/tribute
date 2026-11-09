@@ -1343,13 +1343,13 @@ pub fn validate_type_bodies(ctx: &IrContext, module: Module) -> ValidationResult
         for attr in data.attrs.values() {
             attr.visit_types(&mut |nested| reach(ctx, nested, seen, errors));
         }
-        if !crate::type_def::is_identified(ctx, ty) {
+        let Some(identifier) = crate::type_def::identifier(ctx, ty) else {
             return;
-        }
+        };
         match ctx.type_body(ty) {
             Some(body) => reach(ctx, body, seen, errors),
             None => errors.push(ValidationError::Operation {
-                message: format!("identified type {} has no body", ty.display(ctx)),
+                message: format!("identified type {identifier:?} has no body"),
             }),
         }
     }

@@ -129,7 +129,7 @@ pub mod __private {
         OpAsmFormat, OpAsmFormatDef, OpAsmHooks, TypeAliasHint, TypeAliasHook, TypeAsmFormat,
         TypeAsmHooks, erased_alias_hint,
     };
-    use crate::type_def::TypeVerifier;
+    use crate::type_def::{IdentifiedType, IdentifierHook, TypeVerifier, erased_identifier};
     use crate::type_verifier::{VerifyType, erased_verifier};
 
     /// Entry point for generated verifiers. Requiring this instead of
@@ -220,6 +220,21 @@ pub mod __private {
     #[diagnostic::do_not_recommend]
     impl<T: TypeAliasHint> DeclaredTypeAliasHint for T {
         const ALIAS_HINT: TypeAliasHook = erased_alias_hint::<T>;
+    }
+
+    /// Entry point for generated type identifiers.
+    #[diagnostic::on_unimplemented(
+        message = "`{Self}` is declared with `#[identified]` but does not implement `IdentifiedType`",
+        label = "`#[identified]` requires this implementation",
+        note = "add `impl IdentifiedType for {Self} {{ fn identifier<'a>(&self, ctx: &'a IrContext) -> Option<&'a str> {{ .. }} }}`"
+    )]
+    pub trait DeclaredIdentifiedType {
+        const IDENTIFIER: IdentifierHook;
+    }
+
+    #[diagnostic::do_not_recommend]
+    impl<T: IdentifiedType> DeclaredIdentifiedType for T {
+        const IDENTIFIER: IdentifierHook = erased_identifier::<T>;
     }
 }
 
