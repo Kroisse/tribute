@@ -64,6 +64,21 @@ mod wasm {
     #[asm_format(cond attr_dict_bare)]
     fn br_if(target: Attr<u32>, cond: Value<_>) {}
 
+    /// Branch to the label that `index` selects, as Wasm's `br_table`.
+    ///
+    /// `targets[i]` is the relative label depth taken when `index` is `i`;
+    /// `default` is taken when `index`, read as unsigned, is at least the
+    /// number of targets. Depths count enclosing `wasm.block`, `wasm.loop`,
+    /// and `wasm.if` labels as `wasm.br` does. Like `wasm.br`, it ends its
+    /// block: nothing after it runs. The branch carries no values, so every
+    /// label it names takes no branch operands.
+    ///
+    /// ```text
+    /// wasm.br_table %index {default = 3, targets = [0, 2, 1]}
+    /// ```
+    #[asm_format(index attr_dict_bare)]
+    fn br_table(index: Value<I32>, targets: Attr<[u32]>, default: Attr<u32>) {}
+
     #[asm_format(values attr_dict_bare)]
     fn r#return(values: Variadic<_>) {}
     #[asm_format(value attr_dict_bare)]
