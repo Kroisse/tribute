@@ -4,7 +4,7 @@
 
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use tribute_ir::dialect::adt;
-use tribute_ir::dialect::tribute_control::{Row, RowUnion};
+use tribute_ir::dialect::tribute_control::{self, Row, RowUnion};
 use tribute_ir::dialect::tribute_rt;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::core;
@@ -267,13 +267,14 @@ impl<'db> NominalTypes<'db> {
                     .intern(ir)
                     .as_type_ref()
             }
-            TypeKind::Named { id, .. }
+            TypeKind::Named { id, row_args, .. }
                 if self.get_type(&id.qualified(self.db)).is_some()
                     || self
                         .logical_nominal_declarations
                         .contains(&id.qualified(self.db)) =>
             {
-                self.adt_typeref(ir, &id.qualified(self.db))
+                let row_args = row_args.iter().map(|row| self.ability_row(*row));
+                self.adt_typeref(ir, &id.qualified(self.db), row_args)
             }
             TypeKind::Named { .. } => self.anyref_type(ir),
             TypeKind::Func {
@@ -544,26 +545,31 @@ impl<'db> NominalTypes<'db> {
         )])
     }
 
-    /// Create an `adt.struct` type with name and field types.
+    /// Create an `adt.struct` type with name, field types, and `row_params`
+    /// row binders.
     pub(crate) fn adt_struct_type(
         &self,
         ir: &mut IrContext,
         name: &Symbol,
         fields: &[TypeRef],
+        row_params: u32,
     ) -> TypeRef {
         let name = ir.intern_symbol_text(name);
-        adt::Struct::from_fields(ir, name, fields.iter().copied(), AttributeMap::new())
-            .as_type_ref()
+        let attrs = Self::layout_attrs(ir, row_params, AttributeMap::new());
+        adt::Struct::from_fields(ir, name, fields.iter().copied(), attrs).as_type_ref()
     }
 
-    /// Create an `adt.enum` type with name and each variant's field types.
+    /// Create an `adt.enum` type with name, each variant's field types, and
+    /// `row_params` row binders.
     pub(crate) fn adt_enum_type(
         &self,
         ir: &mut IrContext,
         name: &Symbol,
         variants: &[Vec<TypeRef>],
+        row_params: u32,
     ) -> TypeRef {
-        Self::enum_type(ir, name, variants, AttributeMap::new())
+        let attrs = Self::layout_attrs(ir, row_params, AttributeMap::new());
+        Self::enum_type(ir, name, variants, attrs)
     }
 
     /// Create an `adt.enum` type that records where it was declared.
@@ -572,13 +578,26 @@ impl<'db> NominalTypes<'db> {
         ir: &mut IrContext,
         name: &Symbol,
         variants: &[Vec<TypeRef>],
+        row_params: u32,
         definition: Location,
     ) -> TypeRef {
         let mut attrs = AttributeMap::new();
         attrs
             .view_mut(ir)
             .insert("tribute.definition", Attribute::Location(definition));
+        let attrs = Self::layout_attrs(ir, row_params, attrs);
         Self::enum_type(ir, name, variants, attrs)
+    }
+
+    /// `attrs` with a layout's `row_params`, absent when it has none.
+    fn layout_attrs(ir: &mut IrContext, row_params: u32, mut attrs: AttributeMap) -> AttributeMap {
+        if row_params > 0 {
+            attrs.view_mut(ir).insert(
+                tribute_control::ROW_PARAMS_ATTR,
+                Attribute::Int(row_params.into()),
+            );
+        }
+        attrs
     }
 
     fn enum_type(
@@ -592,10 +611,16 @@ impl<'db> NominalTypes<'db> {
         adt::Enum::from_variants(ir, name, variants, attrs).as_type_ref()
     }
 
-    /// Create an `adt.typeref` type — a reference to a named type.
-    pub(crate) fn adt_typeref(&self, ir: &mut IrContext, name: &Symbol) -> TypeRef {
+    /// Create an `adt.typeref` type — a reference to a named type, passing
+    /// `row_args` to its row parameters.
+    pub(crate) fn adt_typeref(
+        &self,
+        ir: &mut IrContext,
+        name: &Symbol,
+        row_args: impl IntoIterator<Item = Row>,
+    ) -> TypeRef {
         let name = ir.intern_symbol_text(name);
-        adt::Typeref::named(ir, name, []).as_type_ref()
+        adt::Typeref::named(ir, name, row_args).as_type_ref()
     }
 }
 

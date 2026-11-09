@@ -339,8 +339,9 @@ pub(super) fn lower_constructor<'db>(
         &ctor.resolved,
         ctor.ty,
     );
-    let values =
-        super::super::expr::cast_variant_args(builder, location, values, type_attr, &variant);
+    let values = super::super::expr::cast_variant_args(
+        builder, location, values, type_attr, result_ty, &variant,
+    );
     let (tag, _) =
         super::super::expr::constructor_variant(builder.ctx, builder.ir, type_attr, &variant);
     let variant = adt::VariantNew::operands(values)
@@ -483,16 +484,15 @@ pub(super) fn lower_record<'db>(
         } else {
             let base =
                 spread.unwrap_or_else(|| panic!("typechecked record is missing field {name}"));
-            // The layout owns concrete field types.  `struct_get` needs a
-            // result type, obtained from the matching getter expression type
-            // only after normal typechecking; use layout metadata directly.
-            let field_types =
-                tribute_ir::dialect::adt::layout::get_struct_fields(builder.ir, layout)
-                    .unwrap_or_else(|| panic!("prescanned struct layout is malformed"));
+            // The layout owns concrete field types, with its row binders
+            // taking the spread value's row arguments.
+            let base_ty = builder.ir.value_ty(base);
+            let field_ty = adt::field_type(builder.ir, base_ty, index)
+                .unwrap_or_else(|| panic!("prescanned struct layout is malformed"));
             let get = adt::StructGet::operands(base)
                 .r#type(layout)
                 .field(index as u32)
-                .results(field_types[index])
+                .results(field_ty)
                 .build(builder.ir, location);
             builder.ir.push_op(builder.block, get.op_ref());
             ordered.push(get.result(builder.ir));
@@ -541,9 +541,10 @@ pub(super) fn lower_variant_record<'db>(
                 .unwrap_or_else(|| panic!("typechecked variant record is missing field {name}"))
         })
         .collect();
-    let ordered =
-        super::super::expr::cast_variant_args(builder, location, ordered, layout, variant);
     let result_ty = expr_type_for_id(builder, id);
+    let ordered = super::super::expr::cast_variant_args(
+        builder, location, ordered, layout, result_ty, variant,
+    );
     let (tag, _) =
         super::super::expr::constructor_variant(builder.ctx, builder.ir, layout, variant);
     let value = adt::VariantNew::operands(ordered)

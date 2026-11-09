@@ -592,8 +592,10 @@ pub fn field_type(ctx: &mut IrContext, value_ty: TypeRef, field: usize) -> Optio
 }
 
 /// `ty`, written in a layout with `row_params` binders, as seen through a
-/// value of type `value_ty`.
-fn substitute_layout_binders(
+/// value of type `value_ty`: the layout's binders replaced by the value
+/// type's row arguments. `None` when the layout has binders and `value_ty`
+/// is not a typeref.
+pub fn substitute_layout_binders(
     ctx: &mut IrContext,
     row_params: Option<u32>,
     value_ty: TypeRef,

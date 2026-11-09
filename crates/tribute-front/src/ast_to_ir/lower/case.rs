@@ -9,6 +9,7 @@ use tribute_ir::dialect::adt::layout::get_struct_fields;
 use tribute_ir::dialect::list;
 use trunk_ir::context::{BlockData, IrContext, RegionData};
 use trunk_ir::dialect::{arith, scf};
+use trunk_ir::ops::DialectType;
 use trunk_ir::refs::{BlockRef, TypeRef, ValueRef};
 use trunk_ir::types::{Attribute, Location};
 use trunk_ir::{Symbol, SymbolPath};
@@ -84,7 +85,8 @@ pub(super) fn emit_logical_pattern_check<'db>(
         }
         PatternKind::Variant { .. } | PatternKind::Record { .. } => {
             let (layout, fields) = logical_constructor_pattern(builder.ctx, builder.ir, pattern);
-            match layout {
+            let value_ty = builder.ir.value_ty(scrutinee);
+            match layout.through(builder.ir, value_ty) {
                 ConstructorLayout::Struct {
                     ty,
                     fields: field_tys,
@@ -152,6 +154,52 @@ struct VariantLayout {
     ty: TypeRef,
     tag: u32,
     fields: Vec<TypeRef>,
+}
+
+impl ConstructorLayout {
+    /// The layout as a value of type `value_ty` sees it: its field types take
+    /// the value's row arguments in place of the layout's row binders
+    /// (`design/tribute-dialects.md`, "Nominal row 인자").
+    fn through(self, ir: &mut IrContext, value_ty: TypeRef) -> Self {
+        match self {
+            ConstructorLayout::Struct { ty, fields } => {
+                let row_params = adt::Struct::from_type_ref(ir, ty)
+                    .expect("a struct pattern's layout is an adt.struct")
+                    .row_params(ir);
+                ConstructorLayout::Struct {
+                    ty,
+                    fields: fields_through(ir, row_params, value_ty, fields),
+                }
+            }
+            ConstructorLayout::Variant(VariantLayout { ty, tag, fields }) => {
+                let row_params = adt::Enum::from_type_ref(ir, ty)
+                    .expect("a variant pattern's layout is an adt.enum")
+                    .row_params(ir);
+                ConstructorLayout::Variant(VariantLayout {
+                    ty,
+                    tag,
+                    fields: fields_through(ir, row_params, value_ty, fields),
+                })
+            }
+        }
+    }
+}
+
+/// `fields`, written in a layout with `row_params` binders, as seen through a
+/// value of type `value_ty`.
+pub(super) fn fields_through(
+    ir: &mut IrContext,
+    row_params: Option<u32>,
+    value_ty: TypeRef,
+    fields: Vec<TypeRef>,
+) -> Vec<TypeRef> {
+    fields
+        .into_iter()
+        .map(|field| {
+            adt::substitute_layout_binders(ir, row_params, value_ty, field)
+                .expect("a value of a row-parameterized type carries its row arguments")
+        })
+        .collect()
 }
 
 /// The layout of a constructor pattern and its sub-patterns paired with the
@@ -707,7 +755,8 @@ pub(super) fn bind_logical_pattern_fields<'db>(
         }
         PatternKind::Variant { .. } | PatternKind::Record { .. } => {
             let (layout, fields) = logical_constructor_pattern(ctx, ir, pattern);
-            match layout {
+            let value_ty = ir.value_ty(scrutinee);
+            match layout.through(ir, value_ty) {
                 ConstructorLayout::Struct {
                     ty,
                     fields: field_tys,

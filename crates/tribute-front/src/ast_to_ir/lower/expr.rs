@@ -30,14 +30,21 @@ pub(super) fn constructor_variant(
 /// Coerce constructor arguments to the representation recorded in the enum
 /// layout. Generic enum fields are erased to `anyref`, so primitive payloads
 /// must cross an explicit conversion boundary before `adt.variant_new`.
+/// The layout's row binders take the row arguments of `value_ty`, the type
+/// of the constructed value.
 pub(super) fn cast_variant_args<'db>(
     builder: &mut IrBuilder<'_, 'db>,
     location: Location,
     args: Vec<ValueRef>,
     enum_ty: TypeRef,
+    value_ty: TypeRef,
     variant: &Symbol,
 ) -> Vec<ValueRef> {
     let (_, field_types) = constructor_variant(builder.ctx, builder.ir, enum_ty, variant);
+    let row_params = adt::Enum::from_type_ref(builder.ir, enum_ty)
+        .expect("a constructor's layout is an adt.enum")
+        .row_params(builder.ir);
+    let field_types = super::case::fields_through(builder.ir, row_params, value_ty, field_types);
 
     assert_eq!(
         args.len(),

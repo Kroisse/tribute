@@ -27,6 +27,7 @@ mod e2e_local_callables;
 mod e2e_nat_arithmetic;
 mod e2e_nat_text;
 mod e2e_native;
+mod e2e_nominal_row_params;
 mod e2e_records;
 mod evidence_lambda;
 mod evidence_plan_ir;

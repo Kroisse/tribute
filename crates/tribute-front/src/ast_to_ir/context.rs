@@ -17,7 +17,7 @@ use trunk_ir::types::Location;
 use super::nominal::NominalTypes;
 use super::row_binders::RowBinders;
 use crate::SortedMap;
-use crate::ast::{CtorId, LocalId, NodeId, SpanMaps, TypeScheme};
+use crate::ast::{CtorId, LocalId, NodeId, RowVar, SpanMaps, TypeScheme};
 
 /// A source-visible callable synthesized by the logical frontend, such as a
 /// struct-field accessor. These signatures are semantic lowering metadata,
@@ -509,24 +509,28 @@ impl<'db> IrLoweringCtx<'db> {
         self.nominal.ability_symbol(ability_name, arguments)
     }
 
-    /// Create an `adt.struct` type with name and field types.
+    /// Create an `adt.struct` type with name, field types, and `row_params`
+    /// row binders.
     pub fn adt_struct_type(
         &self,
         ir: &mut IrContext,
         name: &Symbol,
         fields: &[TypeRef],
+        row_params: u32,
     ) -> TypeRef {
-        self.nominal.adt_struct_type(ir, name, fields)
+        self.nominal.adt_struct_type(ir, name, fields, row_params)
     }
 
-    /// Create an `adt.enum` type with name and each variant's field types.
+    /// Create an `adt.enum` type with name, each variant's field types, and
+    /// `row_params` row binders.
     pub fn adt_enum_type(
         &self,
         ir: &mut IrContext,
         name: &Symbol,
         variants: &[Vec<TypeRef>],
+        row_params: u32,
     ) -> TypeRef {
-        self.nominal.adt_enum_type(ir, name, variants)
+        self.nominal.adt_enum_type(ir, name, variants, row_params)
     }
 
     /// Create an `adt.enum` type that records where it was declared.
@@ -535,15 +539,35 @@ impl<'db> IrLoweringCtx<'db> {
         ir: &mut IrContext,
         name: &Symbol,
         variants: &[Vec<TypeRef>],
+        row_params: u32,
         definition: Location,
     ) -> TypeRef {
         self.nominal
-            .adt_enum_type_with_definition(ir, name, variants, definition)
+            .adt_enum_type_with_definition(ir, name, variants, row_params, definition)
     }
 
-    /// Create an `adt.typeref` type — a reference to a named type.
-    pub fn adt_typeref(&self, ir: &mut IrContext, name: &Symbol) -> TypeRef {
-        self.nominal.adt_typeref(ir, name)
+    /// Create an `adt.typeref` type — a reference to a named type, passing
+    /// `row_args` to its row parameters.
+    pub fn adt_typeref(
+        &self,
+        ir: &mut IrContext,
+        name: &Symbol,
+        row_args: impl IntoIterator<Item = Row>,
+    ) -> TypeRef {
+        self.nominal.adt_typeref(ir, name, row_args)
+    }
+
+    /// Read types with `binders` as the row binders in scope, as the fields
+    /// of a nominal layout see its row parameters, and return the scope to
+    /// restore with [`Self::leave_definition`].
+    pub(crate) fn enter_layout(&mut self, binders: &[RowVar]) -> DefinitionScope {
+        let binders = binders
+            .iter()
+            .map(|&variable| (variable, RowBinder::Param))
+            .collect();
+        DefinitionScope {
+            binders: self.nominal.replace_current_row_binders(binders),
+        }
     }
 }
 
@@ -680,7 +704,7 @@ mod tests {
         );
         assert_eq!(
             ctx.convert_logical_type(&mut ir, forward),
-            ctx.adt_typeref(&mut ir, &nominal_name)
+            ctx.adt_typeref(&mut ir, &nominal_name, [])
         );
 
         // A source declaration named List must not capture the builtin type,
@@ -720,7 +744,7 @@ mod tests {
         let list_signature =
             tribute_ir::dialect::tribute_control::FuncSig::from_type_ref(&ir, callable_ir).unwrap();
         let anyref = ctx.anyref_type(&mut ir);
-        let nominal_list = ctx.adt_typeref(&mut ir, &list_name);
+        let nominal_list = ctx.adt_typeref(&mut ir, &list_name, []);
         assert_eq!(list_signature.inputs(&ir), &[anyref, nominal_list]);
         assert_eq!(list_signature.result(&ir), anyref);
         let tuple = AstType::new(&db, TypeKind::Tuple(vec![builtin_list, source_list]));

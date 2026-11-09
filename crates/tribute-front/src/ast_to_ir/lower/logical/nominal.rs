@@ -15,7 +15,8 @@ use crate::ast_to_ir::lower::{FuncSignature, IrBuilder};
 ///
 /// Constructor schemes are the authoritative semantic field types, so records,
 /// constructors, accessors, and pattern extraction share the same recursive
-/// `tribute_control` callable layouts.
+/// `tribute_control` callable layouts. Returns those schemes in declaration
+/// order.
 pub(super) fn prescan_logical_nominal_layouts<'db>(
     ctx: &mut IrLoweringCtx<'db>,
     ir: &mut IrContext,
@@ -24,15 +25,19 @@ pub(super) fn prescan_logical_nominal_layouts<'db>(
     runtime_types: &mut Vec<(SymbolPath, TypeRef)>,
     constructors: &HashMap<crate::ast::CtorId<'db>, crate::ast::TypeScheme<'db>>,
     specialized_enum_variants: &SortedMap<crate::ast::NodeId, crate::ast::TypeScheme<'db>>,
-) {
+) -> Vec<crate::ast::TypeScheme<'db>> {
+    let mut layout_schemes = Vec::new();
     for entry in entries {
         let prefix = &entry.module;
         match &entry.decl {
             Decl::Struct(structure) => {
                 let qualified = prefix.child(structure.name.clone());
                 let ctor = CtorId::new(ctx.db, qualified);
-                let field_types =
-                    constructor_fields(ctx, constructors, ctor, structure.fields.len());
+                let scheme = constructor_scheme(constructors, ctor);
+                layout_schemes.push(scheme);
+                let row_params = layout_row_params(ctx, [scheme], structure.row_params.len());
+                let outer = ctx.enter_layout(scheme.effect_params(ctx.db));
+                let field_types = constructor_schema_fields(ctx, scheme, structure.fields.len());
                 let fields = structure
                     .fields
                     .iter()
@@ -44,9 +49,10 @@ pub(super) fn prescan_logical_nominal_layouts<'db>(
                         )
                     })
                     .collect::<Vec<_>>();
+                ctx.leave_definition(outer);
                 let name = super::super::qualified_type_name(ctx.db, &ctor);
                 let field_types: Vec<_> = fields.iter().map(|&(_, ty)| ty).collect();
-                let layout = ctx.adt_struct_type(ir, &name, &field_types);
+                let layout = ctx.adt_struct_type(ir, &name, &field_types, row_params);
                 let field_names: Vec<_> = fields
                     .iter()
                     .map(|(field, _)| ir.intern_symbol_text(field))
@@ -65,13 +71,11 @@ pub(super) fn prescan_logical_nominal_layouts<'db>(
             Decl::Enum(enumeration) => {
                 let qualified = prefix.child(enumeration.name.clone());
                 let enum_ctor = CtorId::new(ctx.db, qualified.clone());
-                let variants = enumeration
+                let schemes: Vec<_> = enumeration
                     .variants
                     .iter()
                     .map(|variant| {
-                        let variant_ctor =
-                            CtorId::new(ctx.db, qualified.child(variant.name.clone()));
-                        let fields: Vec<TypeRef> = if enumeration.id.variant().is_some() {
+                        if enumeration.id.variant().is_some() {
                             let scheme = *specialized_enum_variants.get(&variant.id)
                                 .expect("missing specialized enum variant schema");
                             let result = match scheme.body(ctx.db).kind(ctx.db) {
@@ -82,16 +86,36 @@ pub(super) fn prescan_logical_nominal_layouts<'db>(
                                 if args.is_empty() && *id.path(ctx.db) == qualified
                                     && *id.origin(ctx.db) == crate::ast::TypeOrigin::Source { disambiguator: enumeration.disambiguator }),
                                 "specialized enum variant schema has wrong owner");
-                            constructor_schema_fields(ctx, scheme, variant.fields.len())
+                            scheme
                         } else {
-                            constructor_fields(ctx, constructors, variant_ctor, variant.fields.len())
+                            let variant_ctor =
+                                CtorId::new(ctx.db, qualified.child(variant.name.clone()));
+                            constructor_scheme(constructors, variant_ctor)
                         }
-                        .into_iter()
-                        .map(|ty| ctx.convert_logical_type(ir, ty))
-                        .collect();
+                    })
+                    .collect();
+                let row_params =
+                    layout_row_params(ctx, schemes.iter().copied(), enumeration.row_params.len());
+                layout_schemes.extend(schemes.iter().copied());
+                let binders = schemes
+                    .first()
+                    .map(|scheme| scheme.effect_params(ctx.db).clone())
+                    .unwrap_or_default();
+                let outer = ctx.enter_layout(&binders);
+                let variants = enumeration
+                    .variants
+                    .iter()
+                    .zip(&schemes)
+                    .map(|(variant, &scheme)| {
+                        let fields: Vec<TypeRef> =
+                            constructor_schema_fields(ctx, scheme, variant.fields.len())
+                                .into_iter()
+                                .map(|ty| ctx.convert_logical_type(ir, ty))
+                                .collect();
                         (variant.name.clone(), fields)
                     })
                     .collect::<Vec<_>>();
+                ctx.leave_definition(outer);
                 let name = super::super::qualified_type_name(ctx.db, &enum_ctor);
                 let location = ctx.location(enumeration.id);
                 let definition = crate::ast::TypeDefId::declared(
@@ -102,9 +126,15 @@ pub(super) fn prescan_logical_nominal_layouts<'db>(
                 let variant_fields: Vec<_> =
                     variants.iter().map(|(_, fields)| fields.clone()).collect();
                 let layout = if well_known_types.is_string(definition) {
-                    ctx.adt_enum_type_with_definition(ir, &name, &variant_fields, location)
+                    ctx.adt_enum_type_with_definition(
+                        ir,
+                        &name,
+                        &variant_fields,
+                        row_params,
+                        location,
+                    )
                 } else {
-                    ctx.adt_enum_type(ir, &name, &variant_fields)
+                    ctx.adt_enum_type(ir, &name, &variant_fields, row_params)
                 };
                 for (position, (variant, _)) in variants.iter().enumerate() {
                     let position =
@@ -139,6 +169,7 @@ pub(super) fn prescan_logical_nominal_layouts<'db>(
             _ => {}
         }
     }
+    layout_schemes
 }
 
 /// Add the nominal declaration `decl` to the module body.
@@ -182,16 +213,37 @@ pub(super) fn collect_logical_nominal_identities<'db>(
     }
 }
 
-pub(super) fn constructor_fields<'db>(
-    ctx: &IrLoweringCtx<'db>,
+fn constructor_scheme<'db>(
     constructors: &HashMap<crate::ast::CtorId<'db>, crate::ast::TypeScheme<'db>>,
     constructor: CtorId<'db>,
-    field_count: usize,
-) -> Vec<crate::ast::Type<'db>> {
-    let scheme = constructors
+) -> crate::ast::TypeScheme<'db> {
+    *constructors
         .get(&constructor)
-        .unwrap_or_else(|| panic!("missing typechecked constructor schema for {constructor:?}"));
-    constructor_schema_fields(ctx, *scheme, field_count)
+        .unwrap_or_else(|| panic!("missing typechecked constructor schema for {constructor:?}"))
+}
+
+/// The number of row binders of a layout whose declaration has `declared`
+/// row parameters. Every constructor scheme quantifies them in the same
+/// order, which the layout's binders follow.
+fn layout_row_params<'db>(
+    ctx: &IrLoweringCtx<'db>,
+    schemes: impl IntoIterator<Item = crate::ast::TypeScheme<'db>>,
+    declared: usize,
+) -> u32 {
+    let mut schemes = schemes.into_iter();
+    if let Some(first) = schemes.next() {
+        let binders = first.effect_params(ctx.db);
+        assert_eq!(
+            binders.len(),
+            declared,
+            "a constructor scheme quantifies its declaration's row parameters"
+        );
+        assert!(
+            schemes.all(|scheme| scheme.effect_params(ctx.db) == binders),
+            "the constructors of one layout quantify the same row parameters"
+        );
+    }
+    u32::try_from(declared).expect("a declaration has fewer than 2^32 row parameters")
 }
 
 pub(super) fn constructor_schema_fields<'db>(
