@@ -405,9 +405,10 @@ Pass를 거친 IR은 다음 stack 계약을 만족한다.
   남아도 된다. 그 밖의 block 끝에서 stack은 비어 있다.
 
 Stack에 값을 남기는지는 backend 표현 규칙이 정한다. Call과 indirect call의
-`core.nil` 결과 slot, Wasm 값으로 표현하지 않는 타입의 `wasm.nop`, 결과가
-`core.nil`인 structured control, 그리고 then region이 값을 넘기지 않는 `wasm.if`의
-결과는 stack에 값을 남기지 않는다. 이런 결과를 읽는 곳은 대입되지 않은 그 결과의
+`core.nil` 결과 slot, 결과가 `core.nil`인 structured control, 그리고 then region이
+값을 넘기지 않는 `wasm.if`의 결과는 stack에 값을 남기지 않는다. `wasm.nop`은 결과
+타입이 `wasm.func_sig`, `wasm.funcref`, `wasm.anyref`, `wasm.structref`,
+`core.nil`일 때만 그 `ref.null`을 남기고, 다른 타입이면 값을 남기지 않는다. 이런 결과를 읽는 곳은 대입되지 않은 그 결과의
 local, 즉 local의 기본값을 읽는다.
 
 Emission 경계는 emitter 직전에 이 계약을 한 곳에서 검사하고, 어긋나면 그
