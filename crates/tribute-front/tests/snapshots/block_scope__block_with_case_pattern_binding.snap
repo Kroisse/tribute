@@ -6,8 +6,8 @@ core.module @test {
   !"pkg::Option" = adt.enum<"pkg::Option", [(tribute_rt.anyref), ()]>
   !"pkg::Option$Nat" = adt.enum<"pkg::Option$Nat", [(core.i32), ()]>
 
-  adt.enum_decl "pkg::Option" [Some, None]
-  adt.enum_decl "pkg::Option$Nat" [Some, None]
+  adt.enum_decl !"pkg::Option" [Some, None]
+  adt.enum_decl !"pkg::Option$Nat" [Some, None]
   tribute_control.func @"pkg::example"['a0](%0: adt.typeref<"pkg::Option$Nat">) -> core.i32 row(| 'a0) inferred {
       %1 = adt.variant_is %0 {tag = 0, type = !"pkg::Option$Nat"} : core.i1
       %2 = scf.if %1 -> (core.i1) {

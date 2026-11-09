@@ -445,21 +445,21 @@ fn main() -> Nil {
 
     let block = module.first_block(&ctx).expect("module body");
     let mut declared = Vec::new();
+    // Each declaration follows its layout through the conversions: its
+    // `type` is the layout published under the layout's name.
     for &op in &ctx.block(block).ops {
         if let Ok(decl) = adt::StructDecl::from_op(&ctx, op) {
-            let layout = ctx
-                .type_alias_by_text(decl.name(&ctx))
-                .and_then(|ty| adt::Struct::from_type_ref(&ctx, ty))
-                .unwrap_or_else(|| panic!("{} names a published struct", decl.name(&ctx)));
+            let layout = adt::Struct::from_type_ref(&ctx, decl.r#type(&ctx)).unwrap();
+            let name = layout.name(&ctx).unwrap();
+            assert_eq!(ctx.type_alias_by_text(name), Some(decl.r#type(&ctx)));
             assert_eq!(decl.fields(&ctx).len(), layout.fields(&ctx).len());
-            declared.push(decl.name(&ctx).to_owned());
+            declared.push(name.to_owned());
         } else if let Ok(decl) = adt::EnumDecl::from_op(&ctx, op) {
-            let layout = ctx
-                .type_alias_by_text(decl.name(&ctx))
-                .and_then(|ty| adt::Enum::from_type_ref(&ctx, ty))
-                .unwrap_or_else(|| panic!("{} names a published enum", decl.name(&ctx)));
+            let layout = adt::Enum::from_type_ref(&ctx, decl.r#type(&ctx)).unwrap();
+            let name = layout.name(&ctx);
+            assert_eq!(ctx.type_alias_by_text(name), Some(decl.r#type(&ctx)));
             assert_eq!(decl.variants(&ctx).len(), layout.variant_count(&ctx));
-            declared.push(decl.name(&ctx).to_owned());
+            declared.push(name.to_owned());
         }
     }
     let declared_as = |name: &str| {
@@ -473,25 +473,25 @@ fn main() -> Nil {
     for name in ["Point", "Handler"] {
         let layout = ctx.type_alias_by_text(&declared_as(name)).unwrap();
         let layout = adt::Struct::from_type_ref(&ctx, layout).unwrap();
-        assert!(decls.of_struct(&ctx, layout).is_some(), "{name}");
+        assert!(decls.of_struct(layout).is_some(), "{name}");
     }
     for name in ["Shape", "Maybe$Int"] {
         let layout = ctx.type_alias_by_text(&declared_as(name)).unwrap();
         let layout = adt::Enum::from_type_ref(&ctx, layout).unwrap();
-        assert!(decls.of_enum(&ctx, layout).is_some(), "{name}");
+        assert!(decls.of_enum(layout).is_some(), "{name}");
     }
 
-    // The RTTI table takes its names from the declarations: renamed there,
-    // the names reach the table although the layouts still carry the old
-    // ones.
-    let point = declared_as("Point");
-    let shape = declared_as("Shape");
+    // The RTTI table takes its field and variant names from the
+    // declarations: renamed there, the names reach the table although the
+    // layouts are unchanged.
+    let point = ctx.type_alias_by_text(&declared_as("Point")).unwrap();
+    let shape = ctx.type_alias_by_text(&declared_as("Shape")).unwrap();
     for &op in &ctx.block(block).ops.clone() {
-        if adt::StructDecl::from_op(&ctx, op).is_ok_and(|decl| decl.name(&ctx) == point) {
+        if adt::StructDecl::from_op(&ctx, op).is_ok_and(|decl| decl.r#type(&ctx) == point) {
             let fields = ["declared_x", "declared_y"].map(|name| ctx.string_attr(name));
             ctx.op_attrs_mut(op)
                 .insert("fields", Attribute::List(fields.into()));
-        } else if adt::EnumDecl::from_op(&ctx, op).is_ok_and(|decl| decl.name(&ctx) == shape) {
+        } else if adt::EnumDecl::from_op(&ctx, op).is_ok_and(|decl| decl.r#type(&ctx) == shape) {
             let variants =
                 ["DeclaredDot", "DeclaredCircle", "DeclaredRect"].map(|name| ctx.string_attr(name));
             ctx.op_attrs_mut(op)
@@ -1845,7 +1845,7 @@ fn main() -> Nil {}
         let variant_names = |ir: &IrContext, layout: TypeRef| -> Vec<String> {
             let layout = adt::Enum::from_type_ref(ir, layout).expect("enum layout");
             decls
-                .of_enum(ir, layout)
+                .of_enum(layout)
                 .expect("a source enum is declared")
                 .variants(ir)
                 .map(str::to_owned)

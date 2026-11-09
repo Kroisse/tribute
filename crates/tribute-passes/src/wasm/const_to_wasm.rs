@@ -430,7 +430,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   !String = adt.enum<"String", [(wasm.anyref, wasm.anyref, core.i32), (core.bytes)]>
-  adt.enum_decl "String" [Branch, Leaf]
+  adt.enum_decl !String [Branch, Leaf]
   wasm.func @main() -> core.nil {
     %string = adt.string_const {value = "hello"} : wasm.anyref
     wasm.return
@@ -480,8 +480,8 @@ mod tests {
             r#"core.module @test {
   !PreludeString = adt.enum<"String", [(core.bytes), (wasm.anyref, wasm.anyref, core.i32)]>
   !UserString = adt.enum<"user::String", [(core.bytes), (wasm.anyref, wasm.anyref, core.i32)]>
-  adt.enum_decl "String" [Leaf, Branch]
-  adt.enum_decl "user::String" [Leaf, Branch]
+  adt.enum_decl !PreludeString [Leaf, Branch]
+  adt.enum_decl !UserString [Leaf, Branch]
   wasm.func @main() -> core.nil {
     %string = adt.string_const {value = "hello"} : wasm.anyref
     wasm.return
@@ -505,7 +505,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   !String = adt.enum<"String", [(core.bytes), (wasm.anyref, wasm.anyref, core.i32)]>
-  adt.enum_decl "String" [Leaf, Branch]
+  adt.enum_decl !String [Leaf, Branch]
   wasm.func @main() -> core.nil {
     %string = adt.string_const {value = "hello"} : wasm.anyref
     wasm.return
