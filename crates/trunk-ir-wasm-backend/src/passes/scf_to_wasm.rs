@@ -501,7 +501,7 @@ impl JumpTable {
 ///       ...
 ///         wasm.block {               // label of the first case
 ///           %i = wasm.i32_sub %d, %min
-///           wasm.br_table %i {default = n, targets = [..]}
+///           wasm.br_table %i, default n [..]
 ///         }
 ///         <first case>
 ///         wasm.yield %v
@@ -1613,10 +1613,7 @@ mod tests {
         assert!(!output.contains("wasm.if"), "{output}");
         assert!(output.contains("wasm.i32_sub"), "{output}");
         // Values 1, 2, 3, 4 from the smallest case; 3 has no case.
-        assert!(
-            output.contains("{default = 3, targets = [0, 1, 3, 2]}"),
-            "{output}"
-        );
+        assert!(output.contains(", default 3 [0, 1, 3, 2]"), "{output}");
         // Each case branches past the later case labels and the default
         // label to the exit; the default falls through to it.
         assert_eq!(br_targets(&output), ["3", "2", "1"], "{output}");
@@ -1646,10 +1643,7 @@ mod tests {
         );
 
         assert!(!output.contains("wasm.i32_sub"), "{output}");
-        assert!(
-            output.contains("{default = 3, targets = [0, 1, 2]}"),
-            "{output}"
-        );
+        assert!(output.contains(", default 3 [0, 1, 2]"), "{output}");
     }
 
     #[test]

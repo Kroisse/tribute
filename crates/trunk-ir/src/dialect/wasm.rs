@@ -74,9 +74,9 @@ mod wasm {
     /// label it names takes no branch operands.
     ///
     /// ```text
-    /// wasm.br_table %index {default = 3, targets = [0, 2, 1]}
+    /// wasm.br_table %index, default 3 [0, 2, 1]
     /// ```
-    #[asm_format(index attr_dict_bare)]
+    #[asm_format(index "," "default" default targets attr_dict_bare)]
     fn br_table(index: Value<I32>, targets: Attr<[u32]>, default: Attr<u32>) {}
 
     #[asm_format(values attr_dict_bare)]
@@ -1142,6 +1142,37 @@ mod tests {
         let mut ctx = crate::IrContext::new();
         let module = parse_test_module(&mut ctx, text);
         assert_eq!(module.op().display(&ctx).to_string(), text);
+    }
+
+    #[test]
+    fn br_table_writes_its_default_before_the_table() {
+        let text = r#"core.module @test {
+  wasm.func @f(%0: core.i32) {
+      wasm.block {
+          wasm.block {
+              wasm.br_table %0, default 1 [0, 1, 0]
+          }
+          wasm.br {target = 0}
+      }
+      wasm.return
+  }
+}
+"#;
+        let mut ctx = crate::IrContext::new();
+        let module = parse_test_module(&mut ctx, text);
+        assert_eq!(module.op().display(&ctx).to_string(), text);
+        let std::ops::ControlFlow::Break(table) = crate::walk::walk_op(
+            &ctx,
+            module.op(),
+            &mut |op| match BrTable::from_op(&ctx, op) {
+                Ok(table) => std::ops::ControlFlow::Break(table),
+                Err(_) => std::ops::ControlFlow::Continue(crate::walk::WalkAction::Advance),
+            },
+        ) else {
+            panic!("the module has a br_table");
+        };
+        assert_eq!(table.default(&ctx), 1);
+        assert_eq!(table.targets(&ctx).collect::<Vec<_>>(), [0, 1, 0]);
     }
 
     #[test]
