@@ -1910,13 +1910,19 @@ impl<'r, 'e, 'db> FunctionResolver<'r, 'e, 'db> {
         match resolved {
             ResolvedRef::ImplicitConstructor {
                 name,
-                candidates,
+                mut candidates,
                 mut hidden,
             } => {
                 let fields: SmallVec<[&Symbol; 4]> =
                     fields.into_iter().map(|(_, field)| field).collect();
                 self.module
                     .hide_record_constructors(&mut hidden, &name, &fields);
+                // A hidden constructor is selected only by an expected
+                // type, which reports it; the scope's candidates leave it
+                // out, as they leave out any constructor it does not see.
+                for rank in candidates.ranks_mut() {
+                    rank.retain(|ctor| hidden.iter().all(|(id, _)| id != ctor));
+                }
                 ResolvedRef::ImplicitConstructor {
                     name,
                     candidates,

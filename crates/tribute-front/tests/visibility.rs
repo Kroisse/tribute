@@ -608,6 +608,11 @@ fn respread(window: Window) -> Window { .Window { ..window, data: 1 } }
 
 fn relabel(window: Window) -> Window { .Window { ..window, label: "b" } }
 
+fn unannotated(window: Window) -> Nil {
+    let updated = .Window { ..window, data: 1 }
+    let relabeled = .Window { ..window, label: "b" }
+}
+
 fn matched(window: Window) -> Nat {
     case window {
         .Window { data, .. } -> data
@@ -628,6 +633,7 @@ fn reexported() -> Window { facade::Window("b", 1) }
         errors,
         [
             format!("`facade::Window` is not visible here: {hidden}"),
+            format!("`m::Window` is not visible here: {hidden}"),
             format!("`m::Window` is not visible here: {hidden}"),
             format!("`m::Window` is not visible here: {hidden}"),
         ]
