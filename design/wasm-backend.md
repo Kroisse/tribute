@@ -40,9 +40,8 @@ tribute-passes/           # tribute-ir 의존
 ├── wasm/adt_to_wasm.rs   # adt.* → wasm_gc.*
 ├── wasm/struct_layouts.rs
 │                         # 사용자 struct와 variant의 wasm_gc.struct 타입
-├── wasm/bytes.rs         # 경계 안 byte 배열 읽기 intrinsic lowering
 ├── wasm/intrinsic_to_wasm.rs
-│                         # 출구 뒤: extern "C" bytes helper를 GC 연산으로 바인딩
+│                         # 출구 뒤: extern "C" byte 배열 helper를 GC 연산으로 바인딩
 ├── wasm/convert_signatures.rs
 │                         # 함수와 간접 호출 signature의 Wasm 타입 변환
 └── ...

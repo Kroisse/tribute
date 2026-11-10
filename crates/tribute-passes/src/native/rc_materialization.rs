@@ -235,15 +235,13 @@ fn allocation_size_for_type(
     // Zero is a dispatch-only dynamic-size signal: header RTTI must resolve it
     // to an exact release function before deallocation. It is never a shallow
     // fallback and is not inferred from physical definitions.
-    let data = ctx.get_type(ty);
     if tribute_ir::dialect::tribute_rt::Anyref::matches(ctx, ty)
         || tribute_ir::dialect::tribute_rt::Intref::matches(ctx, ty)
     {
         return Ok(0);
     }
-    // A `Bytes` object is released by its reserved RTTI entry, and an
-    // array's size depends on its length.
-    if (data.name.is(ctx, "core.bytes")) || tribute_ir::dialect::adt::Array::matches(ctx, ty) {
+    // An array's size depends on its length.
+    if tribute_ir::dialect::adt::Array::matches(ctx, ty) {
         return Ok(0);
     }
     let layout = plan.allocation_layout_for_type(ctx, ty)?;

@@ -1270,7 +1270,6 @@ fn main() -> Nil {
         "{output}"
     );
     assert!(!output.contains("adt.array_const"), "{output}");
-    assert!(!output.contains("core.bytes"), "{output}");
 }
 
 #[salsa_test]
@@ -2329,49 +2328,6 @@ fn arithmetic_intrinsic_lowering_consumes_its_identities(db: &salsa::DatabaseImp
     );
 }
 
-#[salsa_test]
-fn both_targets_consume_the_bytes_intrinsic_inside_the_boundary(db: &salsa::DatabaseImpl) {
-    use tribute_ir::dialect::tribute_control::COMPILER_INTRINSIC_ATTR;
-    use tribute_passes::abi_boundary::TargetKind;
-    use trunk_ir::dialect::func;
-
-    for target in [TargetKind::Native, TargetKind::Wasm] {
-        let source = source_from_str(
-            "native_calculator.trb",
-            include_str!("../../lang-examples/native_calculator.trb"),
-        );
-        let (mut ctx, module) = run_shared_pipeline(db, source)
-            .expect("shared pipeline must succeed")
-            .expect("fixture must lower");
-        match target {
-            TargetKind::Native => run_target_to_boundary_exit(
-                &mut ctx,
-                module,
-                tribute_passes::abi_boundary::TargetKind::Native,
-            ),
-            TargetKind::Wasm => run_target_to_boundary_exit(
-                &mut ctx,
-                module,
-                tribute_passes::abi_boundary::TargetKind::Wasm,
-            ),
-        }
-        .unwrap_or_else(|error| panic!("{target:?} boundary failed: {error}"));
-
-        for &op in module.ops(&ctx) {
-            assert!(
-                ctx.op_attrs(op).get(COMPILER_INTRINSIC_ATTR).is_none(),
-                "{target:?}: the identity is consumed at the boundary exit"
-            );
-            let declares_intrinsic = func::Func::from_op(&ctx, op)
-                .is_ok_and(|function| function.sym_name(&ctx) == "__bytes_get_or_panic");
-            assert!(
-                !declares_intrinsic,
-                "{target:?}: the intrinsic declaration is removed"
-            );
-        }
-    }
-}
-
 /// Type checking reads package std through the dependency table: the
 /// user's output holds only the user's declarations, and preparation
 /// takes std's with them as one table.
@@ -2540,40 +2496,6 @@ fn types_surviving_wasm_lowering(
         std::ops::ControlFlow::Continue(trunk_ir::walk::WalkAction::Advance)
     });
     sites
-}
-
-#[salsa_test]
-fn wasm_lowering_leaves_no_core_bytes(db: &salsa::DatabaseImpl) {
-    let not_core_bytes = |ctx: &IrContext, ty| {
-        let data = ctx.get_type(ty);
-        !(data.name.is(ctx, "core.bytes"))
-    };
-    for (path, text) in [
-        (
-            "wasm_dynamic_output.trb",
-            include_str!("../../lang-examples/wasm_dynamic_output.trb"),
-        ),
-        (
-            "case_bytes.trb",
-            r#"fn pick(x: Bytes, y: Bytes, f: Bool) -> Bytes {
-    case f {
-        True -> x
-        False -> y
-    }
-}
-
-fn main() ->{std::io::Io} Nil {
-    std::io::print_line(String::from_bytes(pick(b"ab", b"cd", True)))
-}
-"#,
-        ),
-    ] {
-        let sites = types_surviving_wasm_lowering(db, path, text, &not_core_bytes);
-        assert!(
-            sites.is_empty(),
-            "{path}: core.bytes survives Wasm lowering at {sites:#?}"
-        );
-    }
 }
 
 #[salsa_test]

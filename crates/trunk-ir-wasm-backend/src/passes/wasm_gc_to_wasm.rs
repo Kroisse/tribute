@@ -408,11 +408,10 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !data = wasm_gc.array<core.i8, {layout = "bytes_data"}>
-  !bytes = test.layout<!data, core.i32, core.i32, {layout = "bytes"}>
+  !closure = test.layout<core.i32, {layout = "closure"}>
   wasm.func @main() -> core.nil {
     %zero = wasm.i32_const 0 : core.i32
-    %bytes = wasm_gc.struct_new %zero {type = !bytes} : !bytes
+    %closure = wasm_gc.struct_new %zero {type = !closure} : !closure
     wasm.return
   }
 }"#,
@@ -429,20 +428,19 @@ mod tests {
             .iter()
             .find_map(|&op| wasm::StructNew::from_op(&ctx, op).ok())
             .expect("typed struct.new should be lowered");
-        assert_eq!(op.type_idx(&ctx), crate::gc_types::BYTES_STRUCT_IDX);
+        assert_eq!(op.type_idx(&ctx), crate::gc_types::CLOSURE_STRUCT_IDX);
     }
 
     #[test]
-    fn bytes_layouts_are_identified_by_their_layout_alone() {
+    fn builtin_layouts_are_identified_by_their_layout_alone() {
         let mut ctx = IrContext::new();
         parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !data = wasm_gc.array<core.i8, {layout = "bytes_data"}>
   !plain = wasm_gc.array<core.i8>
   !plain_ref = core.ref<wasm_gc.array<core.i8>>
-  !bytes = test.layout<!data, core.i32, core.i32, {layout = "bytes"}>
-  !lookalike = test.layout<!plain, core.i32, core.i32>
+  !closure = test.layout<core.i32, {layout = "closure"}>
+  !lookalike = test.layout<core.i32>
 }"#,
         );
         fn alias(ctx: &IrContext, name: &'static str) -> TypeRef {
@@ -450,12 +448,8 @@ mod tests {
         }
 
         assert_eq!(
-            builtin_type_idx(&ctx, alias(&ctx, "data")),
-            Some(crate::gc_types::BYTES_ARRAY_IDX)
-        );
-        assert_eq!(
-            builtin_type_idx(&ctx, alias(&ctx, "bytes")),
-            Some(crate::gc_types::BYTES_STRUCT_IDX)
+            builtin_type_idx(&ctx, alias(&ctx, "closure")),
+            Some(crate::gc_types::CLOSURE_STRUCT_IDX)
         );
         for shape_only in ["plain", "plain_ref", "lookalike"] {
             assert_eq!(

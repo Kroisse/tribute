@@ -2445,7 +2445,7 @@ fn enum_rtti_uses_the_same_nested_managed_predicate() {
         r#"core.module @test {
   !Child = adt.struct<"Child",(core.i32)>
   !ChildRef = adt.struct<"Child">
-  !Choice = adt.enum<"Choice",[(), (!ChildRef, core.ptr), (core.bytes)]>
+  !Choice = adt.enum<"Choice",[(), (!ChildRef, core.ptr), (adt.array<core.i8>)]>
   func.func @some(%child: !ChildRef, %raw: core.ptr) -> !Choice {
     %choice = adt.variant_new 1(%child, %raw) : (!ChildRef, core.ptr) -> !Choice
     func.return %choice
@@ -2487,11 +2487,11 @@ fn unmanaged_physical_and_buffer_types_never_receive_actions() {
 fn bytes_is_a_managed_reference_with_its_own_units() {
     let (ctx, _module, plan) = build(
         r#"core.module @test {
-  !Leaf = adt.struct<"Leaf",(core.bytes)>
+  !Leaf = adt.struct<"Leaf",(adt.array<core.i8>)>
   !LeafRef = adt.struct<"Leaf">
   func.func @wrap(%raw: core.ptr) -> !LeafRef {
-    %bytes = tribute_rt.from_raw %raw : core.bytes
-    %leaf = adt.struct_new(%bytes) : (core.bytes) -> !LeafRef
+    %bytes = tribute_rt.from_raw %raw : adt.array<core.i8>
+    %leaf = adt.struct_new(%bytes) : (adt.array<core.i8>) -> !LeafRef
     func.return %leaf
   }
 }"#,
@@ -2525,8 +2525,8 @@ fn only_explicit_transfers_cross_between_raw_pointers_and_managed_references() {
     // A cast cannot say whether a unit moves, in either direction.
     assert_plan_error_unchanged(
         r#"core.module @test {
-  func.func @receive(%raw: core.ptr) -> core.bytes {
-    %bytes = core.unrealized_conversion_cast %raw : core.ptr to core.bytes
+  func.func @receive(%raw: core.ptr) -> adt.array<core.i8> {
+    %bytes = core.unrealized_conversion_cast %raw : core.ptr to adt.array<core.i8>
     func.return %bytes
   }
 }"#,
@@ -2534,8 +2534,8 @@ fn only_explicit_transfers_cross_between_raw_pointers_and_managed_references() {
     );
     assert_plan_error_unchanged(
         r#"core.module @test {
-  func.func @view(%bytes: core.bytes) -> core.ptr {
-    %raw = core.unrealized_conversion_cast %bytes : core.bytes to core.ptr
+  func.func @view(%bytes: adt.array<core.i8>) -> core.ptr {
+    %raw = core.unrealized_conversion_cast %bytes : adt.array<core.i8> to core.ptr
     func.return %raw
   }
 }"#,
@@ -2544,8 +2544,8 @@ fn only_explicit_transfers_cross_between_raw_pointers_and_managed_references() {
     // `from_raw` itself takes a raw pointer and produces a managed reference.
     assert_plan_error_unchanged(
         r#"core.module @test {
-  func.func @retype(%bytes: core.bytes) -> core.bytes {
-    %again = tribute_rt.from_raw %bytes : core.bytes
+  func.func @retype(%bytes: adt.array<core.i8>) -> adt.array<core.i8> {
+    %again = tribute_rt.from_raw %bytes : adt.array<core.i8>
     func.return %again
   }
 }"#,

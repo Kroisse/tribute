@@ -519,7 +519,7 @@ mod tests {
             r#"core.module @test {
   !Child = adt.struct<"Child", (core.i32)>
   !ChildRef = adt.struct<"Child">
-  !Parent = adt.struct<"Parent", (!ChildRef, core.ptr, core.bytes)>
+  !Parent = adt.struct<"Parent", (!ChildRef, core.ptr, adt.array<core.i8>)>
   func.func @read(%parent: adt.struct<"Parent">) -> !ChildRef {
     %child = adt.struct_get %parent {field = 0, type = !Parent} : !ChildRef
     func.return %child

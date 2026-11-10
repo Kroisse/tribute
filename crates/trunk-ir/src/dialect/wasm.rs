@@ -545,9 +545,6 @@ mod wasm {
     ) -> Value<_> {
     }
 
-    #[asm_format(attr_dict_bare ":" type(result))]
-    fn bytes_from_data(data_idx: Attr<u32>, offset: Attr<u32>, len: Attr<u32>) -> Value<_> {}
-
     #[asm_format(r#ref "," index attr_dict_bare ":" type(result))]
     fn array_get(type_idx: Attr<u32>, r#ref: Value<_>, index: Value<I32>) -> Value<_> {}
 

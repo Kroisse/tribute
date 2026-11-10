@@ -15,9 +15,7 @@ use wasm_encoder::{AbstractHeapType, HeapType, RefType, ValType};
 
 use crate::assignability::is_wasm_physical_argument_assignable;
 use crate::errors::CompilationErrorKind;
-use crate::gc_types::{
-    BYTES_ARRAY_IDX, BYTES_DATA_LAYOUT, BYTES_LAYOUT, BYTES_STRUCT_IDX, CLOSURE_STRUCT_IDX,
-};
+use crate::gc_types::CLOSURE_STRUCT_IDX;
 use crate::{CompilationError, CompilationResult};
 
 // ============================================================================
@@ -198,18 +196,6 @@ pub(crate) fn type_to_valtype(
         Ok(ValType::F32)
     } else if trunk_ir::dialect::core::F64::matches(ctx, ty) {
         Ok(ValType::F64)
-    } else if has_layout(ctx, ty, BYTES_LAYOUT) {
-        // A Bytes value always exists; its struct is never null.
-        Ok(ValType::Ref(RefType {
-            nullable: false,
-            heap_type: HeapType::Concrete(BYTES_STRUCT_IDX),
-        }))
-    } else if has_layout(ctx, ty, BYTES_DATA_LAYOUT) {
-        // The Bytes struct's backing array field is non-nullable.
-        Ok(ValType::Ref(RefType {
-            nullable: false,
-            heap_type: HeapType::Concrete(BYTES_ARRAY_IDX),
-        }))
     } else if trunk_ir::dialect::core::Ptr::matches(ctx, ty) {
         Ok(ValType::I32)
     } else if let Some(type_idx) = builtin_layout_type_idx(ctx, ty) {

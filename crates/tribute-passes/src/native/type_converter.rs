@@ -122,10 +122,6 @@ pub fn native_type_converter(ctx: &mut IrContext) -> (TypeConverter, NativeTypeR
         if tribute_rt::ConventionTableRef::matches(ctx, ty) {
             return Some(r.core_ptr);
         }
-        // core.bytes → ptr (Bytes is a heap-allocated struct)
-        if is_bytes_type(ctx, ty) {
-            return Some(r.core_ptr);
-        }
         // ADT struct/enum/variant_instance → ptr
         if is_adt_ptr_type(ctx, ty) {
             return Some(r.core_ptr);
@@ -253,12 +249,6 @@ fn is_array_type(ctx: &IrContext, ty: TypeRef) -> bool {
     use trunk_ir::ops::DialectType;
     tribute_ir::dialect::adt::Array::matches(ctx, ty)
         || trunk_ir::dialect::core::Array::matches(ctx, ty)
-}
-
-/// Helper: Check if a type is core.bytes.
-fn is_bytes_type(ctx: &IrContext, ty: TypeRef) -> bool {
-    let data = ctx.get_type(ty);
-    data.name.is(ctx, "core.bytes")
 }
 
 impl NativeTypeRefs {

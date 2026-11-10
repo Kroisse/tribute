@@ -22,7 +22,6 @@ mod core {
 
     struct Nil;
     struct Never;
-    struct Bytes;
     struct Ptr;
     struct Array<Element>;
     struct Ref<Pointee> {

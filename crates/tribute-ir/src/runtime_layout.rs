@@ -19,10 +19,6 @@ pub const CLOSURE_CAPTURES: &str = "closure_captures";
 /// The type attribute naming the closure base of a [`CLOSURE_CAPTURES`] layout,
 /// whose fields are a prefix of the capture layout's fields.
 pub const CLOSURE_BASE_ATTR: &str = "closure_base";
-/// Wasm `Bytes` storage: a backing array, a start offset, and a length.
-pub const BYTES: &str = "bytes";
-/// The byte array a Wasm `Bytes` points into.
-pub const BYTES_DATA: &str = "bytes_data";
 /// A boxed `Float`: one `f64` field, stored where a uniform reference is
 /// expected.
 pub const BOXED_F64: &str = "boxed_f64";

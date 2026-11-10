@@ -278,14 +278,12 @@ fn unbox_via_i31(
 // Main entry point
 // =============================================================================
 
-/// Replace the shared closure storage, `core.bytes`, and the `tribute_rt`
-/// primitives with their Wasm types everywhere they occur, including inside
-/// ADT layouts, aliases, signatures, and attributes, before target
-/// instructions.
+/// Replace the shared closure storage and the `tribute_rt` primitives with
+/// their Wasm types everywhere they occur, including inside ADT layouts,
+/// aliases, signatures, and attributes, before target instructions.
 pub(crate) fn convert_builtin_layouts(ctx: &mut IrContext, module: trunk_ir::rewrite::Module) {
     let shared_closure = crate::closure_lower::closure_struct_type_ref(ctx);
     let closure = closure_adt_type(ctx);
-    let bytes = super::bytes::bytes_struct_type(ctx);
     let i32_ty = core::I32::type_ref(ctx);
     let f64_ty = core::F64::type_ref(ctx);
     let anyref_ty = wasm_dialect::Anyref::params().intern(ctx).as_type_ref();
@@ -293,9 +291,6 @@ pub(crate) fn convert_builtin_layouts(ctx: &mut IrContext, module: trunk_ir::rew
     crate::closure_lower::substitute_module_types(ctx, module, "wasm", move |ctx, ty| {
         if ty == shared_closure {
             return Some(closure);
-        }
-        if trunk_ir::dialect::core::Bytes::matches(ctx, ty) {
-            return Some(bytes);
         }
         use tribute_ir::dialect::tribute_rt::{
             Anyref, Bool, ConventionTableRef, Float, Int, Intref, Nat,
@@ -345,8 +340,6 @@ pub fn wasm_type_converter(
     let arrayref_ty = wasm_dialect::Arrayref::params().intern(ctx).as_type_ref();
     let closure_ty = closure_adt_type(ctx);
     let shared_closure_ty = crate::closure_lower::closure_struct_type_ref(ctx);
-    let bytes_data_ty = super::bytes::bytes_data_type(ctx);
-    let bytes_data_gc_ty = super::bytes::bytes_data_gc_type(ctx);
 
     let mut tc = TypeConverter::new();
 
@@ -466,12 +459,6 @@ pub fn wasm_type_converter(
     // `convert-typed-arrays` then replaces each with its GC array everywhere,
     // as `convert-struct-layouts` does for user structs.
     tc.add_conversion(move |ctx, ty| is_typed_array(ctx, ty).then_some(ty));
-
-    // The bytes backing array keeps its layout identifier rather than
-    // becoming an erased `wasm.arrayref`.
-    tc.add_conversion(move |_, ty| {
-        (ty == bytes_data_ty || ty == bytes_data_gc_ty).then_some(bytes_data_gc_ty)
-    });
 
     // Convert any other `adt.array` -> wasm.arrayref. A GC array is already
     // a Wasm type and stays as it is.
@@ -724,14 +711,6 @@ mod tests {
         assert_eq!(
             tribute_ir::runtime_layout::CLOSURE,
             trunk_ir_wasm_backend::gc_types::CLOSURE_LAYOUT
-        );
-        assert_eq!(
-            tribute_ir::runtime_layout::BYTES,
-            trunk_ir_wasm_backend::gc_types::BYTES_LAYOUT
-        );
-        assert_eq!(
-            tribute_ir::runtime_layout::BYTES_DATA,
-            trunk_ir_wasm_backend::gc_types::BYTES_DATA_LAYOUT
         );
         assert_eq!(
             tribute_ir::runtime_layout::DESCRIBED,

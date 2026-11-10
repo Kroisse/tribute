@@ -336,7 +336,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   clif.func @f(%p: core.ptr) -> core.nil {
-    %field = clif.load %p {offset = 0} : core.bytes
+    %field = clif.load %p {offset = 0} : test.opaque
     clif.return
   }
 }"#,

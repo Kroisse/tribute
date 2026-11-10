@@ -829,24 +829,20 @@ mod tests {
     }
 
     #[test]
-    fn erased_arrayref_result_satisfies_plain_but_not_layout_arrays() {
+    fn erased_arrayref_result_satisfies_a_plain_array() {
         let mut ctx = IrContext::new();
         parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !Data = wasm_gc.array<core.i8, {layout = "bytes_data"}>
   !Plain = wasm_gc.array<core.i8>
 }"#,
         );
-        let alias = |ctx: &IrContext, name: &str| ctx.type_alias_by_text(name).unwrap();
-        let data = alias(&ctx, "Data");
-        let plain = alias(&ctx, "Plain");
+        let plain = ctx.type_alias_by_text("Plain").unwrap();
         let arrayref = wasm_dialect::Arrayref::params()
             .intern(&mut ctx)
             .as_type_ref();
 
         assert!(is_wasm_physical_result_assignable(&ctx, arrayref, plain));
-        assert!(!is_wasm_physical_result_assignable(&ctx, arrayref, data));
     }
 
     #[test]
@@ -898,13 +894,13 @@ mod tests {
             r#"core.module @test {
   !Leaf = wasm_gc.struct<core.i32>
   !Closure = test.layout<{layout = "closure"}>
-  !Data = wasm_gc.array<core.i8, {layout = "bytes_data"}>
-  !Bytes = test.layout<!Data, core.i32, core.i32, {layout = "bytes"}>
+  !Described = test.layout<core.i32, {layout = "described"}>
+  !Data = wasm_gc.array<core.i8>
   wasm.func @byRef(%value: wasm.structref) -> core.nil { wasm.return }
   wasm.func @byArray(%value: wasm.arrayref) -> core.nil { wasm.return }
-  wasm.func @caller(%leaf: !Leaf, %bytes: !Bytes, %closure: !Closure, %data: !Data) -> core.nil {
+  wasm.func @caller(%leaf: !Leaf, %described: !Described, %closure: !Closure, %data: !Data) -> core.nil {
     wasm.call @byRef(%leaf) : (!Leaf) -> ()
-    wasm.call @byRef(%bytes) : (!Bytes) -> ()
+    wasm.call @byRef(%described) : (!Described) -> ()
     wasm.call @byRef(%closure) : (!Closure) -> ()
     wasm.call @byArray(%data) : (!Data) -> ()
     wasm.return
@@ -923,11 +919,11 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   !Array = wasm_gc.array<core.i32>
-  !Data = wasm_gc.array<core.i8, {layout = "bytes_data"}>
-  !Bytes = test.layout<!Data, core.i32, core.i32, {layout = "bytes"}>
+  !Data = wasm_gc.array<core.i8>
+  !Closure = test.layout<{layout = "closure"}>
   wasm.func @byAny(%value: wasm.anyref) -> core.nil { wasm.return }
-  wasm.func @caller(%bytes: !Bytes, %data: !Data, %array: !Array, %structural: wasm_gc.struct<core.i32>) -> core.nil {
-    wasm.call @byAny(%bytes) : (!Bytes) -> ()
+  wasm.func @caller(%closure: !Closure, %data: !Data, %array: !Array, %structural: wasm_gc.struct<core.i32>) -> core.nil {
+    wasm.call @byAny(%closure) : (!Closure) -> ()
     wasm.call @byAny(%data) : (!Data) -> ()
     wasm.call @byAny(%array) : (!Array) -> ()
     wasm.call @byAny(%structural) : (wasm_gc.struct<core.i32>) -> ()
@@ -975,7 +971,7 @@ mod tests {
             ("wasm.arrayref", "wasm.structref"),
             ("wasm.funcref", "wasm.structref"),
             ("wasm.i31ref", "wasm.structref"),
-            ("!Bytes", "wasm.arrayref"),
+            ("!Closure", "wasm.arrayref"),
             ("wasm.structref", "wasm.arrayref"),
             ("!Leaf", "wasm.arrayref"),
         ] {
@@ -986,8 +982,7 @@ mod tests {
                     r#"core.module @test {{
   !Leaf = wasm_gc.struct<core.i32>
   !Unregistered = test.opaque<core.i32>
-  !Data = wasm_gc.array<core.i8, {{layout = "bytes_data"}}>
-  !Bytes = test.layout<!Data, core.i32, core.i32, {{layout = "bytes"}}>
+  !Closure = test.layout<{{layout = "closure"}}>
   wasm.func @callee(%value: {parameter_ty}) -> core.nil {{ wasm.return }}
   wasm.func @caller(%value: {value_ty}) -> core.nil {{
     wasm.call @callee(%value) : ({value_ty}) -> ()

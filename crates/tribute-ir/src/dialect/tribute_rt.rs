@@ -2,7 +2,7 @@
 
 use crate::dialect::tribute_rtti::{ManagedRef, ManagedRefType};
 use trunk_ir::attr_kind::SymbolRef;
-use trunk_ir::dialect::core::{Bytes, Ptr};
+use trunk_ir::dialect::core::Ptr;
 use trunk_ir::op_flag::Pure;
 
 #[trunk_ir::dialect]
@@ -118,10 +118,6 @@ mod tribute_rt {
 
 impl ManagedRefType for Intref {}
 impl ManagedRefType for Anyref {}
-
-// A native `Bytes` value points to a reference-counted object.
-impl ManagedRefType for Bytes {}
-trunk_ir::register_interfaces!(Bytes: ManagedRefType);
 
 // === RC Header Layout ===
 // Re-exported from `tribute-rc`. See `tribute_rc::RcBox` for the layout definition.

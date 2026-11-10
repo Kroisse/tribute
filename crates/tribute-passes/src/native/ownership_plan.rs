@@ -304,7 +304,6 @@ fn is_typed_managed_reference(
     }
     tribute_ir::dialect::tribute_rt::Anyref::matches(ctx, ty)
         || tribute_ir::dialect::tribute_rt::Intref::matches(ctx, ty)
-        || trunk_ir::dialect::core::Bytes::matches(ctx, ty)
 }
 
 fn is_managed_value(ctx: &IrContext, value: ValueRef, managed_layouts: &HashSet<TypeRef>) -> bool {
