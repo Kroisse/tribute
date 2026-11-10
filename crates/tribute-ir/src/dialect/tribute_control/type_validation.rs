@@ -73,10 +73,9 @@ pub(super) fn canonical_nominal_layouts(
     let mut sorted_reachable_types = reachable_types.iter().copied().collect::<Vec<_>>();
     sorted_reachable_types.sort_unstable();
     for ty in sorted_reachable_types {
-        if !adt::Struct::matches(ctx, ty) && !adt::Enum::matches(ctx, ty) {
-            continue;
-        }
-        let Some(name) = ctx.type_attrs(ty).get_string_ref("name") else {
+        let Some(name) =
+            adt::DynAdtLayout::get(ctx, ty).and_then(|layout| layout.key_name_ref(ctx))
+        else {
             continue;
         };
         // A key without a body is no definition, and nothing reads its

@@ -27,7 +27,7 @@ use trunk_ir::ops::DialectType;
 /// The `wasm_gc.struct` of the user struct or closure capture layout `ty`,
 /// or `None` when `ty` is neither.
 pub fn struct_type(ctx: &mut IrContext, ty: TypeRef) -> Option<TypeRef> {
-    if !ctx.get_type(ty).name.is(ctx, "adt.struct") {
+    if !tribute_ir::dialect::adt::Struct::matches(ctx, ty) {
         return None;
     }
     if let Some(base) = ctx
@@ -66,7 +66,8 @@ pub fn variant_type(ctx: &mut IrContext, enum_ty: TypeRef, tag: u32) -> Option<T
 /// each enum layout or row instance with the type of its values.
 pub(crate) fn convert(ctx: &mut IrContext, module: Module) {
     crate::closure_lower::substitute_module_types(ctx, module, "gc", |ctx, ty| {
-        let reference = tribute_ir::dialect::adt::row_instance_def(ctx, ty).is_some()
+        let reference = tribute_ir::dialect::tribute_control::DynRowParameterized::get(ctx, ty)
+            .is_some_and(|instance| instance.instance_def(ctx).is_some())
             || tribute_ir::dialect::adt::Enum::matches(ctx, ty);
         if reference {
             return Some(reference_type(ctx, ty));

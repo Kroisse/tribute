@@ -115,7 +115,9 @@ impl Converter<'_> {
         // source-logical boundary, as callable rows do
         // (`design/tribute-dialects.md` § "Nominal row 인자"): a row
         // instance becomes its layout's key.
-        if let Some(def) = tribute_ir::dialect::adt::row_instance_def(self.ctx, ty) {
+        if let Some(def) = tribute_control::DynRowParameterized::get(self.ctx, ty)
+            .and_then(|instance| instance.instance_def(self.ctx))
+        {
             let converted = self.convert_type(def);
             self.converted_types.insert(ty, converted);
             return converted;

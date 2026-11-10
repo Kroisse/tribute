@@ -572,10 +572,12 @@ register_interfaces!(core::Bytes: ManagedRefType);
 let managed = DynManagedRefType::is_implemented(ctx, ty);
 ```
 
-The registry is keyed by type name, and `DynX::get(ctx, ty)` returns a
-handle whose `ty()` is the queried type. A method is called on the type's
-wrapper, so query a type interface's methods only on types that pass their
-definition's shape and verifier; a marker interface answers by name alone.
+The registry is keyed by type name. A method is called on the type's
+wrapper, so `DynX::get(ctx, ty)` returns a handle, whose `ty()` is the
+queried type, only for a type that passes its definition's shape and
+verifier, and `None` for a malformed one; every method may then be queried
+on the handle, including on unverified IR. `DynX::is_implemented` answers
+by name alone, as a marker interface does.
 A hook that core infrastructure reaches through the definition, such as a
 verifier, an assembly format, an alias hint, or an identifier, belongs on
 `TypeDef` instead.
