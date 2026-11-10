@@ -18,6 +18,10 @@ impl tribute_ir::dialect::adt::convert::LayoutBlindConversion for Converter<'_> 
         Ok(self.convert_type(ty))
     }
 
+    fn key_follows_body(&self, layout: TypeRef) -> bool {
+        tribute_control::logical_tuple_elements(self.ctx, layout).is_some()
+    }
+
     fn fix(&mut self, from: TypeRef, to: TypeRef) {
         self.converted_types.insert(from, to);
     }
@@ -107,6 +111,18 @@ impl Converter<'_> {
             let input = self.convert_type(data.params[0]);
             let answer = self.convert_type(data.params[1]);
             let converted = self.resumption_type(input, answer);
+            self.converted_types.insert(ty, converted);
+            return converted;
+        }
+        // A tuple layout is named by its element types, so converting them
+        // renames it, and tuples that differed only in rows become one
+        // (`design/tribute-dialects.md` § "Nominal layout의 게시").
+        if let Some(elements) = tribute_control::logical_tuple_elements(self.ctx, ty) {
+            let mut elements = elements.to_vec();
+            for element in &mut elements {
+                *element = self.convert_type(*element);
+            }
+            let converted = tribute_control::logical_tuple_type(self.ctx, &elements);
             self.converted_types.insert(ty, converted);
             return converted;
         }
