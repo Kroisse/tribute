@@ -641,6 +641,18 @@ pub fn wasm_type_converter(
                 ops: vec![cast_op.op_ref()],
             });
         }
+        // A scalar array or evidence that `convert-typed-arrays` already
+        // replaced with its GC array is recovered the same way.
+        if from_is_any && trunk_ir::dialect::wasm_gc::Array::matches(ctx, to_ty) {
+            let cast_op = wasm_gc_dialect::RefCast::operands(value)
+                .target_type(to_ty)
+                .results(to_ty)
+                .build(ctx, location);
+            return Some(MaterializeResult {
+                value: cast_op.result(ctx),
+                ops: vec![cast_op.op_ref()],
+            });
+        }
         if from_is_any && trunk_ir::dialect::wasm::Arrayref::matches(ctx, to_ty) {
             let cast_op = wasm_dialect::RefCast::operands(value)
                 .target_type(arrayref_ty)

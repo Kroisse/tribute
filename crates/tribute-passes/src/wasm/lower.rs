@@ -1271,6 +1271,34 @@ mod tests {
     }
 
     #[test]
+    fn lower_to_wasm_recovers_a_scalar_array_from_an_erased_value() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @len(%erased: tribute_rt.anyref) -> core.index {
+    %ints = core.unrealized_conversion_cast %erased : tribute_rt.anyref to adt.array<core.i32>
+    %len = adt.array_len %ints : core.index
+    func.return %len
+  }
+}"#,
+        );
+
+        let root = core::Module::from_op(&ctx, module.op()).expect("core.module");
+        let mut pm = trunk_ir::pass::PassManager::new();
+        add_lowering_passes(&mut pm);
+        pm.add_pass(LegalizeUnrealizedCasts)
+            .add_pass(trunk_ir::conversion::ReconcileUnrealizedCasts)
+            .add_pass(FinalizeWasmGcTypes);
+        pm.run(&mut ctx, root, &mut Default::default())
+            .expect("a recovered scalar array should lower and finalize");
+
+        let output = module.op().display(&ctx).to_string();
+        assert!(!output.contains("unrealized_conversion_cast"), "{output}");
+        assert!(output.contains("wasm.ref_cast"), "{output}");
+    }
+
+    #[test]
     fn lower_to_wasm_declares_each_module_resource_once() {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
