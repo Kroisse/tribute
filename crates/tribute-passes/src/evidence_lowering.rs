@@ -242,7 +242,7 @@ fn some_dispatch(
     };
     // The parameter is a reference to the published `Option` instance.
     let some = adt::VariantNew::operands([dispatch])
-        .tag(some)
+        .tag(u64::from(some))
         .results(option_ty)
         .build(ctx, location);
     rewriter.insert_op(some.op_ref());
@@ -624,10 +624,7 @@ mod tests {
             [(runtime_callee("extend"), 5)],
             "{printed}"
         );
-        assert!(
-            printed.contains("adt.variant_new %2 {tag = 1} : "),
-            "{printed}"
-        );
+        assert!(printed.contains("adt.variant_new 1(%2) :"), "{printed}");
     }
 
     #[test]

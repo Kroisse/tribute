@@ -323,7 +323,7 @@ fn emit_logical_variant_pattern_check<'db>(
     let bool_ty = builder.ctx.bool_type(builder.ir);
     let tag = adt::VariantIs::operands(scrutinee)
         .r#type(enum_ty)
-        .tag(variant)
+        .tag(u64::from(variant))
         .results(bool_ty)
         .build(builder.ir, location);
     builder.ir.push_op(builder.block, tag.op_ref());
@@ -343,7 +343,7 @@ fn emit_logical_variant_pattern_check<'db>(
             let field_ty = variant_fields[index];
             let get = adt::VariantGet::operands(scrutinee)
                 .r#type(enum_ty)
-                .tag(variant)
+                .tag(u64::from(variant))
                 .field(index as u32)
                 .results(field_ty)
                 .build(nested.ir, location);
@@ -786,7 +786,7 @@ pub(super) fn bind_logical_pattern_fields<'db>(
                     for (index, field) in fields {
                         let get = adt::VariantGet::operands(scrutinee)
                             .r#type(ty)
-                            .tag(tag)
+                            .tag(u64::from(tag))
                             .field(index as u32)
                             .results(field_tys[index])
                             .build(ir, location);

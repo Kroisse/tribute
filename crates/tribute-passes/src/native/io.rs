@@ -285,7 +285,7 @@ fn variant_region<const N: usize>(
 ) -> RegionRef {
     // The variant is of the enum's type, cast to the operation's result type.
     let variant = adt::VariantNew::operands(fields)
-        .tag(tag)
+        .tag(u64::from(tag))
         .results(enum_ty)
         .build(ctx, loc);
     let cast = core::UnrealizedConversionCast::operands(variant.result(ctx))
@@ -381,7 +381,10 @@ mod tests {
             "{output}"
         );
         for tag in 0..4 {
-            assert!(output.contains(&format!("tag = {tag}}}")), "{output}");
+            assert!(
+                output.contains(&format!("adt.variant_new {tag}(")),
+                "{output}"
+            );
         }
 
         let validation = trunk_ir::validation::validate_value_integrity(&ctx, module);

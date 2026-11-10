@@ -2343,7 +2343,7 @@ fn another_layout_rejects_callable_projection_spoofing() {
   !Spoofed = adt.struct<"Tuple", (!F), {k = 1}>
   !TupleRef = adt.struct<"Tuple">
   tribute_control.func @caller(%tuple: !TupleRef, %value: core.i32) -> core.i32 {
-    %canonical = adt.struct_new %value : (core.i32) -> !TupleRef
+    %canonical = adt.struct_new(%value) : (core.i32) -> !TupleRef
     %callee = adt.struct_get %tuple {type = !Spoofed, field = 0} : !F
     %result = tribute_control.call_indirect %callee(%value) : (core.i32) -> core.i32
     tribute_control.return %result

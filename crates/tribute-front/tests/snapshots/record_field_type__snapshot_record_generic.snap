@@ -18,14 +18,14 @@ core.module @test {
   }
   tribute_control.func @"pkg::Pair::first::set"(%0: !"pkg::Pair", %1: tribute_rt.anyref) -> !"pkg::Pair" {
       %2 = adt.struct_get %0 {field = 1, type = !"pkg::Pair"} : tribute_rt.anyref
-      %3 = adt.struct_new %1, %2 : (tribute_rt.anyref, tribute_rt.anyref) -> !"pkg::Pair"
+      %3 = adt.struct_new(%1, %2) : (tribute_rt.anyref, tribute_rt.anyref) -> !"pkg::Pair"
       tribute_control.return %3
   }
   tribute_control.func @"pkg::Pair::first::modify"['a0](%0: !"pkg::Pair", %1: !t2) -> !"pkg::Pair" row(| 'a0) {
       %2 = adt.struct_get %0 {field = 0, type = !"pkg::Pair"} : tribute_rt.anyref
       %3 = tribute_control.call_indirect %1(%2) : (tribute_rt.anyref) -> tribute_rt.anyref row(| 'a0)
       %4 = adt.struct_get %0 {field = 1, type = !"pkg::Pair"} : tribute_rt.anyref
-      %5 = adt.struct_new %3, %4 : (tribute_rt.anyref, tribute_rt.anyref) -> !"pkg::Pair"
+      %5 = adt.struct_new(%3, %4) : (tribute_rt.anyref, tribute_rt.anyref) -> !"pkg::Pair"
       tribute_control.return %5
   }
   tribute_control.func @"pkg::Pair::second"(%0: !"pkg::Pair") -> tribute_rt.anyref {
@@ -34,20 +34,20 @@ core.module @test {
   }
   tribute_control.func @"pkg::Pair::second::set"(%0: !"pkg::Pair", %1: tribute_rt.anyref) -> !"pkg::Pair" {
       %2 = adt.struct_get %0 {field = 0, type = !"pkg::Pair"} : tribute_rt.anyref
-      %3 = adt.struct_new %2, %1 : (tribute_rt.anyref, tribute_rt.anyref) -> !"pkg::Pair"
+      %3 = adt.struct_new(%2, %1) : (tribute_rt.anyref, tribute_rt.anyref) -> !"pkg::Pair"
       tribute_control.return %3
   }
   tribute_control.func @"pkg::Pair::second::modify"['a0](%0: !"pkg::Pair", %1: !t2) -> !"pkg::Pair" row(| 'a0) {
       %2 = adt.struct_get %0 {field = 1, type = !"pkg::Pair"} : tribute_rt.anyref
       %3 = tribute_control.call_indirect %1(%2) : (tribute_rt.anyref) -> tribute_rt.anyref row(| 'a0)
       %4 = adt.struct_get %0 {field = 0, type = !"pkg::Pair"} : tribute_rt.anyref
-      %5 = adt.struct_new %4, %3 : (tribute_rt.anyref, tribute_rt.anyref) -> !"pkg::Pair"
+      %5 = adt.struct_new(%4, %3) : (tribute_rt.anyref, tribute_rt.anyref) -> !"pkg::Pair"
       tribute_control.return %5
   }
   tribute_control.func @"pkg::make_pair"['a0]() -> !"pkg::Pair$Int$Bool" row(| 'a0) inferred {
       %0 = arith.constant 42 : core.i32
       %1 = arith.constant true : core.i1
-      %2 = adt.struct_new %0, %1 : (core.i32, core.i1) -> !"pkg::Pair$Int$Bool"
+      %2 = adt.struct_new(%0, %1) : (core.i32, core.i1) -> !"pkg::Pair$Int$Bool"
       tribute_control.return %2
   }
   tribute_control.func @"pkg::Pair$Int$Bool::first"(%0: !"pkg::Pair$Int$Bool") -> core.i32 {
@@ -56,14 +56,14 @@ core.module @test {
   }
   tribute_control.func @"pkg::Pair$Int$Bool::first::set"(%0: !"pkg::Pair$Int$Bool", %1: core.i32) -> !"pkg::Pair$Int$Bool" {
       %2 = adt.struct_get %0 {field = 1, type = !"pkg::Pair$Int$Bool"} : core.i1
-      %3 = adt.struct_new %1, %2 : (core.i32, core.i1) -> !"pkg::Pair$Int$Bool"
+      %3 = adt.struct_new(%1, %2) : (core.i32, core.i1) -> !"pkg::Pair$Int$Bool"
       tribute_control.return %3
   }
   tribute_control.func @"pkg::Pair$Int$Bool::first::modify"['a0](%0: !"pkg::Pair$Int$Bool", %1: tribute_control.func_sig<(core.i32) -> core.i32 row(| 'a0)>) -> !"pkg::Pair$Int$Bool" row(| 'a0) {
       %2 = adt.struct_get %0 {field = 0, type = !"pkg::Pair$Int$Bool"} : core.i32
       %3 = tribute_control.call_indirect %1(%2) : (core.i32) -> core.i32 row(| 'a0)
       %4 = adt.struct_get %0 {field = 1, type = !"pkg::Pair$Int$Bool"} : core.i1
-      %5 = adt.struct_new %3, %4 : (core.i32, core.i1) -> !"pkg::Pair$Int$Bool"
+      %5 = adt.struct_new(%3, %4) : (core.i32, core.i1) -> !"pkg::Pair$Int$Bool"
       tribute_control.return %5
   }
   tribute_control.func @"pkg::Pair$Int$Bool::second"(%0: !"pkg::Pair$Int$Bool") -> core.i1 {
@@ -72,14 +72,14 @@ core.module @test {
   }
   tribute_control.func @"pkg::Pair$Int$Bool::second::set"(%0: !"pkg::Pair$Int$Bool", %1: core.i1) -> !"pkg::Pair$Int$Bool" {
       %2 = adt.struct_get %0 {field = 0, type = !"pkg::Pair$Int$Bool"} : core.i32
-      %3 = adt.struct_new %2, %1 : (core.i32, core.i1) -> !"pkg::Pair$Int$Bool"
+      %3 = adt.struct_new(%2, %1) : (core.i32, core.i1) -> !"pkg::Pair$Int$Bool"
       tribute_control.return %3
   }
   tribute_control.func @"pkg::Pair$Int$Bool::second::modify"['a0](%0: !"pkg::Pair$Int$Bool", %1: tribute_control.func_sig<(core.i1) -> core.i1 row(| 'a0)>) -> !"pkg::Pair$Int$Bool" row(| 'a0) {
       %2 = adt.struct_get %0 {field = 1, type = !"pkg::Pair$Int$Bool"} : core.i1
       %3 = tribute_control.call_indirect %1(%2) : (core.i1) -> core.i1 row(| 'a0)
       %4 = adt.struct_get %0 {field = 0, type = !"pkg::Pair$Int$Bool"} : core.i32
-      %5 = adt.struct_new %4, %3 : (core.i32, core.i1) -> !"pkg::Pair$Int$Bool"
+      %5 = adt.struct_new(%4, %3) : (core.i32, core.i1) -> !"pkg::Pair$Int$Bool"
       tribute_control.return %5
   }
 }

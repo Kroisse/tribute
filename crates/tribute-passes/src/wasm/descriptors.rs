@@ -129,10 +129,10 @@ mod tests {
   !E = adt.enum<"E", [(), (core.f64)]>
   wasm.func @main(%next: adt.struct<"S">, %any: tribute_rt.anyref, %n: tribute_rt.nat, %x: core.f64) -> core.nil {
     %one = wasm.i32_const 1 : core.i32
-    %some = adt.variant_new %x {tag = 1} : (core.f64) -> !E
-    %s = adt.struct_new %next, %any, %n : (adt.struct<"S">, tribute_rt.anyref, tribute_rt.nat) -> !S
-    %closure = adt.struct_new %one : (core.i32) -> !Closure
-    %again = adt.variant_new %x {tag = 1} : (core.f64) -> !E
+    %some = adt.variant_new 1(%x) : (core.f64) -> !E
+    %s = adt.struct_new(%next, %any, %n) : (adt.struct<"S">, tribute_rt.anyref, tribute_rt.nat) -> !S
+    %closure = adt.struct_new(%one) : (core.i32) -> !Closure
+    %again = adt.variant_new 1(%x) : (core.f64) -> !E
     wasm.return
   }
 }"#,
@@ -184,8 +184,8 @@ mod tests {
   !S = adt.struct<"S", (core.f64)>
   !E = adt.enum<"E", [(), (core.f64)]>
   wasm.func @main(%x: core.f64) -> core.nil {
-    %some = adt.variant_new %x {tag = 1} : (core.f64) -> !E
-    %s = adt.struct_new %x : (core.f64) -> !S
+    %some = adt.variant_new 1(%x) : (core.f64) -> !E
+    %s = adt.struct_new(%x) : (core.f64) -> !S
     wasm.return
   }
 }"#,
@@ -215,9 +215,9 @@ mod tests {
   !S = adt.struct<"S", (core.f64)>
   !E = adt.enum<"E", [(), (core.f64), (), (core.f64)]>
   wasm.func @main(%x: core.f64) -> core.nil {
-    %d = adt.variant_new %x {tag = 3} : (core.f64) -> !E
-    %s = adt.struct_new %x : (core.f64) -> !S
-    %b = adt.variant_new %x {tag = 1} : (core.f64) -> !E
+    %d = adt.variant_new 3(%x) : (core.f64) -> !E
+    %s = adt.struct_new(%x) : (core.f64) -> !S
+    %b = adt.variant_new 1(%x) : (core.f64) -> !E
     wasm.return
   }
 }"#,

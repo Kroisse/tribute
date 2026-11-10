@@ -510,7 +510,7 @@ fn validate_projection_contract(
             .map_err(|_| OwnershipPlanError::new("unsupported ADT projection"))?;
         let fields = adt::Enum::from_type_ref(ctx, get.r#type(ctx))
             .ok_or_else(|| OwnershipPlanError::new("variant_get has invalid layout"))?
-            .variant_fields(ctx, get.tag(ctx))
+            .variant_fields(ctx, get.variant(ctx))
             .ok_or_else(|| OwnershipPlanError::new("variant_get tag is stale"))?;
         let field_ty = fields
             .get(get.field(ctx) as usize)

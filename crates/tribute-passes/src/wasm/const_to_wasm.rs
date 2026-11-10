@@ -280,7 +280,7 @@ impl OpRewritePattern for StringConstPattern<'_> {
             .build(ctx, location);
         // The string's value is the leaf itself, of the String enum's type.
         let leaf = adt::VariantNew::operands([bytes.result(ctx)])
-            .tag(leaf_tag)
+            .tag(u64::from(leaf_tag))
             .results(string_enum_ty)
             .build(ctx, location);
 
@@ -448,7 +448,7 @@ mod tests {
         assert!(output.contains("wasm.bytes_from_data"), "{output}");
         assert!(output.contains("adt.variant_new"), "{output}");
         // The declaration, not a fixed position, locates `Leaf`.
-        assert!(output.contains("tag = 1"), "{output}");
+        assert!(output.contains("adt.variant_new 1("), "{output}");
     }
 
     #[test]

@@ -345,7 +345,7 @@ pub(super) fn lower_constructor<'db>(
     let (tag, _) =
         super::super::expr::constructor_variant(builder.ctx, builder.ir, type_attr, &variant);
     let variant = adt::VariantNew::operands(values)
-        .tag(tag)
+        .tag(u64::from(tag))
         .results(result_ty)
         .build(builder.ir, location);
     builder.ir.push_op(builder.block, variant.op_ref());
@@ -544,7 +544,7 @@ pub(super) fn lower_variant_record<'db>(
     let (tag, _) =
         super::super::expr::constructor_variant(builder.ctx, builder.ir, layout, variant);
     let value = adt::VariantNew::operands(ordered)
-        .tag(tag)
+        .tag(u64::from(tag))
         .results(result_ty)
         .build(builder.ir, location);
     builder.ir.push_op(builder.block, value.op_ref());

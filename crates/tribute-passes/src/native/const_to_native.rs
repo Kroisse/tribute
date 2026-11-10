@@ -469,7 +469,7 @@ impl OpRewritePattern for StringConstNativePattern {
             .results(bytes_ty)
             .build(ctx, loc);
         let variant_new = adt::VariantNew::operands([bytes.result(ctx)])
-            .tag(leaf)
+            .tag(u64::from(leaf))
             .results(string_enum_ty)
             .build(ctx, loc);
 

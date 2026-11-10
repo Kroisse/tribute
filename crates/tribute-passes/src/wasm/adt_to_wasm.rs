@@ -354,7 +354,7 @@ impl OpRewritePattern for VariantNewPattern {
     ) -> Option<()> {
         let op = variant_new.op_ref();
         let loc = ctx.op(op).location;
-        let tag = variant_new.tag(ctx);
+        let tag = variant_new.variant(ctx);
         let base_type = canonical_enum_type(ctx, variant_new.layout(ctx))?;
         let mut fields: Vec<_> = variant_new.fields(ctx).to_vec();
         let descriptor = (variant_new.layout(ctx), Some(tag));
@@ -392,7 +392,7 @@ impl OpRewritePattern for VariantIsPattern {
     ) -> Option<()> {
         let op = variant_is.op_ref();
         let loc = ctx.op(op).location;
-        let tag = variant_is.tag(ctx);
+        let tag = variant_is.variant(ctx);
         let ref_val = variant_is.r#ref(ctx);
         let result_ty = variant_is.result_ty(ctx);
 
@@ -522,7 +522,7 @@ impl OpRewritePattern for VariantGetPattern {
         let loc = ctx.op(op).location;
         let ref_val = variant_get.r#ref(ctx);
         let field_idx = variant_get.field(ctx);
-        let tag = variant_get.tag(ctx);
+        let tag = variant_get.variant(ctx);
         let enum_type = canonical_enum_type(ctx, variant_get.r#type(ctx))?;
         let declared_field_ty = *adt::Enum::from_type_ref(ctx, enum_type)?
             .variant_fields(ctx, tag)?
@@ -1196,11 +1196,11 @@ mod tests {
   wasm.func @main() -> core.nil {
     %zero = wasm.i32_const 0 : core.i32
     %one = wasm.i32_const 1 : core.i32
-    %struct = adt.struct_new %zero : (core.i32) -> !S
+    %struct = adt.struct_new(%zero) : (core.i32) -> !S
     %field = adt.struct_get %struct {type = !S, field = 0} : core.i32
     adt.struct_set %struct, %field {type = !S, field = 0}
 
-    %variant = adt.variant_new %one {tag = 0} : (core.i32) -> !E
+    %variant = adt.variant_new 0(%one) : (core.i32) -> !E
     %is_some = adt.variant_is %variant {type = !E, tag = 0} : core.i32
     %payload = adt.variant_get %variant {type = !E, tag = 0, field = 0} : core.i32
 
@@ -1273,14 +1273,14 @@ mod tests {
 
   wasm.func @main(%env: wasm.anyref) -> core.nil {
     %one = wasm.i32_const 1 : core.i32
-    %first = adt.struct_new %one : (core.i32) -> !S
-    %second = adt.struct_new %one : (core.i32) -> !S
+    %first = adt.struct_new(%one) : (core.i32) -> !S
+    %second = adt.struct_new(%one) : (core.i32) -> !S
     %field = adt.struct_get %first {type = !S, field = 0} : core.i32
     adt.struct_set %first, %field {type = !S, field = 0}
-    %closure = adt.struct_new %one : (core.i32) -> !Closure
+    %closure = adt.struct_new(%one) : (core.i32) -> !Closure
     %table = adt.struct_get %closure {type = !Closure, field = 0} : core.i32
-    %some = adt.variant_new %one {tag = 1} : (core.i32) -> !E
-    %none = adt.variant_new {tag = 0} : () -> !E
+    %some = adt.variant_new 1(%one) : (core.i32) -> !E
+    %none = adt.variant_new 0() : () -> !E
     %payload = adt.variant_get %some {type = !E, tag = 1, field = 0} : core.i32
     wasm.return
   }
@@ -1370,8 +1370,8 @@ mod tests {
 
   wasm.func @main(%input: !ListRef) -> core.nil {
     %zero = wasm.i32_const 0 : core.i32
-    %empty = adt.variant_new {tag = 0} : () -> !ListRef
-    %list = adt.variant_new %zero, %empty {tag = 1} : (core.i32, !ListRef) -> !ListRef
+    %empty = adt.variant_new 0() : () -> !ListRef
+    %list = adt.variant_new 1(%zero, %empty) : (core.i32, !ListRef) -> !ListRef
     %is_cons = adt.variant_is %input {type = !List, tag = 1} : core.i1
     %tail = adt.variant_get %input {type = !List, tag = 1, field = 1} : !ListRef
     wasm.return
@@ -1479,8 +1479,8 @@ mod tests {
 
   wasm.func @main(%input: !ERef) -> core.nil {
     %one = wasm.i32_const 1 : core.i32
-    %none = adt.variant_new {tag = 0} : () -> !ERef
-    %some = adt.variant_new %one {tag = 1} : (core.i32) -> !ERef
+    %none = adt.variant_new 0() : () -> !ERef
+    %some = adt.variant_new 1(%one) : (core.i32) -> !ERef
     %is_some = adt.variant_is %input {type = !E, tag = 1} : core.i32
     %is_other = adt.variant_is %input {type = !E, tag = 2} : core.i32
     wasm.return
@@ -1544,7 +1544,7 @@ mod tests {
 
   wasm.func @main(%input: !ERef, %never: !FRef) -> core.nil {
     %one = wasm.i32_const 1 : core.i32
-    %some = adt.variant_new %one {tag = 1} : (core.i32) -> !ERef
+    %some = adt.variant_new 1(%one) : (core.i32) -> !ERef
     %tag =adt.variant_tag %input {type = !E}
     %unallocated = adt.variant_tag %never {type = !F}
     wasm.return
@@ -1602,9 +1602,9 @@ mod tests {
   wasm.func @main(%from_a_ref: !ARef, %from_b_ref: !BRef, %x: core.f64) -> core.nil {
     %from_matching_enum = adt.variant_get %from_a_ref {type = !A, tag = 0, field = 0} : core.i32
     %from_mismatched_enum = adt.variant_get %from_b_ref {type = !A, tag = 0, field = 0} : core.i32
-    %from_b = adt.variant_new %x {tag = 0} : (core.f64) -> !BRef
+    %from_b = adt.variant_new 0(%x) : (core.f64) -> !BRef
     %wrong_enum = adt.variant_get %from_b {type = !A, tag = 0, field = 0} : core.i32
-    %from_a_other = adt.variant_new %x {tag = 1} : (core.f64) -> !ARef
+    %from_a_other = adt.variant_new 1(%x) : (core.f64) -> !ARef
     %wrong_tag = adt.variant_get %from_a_other {type = !A, tag = 0, field = 0} : core.i32
     wasm.return
   }

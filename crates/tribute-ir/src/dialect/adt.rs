@@ -104,11 +104,11 @@ mod adt {
     /// any other result type.
     ///
     /// ```text
-    /// %p = adt.struct_new %x, %y : (core.f64, core.f64) -> !Point
+    /// %p = adt.struct_new(%x, %y) : (core.f64, core.f64) -> !Point
     /// ```
     ///
-    /// The text writes the field operands' types and the result type, as
-    /// `spirv.CompositeConstruct` does.
+    /// The text writes the field operands in parentheses, then their types
+    /// and the result type, as `spirv.CompositeConstruct` does.
     ///
     /// When the layout declares row parameters, each field operand has the
     /// layout's field type with the layout's row binders replaced by the
@@ -116,7 +116,7 @@ mod adt {
     /// substitution; see `design/tribute-dialects.md` § "Nominal row 인자".
     #[flags(Pure)]
     #[verify]
-    #[asm_format(fields attr_dict_bare ":" functional_type(fields, result))]
+    #[asm_format("(" fields ")" attr_dict_bare ":" functional_type(fields, result))]
     fn struct_new(fields: Variadic<_>) -> Value<_> {}
 
     /// Field `field` of the struct `ref` of layout `type`.
@@ -137,12 +137,13 @@ mod adt {
     /// row instance's `def` ([`VariantNew::layout`]).
     ///
     /// ```text
-    /// %dot = adt.variant_new %x, %y {tag = 1} : (core.f64, core.f64) -> !Shape
+    /// %dot = adt.variant_new 1(%x, %y) : (core.f64, core.f64) -> !Shape
     /// ```
     ///
-    /// The text writes the field operands' types and the result type, as
-    /// `adt.struct_new` does. `tag` is the variant's position among the layout's variants, in
-    /// declaration order, as `adt.variant_tag` returns it; the verifier
+    /// The text writes `tag` before the field operands and otherwise follows
+    /// `adt.struct_new`. `tag` is a static `core.index`: the variant's
+    /// position among the layout's variants, in declaration order, as
+    /// `adt.variant_tag` returns it at run time; the verifier
     /// rejects a result type that names no enum layout and a position the
     /// layout does not have.
     ///
@@ -152,15 +153,15 @@ mod adt {
     /// substitution; see `design/tribute-dialects.md` § "Nominal row 인자".
     #[flags(Pure)]
     #[verify]
-    #[asm_format(fields attr_dict_bare ":" functional_type(fields, result))]
-    fn variant_new(tag: Attr<u32>, fields: Variadic<_>) -> Value<_> {}
+    #[asm_format(tag "(" fields ")" attr_dict_bare ":" functional_type(fields, result))]
+    fn variant_new(tag: Attr<Index>, fields: Variadic<_>) -> Value<_> {}
 
     /// Whether `ref`, a value of enum layout `type`, is of variant `tag`, the
     /// variant's position as for `adt.variant_new`.
     #[flags(Pure)]
     #[verify]
     #[asm_format(r#ref attr_dict_bare ":" type(result))]
-    fn variant_is(r#type: Attr<Type>, tag: Attr<u32>, r#ref: Value<_>) -> Value<_> {}
+    fn variant_is(r#type: Attr<Type>, tag: Attr<Index>, r#ref: Value<_>) -> Value<_> {}
 
     /// The position of `ref`'s variant among the variants of the
     /// `adt.enum` `type`, in declaration order.
@@ -197,7 +198,7 @@ mod adt {
     #[asm_format(r#ref attr_dict_bare ":" type(result))]
     fn variant_get(
         r#type: Attr<Type>,
-        tag: Attr<u32>,
+        tag: Attr<Index>,
         field: Attr<u32>,
         r#ref: Value<_>,
     ) -> Value<_> {
@@ -829,14 +830,14 @@ pub enum VariantTagError {
     #[display("`type` is not an `adt.enum` layout")]
     NotAnEnum,
     #[display("tag {tag} is not a variant of an enum with {count} variant(s)")]
-    OutOfRange { tag: u32, count: usize },
+    OutOfRange { tag: u64, count: usize },
 }
 
 /// Check that `tag` is the position of a variant of the enum layout `ty`.
 fn verify_variant_tag(
     ctx: &IrContext,
     ty: TypeRef,
-    tag: u32,
+    tag: u64,
 ) -> Result<(), trunk_ir::ops::VerificationError> {
     let count = Enum::from_type_ref(ctx, ty)
         .ok_or(VariantTagError::NotAnEnum)?
@@ -890,6 +891,33 @@ impl trunk_ir::ops::Verify for VariantNew {
             return Err(ConstructionLayoutError { kind: "adt.enum" }.into());
         }
         verify_variant_tag(ctx, layout, self.tag(ctx))
+    }
+}
+
+/// The variant position a verified `tag` holds: the verifier bounds it by
+/// the layout's variant count, which fits `u32`.
+fn variant_position(tag: u64) -> u32 {
+    u32::try_from(tag).expect("a verified variant tag is a variant position")
+}
+
+impl VariantNew {
+    /// The position of the variant this operation creates, its `tag`.
+    pub fn variant(self, ctx: &IrContext) -> u32 {
+        variant_position(self.tag(ctx))
+    }
+}
+
+impl VariantIs {
+    /// The position of the variant this operation tests for, its `tag`.
+    pub fn variant(self, ctx: &IrContext) -> u32 {
+        variant_position(self.tag(ctx))
+    }
+}
+
+impl VariantGet {
+    /// The position of the variant this operation reads, its `tag`.
+    pub fn variant(self, ctx: &IrContext) -> u32 {
+        variant_position(self.tag(ctx))
     }
 }
 
@@ -2515,8 +2543,8 @@ mod tests {
         let valid = r#"core.module @test {
   !Shape = adt.enum<"Shape", [(), (core.f64, core.f64)]>
   func.func @f(%x: core.f64, %shape: !Shape) -> core.f64 {
-    %dot = adt.variant_new {tag = 0} : () -> !Shape
-    %rect = adt.variant_new %x, %x {tag = 1} : (core.f64, core.f64) -> !Shape
+    %dot = adt.variant_new 0() : () -> !Shape
+    %rect = adt.variant_new 1(%x, %x) : (core.f64, core.f64) -> !Shape
     %is_rect = adt.variant_is %shape {tag = 1, type = !Shape} : core.i1
     %width = adt.variant_get %shape {field = 0, tag = 1, type = !Shape} : core.f64
     func.return %width
@@ -2529,7 +2557,7 @@ mod tests {
 
         for (invalid, expected) in [
             (
-                "adt.variant_new {tag = 2} : () -> !Shape",
+                "adt.variant_new 2() : () -> !Shape",
                 "tag 2 is not a variant of an enum with 2 variant(s)",
             ),
             (
@@ -2592,7 +2620,7 @@ mod canonicalize_tests {
     const PAIR: &str = r#"core.module @test {
   !pair = adt.struct<"Pair", (core.i32, core.i64)>
   func.func @f(%x: core.i32, %y: core.i64) -> core.i64 {
-    %p = adt.struct_new %x, %y : (core.i32, core.i64) -> !pair
+    %p = adt.struct_new(%x, %y) : (core.i32, core.i64) -> !pair
     %r = adt.struct_get %p {type = !pair, field = 1} : core.i64
     func.return %r
   }
@@ -2634,7 +2662,7 @@ mod canonicalize_tests {
   !pair = adt.struct<"Pair", (core.i32, core.i64)>
   !other = adt.struct<"Other", (core.i32, core.i64)>
   func.func @f(%x: core.i32, %y: core.i64) -> core.i64 {
-    %p = adt.struct_new %x, %y : (core.i32, core.i64) -> !pair
+    %p = adt.struct_new(%x, %y) : (core.i32, core.i64) -> !pair
     %r = adt.struct_get %p {type = !other, field = 1} : core.i64
     func.return %r
   }
@@ -2650,7 +2678,7 @@ mod canonicalize_tests {
             r#"core.module @test {
   !pair = adt.struct<"Pair", (core.i32, core.i64)>
   func.func @f(%x: core.i32, %y: core.i64) -> core.i32 {
-    %p = adt.struct_new %x, %y : (core.i32, core.i64) -> !pair
+    %p = adt.struct_new(%x, %y) : (core.i32, core.i64) -> !pair
     %r = adt.struct_get %p {type = !pair, field = 1} : core.i32
     func.return %r
   }
@@ -2666,7 +2694,7 @@ mod canonicalize_tests {
             r#"core.module @test {
   !pair = adt.struct<"Pair", (core.i32, core.i64)>
   func.func @f(%x: core.i32, %y: core.i64) -> core.i64 {
-    %p = adt.struct_new %x, %y : (core.i32, core.i64) -> !pair
+    %p = adt.struct_new(%x, %y) : (core.i32, core.i64) -> !pair
     %r = adt.struct_get %p {type = !pair, field = 2} : core.i64
     func.return %r
   }
@@ -2682,7 +2710,7 @@ mod canonicalize_tests {
             r#"core.module @test {
   !pair = adt.struct<"Pair", (core.i32, core.i64)>
   func.func @f(%x: core.i32, %y: core.i64, %z: core.i64) -> core.i64 {
-    %p = adt.struct_new %x, %y : (core.i32, core.i64) -> !pair
+    %p = adt.struct_new(%x, %y) : (core.i32, core.i64) -> !pair
     %any = adt.ref_cast %p {type = tribute_rt.anyref} : tribute_rt.anyref
     %alias = adt.ref_cast %any {type = !pair} : !pair
     adt.struct_set %alias, %z {type = !pair, field = 1}
@@ -2705,7 +2733,7 @@ mod canonicalize_tests {
     func.return
   }
   func.func @f(%x: core.i32, %y: core.i64) -> core.i64 {
-    %p = adt.struct_new %x, %y : (core.i32, core.i64) -> !pair
+    %p = adt.struct_new(%x, %y) : (core.i32, core.i64) -> !pair
     %r = adt.struct_get %p {type = !pair, field = 1} : core.i64
     func.return %r
   }
@@ -2721,7 +2749,7 @@ mod canonicalize_tests {
             r#"core.module @test {
   !pair = adt.struct<"Pair", (core.i32, core.i64)>
   func.func @f(%x: core.i32, %y: core.i64, %z: core.i64) -> core.i64 {
-    %p = adt.struct_new %x, %y : (core.i32, core.i64) -> !pair
+    %p = adt.struct_new(%x, %y) : (core.i32, core.i64) -> !pair
     adt.struct_set %p, %z {type = !pair, field = 1}
     %r = adt.struct_get %p {type = !pair, field = 1} : core.i64
     func.return %r
@@ -2738,7 +2766,7 @@ mod canonicalize_tests {
             r#"core.module @test {
   !pair = adt.struct<"Pair", (core.i32, core.i64)>
   func.func @f(%x: core.i32, %y: core.i64) -> core.i64 {
-    %p = adt.struct_new %x, %y : (core.i32, core.i64) -> !pair
+    %p = adt.struct_new(%x, %y) : (core.i32, core.i64) -> !pair
     %r = adt.struct_get %p {type = !pair, field = 1} : core.i64
     tribute_rt.release %p {alloc_size = 24}
     func.return %r

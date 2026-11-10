@@ -246,7 +246,7 @@ pub fn allocation_descriptor(
         return Some((new.layout(ctx), None));
     }
     let new = adt::VariantNew::from_op(ctx, op).ok()?;
-    Some((new.layout(ctx), Some(new.tag(ctx))))
+    Some((new.layout(ctx), Some(new.variant(ctx))))
 }
 
 /// The runtime type descriptor a native allocation operation creates: an

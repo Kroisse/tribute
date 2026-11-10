@@ -285,7 +285,7 @@ impl OpRewritePattern for VariantNewPattern {
     ) -> Option<()> {
         let op = variant_new.op_ref();
         let enum_ty = variant_new.layout(ctx);
-        let tag = variant_new.tag(ctx);
+        let tag = variant_new.variant(ctx);
         let tc = rewriter.type_converter();
 
         let Some(variant_layout) = compute_variant_layout(ctx, enum_ty, tag, tc) else {

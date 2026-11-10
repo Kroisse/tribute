@@ -6,7 +6,7 @@ core.module @test {
   !Test = adt.struct<"Test", (core.i32, core.i32)>
 
   func.func @create_struct(%0: core.i32, %1: core.i32) -> !Test {
-      %2 = adt.struct_new %0, %1 {type = !Test} : (core.i32, core.i32) -> !Test
+      %2 = adt.struct_new(%0, %1) {type = !Test} : (core.i32, core.i32) -> !Test
       func.return %2
   }
   tribute_rtti.layout {fields = ["u32", "u32"], index = 5, type = !Test}

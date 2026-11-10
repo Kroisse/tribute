@@ -43,7 +43,7 @@ fn adt_projection_has_exact_callable_type(
                 ctx,
                 layout,
                 ctx.value_ty(source),
-                get.tag(ctx),
+                get.variant(ctx),
                 get.field(ctx),
             ) == Some(result_type);
     }

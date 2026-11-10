@@ -86,7 +86,7 @@ pub(crate) fn lower(
             accesses.push((op, layout));
         }
         if let Ok(get) = adt::VariantGet::from_op(ctx, op) {
-            variants.push((get.r#type(ctx), get.tag(ctx)));
+            variants.push((get.r#type(ctx), get.variant(ctx)));
         }
         ControlFlow::Continue(WalkAction::Advance)
     });
@@ -161,7 +161,7 @@ impl OpRewritePattern for VariantGetPattern {
         rewriter: &mut PatternRewriter<'_>,
     ) -> Option<()> {
         let op = variant_get.op_ref();
-        let variant = (variant_get.r#type(ctx), variant_get.tag(ctx));
+        let variant = (variant_get.r#type(ctx), variant_get.variant(ctx));
         let &structural = self.layouts.get(&variant)?;
         let loc = ctx.op(op).location;
         let field_get = adt::StructGet::operands(variant_get.r#ref(ctx))
@@ -193,7 +193,7 @@ impl OpRewritePattern for VariantIsPattern {
         let op = variant_is.op_ref();
         let loc = ctx.op(op).location;
         let result_ty = variant_is.result_ty(ctx);
-        let descriptor = (variant_is.r#type(ctx), Some(variant_is.tag(ctx)));
+        let descriptor = (variant_is.r#type(ctx), Some(variant_is.variant(ctx)));
         let Some(&number) = self.numbers.get(&descriptor) else {
             let never = arith::Constant::operands()
                 .value(Attribute::Bool(false))

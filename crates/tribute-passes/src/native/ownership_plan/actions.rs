@@ -504,7 +504,7 @@ impl ActionPlanner<'_> {
             let layout = new.layout(self.ir);
             let fields = adt::Enum::from_type_ref(self.ir, layout)
                 .ok_or_else(|| OwnershipPlanError::new("variant_new has invalid layout"))?
-                .variant_fields(self.ir, new.tag(self.ir))
+                .variant_fields(self.ir, new.variant(self.ir))
                 .ok_or_else(|| OwnershipPlanError::new("variant_new tag is stale"))?;
             validate_allocation_result(self.ir, op, layout, self.managed_layouts)?;
             return self.plan_owning_operands(op, 0, fields.iter().copied());
