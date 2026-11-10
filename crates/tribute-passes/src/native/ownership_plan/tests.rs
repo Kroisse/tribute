@@ -499,7 +499,7 @@ fn internal_closure_raw_pointer_handoff_outside_native_evidence_fails_closed() {
   }
   func.func @install() -> core.nil {
     %code = arith.constant 0 : core.i32
-    %env = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
+    %env = adt.ref_null : tribute_rt.anyref
     %closure = adt.struct_new(%code) : (core.i32) -> !_closure
     %raw = core.unrealized_conversion_cast %closure : !_closure to core.ptr
     %result = func.call @escape(%raw) : (core.ptr) -> core.nil
@@ -517,7 +517,7 @@ fn into_raw_transfers_one_exact_closure_unit_without_materializing_rc() {
   !_closure = adt.struct<(tribute_rt.convention_table_ref), {layout = "closure"}>
   func.func @install() -> core.nil {
     %code = arith.constant 0 : core.i32
-    %env = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
+    %env = adt.ref_null : tribute_rt.anyref
     %closure = adt.struct_new(%code) : (core.i32) -> !_closure
     %raw = tribute_rt.into_raw %closure : core.ptr
     func.return
@@ -552,7 +552,7 @@ fn into_raw_fixture(transfers: &str) -> String {
   !_closure = adt.struct<(tribute_rt.convention_table_ref), {layout = "closure"}>
   func.func @transfers() -> core.nil {
     %code = arith.constant 0 : core.i32
-    %env = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
+    %env = adt.ref_null : tribute_rt.anyref
     %closure = adt.struct_new(%code) : (core.i32) -> !_closure
 "#,
         transfers,
@@ -581,8 +581,8 @@ fn nested_field_borrow_keeps_the_outer_owner_alive_through_the_last_use() {
     %inner = adt.struct_new(%child) : (!ChildRef) -> !InnerRef
     %owner = adt.struct_new(%inner) : (!InnerRef) -> !Box
     %loaded = adt.struct_get %owner {field = 0, type = !Box} : !InnerRef
-    %erased = adt.ref_cast %loaded {type = tribute_rt.anyref} : tribute_rt.anyref
-    %restored = adt.ref_cast %erased {type = !InnerRef} : !InnerRef
+    %erased = adt.ref_cast %loaded : !InnerRef to tribute_rt.anyref
+    %restored = adt.ref_cast %erased : tribute_rt.anyref to !InnerRef
     %nested = adt.struct_get %restored {field = 0, type = !Inner} : !ChildRef
     %value = func.call @observe(%nested) : (!ChildRef) -> core.i32
     func.return
@@ -671,7 +671,7 @@ fn into_raw_group_validation_ignores_preserved_field_borrow_acquire() {
   !Owner = adt.struct<"Owner",(!_closure)>
   func.func @transfers() -> core.nil {
     %code = arith.constant 0 : core.i32
-    %env = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
+    %env = adt.ref_null : tribute_rt.anyref
     %stored = adt.struct_new(%code) : (core.i32) -> !_closure
     %owner = adt.struct_new(%stored) : (!_closure) -> !Owner
     %closure = adt.struct_get %owner {field = 0, type = !Owner} : !_closure
@@ -718,7 +718,7 @@ fn into_raw_rejects_non_transfer_and_cross_block_uses_before_mutation() {
   !_closure = adt.struct<(tribute_rt.convention_table_ref), {layout = "closure"}>
   func.func @later_use() -> !_closure {
     %code = arith.constant 0 : core.i32
-    %env = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
+    %env = adt.ref_null : tribute_rt.anyref
     %closure = adt.struct_new(%code) : (core.i32) -> !_closure
     %raw = tribute_rt.into_raw %closure : core.ptr
     func.return %closure
@@ -732,7 +732,7 @@ fn into_raw_rejects_non_transfer_and_cross_block_uses_before_mutation() {
   func.func @cross_block() -> core.nil {
     ^entry:
       %code = arith.constant 0 : core.i32
-      %env = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
+      %env = adt.ref_null : tribute_rt.anyref
       %closure = adt.struct_new(%code) : (core.i32) -> !_closure
       %first = tribute_rt.into_raw %closure : core.ptr
       cf.br [^next]
@@ -835,7 +835,7 @@ fn duplicate_owning_destinations_and_null_are_explicit() {
     func.return %node
   }
   func.func @null() -> !NodeRef {
-    %null = adt.ref_null {type = !NodeRef} : !NodeRef
+    %null = adt.ref_null : !NodeRef
     func.return %null
   }
   func.func @replace(%node: !NodeRef, %value: !NodeRef) -> core.nil {
@@ -1736,8 +1736,8 @@ fn compatible_cast_and_enum_projection_preserve_borrowed_ownership() {
   !Choice = adt.enum<"Choice",[(!ChildRef)]>
   !ChoiceRef = adt.enum<"Choice">
   func.func @load(%choice: !ChoiceRef) -> !ChildRef {
-    %erased = adt.ref_cast %choice {type = tribute_rt.anyref} : tribute_rt.anyref
-    %restored = adt.ref_cast %erased {type = !ChoiceRef} : !ChoiceRef
+    %erased = adt.ref_cast %choice : !ChoiceRef to tribute_rt.anyref
+    %restored = adt.ref_cast %erased : tribute_rt.anyref to !ChoiceRef
     %child = adt.variant_get %restored {type = !Choice, tag = 0, field = 0} : !ChildRef
     func.return %child
   }
@@ -2359,7 +2359,7 @@ fn value_dying_on_a_back_edge_to_the_entry_block_is_rejected() {
   }
   func.func @restart() -> core.nil {
     ^entry:
-      %child = adt.ref_null {type = !ChildRef} : !ChildRef
+      %child = adt.ref_null : !ChildRef
       %value = adt.struct_new(%child) : (!ChildRef) -> !BoxRef
       %again = adt.ref_is_null %child : core.i1
       cf.cond_br %again [^back, ^use]
@@ -2824,7 +2824,7 @@ fn stale_identity_unsupported_regions_and_malformed_calls_fail_unchanged() {
   !R = adt.struct<"R">
   !Layout = adt.struct<"R",(core.i32)>
   func.func @f(%raw: core.ptr) -> !R {
-    %value = adt.ref_cast %raw {type = !R} : !R
+    %value = adt.ref_cast %raw : core.ptr to !R
     func.return %value
   }
 }"#,
@@ -2834,7 +2834,7 @@ fn stale_identity_unsupported_regions_and_malformed_calls_fail_unchanged() {
   !B = adt.struct<"B">
   !BLayout = adt.struct<"B",(core.i32)>
   func.func @f(%value: !A) -> !B {
-    %wrong = adt.ref_cast %value {type = !B} : !B
+    %wrong = adt.ref_cast %value : !A to !B
     func.return %wrong
   }
 }"#,
@@ -2916,25 +2916,6 @@ fn reachable_recursive_nominal_layout_is_validated_once() {
 
     assert_eq!(plan.rtti_types().len(), 1);
     assert_eq!(plan.rtti_types()[0].fields, [FieldKind::Managed]);
-}
-
-#[test]
-fn direct_layout_in_live_null_metadata_is_managed() {
-    let (ctx, _module, plan) = build(
-        r#"core.module @test {
-  !Node = adt.struct<"__native_node",(core.i32)>
-  func.func @empty() -> tribute_rt.anyref {
-    %null = adt.ref_null {type = !Node} : tribute_rt.anyref
-    func.return %null
-  }
-}"#,
-    );
-
-    let node = ctx
-        .type_alias_by_text("Node")
-        .expect("parsed native node alias");
-    assert!(plan.is_managed_type(&ctx, node));
-    assert!(plan.rtti_types().is_empty());
 }
 
 #[test]

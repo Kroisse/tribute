@@ -465,28 +465,8 @@ impl ActionPlanner<'_> {
         if tribute_ir::dialect::tribute_rt::IntoRaw::matches(self.ir, op) {
             return self.plan_into_raw(op, transferred);
         }
-        if let Ok(null) = adt::RefNull::from_op(self.ir, op) {
-            let [result] = self.ir.op_results(op) else {
-                return Err(OwnershipPlanError::new(
-                    "adt.ref_null has malformed result arity",
-                ));
-            };
-            let ty = null.r#type(self.ir);
-            let result_managed = is_managed_value(self.ir, *result, self.managed_layouts);
-            let declared_managed = is_typed_managed_reference(self.ir, ty, self.managed_layouts);
-            if result_managed
-                && (!declared_managed
-                    || !types_compatible(
-                        self.ir,
-                        self.ir.value_ty(*result),
-                        ty,
-                        self.managed_layouts,
-                    ))
-            {
-                return Err(OwnershipPlanError::new(
-                    "adt.ref_null must inhabit a compatible managed reference type",
-                ));
-            }
+        // The null inhabitant of its result type owns nothing.
+        if adt::RefNull::matches(self.ir, op) {
             return Ok(());
         }
         if let Ok(new) = adt::StructNew::from_op(self.ir, op) {

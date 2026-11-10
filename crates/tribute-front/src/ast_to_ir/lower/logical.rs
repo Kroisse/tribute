@@ -237,7 +237,6 @@ mod tests {
         });
         let anyref = ctx.anyref_type(&mut ir);
         let value = adt::RefNull::operands()
-            .r#type(anyref)
             .results(anyref)
             .build(&mut ir, location);
         ir.push_op(block, value.op_ref());

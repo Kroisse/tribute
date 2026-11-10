@@ -899,7 +899,6 @@ impl TerminalFunctions {
             core::NilValue::operands().build(ctx, location).op_ref()
         } else {
             adt::RefNull::operands()
-                .r#type(anyref_ty)
                 .results(anyref_ty)
                 .build(ctx, location)
                 .op_ref()

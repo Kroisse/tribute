@@ -55,8 +55,8 @@ const ALIAS_PROJECTION: &str = r#"core.module @test {
   !ChoiceRef = adt.enum<"Choice">
   func.func @load(%choice: !ChoiceRef) -> !ChildRef {
     ^entry:
-      %erased = adt.ref_cast %choice {type = tribute_rt.anyref} : tribute_rt.anyref
-      %restored = adt.ref_cast %erased {type = !ChoiceRef} : !ChoiceRef
+      %erased = adt.ref_cast %choice : !ChoiceRef to tribute_rt.anyref
+      %restored = adt.ref_cast %erased : tribute_rt.anyref to !ChoiceRef
       %child = adt.variant_get %restored {type = !Choice, tag = 0, field = 0} : !ChildRef
       cf.br [^next]
     ^next:
@@ -79,8 +79,8 @@ const NESTED_PROJECTION: &str = r#"core.module @test {
       %inner = adt.struct_new(%child) : (!ChildRef) -> !InnerRef
       %owner = adt.struct_new(%inner) : (!InnerRef) -> !Box
       %loaded = adt.struct_get %owner {field = 0, type = !Box} : !InnerRef
-      %erased = adt.ref_cast %loaded {type = tribute_rt.anyref} : tribute_rt.anyref
-      %restored = adt.ref_cast %erased {type = !InnerRef} : !InnerRef
+      %erased = adt.ref_cast %loaded : !InnerRef to tribute_rt.anyref
+      %restored = adt.ref_cast %erased : tribute_rt.anyref to !InnerRef
       %nested = adt.struct_get %restored {field = 0, type = !Inner} : !ChildRef
       cf.br [^next]
     ^next:

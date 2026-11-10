@@ -170,7 +170,7 @@ fn root_dispatch_definition_matches_fixed_wasm_tail_signature_and_validates_bina
     let (mut ctx, module) = source_logical_cps_root_module(
         r#"
             %dispatch = adt.struct_get %frame {field = 1, type = !__tribute_continuation_frame_root_nil} : !Dispatch
-            %resume = adt.ref_null {type = !Resume} : !Resume
+            %resume = adt.ref_null : !Resume
             %product = adt.struct_new() : () -> !Payload
             %payload = core.unrealized_conversion_cast %product : !Payload to tribute_rt.anyref
             effect.dispatch_cps @State @get(%payload) [%evidence, %dispatch, %resume] -> core.nil

@@ -344,7 +344,7 @@ mod tests {
         let result = run_pass(
             r#"core.module @test {
   func.func @test_fn() -> core.ptr {
-    %0 = adt.ref_null {type = adt.struct<"Env", (core.i32)>} : core.ptr
+    %0 = adt.ref_null : core.ptr
     func.return %0
   }
 }"#,
@@ -358,7 +358,7 @@ mod tests {
             r#"core.module @test {
   func.func @test_fn() -> core.ptr {
     %0 = clif.iconst 100 : core.ptr
-    %1 = adt.ref_cast %0 {type = adt.struct<"Env", (core.i32)>} : core.ptr
+    %1 = adt.ref_cast %0 : core.ptr to core.ptr
     func.return %1
   }
 }"#,

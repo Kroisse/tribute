@@ -981,10 +981,8 @@ impl OpRewritePattern for RefNullPattern {
         let loc = ctx.op(op).location;
         let result_ty = ref_null.result_ty(ctx);
 
-        let adt_type = ref_null.r#type(ctx);
-
         let new_op = wasm_gc_dialect::RefNull::operands()
-            .target_type(adt_type)
+            .target_type(result_ty)
             .results(result_ty)
             .build(ctx, loc);
         rewriter.replace_op(new_op.op_ref());
@@ -1034,11 +1032,8 @@ impl OpRewritePattern for RefCastPattern {
         let ref_val = ref_cast.r#ref(ctx);
         let result_ty = ref_cast.result_ty(ctx);
 
-        // Get the target type from the adt type attribute
-        let adt_type = ref_cast.r#type(ctx);
-
         let new_op = wasm_gc_dialect::RefCast::operands(ref_val)
-            .target_type(adt_type)
+            .target_type(result_ty)
             .results(result_ty)
             .build(ctx, loc);
         rewriter.replace_op(new_op.op_ref());
@@ -1213,9 +1208,9 @@ mod tests {
     adt.array_set %array, %at, %element
     %length = adt.array_len %filled : core.index
 
-    %null = adt.ref_null {type = !S} : !S
+    %null = adt.ref_null : !S
     %is_null = adt.ref_is_null %null : core.i32
-    %ref = adt.ref_cast %null {type = !S} : !S
+    %ref = adt.ref_cast %null : !S to !S
     wasm.return
   }
 }"#,

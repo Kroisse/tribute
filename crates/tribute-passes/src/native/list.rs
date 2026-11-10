@@ -149,11 +149,15 @@ impl OpRewritePattern for EmptyPattern {
         let op = empty.op_ref();
         let result_ty = ctx.op_result_types(op)[0];
         let node_ty = node_type(ctx, empty.element_type(ctx));
+        let location = ctx.op(op).location;
         let null = adt::RefNull::operands()
-            .r#type(node_ty)
+            .results(node_ty)
+            .build(ctx, location);
+        rewriter.insert_op(null.op_ref());
+        let list = core::UnrealizedConversionCast::operands(null.result(ctx))
             .results(result_ty)
-            .build(ctx, ctx.op(op).location);
-        rewriter.replace_op(null.op_ref());
+            .build(ctx, location);
+        rewriter.replace_op(list.op_ref());
         Some(())
     }
 }

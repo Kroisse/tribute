@@ -311,23 +311,34 @@ mod adt {
     #[asm_format(r#ref attr_dict_bare ":" type(result))]
     fn array_len(r#ref: Value<impl Array>) -> Value<Index> {}
 
-    /// The null inhabitant of exactly the nominal value type `type` (a
-    /// layout key or a row instance), which is also the result type. Retaining or releasing it is a no-op.
+    /// The null inhabitant of exactly its result type, a managed reference
+    /// type such as a nominal value type (a layout key or a row instance).
+    /// Retaining or releasing it is a no-op.
+    ///
+    /// ```text
+    /// %n = adt.ref_null : !"pkg::Node"
+    /// ```
     #[flags(Pure)]
     #[asm_format(attr_dict_bare ":" type(result))]
-    fn ref_null(r#type: Attr<Type>) -> Value<_> {}
+    fn ref_null() -> Value<_> {}
 
     #[flags(Pure)]
     #[asm_format(r#ref attr_dict_bare ":" type(result))]
     fn ref_is_null(r#ref: Value<_>) -> Value<_> {}
 
-    /// `ref` as the nominal value type `type` (a layout key or a row
-    /// instance), which is also the result type. It is allowed only between managed references whose nominal identity has been
-    /// established to be the same.
+    /// `ref` as its result type, a managed reference type such as a nominal
+    /// value type (a layout key or a row instance). It is allowed only
+    /// between managed references whose nominal identity has been
+    /// established to be the same. The text writes both types, as
+    /// `core.unrealized_conversion_cast` does.
+    ///
+    /// ```text
+    /// %c = adt.ref_cast %v : tribute_rt.anyref to !"pkg::Node"
+    /// ```
     #[implements(Fold)]
     #[flags(Pure)]
-    #[asm_format(r#ref attr_dict_bare ":" type(result))]
-    fn ref_cast(r#type: Attr<Type>, r#ref: Value<_>) -> Value<_> {}
+    #[asm_format(r#ref attr_dict_bare ":" type(r#ref) "to" type(result))]
+    fn ref_cast(r#ref: Value<_>) -> Value<_> {}
 
     /// A string constant: a value of the canonical String type holding
     /// `value`, written as `arith.constant` writes its value.
@@ -555,17 +566,14 @@ impl OpRewritePattern for ForwardStructGet {
     }
 }
 
-/// `adt.ref_cast {type = T} (%x : T)` → `%x`.
+/// `adt.ref_cast %x : T to T` → `%x`.
 ///
 /// The cast is the identity when its operand already has the result type.
 impl Fold for RefCast {
     fn fold(&self, ctx: &IrContext) -> Option<FoldResult> {
-        let op = self.op_ref();
-        let cast = self;
-        let operand = cast.r#ref(ctx);
-        let [result_ty] = ctx.op_result_types(op).as_array()?;
-        (ctx.value_ty(operand) == *result_ty && cast.r#type(ctx) == *result_ty)
-            .then_some(FoldResult::Forward(operand))
+        let operand = self.r#ref(ctx);
+        let [result_ty] = ctx.op_result_types(self.op_ref()).as_array()?;
+        (ctx.value_ty(operand) == *result_ty).then_some(FoldResult::Forward(operand))
     }
 }
 
@@ -2875,8 +2883,8 @@ mod canonicalize_tests {
   !pair = adt.struct<"Pair", (core.i32, core.i64)>
   func.func @f(%x: core.i32, %y: core.i64, %z: core.i64) -> core.i64 {
     %p = adt.struct_new(%x, %y) : (core.i32, core.i64) -> !pair
-    %any = adt.ref_cast %p {type = tribute_rt.anyref} : tribute_rt.anyref
-    %alias = adt.ref_cast %any {type = !pair} : !pair
+    %any = adt.ref_cast %p : !pair to tribute_rt.anyref
+    %alias = adt.ref_cast %any : tribute_rt.anyref to !pair
     adt.struct_set %alias, %z {type = !pair, field = 1}
     %r = adt.struct_get %p {type = !pair, field = 1} : core.i64
     func.return %r
@@ -2947,7 +2955,7 @@ mod canonicalize_tests {
             r#"core.module @test {
   !pair = adt.struct<"Pair", (core.i32, core.i64)>
   func.func @f(%p: !pair) -> !pair {
-    %r = adt.ref_cast %p {type = !pair} : !pair
+    %r = adt.ref_cast %p : !pair to !pair
     func.return %r
   }
 }"#,
@@ -2962,7 +2970,7 @@ mod canonicalize_tests {
             r#"core.module @test {
   !pair = adt.struct<"Pair", (core.i32, core.i64)>
   func.func @f(%p: !pair) -> tribute_rt.anyref {
-    %r = adt.ref_cast %p {type = tribute_rt.anyref} : tribute_rt.anyref
+    %r = adt.ref_cast %p : !pair to tribute_rt.anyref
     func.return %r
   }
 }"#,
