@@ -34,14 +34,15 @@ Gleam도 glob import를 지원하지 않으며, Rust/Haskell 커뮤니티에서�
 ### Compiler-owned builtin bindings
 
 파일 기반 module tree가 구성되기 전에도 compiler-owned binding은 resolver namespace에
-virtual export로 주입할 수 있다. 현재 runtime 전용 타입 `std::runtime::Slots`가
-이 경로를 사용한다. 사용자 AST나 표준 라이브러리 AST에 synthetic declaration을
-추가하지 않으며, semantic identity는 source declaration과 구분된다. Ability는 이 경로를
-쓰지 않는다. 표준 입출력 ability도 패키지 `std`의 source에 선언한다([io.md](io.md)).
+virtual export로 주입할 수 있다. 현재 runtime 전용 타입 `std::runtime::Slots`와
+`std::runtime::ByteArray`가 이 경로를 사용한다. 사용자 AST나 표준 라이브러리 AST에
+synthetic declaration을 추가하지 않으며, semantic identity는 source declaration과
+구분된다. Ability는 이 경로를 쓰지 않는다. 표준 입출력 ability도 패키지 `std`의
+source에 선언한다([io.md](io.md)).
 Virtual export는 그 binding을 내보내는 패키지(`std`)의 이름공간에 속하며, 일반
 항목과 같은 [가시성](#가시성-visibility) 규칙을 따른다. `std::runtime`의 virtual
-export(`Slots(a)`, `Dispatch`)는 그 모듈이 `pub(pkg)`이므로 패키지 `std` 밖에서 보이지
-않는다.
+export(`Slots(a)`, `ByteArray`, `Dispatch`)는 그 모듈이 `pub(pkg)`이므로 패키지 `std`
+밖에서 보이지 않는다.
 
 이 경로는 일반 standard-library module loading을 대신하지 않는다. Source로 구현할 수
 있는 표준 타입과 함수는 장기적으로 file-based module system을 사용한다. 다만 source
@@ -149,7 +150,7 @@ source로 쓴다. 이 code는 패키지 `std`의 `pub(pkg)` 모듈 `std::runtime
 [가시성](#가시성-visibility) 규칙에 따라 패키지 `std` 밖에서는 이 모듈과 그 항목을
 이름으로 가리킬 수 없다. 사용자 프로그램은 이 code를 부르지 않는다.
 
-Source로 표현할 수 없는 runtime 전용 타입(`Slots(a)`, `Dispatch`)은
+Source로 표현할 수 없는 runtime 전용 타입(`Slots(a)`, `ByteArray`, `Dispatch`)은
 [compiler-owned builtin binding](#compiler-owned-builtin-bindings)으로
 `std::runtime` 안에만 virtual export한다. Virtual export도 export된 모듈의
 가시성을 따르므로 패키지 `std` 밖에서는 보이지 않는다.
@@ -167,9 +168,9 @@ lowering이 쓰는 runtime 항목 경로의 집합을 가진다.
   compiler 오류로 보고한다.
 - `std::runtime` 안의 다른 선언은 runtime 항목이 아니다. Runtime 항목이 부르는
   helper일 수 있다.
-- Virtual export한 compiler 소유 타입(`Slots(a)`, `Dispatch`)과
-  `std::runtime::Slots`의 compiler intrinsic은 runtime 항목이 아니다. 그 IR
-  형태는 compiler가 정하므로 `tribute.types`로 게시하지 않으며, intrinsic은
+- Virtual export한 compiler 소유 타입(`Slots(a)`, `ByteArray`, `Dispatch`)과
+  `std::runtime::Slots`, `std::runtime::ByteArray`의 compiler intrinsic은
+  runtime 항목이 아니다. 그 IR 형태는 compiler가 정하므로 `tribute.types`로 게시하지 않으며, intrinsic은
   아래 `extern "intrinsic"` directive 규칙을 따른다.
 - Lowering은 runtime 함수를 canonical 경로에서 만든 IR symbol로 찾는다. 패키지
   `std`의 선언 식별자는 사용자 패키지의 선언과 섞이지 않으므로(위

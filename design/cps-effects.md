@@ -1398,7 +1398,10 @@ Wasm dialect lowering이 이를 `wasm.call_indirect` /
 struct 위의 `wasm.func`로 compile된다.
 
 Marker는 `outer: Slots(Marker)`로 자기 배열을 담으므로 그대로 쓰면 재귀 GC 타입이
-된다. Wasm target은 struct의 배열 field를 `arrayref`로 저장하고 읽을 때 구체 배열로
-cast하며, evidence 배열의 원소는 `structref`로 저장한다. Evidence 값은 `adt` 연산이
-모두 Wasm 연산으로 바뀔 때까지 `adt.array` 타입을 유지하고, 그 뒤 한 번에
-`wasm_gc.array<wasm.structref>`로 바뀐다.
+된다. Wasm target은 원소가 참조인 배열을 struct field에 `arrayref`로 저장하고 읽을
+때 구체 배열로 cast하며([GC 배열 표현][wasm-gc-arrays]), evidence 배열의 원소는
+`structref`로 저장한다. Evidence 값은 `adt` 연산이 모두 Wasm 연산으로 바뀔 때까지
+`adt.array` 타입을 유지하고, 그 뒤 한 번에 `wasm_gc.array<wasm.structref>`로
+바뀐다.
+
+[wasm-gc-arrays]: wasm-backend.md#structural-gc-타입과-descriptor-필드

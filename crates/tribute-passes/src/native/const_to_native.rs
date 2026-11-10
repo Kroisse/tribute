@@ -538,7 +538,7 @@ mod tests {
   adt.enum_decl "String" !PreludeString ["Leaf", "Branch"]
   adt.enum_decl "user::String" !UserString ["Leaf", "Branch"]
   func.func @main() -> core.nil {
-    %string = adt.string_const {value = "hello"} : tribute_rt.anyref
+    %string = adt.string_const "hello" : tribute_rt.anyref
     func.return
   }
 }"#,
@@ -614,9 +614,9 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @main() -> core.nil {
-    %first = adt.bytes_const {value = b"first"} : core.bytes
-    %second = adt.bytes_const {value = b"second"} : core.bytes
-    %again = adt.bytes_const {value = b"first"} : core.bytes
+    %first = adt.bytes_const b"first" : core.bytes
+    %second = adt.bytes_const b"second" : core.bytes
+    %again = adt.bytes_const b"first" : core.bytes
     func.return
   }
 }"#,
@@ -654,8 +654,8 @@ mod tests {
     func.return
   }
   func.func @main() -> core.nil {
-    %kept = adt.bytes_const {value = b"kept"} : core.bytes
-    %wide = adt.bytes_const {value = b"wide"} : core.bytes
+    %kept = adt.bytes_const b"kept" : core.bytes
+    %wide = adt.bytes_const b"wide" : core.bytes
     func.return
   }
 }"#,
@@ -690,7 +690,7 @@ mod tests {
     ^param:
       cf.br %x [^merge]
     ^literal:
-      %no = adt.bytes_const {value = b"no"} : core.bytes
+      %no = adt.bytes_const b"no" : core.bytes
       cf.br %no [^merge]
     ^merge(%picked: core.bytes):
       func.return %picked

@@ -92,38 +92,37 @@ Boxed primitives are the simplest heap objects — just the raw value:
 
 ### Bytes
 
-`Bytes` 값은 RC object이고, 읽는 byte 범위와 그 byte의 소유자를 함께 가진다.
+`Bytes`는 prelude source가 선언한 일반 struct이며, byte는
+[byte 배열](types.md#bytearray)에 담긴다. Byte 배열은 원소가 `core.i8`인
+일반 [배열](#array) 객체다.
 
 ```text
-Bytes: [ptr: 첫 byte의 주소] [len: u64] [owner: Bytes 또는 null] [cap: u64] [bytes...]
+std::Bytes:               struct { data: ByteArray, start: Nat, len: Nat }
+std::runtime::ByteArray:  adt.array<core.i8>  →  [len: i64] [bytes...]
 ```
 
-`ptr`와 `len`은 이 값이 보는 byte 범위다. 읽는 쪽은 이 둘만 쓰며 `owner`와 `cap`을
-보지 않는다. `cap`은 객체 뒤에 붙은 byte 수이고, `owner`는 범위의 byte를 가진 다른
-`Bytes`에 대한 owned 참조다.
+- 값이 보는 byte는 `data`의 `[start, start + len)`이다. 잘라내기는 같은 `data`를
+  담은 새 `Bytes`를 만들며 byte를 복사하지 않는다. `data`는 다른 struct field처럼
+  owned 참조이므로, 잘라낸 결과가 살아 있는 동안 배열도 살아 있다.
+- Byte의 소유자를 따로 기록하거나 해제를 특수하게 다루지 않는다. `Bytes`의
+  release는 일반 struct의 [type-specific release](#type-specific-release)이고, byte
+  배열의 release는 managed 원소가 없는 배열의 release다.
+- Struct의 field는 struct의 [가시성](modules.md#가시성-visibility)을 따르므로
+  `start + len ≤ len(data)`는 값이 보장하는 불변식이 아니다. Byte를 읽는 곳이 모두
+  범위를 검사한다. `adt.array_get`은 범위 밖 index를 trap으로 끝내고, byte 범위를
+  받는 runtime 함수는 overflow를 검사한 덧셈으로 범위를 확인한 뒤 벗어나면 실행을
+  끝낸다. 범위 검사 없이 byte 주소를 만드는 경로는 없다.
 
-| 값 | `ptr` | `owner` | `cap` |
-| ---- | ---- | ---- | ---- |
-| 새 byte를 만든 결과(이어 붙이기, 입력 읽기) | 자신의 뒤에 붙은 byte | null | 붙은 byte 수 |
-| Byte를 공유하는 결과(잘라내기) | 다른 `Bytes`에 붙은 byte의 일부 | 그 `Bytes` | `0` |
-| Literal | `clif.data` 같은 정적 저장소 | null | `0` |
+Byte 배열의 RTTI index는 예약 index `0`이다([RTTI table](#rtti-table)). Runtime은
+compiler가 계획한 descriptor 번호 없이 이 번호로 byte 배열을 직접 할당한다.
 
-- RC object는 할당된 뒤 옮겨지지 않으므로 자신의 뒤에 붙은 byte를 가리키는 `ptr`는
-  객체가 살아 있는 동안 유효하다.
-- 잘라내기의 결과는 byte를 실제로 가진 `Bytes`를 retain해 `owner`에 둔다. 원본이
-  byte를 공유하는 값이면 원본이 아니라 원본의 `owner`를 retain하고, 원본이 정적 byte를
-  보면 `owner`는 null이다. 따라서 `owner`는 다른 `owner`를 거치지 않으며, 결과는 원본이
-  release된 뒤에도 byte를 읽을 수 있다.
-- `Bytes`의 release는 null이 아닌 `owner`를 release한 뒤, 고정 부분에 `cap`을 더한
-  크기로 자신을 해제한다.
-
-Byte 하나를 읽는 compiler intrinsic은 native에서 runtime 함수 호출이 된다. `ptr`에서
-읽어 낸 주소는 `Bytes`가 살아 있는 동안만 유효한데, 호출은 argument를 빌리므로 읽는
-동안 `Bytes`가 release되지 않는다.
-
-Runtime 함수는 `Bytes` argument를 호출 동안 빌리고, `Bytes` 결과는 호출자가 unit
-하나를 갖는 새 값으로 돌려준다. Runtime이 다른 기록 안에 raw pointer로 담아 돌려준
-`Bytes`도 같은 방식으로 unit 하나를 넘겨준다.
+Runtime 함수는 byte 배열 argument를 호출 동안 빌리고, 읽을 범위는 별도의 정수
+argument로 받는다. Byte 배열 결과는 호출자가 unit 하나를 갖는 새 값으로 돌려준다.
+Runtime이 다른 기록 안에 raw pointer로 담아 돌려준 byte 배열도 같은 방식으로 unit
+하나를 넘겨준다. `Bytes` struct의 layout은 compiler가 정하므로
+([Field Reordering](#field-reordering)) runtime은 `Bytes`를 만들거나 읽지 않는다.
+Byte 배열을 `Bytes`로 감싸고 `Bytes`에서 배열과 범위를 꺼내는 일은 compiler가 만든
+code가 한다.
 
 ### Array
 
@@ -145,6 +144,39 @@ Array: [len: i64] [element: E...]
 - 배열 operation의 ownership 규칙은
   [typed ownership plan](#1-typed-ownership-and-rtti-plan), 해제는
   [type-specific release](#type-specific-release)가 정한다.
+
+### 정적 객체
+
+정적 객체는 compiler가 프로그램의 data에 둔, 해제되지 않는 RC 객체다. 지금은
+byte 배열 literal(`adt.bytes_const`)만 정적 객체가 된다.
+
+```text
+[-8] refcount: u32 = 2^31
+[-4] rtti_idx: u32   — 일반 객체와 같은 descriptor index
+[ 0] payload...
+```
+
+- 정적 객체는 쓰기 가능한 data에 RC header와 payload를 함께 둔다. Refcount가 바뀌므로
+  읽기 전용 data에 두지 않는다. 할당과 payload 복사가 없으며, 같은 literal을 여러 번
+  평가해도 객체는 하나다.
+- Retain과 release는 정적 객체를 구별하지 않는다. 일반 객체와 같은 증감을 하며, 그
+  때문에 검사나 분기를 더하지 않는다. Refcount는 `2^31`에서 시작하므로 균형 잡힌
+  retain과 release로는 0에 닿지 않고, 객체는 해제되지 않는다.
+- Retain은 일반 객체에서도 overflow를 검사하지 않는다. RC 계약은 한 객체에 동시에
+  살아 있는 unit이 `2^31`개보다 적다고 가정한다. 이 범위 안에서 일반 객체의
+  refcount는 `u32`를 넘지 않고, 정적 객체의 refcount는 `2^31`과 `2^32` 사이에 머물러
+  0이나 1에 닿지 않는다. Unit 하나는 적어도 pointer 크기의 자리를 차지하므로, 이
+  가정을 깨려면 한 객체를 가리키는 owned 참조만으로 16 GiB 이상이 필요하다. 이
+  범위를 넘는 프로그램의 동작은 정의하지 않는다.
+- 정적 객체를 내는 operation의 결과는 일반 할당처럼 unit 하나를 가진 owned 값이다.
+  Lowering은 정적 객체를 retain해 그 unit을 만든다. 그렇지 않으면 평가마다 release만
+  쌓여 refcount가 결국 0에 닿는다.
+- 정적 객체의 refcount는 언제나 1보다 크므로 공유된 객체로 보인다. 유일성에 기대는
+  제자리 재사용, 예를 들어 `tribute_rt.release_moving`의 field 이동은 정적 객체의
+  payload를 바꾸지 않는다. 유일함의 정적 증명은 할당 결과에만 적용되므로 정적 객체에는
+  쓰이지 않는다.
+- 정적 객체의 payload는 managed 참조를 담지 않는다. 담게 된다면 그 참조도 정적
+  객체만 가리켜야 한다.
 
 ### Evidence
 
@@ -442,8 +474,8 @@ block을 만들므로 이런 edge를 만들지 않는다.
 
 Nominal 값 타입은 type 자체로 managed다. Native RC-header allocation을 표현하는
 검증된 internal ADT/closure layout과 `tribute_rt.anyref`/`intref`도 각자의 typed
-contract로 분류한다. `core.bytes`는 [`Bytes`](#bytes) 객체에 대한 managed 참조이고,
-`adt.array`는 원소 타입과 관계없이 [array](#array) 객체에 대한 managed 참조다.
+contract로 분류한다. `adt.array`는 원소 타입과 관계없이 [array](#array) 객체에
+대한 managed 참조이며, [byte 배열](#bytes)도 여기에 든다.
 Unmanaged linear array인 `core.array`는 RC 객체가 아니다.
 Function/code address, borrowed buffer, `core.ptr`는 unmanaged다. 변환 결과가
 pointer라는 사실은 이 분류에 참여하지 않는다.
@@ -962,12 +994,14 @@ Variant의 필드 이름은 선언 순서의 위치 번호(`"0"`, `"1"`, …)다
 
 | Index | 의미 |
 | ---- | ---- |
-| `0` | [`Bytes`](#bytes). `owner`를 release한 뒤 `cap`을 읽어 해제 |
+| `0` | [byte 배열](#bytes) `adt.array<core.i8>`. `kind = 4`, 원소는 부호 없는 8비트 정수 |
 | `1`–`4` | boxing된 `Bool`, `Nat`, `Int`, `Float`. 고정 크기 release |
 | 예약 범위 다음 | ownership planning이 할당 순서대로 정한 struct, variant, 배열의 descriptor |
 
 예약 범위는 compiler가 생성하는 할당 operation 없이 runtime이나 boxing lowering이
-만드는 값에만 쓴다. 할당 operation으로 만드는 값은 모두 예약 범위 다음 번호를 받는다.
+만드는 값에만 쓴다. Byte 배열은 runtime도 할당하므로 compiler가 만드는 byte 배열도
+예약 index `0`을 쓴다. 그 밖에 할당 operation으로 만드는 값은 모두 예약 범위 다음
+번호를 받는다.
 소스 struct와 variant뿐 아니라 closure layout처럼 compiler가 소유한 layout의 할당도
 여기에 속하며, 그 descriptor는 compiler 소유 이름과 필드 종류를 가진다. Closure는
 base와 capture layout마다 descriptor를 하나씩 가지며, 배열의 descriptor 단위는
@@ -976,7 +1010,7 @@ base와 capture layout마다 descriptor를 하나씩 가지며, 배열의 descri
 
 RTTI index는 전체 프로그램 컴파일을 전제로 한 프로그램 내부 번호다. Table과
 `__tribute_deep_release`는 그 프로그램의 모듈 안에서만 index를 해석한다. Runtime과
-공유하는 번호는 runtime이 직접 할당하는 `Bytes`의 `0`뿐이며
+공유하는 번호는 runtime이 직접 할당하는 byte 배열의 `0`뿐이며
 고정이다. 그 밖의 예약 범위를 늘릴 때는 호환 단계가 필요 없고, 사용자 layout index는
 예약 범위 바로 다음부터 시작한다. 따로 컴파일한 단위 사이에서 객체가
 오가게 되면 이 전제가 깨지므로, 그때는 번호 대신 header나 descriptor가 스스로 layout을

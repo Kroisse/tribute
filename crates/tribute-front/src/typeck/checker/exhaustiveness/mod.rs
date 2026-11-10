@@ -42,6 +42,10 @@ impl<'db> TypeChecker<'db> {
     ) -> bool {
         let report = reported.insert(span_node_id);
         if arms.is_empty() {
+            // A case without arms covers every value of an empty type.
+            if self.is_empty_type(scrutinee_ty) {
+                return true;
+            }
             if report {
                 self.report_case(
                     span_node_id,
@@ -133,6 +137,19 @@ impl<'db> TypeChecker<'db> {
             }
         }
         missing.is_empty()
+    }
+
+    /// Whether `ty` itself has no values: `Never`, or an enum without
+    /// variants. Fields of other types are not inspected.
+    fn is_empty_type(&self, ty: Type<'db>) -> bool {
+        match ty.kind(self.db()) {
+            TypeKind::Never => true,
+            TypeKind::Named { id, .. } => self
+                .env
+                .lookup_enum_variants(id.path(self.db()))
+                .is_some_and(|variants| variants.is_empty()),
+            _ => false,
+        }
     }
 
     /// The nominal type of a scrutinee, if it has one.

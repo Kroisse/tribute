@@ -601,6 +601,38 @@ fn main() ->{Io} Nil {
     assert_native_output("handler_op_never_abort.trb", code, "99");
 }
 
+/// The prelude's `absurd` and a case without arms eliminate the `Never`
+/// result of an aborting operation as the branch's `Nat`.
+#[test]
+fn test_never_eliminators_after_abort() {
+    let code = r#"use std::io::{Io, print_line}
+
+ability Stop {
+    op stop() -> Never
+}
+
+fn run(n: Nat) ->{Stop} Nat {
+    case n {
+        0 -> absurd(Stop::stop())
+        1 -> case Stop::stop() {}
+        _ -> n
+    }
+}
+
+fn total(n: Nat) -> Nat {
+    handle run(n) {
+        do x { x }
+        op Stop::stop() { 7 }
+    }
+}
+
+fn main() ->{Io} Nil {
+    print_line({ total(0) + total(1) + total(5) }.to_string)
+}
+"#;
+    assert_output_on_both_targets("never_eliminators_after_abort.trb", code, "19");
+}
+
 /// Test Abort ability with a parameterized abort operation.
 ///
 /// The abort operation carries a Nat payload, and the handler uses it

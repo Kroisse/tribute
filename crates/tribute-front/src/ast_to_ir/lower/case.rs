@@ -615,11 +615,12 @@ fn emit_literal_check<'db>(
         }
         LiteralPattern::String(text) => {
             let equality = builder.ctx.literal_equalities().string;
-            let anyref_ty = builder.ctx.anyref_type(builder.ir);
+            // The literal is a value of the scrutinee's `String` type.
+            let string_ty = builder.ir.value_ty(scrutinee);
             let text = builder.ir.intern_str(text);
             let literal = adt::StringConst::operands()
                 .value(text)
-                .results(anyref_ty)
+                .results(string_ty)
                 .build(builder.ir, location);
             builder.ir.push_op(builder.block, literal.op_ref());
             let literal = literal.result(builder.ir);

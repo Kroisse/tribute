@@ -18,7 +18,6 @@ use tribute_ir::dialect::adt;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::ops::DialectOp;
-use trunk_ir::ops::DialectType;
 use trunk_ir::refs::{OpRef, RegionRef};
 use trunk_ir::rewrite::{
     Module, OpRewritePattern, PatternApplicator, PatternRewriter, TypeConverter,
@@ -39,7 +38,7 @@ impl fmt::Display for ConstValidationError {
             }
             Self::InvalidStringResultType { actual } => write!(
                 f,
-                "adt.string_const must produce wasm.anyref before canonical String lowering, found {actual}"
+                "adt.string_const must produce a value of the canonical String type, found {actual}"
             ),
         }
     }
@@ -133,10 +132,9 @@ pub(crate) fn analyze_consts(ctx: &IrContext, module: Module) -> ConstAnalysis {
     }
 }
 
-/// Validate the representation expected at the Wasm constant-lowering boundary.
-///
-/// This runs after primitive type normalization, so source-level
-/// `tribute_rt.anyref` results must already be represented as `wasm.anyref`.
+/// Validate the representation expected at the Wasm constant-lowering boundary:
+/// a string constant is a value of the canonical String type, which its
+/// lowering builds as that enum's leaf.
 pub(crate) fn validate_for_wasm(
     ctx: &IrContext,
     module: Module,
@@ -151,10 +149,10 @@ pub(crate) fn validate_for_wasm(
         if result.is_err() || adt::StringConst::from_op(ctx, op).is_err() {
             return;
         }
-        if analysis.string_leaf.is_none() {
+        let Some((string_ty, _)) = analysis.string_leaf else {
             result = Err(ConstValidationError::MissingCanonicalStringType);
             return;
-        }
+        };
 
         let Some(&result_ty) = ctx.op_result_types(op).first() else {
             result = Err(ConstValidationError::InvalidStringResultType {
@@ -162,7 +160,7 @@ pub(crate) fn validate_for_wasm(
             });
             return;
         };
-        if !wasm_dialect::Anyref::matches(ctx, result_ty) {
+        if adt::layout_of(ctx, result_ty) != Some(string_ty) {
             result = Err(ConstValidationError::InvalidStringResultType {
                 actual: ctx.get_type(result_ty).name.to_text(ctx),
             });
@@ -365,9 +363,7 @@ mod tests {
             .iter()
             .enumerate()
             .map(|(index, value)| {
-                format!(
-                    "    %value{index} = adt.string_const {{value = \"{value}\"}} : tribute_rt.anyref"
-                )
+                format!("    %value{index} = adt.string_const \"{value}\" : tribute_rt.anyref")
             })
             .collect::<Vec<_>>()
             .join("\n");
@@ -410,8 +406,8 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   wasm.func @main() -> core.nil {
-    %string = adt.string_const {value = "shared"} : tribute_rt.anyref
-    %bytes = adt.bytes_const {value = b"shared"} : core.bytes
+    %string = adt.string_const "shared" : tribute_rt.anyref
+    %bytes = adt.bytes_const b"shared" : core.bytes
     wasm.return
   }
 }"#,
@@ -431,7 +427,7 @@ mod tests {
   !String = adt.enum<"String", [(wasm.anyref, wasm.anyref, core.i32), (core.bytes)]>
   adt.enum_decl "String" !String ["Branch", "Leaf"]
   wasm.func @main() -> core.nil {
-    %string = adt.string_const {value = "hello"} : wasm.anyref
+    %string = adt.string_const "hello" : !String
     wasm.return
   }
 }"#,
@@ -458,7 +454,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   wasm.func @main() -> core.nil {
-    %string = adt.string_const {value = "hello"} : wasm.anyref
+    %string = adt.string_const "hello" : wasm.anyref
     wasm.return
   }
 }"#,
@@ -482,7 +478,7 @@ mod tests {
   adt.enum_decl "String" !PreludeString ["Leaf", "Branch"]
   adt.enum_decl "user::String" !UserString ["Leaf", "Branch"]
   wasm.func @main() -> core.nil {
-    %string = adt.string_const {value = "hello"} : wasm.anyref
+    %string = adt.string_const "hello" : wasm.anyref
     wasm.return
   }
 }"#,
@@ -506,7 +502,7 @@ mod tests {
   !String = adt.enum<"String", [(core.bytes), (wasm.anyref, wasm.anyref, core.i32)]>
   adt.enum_decl "String" !String ["Leaf", "Branch"]
   wasm.func @main() -> core.nil {
-    %string = adt.string_const {value = "hello"} : wasm.anyref
+    %string = adt.string_const "hello" : !String
     wasm.return
   }
 }"#,
@@ -583,9 +579,9 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   wasm.func @main() -> core.nil {
-    %first = adt.bytes_const {value = b"first"} : core.bytes
-    %second = adt.bytes_const {value = b"second"} : core.bytes
-    %again = adt.bytes_const {value = b"first"} : core.bytes
+    %first = adt.bytes_const b"first" : core.bytes
+    %second = adt.bytes_const b"second" : core.bytes
+    %again = adt.bytes_const b"first" : core.bytes
     wasm.return
   }
 }"#,
@@ -615,9 +611,9 @@ mod tests {
   wasm.data(b"active") offset 0
   wasm.data(b"kept") offset 0 passive
   wasm.func @main() -> core.nil {
-    %new = adt.bytes_const {value = b"new"} : core.bytes
-    %kept = adt.bytes_const {value = b"kept"} : core.bytes
-    %active = adt.bytes_const {value = b"active"} : core.bytes
+    %new = adt.bytes_const b"new" : core.bytes
+    %kept = adt.bytes_const b"kept" : core.bytes
+    %active = adt.bytes_const b"active" : core.bytes
     wasm.return
   }
 }"#,

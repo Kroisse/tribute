@@ -2829,6 +2829,7 @@ fn library_names_are_the_prelude_short_names(db: &crate::TributeDatabaseImpl) {
     assert_eq!(
         names,
         [
+            "fn absurd",
             "mod Bytes",
             "mod Float",
             "mod Int",
@@ -2868,6 +2869,7 @@ fn library_names_are_the_prelude_short_names(db: &crate::TributeDatabaseImpl) {
             "Option -> std::Option (std::Option)",
             "Result -> std::Result (std::Result)",
             "String -> std::String (std::String)",
+            "absurd -> std::absurd",
         ]
     );
 }

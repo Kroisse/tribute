@@ -74,7 +74,38 @@ Case 결과와 리스트 리터럴 원소는 공통 타입 관계를 사용한�
 `fn` handler는 operation의 결과 타입을 반환한다. `resume`이 바깥 answer를 참조하는
 것은 그 answer 타입을 결정하는 독립적인 근거가 아니다.
 
-이 규칙은 명시적 제거 표현식이나 빈 case 문법을 추가하지 않는다.
+### 빈 타입과 명시적 제거
+
+`Never`와 variant가 하나도 없는 enum(`enum Void {}`)은 빈 타입이다. 빈 타입의
+값은 존재하지 않으므로, 그런 값을 받은 코드는 실행되지 않는다. 사용자 enum은
+`Never`의 별칭이 아니다. 위의 암묵적 제거는 실제 타입이 `Never`인 표현식에만
+적용되며, 빈 enum 값을 다른 타입의 자리에 쓰는 것은 타입 오류다.
+
+빈 타입의 값은 arm이 없는 `case`로 제거한다. scrutinee의 타입이 빈 타입이면
+`case x {}`는 [망라적](#망라성과-도달-불가-arm)이고, 결과를 만드는 arm이 없으므로
+그 타입은 `Never`다. 따라서 그 결과는 다시 암묵적 제거를 통해 어떤 기대 타입으로도
+검사할 수 있다.
+
+```rust
+enum Void {}
+
+fn from_void(v: Void) -> Nat {
+    case v {}
+}
+```
+
+Prelude는 `Never`의 이름 있는 eliminator를 일반 함수로 정의한다.
+
+```rust
+pub fn absurd(x: Never) ->{} a {
+    case x {}
+}
+```
+
+`absurd`는 `fn(Never) ->{} a` 타입의 순수 다형 함수이며, compiler intrinsic이나
+특수 표현식이 아니다. 암묵적 제거는 표현식 위치에만 적용되고 함수 값이나 명목
+타입의 내부에는 적용되지 않으므로, `Never`를 받는 함수 값이 필요한 자리(예:
+`Option(Never)`의 원소를 다른 타입으로 바꾸는 사상)에 `absurd`를 넘긴다.
 
 ## Function Results
 
@@ -415,6 +446,27 @@ aggregate이면 배열은 그 object에 대한 managed 참조를 담는다.
 그대로 두고 새 배열을 만든다. `get`, `remove`, `replace`는 `at < len`을,
 `insert`는 `at ≤ len`을 요구하며, target은 이를 어긴 실행을 trap으로 끝낸다.
 
+## ByteArray
+
+`std::runtime::ByteArray`는 byte를 담는 고정 길이 불변 배열이며 prelude의
+[`Bytes`](string.md#bytes)가 byte를 담는 데 쓴다. `Slots`처럼 compiler 소유
+타입이고 패키지 `std` 밖에서는 이름으로 가리킬 수 없다. 소스 언어에는 `core.i8`로
+내려가는 숫자 타입이 없으므로 `Slots(a)`의 인스턴스로 쓰지 않는다. IR에서는
+[`adt.array<core.i8>`](tribute-dialects.md#adt-배열)이다.
+
+연산은 `std::runtime::ByteArray`의 compiler intrinsic이다. 위치와 길이는 `Nat`이고
+byte 값은 `0`–`255`의 `Nat`이다.
+
+| 연산 | 뜻 | `adt` operation |
+| --- | --- | --- |
+| `len(bytes: ByteArray) -> Nat` | byte 수 | `adt.array_len` |
+| `get(bytes: ByteArray, at: Nat) -> Nat` | `at`번째 byte를 부호 없이 넓힌 값 | `adt.array_get` |
+
+`get`은 `at < len`을 요구하며, target은 이를 어긴 실행을 trap으로 끝낸다. 새 byte
+배열은 byte literal(`adt.bytes_const`)과 runtime 함수가 만든다. 두 byte 배열을 이어
+붙이는 일처럼 새 byte를 만드는 연산은 runtime 함수이며, 배열과 범위를 받아
+새 배열을 돌려준다([rc.md](rc.md#bytes)).
+
 ---
 
 ## Field Access
@@ -657,6 +709,12 @@ scrutinee의 타입과 상위 패턴의 필드 타입으로 정해진다. 중첩
 - 숫자, 문자열, bytes, rune 리터럴은 도메인이 무한한 것으로 다루므로, 이를 덮으려면
   `_`나 바인딩 패턴이 필요하다.
 - guard가 있는 arm은 망라성에 기여하지 않는다.
+- scrutinee의 타입 자체가 [빈 타입](#빈-타입과-명시적-제거)인 `case`는 arm이 없어도
+  망라적이다. 빈 타입 판정은 scrutinee의 최상위 타입에만 적용한다. 필드나 원소
+  위치의 빈 타입은 추론하지 않으므로 `Option(Never)`를 덮으려면 `.Some(_)`이
+  필요하다. 빈 타입 위의 `_`나 바인딩 arm은 경고 없이 허용한다.
+- 빈 타입이 아닌 scrutinee에 대한 arm 없는 `case`는 망라적이지 않으며
+  `no patterns provided` 오류를 받는다.
 - 앞선 guard 없는 arm들이 이미 모두 덮는 arm은 도달할 수 없으며,
   `unreachable pattern` 경고를 받는다.
 - 분석할 수 없는 패턴을 가진 arm은 guard가 있는 arm처럼 망라성에 기여하지
@@ -671,6 +729,14 @@ arm 뒤의 arm은 도달할 수 없고 `unreachable pattern` 경고를 받는다
 이 arm들을 버리고 마지막 guard 없는 arm을 패턴 검사 없이 실행한다. 따라서 모든
 arm이 실패하는 경로는 lowering 결과에 남지 않으며, 망라성 판정은 중첩 패턴까지
 정확해야 한다.
+
+Arm이 없는 `case`는 scrutinee를 `core.never` 값으로 제거하는 것으로 lowering한다.
+scrutinee가 `Never`이면 그 값 자체가 결과이고, 빈 enum이면 `core.never`로의
+`core.unrealized_conversion_cast`가 결과다. 결과를 다른 기대 타입으로 검사하는
+암묵적 제거도 `core.never`에서 그 타입으로의 cast로 lowering한다. 빈 타입에서
+출발하는 이 cast들은 실행되지 않는 경로에만 놓이며, target 표현 경계의 cast
+검증은 이를 일반 cast와 같이 다룬다. 남은 cast를 허용하도록 검증을 완화하지
+않는다.
 
 `case`는 arm마다 패턴 검사와 guard를 두는 `scf.if` 연쇄로 lowering한다. 정수
 리터럴로 고르는 `case`는 예외로, scrutinee를 판별값으로 하는 `scf.index_switch`
