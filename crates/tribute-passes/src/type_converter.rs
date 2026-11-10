@@ -220,7 +220,7 @@ mod tests {
                 continue;
             }
             lowered.unwrap();
-            let tc = crate::wasm::type_converter::wasm_type_converter(&mut ctx);
+            let tc = crate::wasm::type_converter::wasm_type_converter(&mut ctx, module);
             trunk_ir::rewrite::PatternApplicator::new(tc)
                 .add_pattern(UnrealizedCastConversionPattern)
                 .apply_partial(&mut ctx, module);
@@ -391,7 +391,8 @@ mod tests {
             Some(native_target)
         );
 
-        let wasm_converter = crate::wasm::type_converter::wasm_type_converter(&mut ctx);
+        let module = trunk_ir::parser::parse_test_module(&mut ctx, "core.module @test {}");
+        let wasm_converter = crate::wasm::type_converter::wasm_type_converter(&mut ctx, module);
         let wasm_target = wasm_converter
             .convert_type(&ctx, nominal_ty)
             .expect("Wasm nominal representation");

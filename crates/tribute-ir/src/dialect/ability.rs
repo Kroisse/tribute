@@ -499,8 +499,17 @@ pub fn is_marker_type(ctx: &IrContext, module: trunk_ir::rewrite::Module, ty: Ty
 /// Whether `ty` is the evidence type of the root module `module`: an
 /// `adt.array` of its markers.
 pub fn is_evidence_type(ctx: &IrContext, module: trunk_ir::rewrite::Module, ty: TypeRef) -> bool {
-    crate::dialect::adt::Array::from_type_ref(ctx, ty)
-        .is_some_and(|array| is_marker_type(ctx, module, array.element(ctx)))
+    let marker =
+        crate::runtime_items::runtime_type(ctx, module, crate::runtime_items::evidence::MARKER);
+    marker.is_some_and(|marker| is_evidence_of(ctx, marker, ty))
+}
+
+/// Whether `ty` is an `adt.array` of values of the marker layout `marker`,
+/// for a holder of the [`marker_type`] that no longer holds its module.
+pub fn is_evidence_of(ctx: &IrContext, marker: TypeRef, ty: TypeRef) -> bool {
+    crate::dialect::adt::Array::from_type_ref(ctx, ty).is_some_and(|array| {
+        crate::dialect::adt::layout_of(ctx, array.element(ctx)) == Some(marker)
+    })
 }
 
 /// Whether `ty` has the shape of the evidence type: an `adt.array` of

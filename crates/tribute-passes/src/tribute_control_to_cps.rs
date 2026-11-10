@@ -594,6 +594,12 @@ pub fn tribute_control_to_cps(
         .regions(new_region)
         .build(ctx, module_location);
     let candidate: Module = temp_module.into();
+    // Both verifications see the converted runtime types the module
+    // publishes, such as the evidence marker.
+    for (name, value) in &converted_module_attrs {
+        ctx.op_attrs_mut(candidate.op())
+            .insert(*name, value.clone());
+    }
     for (name, ty) in &converted_aliases {
         ctx.register_type_alias(name.clone(), *ty);
     }
@@ -603,16 +609,18 @@ pub fn tribute_control_to_cps(
     ctx.remove_op(candidate.op());
     ctx.detach_region(source_region);
     ctx.push_op_region(module.op(), new_region);
+    let source_module_attrs = ctx.op(module.op()).attributes.clone();
+    for (name, value) in converted_module_attrs {
+        ctx.op_attrs_mut(module.op()).insert(name, value);
+    }
     if let Err(error) = verify_tribute_control_post_cps(ctx, module, analyses) {
         ctx.detach_region(new_region);
         ctx.push_op_region(module.op(), source_region);
+        ctx.op_mut(module.op()).attributes = source_module_attrs;
         for (name, ty) in &source_aliases {
             ctx.register_type_alias(name.clone(), *ty);
         }
         return Err(error);
-    }
-    for (name, value) in converted_module_attrs {
-        ctx.op_attrs_mut(module.op()).insert(name, value);
     }
     Ok(())
 }
