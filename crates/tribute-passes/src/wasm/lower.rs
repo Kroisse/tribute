@@ -1123,7 +1123,7 @@ mod tests {
   !String = adt.enum<"String", [(core.bytes), (tribute_rt.anyref, tribute_rt.anyref, core.i32)]>
   adt.enum_decl "String" !String ["Leaf", "Branch"]
   func.func @main() -> core.nil {
-    %string = adt.string_const {value = "wrong"} : core.i32
+    %string = adt.string_const "wrong" : core.i32
     func.return
   }
 }"#,
@@ -1217,9 +1217,9 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @run(%newline: core.i1) -> core.nil {
-    %first = adt.bytes_const {value = b"first"} : core.bytes
-    %second = adt.bytes_const {value = b"second"} : core.bytes
-    %again = adt.bytes_const {value = b"first"} : core.bytes
+    %first = adt.bytes_const b"first" : core.bytes
+    %second = adt.bytes_const b"second" : core.bytes
+    %again = adt.bytes_const b"first" : core.bytes
     %write = tribute_io.write %first, %newline : core.nil
     %rewrite = tribute_io.write %again, %newline : core.nil
     func.return

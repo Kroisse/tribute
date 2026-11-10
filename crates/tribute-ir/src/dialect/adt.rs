@@ -329,12 +329,23 @@ mod adt {
     #[asm_format(r#ref attr_dict_bare ":" type(result))]
     fn ref_cast(r#type: Attr<Type>, r#ref: Value<_>) -> Value<_> {}
 
+    /// A string constant: a value of the canonical String type holding
+    /// `value`, written as `arith.constant` writes its value.
+    ///
+    /// ```text
+    /// %s = adt.string_const "hello" : !"std::String"
+    /// ```
     #[flags(Pure)]
-    #[asm_format(attr_dict_bare ":" type(result))]
+    #[asm_format(value attr_dict_bare ":" type(result))]
     fn string_const(value: Attr<String>) -> Value<_> {}
 
+    /// A bytes constant holding `value`.
+    ///
+    /// ```text
+    /// %b = adt.bytes_const b"\x01\x02" : core.bytes
+    /// ```
     #[flags(Pure)]
-    #[asm_format(attr_dict_bare ":" type(result))]
+    #[asm_format(value attr_dict_bare ":" type(result))]
     fn bytes_const(value: Attr<Bytes>) -> Value<_> {}
 }
 
@@ -2155,7 +2166,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  %0 = adt.string_const {value = "hi"} : core.ptr
+  %0 = adt.string_const "hi" : core.ptr
 }"#,
         );
         let op = module.ops(&ctx)[0];
