@@ -211,7 +211,8 @@ release가 마지막일 수 있기 때문이다. Materialization은 owner의 exa
    **lower**한다.
 4. RC lowering pass가 retain/release를 inline code로 **lower**한다.
 
-Type erasure 전 RC planning은 검증된 모든 `adt.typeref`를 semantic type에 따라
+Type erasure 전 RC planning은 검증된 모든
+[nominal 값 타입](tribute-dialects.md#nominal-값-타입)을 semantic type에 따라
 managed로 취급한다. `core.ptr`는 항상 unmanaged이며 cast, symbol, ABI spelling,
 operand position 또는 pointer provenance로 managed 성질을 얻을 수 없다.
 `adt.ref_null`은 nominal managed reference type의 null 값이고, 생성된 retain과
@@ -440,7 +441,7 @@ predecessor이며 어떤 값도 갖고 있지 않다. 일부 predecessor만 값�
 `scf_to_cf`는 multi-successor branch의 target마다 그 branch만 predecessor로 갖는
 block을 만들므로 이런 edge를 만들지 않는다.
 
-`adt.typeref`는 type 자체로 managed다. Native RC-header allocation을 표현하는
+Nominal 값 타입은 type 자체로 managed다. Native RC-header allocation을 표현하는
 검증된 internal ADT/closure layout과 `tribute_rt.anyref`/`intref`도 각자의 typed
 contract로 분류한다. `core.bytes`는 [`Bytes`](#bytes) 객체에 대한 managed 참조이고,
 `adt.array`는 원소 타입과 관계없이 [array](#array) 객체에 대한 managed 참조다.
@@ -738,8 +739,8 @@ plan proves the owner unique, only the unique path is emitted.
 RC lowering follows a semantic-to-physical order:
 
 1. Validate callable origins and managed-reference boundaries on typed IR.
-2. Compute ownership actions and RTTI field information while `adt.typeref`
-   identity is still available.
+2. Compute ownership actions and RTTI field information while nominal value
+   type identity is still available.
 3. Native lowering이 이미 만든 `tribute_rt.into_raw` consuming transfer를 plan이
    검증·기록하고, `tribute_rt.retain`과 `tribute_rt.release`만 materialize한다.
 4. Erase managed references to `core.ptr` and lower the explicit RC operations

@@ -810,7 +810,7 @@ mod tests {
         let lowered = lower(
             r#"core.module @test {
   !Node = adt.struct<"Node", (core.i32)>
-  !NodeRef = adt.typeref<{name = "Node"}>
+  !NodeRef = adt.struct<"Node">
   !Nodes = adt.array<!NodeRef>
   func.func @build(%a: !NodeRef, %b: !NodeRef, %at: core.index) -> !Nodes {
     %pair = adt.array_of %a, %b {type = !Nodes} : !Nodes

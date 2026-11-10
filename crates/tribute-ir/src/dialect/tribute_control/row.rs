@@ -18,8 +18,8 @@ pub const ROW_UNIONS_ATTR: &str = "row_unions";
 /// inferred rather than annotated.
 pub const INFERRED_ROW_ATTR: &str = "inferred_row";
 /// Attribute of a reference holding one row for each quantified binder of
-/// its callee, and type attribute of an `adt.typeref` holding one row for
-/// each row parameter of its declaration.
+/// its callee, and type attribute of a nominal row instance holding one row
+/// for each row parameter of its declaration.
 pub const ROW_ARGS_ATTR: &str = "row_args";
 /// Type attribute of an `adt.struct` or `adt.enum` layout counting its row
 /// binders.
@@ -586,15 +586,13 @@ pub fn logical_tuple_type(ctx: &mut IrContext, elements: &[TypeRef]) -> TypeRef 
     layout
 }
 
-/// The name of the layout a nominal value type `ty` refers to: an
-/// `adt.typeref`'s name, or the name of a layout key or of a row instance's
-/// `def` (`design/tribute-dialects.md` § "Nominal 값 타입"); `None` for a literal layout or
-/// any other type.
+/// The name of the layout a nominal value type `ty` refers to: the name of
+/// a layout key or of a row instance's `def` (`design/tribute-dialects.md`
+/// § "Nominal 값 타입"); `None` for a literal layout or any other type.
 fn nominal_value_name(ctx: &IrContext, ty: TypeRef) -> Option<&str> {
     let data = ctx.get_type(ty);
-    let value = data.name == adt::Typeref::NAME
-        || ((data.name == adt::Struct::NAME || data.name == adt::Enum::NAME)
-            && data.params.is_empty());
+    let value =
+        (data.name == adt::Struct::NAME || data.name == adt::Enum::NAME) && data.params.is_empty();
     if !value {
         return None;
     }
@@ -602,10 +600,10 @@ fn nominal_value_name(ctx: &IrContext, ty: TypeRef) -> Option<&str> {
 }
 
 /// The element types of a compiler-generated tuple layout, whose value type
-/// is its key or an `adt.typeref` to it.
+/// is its key.
 pub fn logical_tuple_elements(ctx: &IrContext, ty: TypeRef) -> Option<&[TypeRef]> {
     let data = ctx.get_type(ty);
-    if data.name != crate::dialect::adt::Typeref::NAME && data.name != adt::Struct::NAME {
+    if data.name != adt::Struct::NAME {
         return None;
     }
     let name = data.attrs.view(ctx).get_str("name")?;
@@ -721,7 +719,7 @@ impl<S: TypeSink> Substitution<'_, S> {
             };
         }
         let ctx = self.sink.ctx();
-        if adt::Typeref::matches(ctx, ty) || adt::row_instance_def(ctx, ty).is_some() {
+        if adt::row_instance_def(ctx, ty).is_some() {
             return self.row_args(ty);
         }
         // A layout's own rows name its binders, not the substituted ones.
@@ -759,7 +757,7 @@ impl<S: TypeSink> Substitution<'_, S> {
         }
     }
 
-    /// The typeref or row instance `ty` with its row arguments substituted.
+    /// The row instance `ty` with its row arguments substituted.
     fn row_args(&mut self, ty: TypeRef) -> Option<TypeRef> {
         let ctx = self.sink.ctx();
         let rows = adt::value_rows(ctx, ty);
@@ -859,7 +857,7 @@ fn visit_rows_in(
         return;
     }
     let data = ctx.get_type(ty);
-    if data.name == adt::Typeref::NAME || adt::row_instance_def(ctx, ty).is_some() {
+    if adt::row_instance_def(ctx, ty).is_some() {
         if let Some(Attribute::List(rows)) = data.attrs.view(ctx).get(ROW_ARGS_ATTR) {
             for row in rows {
                 visit(Row::from_attribute(ctx, row));

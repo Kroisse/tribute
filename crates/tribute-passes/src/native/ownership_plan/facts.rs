@@ -222,7 +222,7 @@ fn compute_module_facts(
         }
         functions.push((symbol.clone(), op));
     }
-    let managed_layouts = layouts.finish(ctx)?;
+    let managed_layouts = layouts.finish();
     let closure_layouts = managed_closure_layouts(closure_allocations, &managed_layouts);
     let rtti_types = build_rtti_plan(ctx, descriptors, &managed_layouts)?;
     Ok(NativeOwnershipModuleFacts {

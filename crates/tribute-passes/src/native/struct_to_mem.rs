@@ -328,7 +328,7 @@ mod tests {
         let (mut ctx, _module, layouts) = lower_module(
             r#"core.module @test {
   !Mixed = adt.struct<"Mixed", (core.i8, tribute_rt.int, tribute_rt.anyref, core.i8, core.ptr, tribute_rt.float, core.i16)>
-  func.func @read(%mixed: adt.typeref<{name = "Mixed"}>) -> core.i8 {
+  func.func @read(%mixed: adt.struct<"Mixed">) -> core.i8 {
     %flag = adt.struct_get %mixed {field = 0, type = !Mixed} : core.i8
     func.return %flag
   }
@@ -414,7 +414,7 @@ mod tests {
     fn variant_tests_compare_the_declared_descriptor_number() {
         let (ctx, module, _layouts) = lower_module(
             r#"core.module @test {
-  !ChoiceRef = adt.typeref<{name = "Choice"}>
+  !ChoiceRef = adt.enum<"Choice">
   !Choice = adt.enum<"Choice", [(), (core.i32), ()]>
   tribute_rtti.layout {fields = [], index = 5, type = !Choice, tag = 0}
   tribute_rtti.layout {fields = ["u32"], index = 6, type = !Choice, tag = 1}
@@ -445,7 +445,7 @@ mod tests {
     fn variant_tag_reads_the_position_of_the_descriptor() {
         let (ctx, module, _layouts) = lower_module(
             r#"core.module @test {
-  !ChoiceRef = adt.typeref<{name = "Choice"}>
+  !ChoiceRef = adt.enum<"Choice">
   !Choice = adt.enum<"Choice", [(), (core.i32), ()]>
   tribute_rtti.layout {fields = ["u32"], index = 5, type = !Choice, tag = 1}
   func.func @test(%choice: !ChoiceRef) -> core.index {
@@ -476,8 +476,8 @@ mod tests {
         let (ctx, module, layouts) = lower_module(
             r#"core.module @test {
   !Child = adt.struct<"Child", (core.i32)>
-  !ChildRef = adt.typeref<{name = "Child"}>
-  !ChoiceRef = adt.typeref<{name = "Choice"}>
+  !ChildRef = adt.struct<"Child">
+  !ChoiceRef = adt.enum<"Choice">
   !Choice = adt.enum<"Choice", [(), (core.i8, !ChildRef), (core.ptr, core.i64)]>
   tribute_rtti.layout {fields = ["u8", "managed"], index = 6, type = !Choice, tag = 1}
   func.func @test(%choice: !ChoiceRef) -> !ChildRef {
@@ -518,9 +518,9 @@ mod tests {
         let (ctx, module, _layouts) = lower_module(
             r#"core.module @test {
   !Child = adt.struct<"Child", (core.i32)>
-  !ChildRef = adt.typeref<{name = "Child"}>
+  !ChildRef = adt.struct<"Child">
   !Parent = adt.struct<"Parent", (!ChildRef, core.ptr, core.bytes)>
-  func.func @read(%parent: adt.typeref<{name = "Parent"}>) -> !ChildRef {
+  func.func @read(%parent: adt.struct<"Parent">) -> !ChildRef {
     %child = adt.struct_get %parent {field = 0, type = !Parent} : !ChildRef
     func.return %child
   }

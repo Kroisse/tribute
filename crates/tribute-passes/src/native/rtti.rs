@@ -1386,7 +1386,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   !Node = adt.struct<"Node", (core.i32)>
-  !NodeRef = adt.typeref<{name = "Node"}>
+  !NodeRef = adt.struct<"Node">
   !Nodes = adt.array<!NodeRef>
   !Shorts = adt.array<core.i16>
   func.func @nodes(%node: !NodeRef) -> !Nodes {

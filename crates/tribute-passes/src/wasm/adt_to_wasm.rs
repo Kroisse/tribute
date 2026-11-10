@@ -84,15 +84,15 @@ use super::descriptors::has_descriptor_field;
 use super::struct_layouts::variant_type;
 
 /// The logical variant operation's `type` attribute is its exact enum-layout
-/// identity. Operand types may be an equivalent `adt.typeref` or already have
-/// an erased target representation, neither of which may choose a distinct
+/// identity. Operand types may be a row instance of it or already have an
+/// erased target representation, neither of which may choose a distinct
 /// WasmGC nominal variant type.
 fn canonical_enum_type(ctx: &IrContext, attr_ty: TypeRef) -> Option<TypeRef> {
     get_enum_variants(ctx, attr_ty).map(|_| attr_ty)
 }
 
 /// Resolve a logical nominal value type to the enum layout it names: the
-/// layout a key, row instance, or typeref denotes. Do not fall back to
+/// layout a key or row instance denotes. Do not fall back to
 /// structural or same-name equivalence here.
 fn canonical_reference_enum_type(ctx: &IrContext, ty: TypeRef) -> Option<TypeRef> {
     if !adt::is_nominal(ctx, ty) {
@@ -1175,14 +1175,11 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   !E = adt.enum<"E", []>
-  !ERef = adt.typeref<{name = "E"}>
 }"#,
         );
         let enum_ty = ctx.type_alias_by_text("E").expect("enum layout");
-        let typeref_ty = ctx.type_alias_by_text("ERef").expect("enum reference");
 
         assert_eq!(canonical_enum_type(&ctx, enum_ty), Some(enum_ty));
-        assert_eq!(canonical_enum_type(&ctx, typeref_ty), None);
     }
 
     #[test]
@@ -1193,7 +1190,7 @@ mod tests {
             r#"core.module @test {
   !S = adt.struct<"S", (core.i32)>
   !E = adt.enum<"E", [(core.i32)]>
-  !ERef = adt.typeref<{name = "E"}>
+  !ERef = adt.enum<"E">
   !A = adt.array<core.i32>
 
   wasm.func @main() -> core.nil {
@@ -1203,7 +1200,7 @@ mod tests {
     %field = adt.struct_get %struct {type = !S, field = 0} : core.i32
     adt.struct_set %struct, %field {type = !S, field = 0}
 
-    %variant = adt.variant_new %one {type = !E, tag = 0} : !ERef
+    %variant = adt.variant_new %one {type = !E, tag = 0} : !E
     %is_some = adt.variant_is %variant {type = !E, tag = 0} : core.i32
     %payload = adt.variant_get %variant {type = !E, tag = 0, field = 0} : core.i32
 
@@ -1368,7 +1365,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !ListRef = adt.typeref<{name = "List"}>
+  !ListRef = adt.enum<"List">
   !List = adt.enum<"List", [(), (core.i32, !ListRef)]>
 
   wasm.func @main(%input: !ListRef) -> core.nil {
@@ -1477,7 +1474,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !ERef = adt.typeref<{name = "E"}>
+  !ERef = adt.enum<"E">
   !E = adt.enum<"E", [(), (core.i32), ()]>
 
   wasm.func @main(%input: !ERef) -> core.nil {
@@ -1540,9 +1537,9 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !ERef = adt.typeref<{name = "E"}>
+  !ERef = adt.enum<"E">
   !E = adt.enum<"E", [(), (core.i32), ()]>
-  !FRef = adt.typeref<{name = "F"}>
+  !FRef = adt.enum<"F">
   !F = adt.enum<"F", [(), ()]>
 
   wasm.func @main(%input: !ERef, %never: !FRef) -> core.nil {
@@ -1592,19 +1589,19 @@ mod tests {
     }
 
     #[test]
-    fn variant_get_casts_its_operand_unless_a_typeref_names_another_enum() {
+    fn variant_get_casts_its_operand_unless_it_names_another_enum() {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !ARef = adt.typeref<{name = "A"}>
-  !BRef = adt.typeref<{name = "B"}>
+  !ARef = adt.enum<"A">
+  !BRef = adt.enum<"B">
   !A = adt.enum<"A", [(core.i32), (core.f64)]>
   !B = adt.enum<"B", [(core.f64)]>
 
   wasm.func @main(%from_a_ref: !ARef, %from_b_ref: !BRef, %x: core.f64) -> core.nil {
-    %from_matching_typeref = adt.variant_get %from_a_ref {type = !A, tag = 0, field = 0} : core.i32
-    %from_mismatched_typeref = adt.variant_get %from_b_ref {type = !A, tag = 0, field = 0} : core.i32
+    %from_matching_enum = adt.variant_get %from_a_ref {type = !A, tag = 0, field = 0} : core.i32
+    %from_mismatched_enum = adt.variant_get %from_b_ref {type = !A, tag = 0, field = 0} : core.i32
     %from_b = adt.variant_new %x {type = !B, tag = 0} : !BRef
     %wrong_enum = adt.variant_get %from_b {type = !A, tag = 0, field = 0} : core.i32
     %from_a_other = adt.variant_new %x {type = !A, tag = 1} : !ARef
@@ -1646,10 +1643,10 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !ERef = adt.typeref<{name = "E"}>
-  !BoxRef = adt.typeref<{name = "Box"}>
-  !NodeRef = adt.typeref<{name = "Node"}>
-  !StringRef = adt.typeref<{name = "String"}>
+  !ERef = adt.enum<"E">
+  !BoxRef = adt.enum<"Box">
+  !NodeRef = adt.enum<"Node">
+  !StringRef = adt.enum<"String">
   !E = adt.enum<"E", [(core.i32)]>
   !Box = adt.enum<"Box", [(!NodeRef)]>
   !Node = adt.enum<"Node", [()]>
@@ -1718,7 +1715,7 @@ mod tests {
             &mut ctx,
             &format!(
                 r#"core.module @test {{
-  !ERef = adt.typeref<{{name = "E"}}>
+  !ERef = adt.enum<"E">
   !E = adt.enum<"E", [(core.i32, core.f64), (core.f64)]>
 
   wasm.func @main(%e: !ERef, %c: core.i32) -> core.nil {{

@@ -311,11 +311,11 @@ machine 호출이 잘못된 register와 stack 배치를 쓴다.
 
 Private native runtime helper는 target stage에서 exact physical callable ABI로만
 선언한다. 이 helper의 parameter와 result는 `core.ptr` 또는 scalar physical type이며
-`adt.typeref`를 사용할 수 없다. Source-logical managed reference와 private runtime
+nominal 값 타입을 사용할 수 없다. Source-logical managed reference와 private runtime
 pointer 사이의 경계는 이름, `abi` 문자열 또는 symbol 위치로 추론하지 않는다.
 
 Native ownership/RTTI plan은 `scf_to_cf` 뒤와 `func_to_clif` 앞에서 한 번 만들며
-IR을 변경하지 않는다. `adt.typeref`와 compiler-generated managed layout의 semantic
+IR을 변경하지 않는다. Nominal 값 타입과 compiler-generated managed layout의 semantic
 type, exact callable contract와 CFG liveness만 사용한다. RTTI deep-release field와
 entry/call/store/load/final-use/tail action은 이 plan에 함께 들어간다. 이후
 `core.ptr`는 이미 선택된 explicit RC operation의 physical operand일 뿐이다.

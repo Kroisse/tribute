@@ -120,9 +120,7 @@ impl Converter<'_> {
             self.converted_types.insert(ty, converted);
             return converted;
         }
-        let erased = if data.name == tribute_ir::dialect::adt::Typeref::NAME {
-            Some(tribute_control::ROW_ARGS_ATTR)
-        } else if tribute_ir::dialect::adt::is_nominal(self.ctx, ty) {
+        let erased = if tribute_ir::dialect::adt::is_nominal(self.ctx, ty) {
             Some(tribute_control::ROW_PARAMS_ATTR)
         } else {
             None

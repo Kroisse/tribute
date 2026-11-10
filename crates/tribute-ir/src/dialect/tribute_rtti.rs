@@ -382,7 +382,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   !point = adt.struct<"Point", (core.i32)>
-  !point_ref = adt.typeref<{name = "Point"}>
+  !point_ref = adt.struct<"Point">
   !choice = adt.enum<"Choice", [()]>
   !any = tribute_rt.anyref
   !small = tribute_rt.intref

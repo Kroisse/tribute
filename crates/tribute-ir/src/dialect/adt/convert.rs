@@ -34,9 +34,8 @@ pub trait LayoutBlindConversion {
 /// consistently afterwards.
 ///
 /// A layout changes when its key attributes or its body's fields convert to
-/// something else, or when its key or body has a layout that changes as a
-/// type of its own; an `adt.typeref` names a layout and does not change with
-/// it. A changed layout gets the key of its converted attributes, with
+/// something else, or when its key or body holds the key or a row instance
+/// of a layout that changes. A changed layout gets the key of its converted attributes, with
 /// `$tag` appended to its name when those attributes are unchanged, and its
 /// body converted after every new key is known. A layout the conversion
 /// replaces with a type other than a nominal layout keeps that replacement.
@@ -210,7 +209,6 @@ fn collect_layouts(ctx: &IrContext, ty: TypeRef, found: &mut Vec<TypeRef>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dialect::adt::Typeref;
     use trunk_ir::parser::parse_test_module;
     use trunk_ir::types::TypeDataBuilder;
 
@@ -271,15 +269,14 @@ mod tests {
             r#"core.module @test {
   !P = adt.struct<"P", (core.i32)>
   !Q = adt.struct<"Q", (core.f64)>
-  !N = adt.struct<"N", (adt.typeref<"P">)>
   !H = adt.struct<"H", (!P)>
   !K = adt.struct<"K", (core.f64), {k = core.i32}>
   !E = adt.enum<"E", [(), (core.i32)]>
 }"#,
         );
         let alias = |ctx: &IrContext, name| ctx.type_alias_by_text(name).unwrap();
-        let [p, q, n, h, k, e] = ["P", "Q", "N", "H", "K", "E"].map(|name| alias(&ctx, name));
-        let roots = [p, q, n, h, k, e];
+        let [p, q, h, k, e] = ["P", "Q", "H", "K", "E"].map(|name| alias(&ctx, name));
+        let roots = [p, q, h, k, e];
         let mut widen = Widen {
             ctx: &mut ctx,
             memo: HashMap::default(),
@@ -300,8 +297,8 @@ mod tests {
             printed(widen.ctx, keys[&e]),
             ("E$w".to_owned(), "adt.enum<[(), (core.i64)]>".to_owned())
         );
-        // A layout holding a changed one as a type follows it; one naming it
-        // through a typeref, and an unrelated one, keep their keys.
+        // A layout holding a changed one's key follows it; an unrelated one
+        // keeps its key.
         assert_eq!(
             widen
                 .ctx
@@ -309,34 +306,10 @@ mod tests {
                 .map(|body| { widen.ctx.get_type(body).params[0] }),
             Some(keys[&p])
         );
-        assert!(!keys.contains_key(&n) && !keys.contains_key(&q));
-        assert_eq!(widen.convert(n).unwrap(), n);
+        assert!(!keys.contains_key(&q));
+        assert_eq!(widen.convert(q).unwrap(), q);
         // Converted key attributes make the new key without a tag.
         assert_eq!(printed(widen.ctx, keys[&k]).0, "K");
         assert_ne!(keys[&k], k);
-    }
-
-    #[test]
-    fn a_typeref_resolves_through_its_alias_before_its_own_key() {
-        let mut ctx = IrContext::new();
-        parse_test_module(
-            &mut ctx,
-            r#"core.module @test {
-  !Unpublished = adt.struct<"U", (core.i32)>
-  !P = adt.struct<"P$w", (core.i64)>
-  !Old = adt.struct<"P", (core.i32)>
-}"#,
-        );
-        let typeref = |ctx: &mut IrContext, name: &str| {
-            let name = ctx.intern_str(name);
-            Typeref::named(ctx, name, [])
-        };
-        // Without an alias of its name, the key the typeref spells.
-        let u = typeref(&mut ctx, "U");
-        assert_eq!(u.layout(&ctx), ctx.type_alias_by_text("Unpublished"));
-        // The alias of its name wins over the key of the same name.
-        let p = typeref(&mut ctx, "P");
-        assert_eq!(p.layout(&ctx), ctx.type_alias_by_text("P"));
-        assert_ne!(p.layout(&ctx), ctx.type_alias_by_text("Old"));
     }
 }

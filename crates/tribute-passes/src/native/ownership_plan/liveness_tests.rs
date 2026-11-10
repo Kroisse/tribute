@@ -10,9 +10,9 @@ use super::*;
 
 const CROSS_BLOCK_BORROW: &str = r#"core.module @test {
   !Child = adt.struct<"Child",(core.i32)>
-  !ChildRef = adt.typeref<{name = "Child"}>
+  !ChildRef = adt.struct<"Child">
   !Box = adt.struct<"Box",(!ChildRef)>
-  !BoxRef = adt.typeref<{name = "Box"}>
+  !BoxRef = adt.struct<"Box">
   func.func @observe(%child: !ChildRef) -> core.i32 {
     %value = adt.struct_get %child {field = 0, type = !Child} : core.i32
     func.return %value
@@ -29,7 +29,7 @@ const CROSS_BLOCK_BORROW: &str = r#"core.module @test {
 }"#;
 
 const BRANCH_LOOP: &str = r#"core.module @test {
-  !R = adt.typeref<{name = "R"}>
+  !R = adt.struct<"R">
   !Layout = adt.struct<"R",(core.i32)>
   func.func @flow(%condition: core.i1, %value: !R) -> core.nil {
     ^entry:
@@ -50,9 +50,9 @@ const BRANCH_LOOP: &str = r#"core.module @test {
 
 const ALIAS_PROJECTION: &str = r#"core.module @test {
   !Child = adt.struct<"Child",(core.i32)>
-  !ChildRef = adt.typeref<{name = "Child"}>
+  !ChildRef = adt.struct<"Child">
   !Choice = adt.enum<"Choice",[(!ChildRef)]>
-  !ChoiceRef = adt.typeref<{name = "Choice"}>
+  !ChoiceRef = adt.enum<"Choice">
   func.func @load(%choice: !ChoiceRef) -> !ChildRef {
     ^entry:
       %erased = adt.ref_cast %choice {type = tribute_rt.anyref} : tribute_rt.anyref
@@ -66,9 +66,9 @@ const ALIAS_PROJECTION: &str = r#"core.module @test {
 
 const NESTED_PROJECTION: &str = r#"core.module @test {
   !Child = adt.struct<"Child",(core.i32)>
-  !ChildRef = adt.typeref<{name = "Child"}>
+  !ChildRef = adt.struct<"Child">
   !Inner = adt.struct<"Inner",(!ChildRef)>
-  !InnerRef = adt.typeref<{name = "Inner"}>
+  !InnerRef = adt.struct<"Inner">
   !Box = adt.struct<"Box",(!InnerRef)>
   func.func @observe(%child: !ChildRef) -> core.i32 {
     %value = adt.struct_get %child {field = 0, type = !Child} : core.i32
@@ -421,7 +421,7 @@ fn failed_facts_lookup_does_not_publish_liveness() {
     let module = parse_test_module(
         &mut ctx,
         r#"core.module @test {
-  !R = adt.typeref<{name = "R"}>
+  !R = adt.struct<"R">
   !Layout = adt.struct<"R",(core.i32)>
   func.func @bad(%value: !R) -> core.i32 {
     %field = adt.struct_get %value {field = 1, type = !Layout} : core.i32

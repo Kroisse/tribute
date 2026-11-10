@@ -26,9 +26,9 @@ pub fn ref_type(ctx: &mut IrContext, name: impl Into<StringArg>, result: TypeRef
     adt::Struct::key(ctx, name, attrs).as_type_ref()
 }
 
-/// Read the result type only from an explicit frame reference or layout.
+/// Read the result type only from an explicit frame layout key.
 pub fn result_type(ctx: &IrContext, frame: TypeRef) -> Option<TypeRef> {
-    (adt::Typeref::matches(ctx, frame) || adt::Struct::matches(ctx, frame))
+    adt::Struct::matches(ctx, frame)
         .then(|| ctx.type_attrs(frame).get_type(RESULT_ATTR))
         .flatten()
 }
@@ -107,7 +107,8 @@ mod tests {
     #[test]
     fn result_type_fails_closed_on_unmarked_or_foreign_types() {
         let mut ctx = IrContext::new();
-        let unmarked = adt::Typeref::named(&mut ctx, "ContinuationFrame", []).as_type_ref();
+        let unmarked =
+            adt::Struct::key(&mut ctx, "ContinuationFrame", AttributeMap::new()).as_type_ref();
         let i32_ty = TypeDataBuilder::new("core.i32").intern(&mut ctx);
         let foreign = TypeDataBuilder::new("test.frame")
             .attr(RESULT_ATTR, Attribute::Type(i32_ty))

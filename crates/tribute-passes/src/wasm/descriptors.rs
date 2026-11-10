@@ -124,10 +124,10 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !S = adt.struct<"S", (adt.typeref<{name = "S"}>, tribute_rt.anyref, tribute_rt.nat)>
+  !S = adt.struct<"S", (adt.struct<"S">,tribute_rt.anyref, tribute_rt.nat)>
   !Closure = adt.struct<(tribute_rt.convention_table_ref), {layout = "closure"}>
   !E = adt.enum<"E", [(), (core.f64)]>
-  wasm.func @main(%next: adt.typeref<{name = "S"}>, %any: tribute_rt.anyref, %n: tribute_rt.nat, %x: core.f64) -> core.nil {
+  wasm.func @main(%next: adt.struct<"S">, %any: tribute_rt.anyref, %n: tribute_rt.nat, %x: core.f64) -> core.nil {
     %one = wasm.i32_const 1 : core.i32
     %some = adt.variant_new %x {tag = 1, type = !E} : !E
     %s = adt.struct_new %next, %any, %n {type = !S} : !S

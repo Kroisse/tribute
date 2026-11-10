@@ -24,11 +24,6 @@ pub(super) fn declaration_map<'a>(
     map
 }
 
-fn is_adt_typeref(ctx: &IrContext, ty: TypeRef) -> bool {
-    let data = ctx.get_type(ty);
-    data.name == crate::dialect::adt::Typeref::NAME
-}
-
 /// Whether `ty` is or holds a nominal value type, a managed reference.
 pub(super) fn contains_nominal_value(
     ctx: &IrContext,
@@ -75,16 +70,9 @@ pub(super) fn canonical_nominal_layouts(
     errors: &mut Vec<ValidationError>,
 ) -> HashMap<StringRef, TypeRef> {
     let mut layouts = HashMap::default();
-    let mut referenced_names = HashSet::default();
     let mut sorted_reachable_types = reachable_types.iter().copied().collect::<Vec<_>>();
     sorted_reachable_types.sort_unstable();
     for ty in sorted_reachable_types {
-        if is_adt_typeref(ctx, ty) {
-            if let Some(name) = ctx.type_attrs(ty).get_string_ref("name") {
-                referenced_names.insert(name);
-            }
-            continue;
-        }
         if !adt::Struct::matches(ctx, ty) && !adt::Enum::matches(ctx, ty) {
             continue;
         }
@@ -103,31 +91,6 @@ pub(super) fn canonical_nominal_layouts(
             }
         } else {
             layouts.insert(name, ty);
-        }
-    }
-    for name in referenced_names {
-        if layouts.contains_key(&name) {
-            continue;
-        }
-        let candidates = ctx
-            .types()
-            .iter()
-            .filter_map(|(ty, data)| {
-                ((adt::Struct::matches(ctx, ty) || adt::Enum::matches(ctx, ty))
-                    && data.attrs.view(ctx).get_string_ref("name") == Some(name))
-                .then_some(ty)
-            })
-            .collect::<Vec<_>>();
-        if let [layout] = candidates.as_slice() {
-            layouts.insert(name, *layout);
-        } else if let [first, second, ..] = candidates.as_slice() {
-            push_type_error(
-                errors,
-                format!(
-                    "nominal layout {:?} is declared more than once ({first} and {second})",
-                    ctx.str(name)
-                ),
-            );
         }
     }
     layouts
@@ -158,8 +121,7 @@ fn collect_reachable_type(ctx: &IrContext, ty: TypeRef, types: &mut HashSet<Type
 /// Context-wide type aliases are printer/parser conveniences, not IR roots:
 /// an alias whose type is never used by an operation, operand, result, block
 /// argument, or type-bearing attribute must not affect validation of this
-/// module. A reachable `adt.typeref` may resolve one unique layout alias; an
-/// ambiguous nominal name remains invalid.
+/// module. A nominal name declared by two layouts is invalid.
 /// Whether class specialization has run on `module`: `Some(false)` when it
 /// holds a `tribute_control` form of a `tribute_cps` operation and no
 /// `tribute_cps` operation, `None` when it holds both, and `Some(true)`
@@ -239,55 +201,8 @@ fn raw_pointer_cast_origin(
 pub(super) fn validate_managed_reference_boundaries(
     ctx: &IrContext,
     body: RegionRef,
-    reachable_types: &HashSet<TypeRef>,
-    nominal_layouts: &HashMap<StringRef, TypeRef>,
     errors: &mut Vec<ValidationError>,
 ) {
-    for ty in reachable_types.iter().copied() {
-        if !is_adt_typeref(ctx, ty) {
-            continue;
-        }
-        let data = ctx.get_type(ty);
-        let Some(name) = ctx.type_attrs(ty).get_string_ref("name") else {
-            push_type_error(
-                errors,
-                format!("{ty}: adt.typeref requires nominal name metadata"),
-            );
-            continue;
-        };
-        if !data.params.is_empty() {
-            push_type_error(
-                errors,
-                format!("{ty}: adt.typeref cannot have type parameters"),
-            );
-        }
-        let Some(&layout) = nominal_layouts.get(&name) else {
-            push_type_error(
-                errors,
-                format!(
-                    "{ty}: adt.typeref {:?} has no verified nominal declaration",
-                    ctx.str(name)
-                ),
-            );
-            continue;
-        };
-        let binders = adt::Struct::from_type_ref(ctx, layout)
-            .and_then(|layout| layout.row_params(ctx))
-            .or_else(|| adt::Enum::from_type_ref(ctx, layout).and_then(|l| l.row_params(ctx)))
-            .unwrap_or(0);
-        let args =
-            adt::Typeref::from_type_ref(ctx, ty).map_or(0, |typeref| typeref.rows(ctx).len());
-        if usize::try_from(binders).ok() != Some(args) {
-            push_type_error(
-                errors,
-                format!(
-                    "{ty}: adt.typeref {:?} passes {args} row arguments to a layout with {binders} row binders",
-                    ctx.str(name)
-                ),
-            );
-        }
-    }
-
     walk_region_ops(ctx, body, &mut |op| {
         let data = ctx.op(op);
         if data.name.is(ctx, "adt.ref_null") {

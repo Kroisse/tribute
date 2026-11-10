@@ -469,13 +469,7 @@ fn whole_ir(
     }
     let reachable_types = collect_reachable_ir_types(ctx, module.op());
     let nominal_layouts = canonical_nominal_layouts(ctx, &reachable_types, &mut errors);
-    validate_managed_reference_boundaries(
-        ctx,
-        body,
-        &reachable_types,
-        &nominal_layouts,
-        &mut errors,
-    );
+    validate_managed_reference_boundaries(ctx, body, &mut errors);
     validate_callable_origins(
         ctx,
         body,

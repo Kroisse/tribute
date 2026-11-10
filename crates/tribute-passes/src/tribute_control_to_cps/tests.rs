@@ -541,7 +541,7 @@ fn textual_nested_attribute_types_convert_atomically() {
 fn nominal_row_arguments_and_binders_are_erased() {
     let input = r#"core.module @test {
   !Callback = adt.struct<"Callback"['a0], (tribute_control.func_sig<() -> core.i32 row(| 'a0)>)>
-  !pure = adt.typeref<"Callback"[row()]>
+  !pure = adt.struct<"Callback"[row()]>
   tribute_cps.func @identity(%value: !pure) -> !pure convention(direct) {
     tribute_control.return %value
   }
@@ -550,7 +550,10 @@ fn nominal_row_arguments_and_binders_are_erased() {
     tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default()).unwrap();
     let printed = module.op().display(&ctx).to_string();
     assert!(printed.contains("adt.struct<\"Callback\", ("), "{printed}");
-    assert!(printed.contains("adt.typeref<\"Callback\">"), "{printed}");
+    assert!(
+        printed.contains("!pure = adt.struct<\"Callback\", ("),
+        "{printed}"
+    );
     assert!(!printed.contains("row("), "{printed}");
 
     let mut reparsed = IrContext::new();
@@ -1908,7 +1911,7 @@ fn a_table_entry_weaker_than_its_cps_target_is_rejected_before_mutation() {
 fn raw_pointer_managed_masquerade_is_rejected_before_mutation() {
     let input = r#"core.module @test {
   !S = adt.struct<"S", ()>
-  !R = adt.typeref<{name = "S"}>
+  !R = adt.struct<"S">
   tribute_cps.func @broken(%raw: core.ptr) -> !R convention(direct) {
     %middle = core.unrealized_conversion_cast %raw : core.ptr to core.i64
     %managed = core.unrealized_conversion_cast %middle : core.i64 to !R

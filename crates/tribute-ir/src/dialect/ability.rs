@@ -521,7 +521,6 @@ pub fn is_evidence_shaped(ctx: &IrContext, ty: TypeRef) -> bool {
         crate::dialect::adt::layout_of(ctx, element)
             .and_then(|layout| crate::dialect::adt::Struct::from_type_ref(ctx, layout))
             .is_some_and(|layout| layout.is_nominal(ctx))
-            || crate::dialect::adt::Typeref::matches(ctx, element)
     })
 }
 
