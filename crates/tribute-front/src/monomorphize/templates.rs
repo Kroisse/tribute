@@ -3,8 +3,8 @@
 //!
 //! A function or extern function with type parameters is a template. Its
 //! nodes, its metadata, and its scheme leave the output with it. Struct and
-//! enum templates stay: an instance whose arguments hold an open ability row
-//! is not specialized and is represented by its template.
+//! enum templates stay: an instance whose arguments hold a variable its
+//! function body owns is not specialized and is represented by its template.
 
 use rustc_hash::FxHashSet as HashSet;
 
