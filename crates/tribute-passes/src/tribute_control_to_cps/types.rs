@@ -114,11 +114,10 @@ impl Converter<'_> {
         // renames it, and tuples that differed only in rows become one
         // (`design/tribute-dialects.md` § "Nominal layout의 게시").
         if let Some(elements) = tribute_control::logical_tuple_elements(self.ctx, ty) {
-            let elements: Vec<_> = elements
-                .to_vec()
-                .into_iter()
-                .map(|element| self.convert_type(element))
-                .collect();
+            let mut elements = elements.to_vec();
+            for element in &mut elements {
+                *element = self.convert_type(*element);
+            }
             let converted = tribute_control::logical_tuple_type(self.ctx, &elements);
             self.converted_types.insert(ty, converted);
             return converted;
