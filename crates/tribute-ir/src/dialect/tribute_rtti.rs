@@ -77,6 +77,18 @@ pub struct ManagedRef;
 #[trunk_ir::type_interface]
 pub trait ManagedRefType: trunk_ir::ops::DialectType {}
 
+/// Marks a managed reference type as the layout of the allocation its values
+/// point to: that allocation's runtime type descriptor is keyed by the type
+/// itself, as `tribute_rtti.layout` names it. A struct layout, an enum layout
+/// (one descriptor per variant), and on native an array type are.
+///
+/// `tribute_rt.anyref`, `tribute_rt.intref`, `core.bytes`, and
+/// `closure.closure` are managed references but not descriptor layouts of
+/// their own, so this is narrower than [`ManagedRefType`]. A nominal
+/// layout's body is no allocation layout of its own; its key is.
+#[trunk_ir::type_interface]
+pub trait DescriptorLayoutType: trunk_ir::ops::DialectType {}
+
 impl trunk_ir::type_constraint::TypeConstraint for ManagedRef {
     const DESC: &'static trunk_ir::type_constraint::ConstraintDesc =
         &trunk_ir::type_constraint::ConstraintDesc {

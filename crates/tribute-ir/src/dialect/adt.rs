@@ -4,7 +4,7 @@ use crate::dialect::tribute_control::{
     DynRowParameterized, ROW_ARGS_ATTR, ROW_PARAMS_ATTR, Row, RowParameterized,
     display_layout_binders, parse_layout_binders,
 };
-use crate::dialect::tribute_rtti::ManagedRefType;
+use crate::dialect::tribute_rtti::{DescriptorLayoutType, ManagedRefType};
 use trunk_ir::asm_format::TypeAliasHint;
 use trunk_ir::dialect::core::Index;
 use trunk_ir::op_flag::Pure;
@@ -51,7 +51,7 @@ mod adt {
     #[asm_format]
     #[alias_hint]
     #[identified]
-    #[implements(ManagedRefType, AdtLayout, RowParameterized)]
+    #[implements(ManagedRefType, DescriptorLayoutType, AdtLayout, RowParameterized)]
     struct Struct<#[rest] ParamFields> {
         name: Option<Attr<String>>,
         row_params: Option<Attr<u32>>,
@@ -78,7 +78,7 @@ mod adt {
     #[asm_format]
     #[alias_hint]
     #[identified]
-    #[implements(ManagedRefType, AdtLayout, RowParameterized)]
+    #[implements(ManagedRefType, DescriptorLayoutType, AdtLayout, RowParameterized)]
     struct Enum<#[rest] ParamVariants> {
         name: Option<Attr<String>>,
         row_params: Option<Attr<u32>>,
@@ -92,7 +92,7 @@ mod adt {
     /// which no `adt` array operation accepts. The index and trap rules the
     /// array operations share are in `design/tribute-dialects.md` § "`adt`
     /// 배열".
-    #[implements(ManagedRefType)]
+    #[implements(ManagedRefType, DescriptorLayoutType)]
     struct Array<Element>;
 
     /// `adt.variant`: the field types of one variant of an `adt.enum`, which
@@ -353,6 +353,11 @@ mod adt {
 impl ManagedRefType for Struct {}
 impl ManagedRefType for Enum {}
 impl ManagedRefType for Array {}
+
+// Each allocation's runtime descriptor is keyed by its layout type.
+impl DescriptorLayoutType for Struct {}
+impl DescriptorLayoutType for Enum {}
+impl DescriptorLayoutType for Array {}
 
 /// An `adt` layout type, `adt.struct` or `adt.enum`: a literal layout, a
 /// nominal layout's key, or a row instance (`design/tribute-dialects.md`
