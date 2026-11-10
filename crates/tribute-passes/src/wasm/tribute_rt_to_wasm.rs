@@ -390,8 +390,8 @@ impl OpRewritePattern for UnboxNatPattern {
 
 /// Pattern for `tribute_rt.box_float` -> `adt.struct_new(BoxedF64, anyref)`
 ///
-/// Boxing converts an f64 to a BoxedF64 struct typed as anyref via
-/// `adt.struct_new` with `anyref_ty` as the result type.
+/// Boxing builds a BoxedF64 struct holding the f64 and casts it to anyref,
+/// which reference upcast legalization writes as `wasm.ref_upcast`.
 struct BoxFloatPattern;
 
 impl OpRewritePattern for BoxFloatPattern {
@@ -409,13 +409,16 @@ impl OpRewritePattern for BoxFloatPattern {
         let anyref_ty = wasm_dialect::Anyref::params().intern(ctx).as_type_ref();
         let boxed_f64_ty = boxed_f64_type(ctx);
 
-        // adt.struct_new creates BoxedF64 struct with the f64 value
         let struct_op = adt::StructNew::operands(vec![value])
             .r#type(boxed_f64_ty)
-            .results(anyref_ty)
+            .results(boxed_f64_ty)
             .build(ctx, location);
-
-        rewriter.replace_op(struct_op.op_ref());
+        rewriter.insert_op(struct_op.op_ref());
+        let upcast =
+            trunk_ir::dialect::core::UnrealizedConversionCast::operands(struct_op.result(ctx))
+                .results(anyref_ty)
+                .build(ctx, location);
+        rewriter.replace_op(upcast.op_ref());
         Some(())
     }
 
