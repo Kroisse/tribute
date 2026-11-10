@@ -65,6 +65,17 @@ impl GcTypeBuilder {
             declared: true,
         }
     }
+
+    /// An array whose element is the parameter of its GC array type.
+    fn declared_array(element: TypeRef) -> Self {
+        Self {
+            kind: GcKind::Array,
+            fields: Vec::new(),
+            array_elem: Some(element),
+            field_count: None,
+            declared: true,
+        }
+    }
 }
 
 // ============================================================================
@@ -362,11 +373,17 @@ pub(crate) fn collect_gc_types(
     for (offset, &ty) in declared_types.iter().enumerate() {
         let idx = FIRST_USER_TYPE_IDX + offset as u32;
         register_type(ctx, &mut type_idx_by_type, idx, ty);
-        if let Some(fields) = wasm_gc::Struct::from_type_ref(ctx, ty) {
+        let declared = if let Some(fields) = wasm_gc::Struct::from_type_ref(ctx, ty) {
+            Some(GcTypeBuilder::declared(fields.fields(ctx)))
+        } else {
+            wasm_gc::Array::from_type_ref(ctx, ty)
+                .map(|array| GcTypeBuilder::declared_array(array.element(ctx)))
+        };
+        if let Some(declared) = declared {
             if builders.len() <= offset {
                 builders.resize_with(offset + 1, GcTypeBuilder::new);
             }
-            builders[offset] = GcTypeBuilder::declared(fields.fields(ctx));
+            builders[offset] = declared;
         }
     }
 

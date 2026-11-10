@@ -1083,6 +1083,65 @@ mod tests {
     }
 
     #[test]
+    fn arrays_named_only_by_fields_and_signatures_get_a_concrete_type() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  !Ints = wasm_gc.array<core.i32>
+  !Holder = wasm_gc.struct<!Ints>
+  wasm.func @pass(%ints: !Ints) -> !Ints {
+    wasm.return %ints
+  }
+  wasm.func @wrap(%ints: !Ints) -> !Holder {
+    %holder = wasm_gc.struct_new %ints {type = !Holder} : !Holder
+    wasm.return %holder
+  }
+}"#,
+        );
+        crate::passes::wasm_gc_to_wasm::lower(&mut ctx, module);
+        let bytes = crate::emit_module_to_wasm(&mut ctx, module)
+            .expect("arrays without array operations must emit")
+            .bytes;
+        Validator::new_with_features(WasmFeatures::all())
+            .validate_all(&bytes)
+            .expect("the module must validate");
+
+        let mut array_index = None;
+        let mut index = 0u32;
+        let mut params = Vec::new();
+        for payload in Parser::new(0).parse_all(&bytes) {
+            let Payload::TypeSection(types) = payload.unwrap() else {
+                continue;
+            };
+            for group in types {
+                for subtype in group.unwrap().into_types() {
+                    match &subtype.composite_type.inner {
+                        wasmparser::CompositeInnerType::Array(_) => array_index = Some(index),
+                        wasmparser::CompositeInnerType::Func(func) => {
+                            params.extend(func.params().iter().copied());
+                        }
+                        _ => {}
+                    }
+                    index += 1;
+                }
+            }
+        }
+        let array_index = array_index.expect("the array has a type of its own");
+        assert!(!params.is_empty());
+        for param in params {
+            let wasmparser::ValType::Ref(reference) = param else {
+                panic!("a reference parameter: {param:?}");
+            };
+            assert_eq!(
+                reference.type_index().and_then(|ty| ty.as_module_index()),
+                Some(array_index),
+                "the parameter names the array, not arrayref"
+            );
+        }
+    }
+
+    #[test]
     fn struct_supertypes_come_only_from_the_declared_attribute() {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
