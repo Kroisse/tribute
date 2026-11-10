@@ -1797,22 +1797,9 @@ fn intrinsic_registry_order_duplicates_and_defined_claims_fail_closed() {
 }
 
 #[test]
-fn managed_reference_metadata_and_return_contracts_fail_closed() {
+fn managed_return_contracts_fail_closed() {
     let (ctx, module) = parse_fixture(
         r#"core.module @test {
-  !S = adt.struct<"S", ()>
-  !Unnamed = adt.typeref
-  !Parameterized = adt.typeref<core.i32, {name = "S"}>
-  !Missing = adt.typeref<{name = "Missing"}>
-  tribute_control.func @unnamed(%value: !Unnamed) -> !Unnamed {
-    tribute_control.return %value
-  }
-  tribute_control.func @parameterized(%value: !Parameterized) -> !Parameterized {
-    tribute_control.return %value
-  }
-  tribute_control.func @missing(%value: !Missing) -> !Missing {
-    tribute_control.return %value
-  }
   tribute_control.func @wrong_return(%integer: core.i32, %flag: core.i1) -> core.i32 {
     tribute_control.return %flag
   }
@@ -1822,19 +1809,24 @@ fn managed_reference_metadata_and_return_contracts_fail_closed() {
     let result = validate(&ctx, module, &[], &mut Default::default());
     let diagnostics = messages(&result);
     assert!(
-        diagnostics.contains("requires nominal name metadata"),
-        "{result}"
-    );
-    assert!(
-        diagnostics.contains("cannot have type parameters"),
-        "{result}"
-    );
-    assert!(
-        diagnostics.contains("has no verified nominal declaration"),
-        "{result}"
-    );
-    assert!(
         diagnostics.contains("return operand type does not match containing semantic callable"),
+        "{result}"
+    );
+}
+
+#[test]
+fn a_nominal_value_of_a_layout_without_a_body_fails_closed() {
+    let (ctx, module) = parse_fixture(
+        r#"core.module @test {
+  tribute_control.func @read(%value: adt.struct<"Missing">) -> adt.struct<"Missing"> {
+    tribute_control.return %value
+  }
+}"#,
+    );
+
+    let result = validate(&ctx, module, &[], &mut Default::default());
+    assert!(
+        messages(&result).contains("nominal layout \"Missing\" has no body"),
         "{result}"
     );
 }
@@ -1844,7 +1836,7 @@ fn managed_defined_boundaries_null_and_compatible_cast_are_valid() {
     let (ctx, module) = parse_fixture(
         r#"core.module @test {
   !S = adt.struct<"S", ()>
-  !R = adt.typeref<{name = "S"}>
+  !R = adt.struct<"S">
   tribute_control.func @managed(%value: !R) -> !R {
     %null = adt.ref_null {type = !R} : !R
     %cast = adt.ref_cast %null {type = !R} : !R
@@ -1862,7 +1854,7 @@ fn managed_bodyless_external_read_line_shape_and_raw_pointer_cast_chain_fail_clo
     let (ctx, module) = parse_fixture(
         r#"core.module @test {
   !ReadLineResult = adt.enum<"ReadLineResult", [(core.bytes), (), (), (core.i32, core.bytes)]>
-  !ReadLineResultRef = adt.typeref<{name = "ReadLineResult"}>
+  !ReadLineResultRef = adt.enum<"ReadLineResult">
   tribute_control.func @user_read_line() -> !ReadLineResultRef
     attributes {abi = "intrinsic"}
   tribute_control.func @masquerade(%raw: core.ptr) -> !ReadLineResultRef {
@@ -1884,7 +1876,7 @@ fn managed_nested_aggregate_in_bodyless_c_external_is_a_trusted_user_boundary() 
     let (ctx, module) = parse_fixture(
         r#"core.module @test {
   !S = adt.struct<"S", ()>
-  !R = adt.typeref<{name = "S"}>
+  !R = adt.struct<"S">
   !Container = adt.struct<"Container", (!R)>
   tribute_control.func @private_helper(%value: !Container) -> core.i32
     attributes {abi = "C"}
@@ -1914,8 +1906,8 @@ fn ref_cast_rejects_distinct_nominal_managed_references() {
         r#"core.module @test {
   !S = adt.struct<"S", ()>
   !T = adt.struct<"T", ()>
-  !RS = adt.typeref<{name = "S"}>
-  !RT = adt.typeref<{name = "T"}>
+  !RS = adt.struct<"S">
+  !RT = adt.struct<"T">
   tribute_control.func @incompatible(%value: !RS) -> !RT {
     %cast = adt.ref_cast %value {type = !RT} : !RT
     tribute_control.return %cast
@@ -2292,9 +2284,9 @@ fn exact_adt_callable_projections_have_semantic_provenance() {
         r#"core.module @test {
   !F = tribute_control.func_sig<(core.i32) -> core.i32>
   !Tuple = adt.struct<"Tuple", (!F)>
-  !TupleRef = adt.typeref<{name = "Tuple"}>
+  !TupleRef = adt.struct<"Tuple">
   !Choice = adt.enum<"Choice", [(!F)]>
-  !ChoiceRef = adt.typeref<{name = "Choice"}>
+  !ChoiceRef = adt.enum<"Choice">
   tribute_control.func @caller(%tuple: !TupleRef, %choice: !ChoiceRef, %value: core.i32) -> core.i32 {
     %tuple_callee = adt.struct_get %tuple {type = !Tuple, field = 0} : !F
     %tuple_result = tribute_control.call_indirect %tuple_callee(%value) : (core.i32) -> core.i32
@@ -2315,9 +2307,9 @@ fn adt_callable_projections_take_the_sources_row_arguments() {
         r#"core.module @test {
   !F = tribute_control.func_sig<(core.i32) -> core.i32>
   !Tuple = adt.struct<"Tuple"['a0], (tribute_control.func_sig<(core.i32) -> core.i32 row(| 'a0)>)>
-  !TupleRef = adt.typeref<"Tuple"[row()]>
+  !TupleRef = adt.struct<"Tuple"[row()]>
   !Choice = adt.enum<"Choice"['a0], [(tribute_control.func_sig<(core.i32) -> core.i32 row(| 'a0)>)]>
-  !ChoiceRef = adt.typeref<"Choice"[row()]>
+  !ChoiceRef = adt.enum<"Choice"[row()]>
   tribute_control.func @caller(%tuple: !TupleRef, %choice: !ChoiceRef, %value: core.i32) -> core.i32 {
     %tuple_callee = adt.struct_get %tuple {type = !Tuple, field = 0} : !F
     %tuple_result = tribute_control.call_indirect %tuple_callee(%value) : (core.i32) -> core.i32
@@ -2338,9 +2330,9 @@ fn adt_callable_projection_requires_matching_declared_field_type() {
         r#"core.module @test {
   !F = tribute_control.func_sig<(core.i32) -> core.i32>
   !Tuple = adt.struct<"Tuple", (core.i32)>
-  !TupleRef = adt.typeref<{name = "Tuple"}>
+  !TupleRef = adt.struct<"Tuple">
   !Choice = adt.enum<"Choice", [(core.i32)]>
-  !ChoiceRef = adt.typeref<{name = "Choice"}>
+  !ChoiceRef = adt.enum<"Choice">
   tribute_control.func @caller(%tuple: !TupleRef, %choice: !ChoiceRef, %value: core.i32) -> core.i32 {
     %tuple_callee = adt.struct_get %tuple {type = !Tuple, field = 0} : !F
     %tuple_result = tribute_control.call_indirect %tuple_callee(%value) : (core.i32) -> core.i32
@@ -2366,9 +2358,9 @@ fn another_layout_rejects_callable_projection_spoofing() {
   !F = tribute_control.func_sig<(core.i32) -> core.i32>
   !Canonical = adt.struct<"Tuple", (core.i32)>
   !Spoofed = adt.struct<"Tuple", (!F), {k = 1}>
-  !TupleRef = adt.typeref<{name = "Tuple"}>
+  !TupleRef = adt.struct<"Tuple">
   tribute_control.func @caller(%tuple: !TupleRef, %value: core.i32) -> core.i32 {
-    %canonical = adt.struct_new %value {type = !Canonical} : !TupleRef
+    %canonical = adt.struct_new(%value) : (core.i32) -> !TupleRef
     %callee = adt.struct_get %tuple {type = !Spoofed, field = 0} : !F
     %result = tribute_control.call_indirect %callee(%value) : (core.i32) -> core.i32
     tribute_control.return %result

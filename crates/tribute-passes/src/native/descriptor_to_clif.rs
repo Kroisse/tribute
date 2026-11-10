@@ -81,7 +81,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  func.func @test(%choice: adt.typeref<{name = "Choice"}>) -> core.i32 {
+  func.func @test(%choice: adt.enum<"Choice">) -> core.i32 {
     %0 = tribute_rtti.descriptor %choice : core.i32
     func.return %0
   }
@@ -110,7 +110,7 @@ mod tests {
     %0 = tribute_rtti.descriptor %value : core.i32
     func.return %0
   }
-  func.func @second(%value: adt.typeref<{name = "Choice"}>) -> core.i32 {
+  func.func @second(%value: adt.enum<"Choice">) -> core.i32 {
     %0 = tribute_rtti.descriptor %value : core.i32
     func.return %0
   }
@@ -150,7 +150,7 @@ mod tests {
             assert!(!validate_op_schemas(&ctx, module.op()).is_ok(), "{ty}");
         }
         for ty in [
-            r#"adt.typeref<{name = "Choice"}>"#,
+            r#"adt.enum<"Choice">"#,
             "adt.struct<\"Point\", (core.i32)>",
             "tribute_rt.anyref",
         ] {

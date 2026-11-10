@@ -95,7 +95,6 @@ enum ContractPhase {
 #[derive(Clone, Copy)]
 struct RootFrameContract {
     reference: TypeRef,
-    layout: TypeRef,
     done: TypeRef,
     dispatch: TypeRef,
 }
@@ -907,7 +906,6 @@ impl TerminalFunctions {
         };
         ops.push(initial);
         let cell_new = adt::StructNew::operands([ctx.op_result(initial, 0)])
-            .r#type(self.cell_ty)
             .results(self.cell_ty)
             .build(ctx, location);
         ops.push(cell_new.op_ref());
@@ -934,7 +932,6 @@ impl TerminalFunctions {
         let done = member(ctx, done_entries, &[cell_new.result(ctx)], self.frame.done);
         let dispatch = member(ctx, dispatch_entries, &[], self.frame.dispatch);
         let frame = adt::StructNew::operands([done, dispatch])
-            .r#type(self.frame.layout)
             .results(self.frame.reference)
             .build(ctx, location);
         ops.push(frame.op_ref());
@@ -1098,13 +1095,14 @@ fn validate_root_continuation_frame(
     physical_results: &[TypeRef],
     phase: ContractPhase,
 ) -> Result<RootFrameContract, TargetAbiError> {
-    // A frame reference is its layout's key, or an `adt.typeref` to it.
-    let is_key = adt::Struct::from_type_ref(ctx, frame).is_some_and(|key| key.is_nominal(ctx));
-    if !is_key && !adt::Typeref::matches(ctx, frame) {
+    // A frame reference is its layout's key.
+    let Some(layout_struct) =
+        adt::Struct::from_type_ref(ctx, frame).filter(|key| key.is_nominal(ctx))
+    else {
         return Err(TargetAbiError::new(
             "target root bridge: worker frame must be an exact nominal frame reference",
         ));
-    }
+    };
     // Physicalization consumes the frame answer provenance after checking it
     // here; the physical frame's Done input then carries the source result.
     let expected_provenance = (phase == ContractPhase::Logical).then_some(source_result);
@@ -1113,22 +1111,11 @@ fn validate_root_continuation_frame(
             "target root bridge: worker frame result provenance differs from root source result",
         ));
     }
-    let name = ctx.type_attrs(frame).get_str("name").ok_or_else(|| {
-        TargetAbiError::new("target root bridge: worker frame lacks nominal layout identity")
-    })?;
-    let layout = adt::layout_of(ctx, frame)
-        .filter(|&layout| ctx.type_body(layout).is_some())
-        .ok_or_else(|| {
-            TargetAbiError::new(
-                "target root bridge: worker frame must have an exact nominal layout",
-            )
-        })?;
-    let layout_struct = adt::Struct::from_type_ref(ctx, layout)
-        .filter(|layout_struct| layout_struct.name(ctx) == Some(name))
-        .filter(|_| continuation_frame::result_type(ctx, layout) == expected_provenance)
-        .ok_or_else(|| {
-            TargetAbiError::new("target root bridge: worker frame layout provenance is malformed")
-        })?;
+    if ctx.type_body(frame).is_none() {
+        return Err(TargetAbiError::new(
+            "target root bridge: worker frame must have an exact nominal layout",
+        ));
+    }
     // `continuation_frame::layout_type` places Done then Dispatch.
     let [done, dispatch] = layout_struct.fields(ctx) else {
         return Err(TargetAbiError::new(
@@ -1139,7 +1126,6 @@ fn validate_root_continuation_frame(
     validate_root_dispatch_type(ctx, *dispatch, frame, evidence, physical_results)?;
     Ok(RootFrameContract {
         reference: frame,
-        layout,
         done: *done,
         dispatch: *dispatch,
     })
@@ -2907,7 +2893,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   !Evidence = adt.array<adt.struct<"std::runtime::evidence::Marker">>
-  !Frame = adt.typeref<{name = "frame", tribute.cps_continuation_frame_result = core.i32}>
+  !Frame = adt.struct<"frame", {tribute.cps_continuation_frame_result = core.i32}>
   !Body = closure.closure<func.func_sig<(!Evidence, !Frame) -> core.never>>
   func.func @run(%ev: !Evidence, %body: !Body) -> core.i32 attributes {tribute.calling_convention = "direct"} {
     %answer = effect.delimit %body, %ev : core.i32

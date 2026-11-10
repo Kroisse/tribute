@@ -9,7 +9,7 @@
 //! `adt_to_wasm` builds variant types here. After every `adt` operation is
 //! lowered, `convert` replaces each user `adt.struct` with its
 //! `wasm_gc.struct` wherever it occurs. A nominal value type, a layout's
-//! key, row instance or `adt.typeref`, becomes the structural type of the
+//! key or row instance, becomes the structural type of the
 //! struct it names, or the abstract struct reference when it names an enum,
 //! whose variants have different types.
 
@@ -63,11 +63,10 @@ pub fn variant_type(ctx: &mut IrContext, enum_ty: TypeRef, tag: u32) -> Option<T
 }
 
 /// Replace each user `adt.struct` in `module` with its `wasm_gc.struct`, and
-/// each `adt.typeref` with the type of the layout it names.
+/// each enum layout or row instance with the type of its values.
 pub(crate) fn convert(ctx: &mut IrContext, module: Module) {
     crate::closure_lower::substitute_module_types(ctx, module, "gc", |ctx, ty| {
-        let reference = tribute_ir::dialect::adt::Typeref::matches(ctx, ty)
-            || tribute_ir::dialect::adt::row_instance_def(ctx, ty).is_some()
+        let reference = tribute_ir::dialect::adt::row_instance_def(ctx, ty).is_some()
             || tribute_ir::dialect::adt::Enum::matches(ctx, ty);
         if reference {
             return Some(reference_type(ctx, ty));
@@ -76,9 +75,9 @@ pub(crate) fn convert(ctx: &mut IrContext, module: Module) {
     });
 }
 
-/// The Wasm type of a value of the nominal type `ty`, an `adt.typeref`, a
-/// row instance, or an enum layout: the structural type of the user struct
-/// it names, or `wasm.structref` for an enum or an unresolved name.
+/// The Wasm type of a value of the nominal type `ty`, a row instance or an
+/// enum layout: the structural type of the user struct it names, or
+/// `wasm.structref` for an enum.
 fn reference_type(ctx: &mut IrContext, ty: TypeRef) -> TypeRef {
     tribute_ir::dialect::adt::layout_of(ctx, ty)
         .and_then(|layout| struct_type(ctx, layout))
@@ -178,7 +177,7 @@ mod tests {
             r#"core.module @test {
   !Pair = adt.struct<"Pair", (core.i64, core.i64)>
   !Shape = adt.enum<"Shape", [()]>
-  wasm.func @f(%pair: adt.typeref<{name = "Pair"}>, %shape: adt.typeref<{name = "Shape"}>, %unknown: adt.typeref<{name = "Missing"}>) -> core.nil {
+  wasm.func @f(%pair: adt.struct<"Pair">, %shape: adt.enum<"Shape">) -> core.nil {
     wasm.return
   }
 }"#,
@@ -188,8 +187,8 @@ mod tests {
 
         let function = module.ops(&ctx)[0];
         let entry = ctx.region(ctx.op_region(function, 0).unwrap()).blocks[0];
-        let [pair, shape, unknown] = ctx.block_args(entry)[..] else {
-            panic!("three parameters")
+        let [pair, shape] = ctx.block_args(entry)[..] else {
+            panic!("two parameters")
         };
         let [i32_ty, i64_ty, structref] = [
             core::I32::type_ref(&mut ctx),
@@ -198,7 +197,6 @@ mod tests {
         ];
         assert_eq!(fields(&ctx, ctx.value_ty(pair)), [i32_ty, i64_ty, i64_ty]);
         assert_eq!(ctx.value_ty(shape), structref);
-        assert_eq!(ctx.value_ty(unknown), structref);
     }
 
     #[test]
@@ -210,7 +208,7 @@ mod tests {
   !Closure = adt.struct<(tribute_rt.convention_table_ref), {layout = "closure"}>
   !Inner = adt.struct<"Inner", (core.i64)>
   !E = adt.enum<"E", [()]>
-  !Outer = adt.struct<"Outer", (core.i1, adt.struct<"Outer">, adt.typeref<{name = "Inner"}>, !E, !Inner, !Closure)>
+  !Outer = adt.struct<"Outer", (core.i1, adt.struct<"Outer">, adt.struct<"Inner">, !E, !Inner, !Closure)>
 }"#,
         );
         let closure = alias(&ctx, "Closure");
@@ -219,7 +217,7 @@ mod tests {
         let i32_ty = core::I32::type_ref(&mut ctx);
         let structref = wasm::Structref::params().intern(&mut ctx).as_type_ref();
 
-        // Every nominal value, a key or a typeref, is a reference.
+        // Every nominal value is a reference.
         assert_eq!(
             fields(&ctx, outer),
             [

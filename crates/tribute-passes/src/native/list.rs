@@ -174,7 +174,6 @@ impl OpRewritePattern for PrependPattern {
         let node_ty = node_type(ctx, prepend.element_type(ctx));
         let location = ctx.op(op).location;
         let node = adt::StructNew::operands([prepend.element(ctx), prepend.tail(ctx)])
-            .r#type(node_ty)
             .results(node_ty)
             .build(ctx, location);
         rewriter.insert_op(node.op_ref());

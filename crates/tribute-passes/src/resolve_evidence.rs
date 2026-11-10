@@ -456,7 +456,7 @@ mod tests {
     fn final_dispatch_fixture(operation: &str) -> String {
         format!(
             r#"core.module @test {{
-  !marker = adt.typeref<{{name = "std::runtime::evidence::Marker"}}>
+  !marker = adt.struct<"std::runtime::evidence::Marker">
   !evidence = adt.array<!marker>
   func.func @test(%ev: !evidence, %prompt: core.i32, %tr: core.ptr, %tr2: core.ptr) -> core.never {{
     {operation}

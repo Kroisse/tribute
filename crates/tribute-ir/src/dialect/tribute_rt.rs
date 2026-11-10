@@ -319,7 +319,8 @@ mod tests {
         let ptr_ty = make_ptr_type(&mut ctx);
         let f64_ty = TypeDataBuilder::new("core.f64").intern(&mut ctx);
         let bool_ty = TypeDataBuilder::new("core.i1").intern(&mut ctx);
-        let managed_ty = crate::dialect::adt::Typeref::named(&mut ctx, "Box", []).as_type_ref();
+        let managed_ty =
+            crate::dialect::adt::Struct::key(&mut ctx, "Box", Default::default()).as_type_ref();
 
         // Build `op` over a fresh operand of `operand_ty`, then check that
         // `from_op` matches it and that its operand accessor and result type

@@ -60,7 +60,6 @@ fn push_one_shot_resume(
         .build(ctx, location);
     ctx.push_op(block, not_consumed.op_ref());
     let state = adt::StructNew::operands([not_consumed.result(ctx)])
-        .r#type(state_type)
         .results(state_type)
         .build(ctx, location);
     ctx.push_op(block, state.op_ref());

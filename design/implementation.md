@@ -151,7 +151,7 @@ order로 전달된다. Pre-CPS verifier는 bodyless function과 metadata를 exac
 intrinsic identity attribute를 lowering에 맡긴다. 이후 intrinsic lowering은 이 verified
 identity와 signature를 소비하며 이름이나 `abi` 문자열을 fallback으로 사용하지 않는다.
 
-같은 pre-CPS 검사에서 `adt.typeref` callable boundary, `adt.ref_null`,
+같은 pre-CPS 검사에서 nominal 값 타입의 callable boundary, `adt.ref_null`,
 `adt.ref_cast`, direct/indirect call과 return을 모두 검사한다. `core.ptr`에서 시작해
 unrealized cast 또는 reference cast를 거쳐 managed nominal reference가 되는 경로는
 전체 validation 실패이며 conversion은 시작하지 않는다. Defined Tribute function은
