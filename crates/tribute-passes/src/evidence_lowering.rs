@@ -241,11 +241,8 @@ fn some_dispatch(
         cast.result(ctx)
     };
     // The parameter is a reference to the published `Option` instance.
-    let option_layout =
-        adt::layout_of(ctx, option_ty).expect("the Option(Dispatch) layout is published");
     let some = adt::VariantNew::operands([dispatch])
-        .r#type(option_layout)
-        .tag(some)
+        .tag(u64::from(some))
         .results(option_ty)
         .build(ctx, location);
     rewriter.insert_op(some.op_ref());
@@ -488,7 +485,7 @@ mod tests {
     const RUNTIME: &str = r#"  !Evidence = adt.array<adt.struct<"std::runtime::evidence::Marker">>
   !Closure = adt.struct<(tribute_rt.convention_table_ref), {layout = "closure"}>
   !"std::Option$std::runtime::Dispatch" = adt.enum<"std::Option$std::runtime::Dispatch", [(), (!Closure)]>
-  !OptionRef = adt.typeref<{name = "std::Option$std::runtime::Dispatch"}>
+  !OptionRef = adt.enum<"std::Option$std::runtime::Dispatch">
   adt.enum_decl "std::Option$std::runtime::Dispatch" !"std::Option$std::runtime::Dispatch" ["None", "Some"]
   func.func @"std::runtime::evidence::lookup"(%ev: !Evidence, %id: core.i32) -> core.i32 {
     func.return %id
@@ -627,10 +624,7 @@ mod tests {
             [(runtime_callee("extend"), 5)],
             "{printed}"
         );
-        assert!(
-            printed.contains("adt.variant_new %2 {tag = 1, "),
-            "{printed}"
-        );
+        assert!(printed.contains("adt.variant_new 1(%2) :"), "{printed}");
     }
 
     #[test]

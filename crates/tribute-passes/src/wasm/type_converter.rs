@@ -15,7 +15,7 @@
 //! | `tribute_rt.float`  | `core.f64`      | Float as f64                        |
 //! | `tribute_rt.intref` | `wasm.i31ref`   | Boxed integer reference             |
 //! | `tribute_rt.anyref` | `wasm.anyref`   | Any reference type                  |
-//! | `adt.typeref<T>`    | `wasm.structref`| Generic struct reference            |
+//! | nominal value type  | `wasm.structref`| Generic struct reference            |
 //!
 //! ## Materializations
 //!
@@ -399,7 +399,7 @@ pub fn wasm_type_converter(
         }
     });
 
-    // Convert a nominal value, a layout's key, row instance or adt.typeref,
+    // Convert a nominal value, a layout's key or row instance,
     // -> wasm.structref (generic struct reference). A nominal layout may
     // hold itself, so its value is not its structural type.
     tc.add_conversion(move |ctx, ty| {
@@ -460,7 +460,7 @@ pub fn wasm_type_converter(
         // Struct-like bridging materializations
         // -----------------------------------------------------------------
 
-        // Reference upcasts (for example a concrete struct or `adt.typeref` to
+        // Reference upcasts (for example a concrete struct or a layout key to
         // `structref`/`anyref`) become `wasm.ref_upcast` in the Wasm target's
         // cast legalization, not materializations,
         // and values of equal representation get equal types from the target
@@ -827,7 +827,7 @@ mod tests {
   !Sample = adt.struct<"Sample", (tribute_rt.nat, tribute_rt.int, tribute_rt.bool, tribute_rt.float, tribute_rt.intref, tribute_rt.anyref)>
   func.func @f(%sample: !Sample, %callee: core.i32, %value: tribute_rt.anyref) -> tribute_rt.int {
     %null = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
-    %some = adt.variant_new %null {tag = 1, type = !Option} : !Option
+    %some = adt.variant_new 1(%null) : (tribute_rt.anyref) -> !Option
     %result = func.call_indirect %callee(%value) : (tribute_rt.anyref) -> tribute_rt.int
     func.return %result
   }

@@ -130,8 +130,10 @@ where
   `result`) or `Variadic<C>` / `Values<L>` (accessor `results`).
 - Attribute kinds are Rust types implementing `attr_kind::AttrKind`, resolved
   in the dialect's scope like bounds: primitives (`bool`, `i32`, `i64`, `u32`,
-  `u64`, `f32`, `f64`), `String`, and the markers
-  `attr_kind::{Type, SymbolRef, Bytes}`. A kind defines its schema domain,
+  `u64`, `f32`, `f64`), `String`, the markers
+  `attr_kind::{Type, SymbolRef, Bytes}`, and `core::Index`, a static
+  `core.index` such as a variant's position, read as `u64`. A kind defines
+  its schema domain,
   the values its accessor returns and its builder setter takes, and how a
   declarative format writes and reads its values, so a dialect adds a kind
   by implementing the trait. A kind narrower than its

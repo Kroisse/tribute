@@ -1265,7 +1265,7 @@ WasmGC 배열 명령의 index와 길이는 memory의 index type과 관계없이 
 core.i32
 core.tuple<core.i32, core.ptr {k = "v"}>
 core.ref<core.i32, {nullable = true}>
-adt.typeref<"Point">
+adt.struct<"Point">
 func.func_sig<(core.i32 {tribute.ownership = "consumed"}) -> core.i64, {call_conv = "tail"}>
 ```
 

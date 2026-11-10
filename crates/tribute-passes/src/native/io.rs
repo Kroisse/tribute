@@ -283,15 +283,27 @@ fn variant_region<const N: usize>(
     tag: u32,
     fields: [ValueRef; N],
 ) -> RegionRef {
+    // The variant is of the enum's type, cast to the operation's result type.
     let variant = adt::VariantNew::operands(fields)
-        .r#type(enum_ty)
-        .tag(tag)
+        .tag(u64::from(tag))
+        .results(enum_ty)
+        .build(ctx, loc);
+    let cast = core::UnrealizedConversionCast::operands(variant.result(ctx))
         .results(result_ty)
         .build(ctx, loc);
-    op_region(ctx, loc, variant.op_ref(), variant.result(ctx))
+    ops_region(
+        ctx,
+        loc,
+        &[variant.op_ref(), cast.op_ref()],
+        cast.result(ctx),
+    )
 }
 
 fn op_region(ctx: &mut IrContext, loc: Location, op: OpRef, result: ValueRef) -> RegionRef {
+    ops_region(ctx, loc, &[op], result)
+}
+
+fn ops_region(ctx: &mut IrContext, loc: Location, ops: &[OpRef], result: ValueRef) -> RegionRef {
     let yield_op = scf::Yield::operands([result]).build(ctx, loc);
     let block = ctx.create_block(BlockData {
         location: loc,
@@ -299,7 +311,9 @@ fn op_region(ctx: &mut IrContext, loc: Location, op: OpRef, result: ValueRef) ->
         ops: smallvec![],
         parent_region: None,
     });
-    ctx.push_op(block, op);
+    for &op in ops {
+        ctx.push_op(block, op);
+    }
     ctx.push_op(block, yield_op.op_ref());
     ctx.create_region(RegionData {
         location: loc,
@@ -367,7 +381,10 @@ mod tests {
             "{output}"
         );
         for tag in 0..4 {
-            assert!(output.contains(&format!("tag = {tag}, ")), "{output}");
+            assert!(
+                output.contains(&format!("adt.variant_new {tag}(")),
+                "{output}"
+            );
         }
 
         let validation = trunk_ir::validation::validate_value_integrity(&ctx, module);

@@ -33,7 +33,7 @@ selection, and specialization must still compare declaration identity.
 특수화된 타입의 path는 선언의 모듈 component를 유지하고 마지막 component만
 맹글링한다.
 중첩 타입 인자는 기존 `$0`/`$1` 맹글링 규칙을 따른다. 이 symbol은 IR의
-`adt.typeref`와 대응하는 struct/enum layout의 `name`에 동일하게 사용하며,
+struct/enum layout의 `name`에 사용하며,
 선언 identity나 타입 인자를 이름에서 역으로 복원하는 근거로 쓰지 않는다.
 
 ## Primitive Numeric Types
