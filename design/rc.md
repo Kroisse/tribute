@@ -162,6 +162,12 @@ byte 배열 literal(`adt.bytes_const`)만 정적 객체가 된다.
 - Retain과 release는 정적 객체를 구별하지 않는다. 일반 객체와 같은 증감을 하며, 그
   때문에 검사나 분기를 더하지 않는다. Refcount는 `2^31`에서 시작하므로 균형 잡힌
   retain과 release로는 0에 닿지 않고, 객체는 해제되지 않는다.
+- Retain은 일반 객체에서도 overflow를 검사하지 않는다. RC 계약은 한 객체에 동시에
+  살아 있는 unit이 `2^31`개보다 적다고 가정한다. 이 범위 안에서 일반 객체의
+  refcount는 `u32`를 넘지 않고, 정적 객체의 refcount는 `2^31`과 `2^32` 사이에 머물러
+  0이나 1에 닿지 않는다. Unit 하나는 적어도 pointer 크기의 자리를 차지하므로, 이
+  가정을 깨려면 한 객체를 가리키는 owned 참조만으로 16 GiB 이상이 필요하다. 이
+  범위를 넘는 프로그램의 동작은 정의하지 않는다.
 - 정적 객체를 내는 operation의 결과는 일반 할당처럼 unit 하나를 가진 owned 값이다.
   Lowering은 정적 객체를 retain해 그 unit을 만든다. 그렇지 않으면 평가마다 release만
   쌓여 refcount가 결국 0에 닿는다.
