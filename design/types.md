@@ -285,6 +285,9 @@ case opt {
 identity is compiler-owned and distinct from every source declaration, including
 a user declaration also spelled `List`. Name-based equality is not sufficient
 for named types: type checking and lowering compare declaration identities.
+A source declaration with the same short name may shadow ordinary annotation
+lookup, but it remains a different nominal type and cannot capture list literal
+or list-pattern syntax.
 
 The concrete RRB-node layout is not a source contract. In particular, `Empty`
 and `Cons` are not public constructors or patterns. Construction uses list

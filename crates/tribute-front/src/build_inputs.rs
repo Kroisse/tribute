@@ -1,5 +1,5 @@
 //! The files a build reads, for listing them and watching them for changes
-//! (`design/implementation.md` § 패키지 source 트리와 파일 입력).
+//! (`design/frontend.md` § 패키지 source 트리와 파일 입력).
 //!
 //! The lists are made from the paths the source tree and manifest queries
 //! asked the file provider about, never from walking a directory. They

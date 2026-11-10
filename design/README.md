@@ -30,8 +30,8 @@ Operation 하나의 계약은 그 `#[dialect]` 선언의 doc comment가 정하�
 | [ir.md](ir.md) | TrunkIR core: dialect 계층, legality, 선언적 schema, 타입 모델 |
 | [tribute-dialects.md](tribute-dialects.md) | Tribute 고수준 dialect의 operation 간 규칙과 타입 규칙 |
 | [cps-effects.md](cps-effects.md) | 직접형 제어의 CPS 변환과 convention class, effect dispatch |
-| [implementation.md](implementation.md) | Compiler phase 책임과 검증 경계 |
-| [lowering.md](lowering.md) | Lowering pass 구조와 pass 순서 |
+| [frontend.md](frontend.md) | Frontend 단계 경계, 패키지 입력, 증분 분석 |
+| [lowering.md](lowering.md) | Lowering pass 구조와 pass 순서, 출력 결정성 |
 | [optimizations.md](optimizations.md) | 최적화 경계와 검증 계약 |
 | [abi-boundary.md](abi-boundary.md) | 단계 불변 조건과 representation/ABI 경계 |
 

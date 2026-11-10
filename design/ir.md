@@ -978,6 +978,13 @@ Symbol 사용 질의는 operation-local이다. Container operation이 직접 sym
 consumer는 nested region을 재귀적으로 순회해야 하며, "사용 없음"을 자식 순회 생략의
 근거로 삼아서는 안 된다.
 
+## Source Origin
+
+각 operation의 `Location`은 진단의 source origin을 보존한다. 새 operation과
+region/block을 생성하는 pass는 원본 source location을 전달하고, synthetic helper도
+의미 있는 origin을 가져야 한다. 같은 location은 source origin 공유를 뜻하며
+operation identity나 callable provenance를 대신하지 않는다.
+
 ## Core Invariants
 
 - A `core.module` owns the top-level region for a compilation unit.
@@ -1522,6 +1529,9 @@ writes `type` in its attribute dictionary. Shared conversion maps
 every input/result and nested type attribute, including types inside
 [parameter attributes](#타입-매개변수-속성), preserving cardinality, and
 checks entry argument arity before changing the signature or entry arguments.
+Each dialect's adapter verifies and decodes its own signature and rebuilds it
+with its own constructor, so the shared traversal selects neither a dialect
+identity nor an ABI.
 Normal `validate_all` combines local operation checks with contextual shared
 function-contract checks. Local checks enforce zero/one ordinary-call results,
 resultless terminators, and exact typed indirect operand/result agreement.
