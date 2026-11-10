@@ -89,8 +89,7 @@ pub(crate) fn closure_captures_layout(
 /// Whether `ty` is the closure base storage layout, identified by its
 /// runtime layout attribute.
 pub(crate) fn is_closure_struct_type_ref(ctx: &IrContext, ty: TypeRef) -> bool {
-    let data = ctx.get_type(ty);
-    data.name.is(ctx, "adt.struct")
+    adt::Struct::matches(ctx, ty)
         && runtime_layout::has_runtime_layout(ctx, ty, runtime_layout::CLOSURE)
 }
 
@@ -98,7 +97,7 @@ pub(crate) fn is_closure_struct_type_ref(ctx: &IrContext, ty: TypeRef) -> bool {
 /// identified by its runtime layout attribute.
 pub(crate) fn is_closure_layout(ctx: &IrContext, ty: TypeRef) -> bool {
     is_closure_struct_type_ref(ctx, ty)
-        || (ctx.get_type(ty).name.is(ctx, "adt.struct")
+        || (adt::Struct::matches(ctx, ty)
             && runtime_layout::has_runtime_layout(ctx, ty, runtime_layout::CLOSURE_CAPTURES))
 }
 

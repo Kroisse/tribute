@@ -27,7 +27,7 @@ use trunk_ir::ops::DialectType;
 /// The `wasm_gc.struct` of the user struct or closure capture layout `ty`,
 /// or `None` when `ty` is neither.
 pub fn struct_type(ctx: &mut IrContext, ty: TypeRef) -> Option<TypeRef> {
-    if !ctx.get_type(ty).name.is(ctx, "adt.struct") {
+    if !tribute_ir::dialect::adt::Struct::matches(ctx, ty) {
         return None;
     }
     if let Some(base) = ctx
