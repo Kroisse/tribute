@@ -71,8 +71,8 @@ pub struct VariantOwner {
 
 impl DescriptorRecord {
     /// The record of the descriptor `(ty, tag)`, read from its nominal layout
-    /// and the layout's declaration in `decls` (`design/ir.md` § "Nominal
-    /// 선언").
+    /// and the layout's declaration in `decls`
+    /// (`design/tribute-dialects.md` § "Nominal 선언").
     ///
     /// # Panics
     ///

@@ -54,7 +54,7 @@ struct ReadLineResult {
 
 /// The layout `std::io` declares as `ReadLineResult`, found by its
 /// declaration's source name, which a conversion's tag on the layout's name
-/// leaves alone (`design/ir.md` § "Nominal 선언").
+/// leaves alone (`design/tribute-dialects.md` § "Nominal 선언").
 fn find_read_line_result(ctx: &IrContext, module: Module) -> Option<ReadLineResult> {
     let block = module.first_block(ctx)?;
     let decl = ctx.block(block).ops.iter().find_map(|&op| {

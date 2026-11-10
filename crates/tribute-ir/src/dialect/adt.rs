@@ -24,7 +24,7 @@ mod adt {
     /// it also has, and its body is a literal `adt.struct` without
     /// attributes holding its fields. A literal layout has no name and is
     /// its fields, its type parameters in declaration order, and its
-    /// attributes (`design/ir.md` § "`adt.struct` nominal layout type").
+    /// attributes (`design/tribute-dialects.md` § "`adt.struct` nominal layout type").
     /// [`Struct::fields`] reads either; `param_fields` reads only the type's
     /// own parameters, which a key has none of. The text writes a key as its name,
     /// and the fields of its body where it writes the body. Fields have no
@@ -235,7 +235,7 @@ mod adt {
     ///   `name` when the converted layout's name has a tag.
     /// - **Location:** the frontend emits it with the layout of each source
     ///   struct; the target pass that lowers `adt` operations erases it
-    ///   (`design/ir.md` § "Nominal 선언").
+    ///   (`design/tribute-dialects.md` § "Nominal 선언").
     #[verify]
     #[asm_format(name r#type fields attr_dict)]
     fn struct_decl(name: Attr<String>, r#type: Attr<Type>, fields: Attr<[String]>) {}
@@ -259,7 +259,7 @@ mod adt {
     ///   `name` when the converted layout's name has a tag.
     /// - **Location:** the frontend emits it with the layout of each source
     ///   enum and each specialized enum instance; the target pass that
-    ///   lowers `adt` operations erases it (`design/ir.md` § "Nominal 선언").
+    ///   lowers `adt` operations erases it (`design/tribute-dialects.md` § "Nominal 선언").
     #[verify]
     #[asm_format(name r#type variants attr_dict)]
     fn enum_decl(name: Attr<String>, r#type: Attr<Type>, variants: Attr<[String]>) {}
@@ -615,7 +615,7 @@ impl Typeref {
     /// that gives the layout a new key publishes again, or without such an
     /// alias the layout whose key this typeref's attributes spell, with
     /// `row_args` replaced by their number as `row_params`
-    /// (`design/ir.md` § "`adt.typeref` nominal reference type").
+    /// (`design/tribute-dialects.md` § "`adt.typeref` nominal reference type").
     pub fn layout(self, ctx: &IrContext) -> Option<TypeRef> {
         let is_layout = |ty: TypeRef| Struct::matches(ctx, ty) || Enum::matches(ctx, ty);
         if let Some(layout) = ctx
@@ -804,7 +804,7 @@ impl trunk_ir::asm_format::TypeAsmFormat for Typeref {
 }
 
 /// The nominal declarations of a module, by the layout each one declares
-/// (`design/ir.md` § "Nominal 선언").
+/// (`design/tribute-dialects.md` § "Nominal 선언").
 #[derive(Debug, Default)]
 pub struct NominalDecls {
     structs: HashMap<TypeRef, StructDecl>,
@@ -1051,7 +1051,7 @@ pub enum LayoutBodyError {
 
 /// Bind `body` to the nominal layout `key` after checking that it is a
 /// literal layout of `key`'s kind without attributes whose row tails name
-/// binders of `key` (`design/ir.md` § "`adt.struct` nominal layout type").
+/// binders of `key` (`design/tribute-dialects.md` § "`adt.struct` nominal layout type").
 fn bind_layout_body(
     ctx: &mut IrContext,
     key: TypeRef,

@@ -791,7 +791,7 @@ tribute_rt.release(ptr) ->
 ### Closure captures
 
 Native closure는 RC header, convention table 주소, capture를 담은 RC 객체 하나다
-([closure 저장 layout](ir.md#closure-저장-layout),
+([closure 저장 layout](tribute-dialects.md#closure-저장-layout),
 [native 배치](cranelift-backend.md#메모리-관리-reference-counting)).
 
 - `closure.new`는 capture layout의 `adt.struct_new`가 되므로 각 capture는 aggregate
@@ -911,7 +911,8 @@ __tribute_rtti: [record; max_index + 1]
 받지 않는 enum 레코드, 필드 배열, 이름 바이트를 둔다. 레코드 안의 참조는
 `__tribute_rtti` 시작 기준의 `u32` offset이며, `0`은 참조가 없음을 뜻한다. 이름은
 UTF-8 바이트이고 NUL로 끝나지 않는다. Source가 선언한 struct·enum·variant의 이름과
-struct의 필드 이름은 그 타입의 [nominal 선언](ir.md#nominal-선언)에서 읽는다.
+struct의 필드 이름은 그 타입의 [nominal 선언](tribute-dialects.md#nominal-선언)에서
+읽는다.
 선언이 없는 compiler 생성 layout은 위치 번호를 필드 이름으로 쓰고, layout 이름을
 레코드 이름으로 쓴다. 이름이 없는 literal layout의 레코드 이름은 `layout` 속성 값이고,
 그것도 없으면 `"struct"`다.

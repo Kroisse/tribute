@@ -89,7 +89,7 @@ mod tribute_rt {
     /// released. Target lowering builds one table per distinct entry list:
     /// read-only data of function addresses on native targets, and
     /// consecutive slots of the function table on Wasm, whose start index is
-    /// the reference. See the closure storage layout in `design/ir.md`.
+    /// the reference. See the closure storage layout in `design/tribute-dialects.md`.
     ///
     /// ```text
     /// %table = tribute_rt.convention_table [@f] : tribute_rt.convention_table_ref

@@ -286,8 +286,8 @@ pub(super) fn generate_enum_specializations_with_index<'db>(
 
 /// The source spelling of the nominal type `id` applied to `type_args`, such
 /// as `pkg::Option(Nat)`: the name a specialized declaration records for
-/// output, spelled whole as identity paths are (`design/ir.md` § "Nominal
-/// 선언").
+/// output, spelled whole as identity paths are
+/// (`design/tribute-dialects.md` § "Nominal 선언").
 fn source_spelling<'db>(
     db: &'db dyn salsa::Database,
     id: TypeDefId<'db>,
