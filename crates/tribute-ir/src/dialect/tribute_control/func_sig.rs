@@ -54,7 +54,11 @@ pub enum FuncSigTypeError {
 /// the parameter count, that there is exactly one result, that no
 /// `tribute.calling_convention` attribute is present, and that the stored row
 /// is well formed and not written out when closed and empty. It does not
-/// inspect the component types.
+/// inspect the component types, since a type is interned once and shared by
+/// every phase. The `tribute_control` validator checks them at the
+/// source-logical boundary: no component contains an unresolved type, a
+/// resume token, or a type implementing `PhysicalCallableType`
+/// (`design/tribute-dialects.md`, "직접형 호출 대상과 제어").
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct FuncSig(pub(super) TypeRef);
 
