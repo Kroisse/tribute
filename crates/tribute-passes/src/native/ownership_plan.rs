@@ -152,7 +152,7 @@ impl FunctionOwnershipPlan {
 }
 
 pub use tribute_ir::dialect::tribute_rtti::FieldKind;
-use tribute_ir::dialect::tribute_rtti::{descriptor_field_types, native_allocation_descriptor};
+use tribute_ir::dialect::tribute_rtti::{DynDescriptorLayoutType, native_allocation_descriptor};
 
 /// One runtime type descriptor: a struct layout, or one variant of an enum
 /// layout, with how the runtime reads each of its fields.
@@ -479,12 +479,7 @@ impl ManagedLayoutCollector {
         if !self.visited_types.insert(ty) {
             return;
         }
-        // An array is an RC object of its own descriptor, identified by its
-        // exact `adt.array` type. A nominal layout's body holds its fields.
-        if tribute_ir::dialect::adt::Struct::matches(ctx, ty)
-            || tribute_ir::dialect::adt::Enum::matches(ctx, ty)
-            || tribute_ir::dialect::adt::Array::matches(ctx, ty)
-        {
+        if DynDescriptorLayoutType::is_implemented(ctx, ty) {
             self.layouts.insert(ty);
         }
         // A nominal layout's fields are its body's, which is no allocation
@@ -551,11 +546,11 @@ fn build_field_kinds(
     tag: Option<u32>,
     managed_layouts: &HashSet<TypeRef>,
 ) -> Result<Vec<FieldKind>, OwnershipPlanError> {
-    let fields = descriptor_field_types(ctx, ty, tag)
+    let fields = DynDescriptorLayoutType::fields_of(ctx, ty, tag)
         .map_err(|error| OwnershipPlanError::new(format!("RTTI descriptor: {error}")))?;
     let mut kinds: Vec<_> = fields
-        .into_iter()
-        .map(|field| field_kind(ctx, field, managed_layouts))
+        .iter()
+        .map(|&field| field_kind(ctx, field, managed_layouts))
         .collect();
     // A closure's first field is its code reference, which native stores as a
     // code pointer whatever the semantic layout's table index type.

@@ -4,7 +4,9 @@ use crate::dialect::tribute_control::{
     DynRowParameterized, ROW_ARGS_ATTR, ROW_PARAMS_ATTR, Row, RowParameterized,
     display_layout_binders, parse_layout_binders,
 };
-use crate::dialect::tribute_rtti::{ManagedRef, ManagedRefType};
+use crate::dialect::tribute_rtti::{
+    DescriptorFieldsError, DescriptorLayoutType, ManagedRef, ManagedRefType,
+};
 use trunk_ir::asm_format::TypeAliasHint;
 use trunk_ir::dialect::core::{I1, Index};
 use trunk_ir::op_flag::Pure;
@@ -51,7 +53,7 @@ mod adt {
     #[asm_format]
     #[alias_hint]
     #[identified]
-    #[implements(ManagedRefType, AdtLayout, RowParameterized)]
+    #[implements(ManagedRefType, DescriptorLayoutType, AdtLayout, RowParameterized)]
     struct Struct<#[rest] ParamFields> {
         name: Option<Attr<String>>,
         row_params: Option<Attr<u32>>,
@@ -78,7 +80,7 @@ mod adt {
     #[asm_format]
     #[alias_hint]
     #[identified]
-    #[implements(ManagedRefType, AdtLayout, RowParameterized)]
+    #[implements(ManagedRefType, DescriptorLayoutType, AdtLayout, RowParameterized)]
     struct Enum<#[rest] ParamVariants> {
         name: Option<Attr<String>>,
         row_params: Option<Attr<u32>>,
@@ -92,7 +94,7 @@ mod adt {
     /// which no `adt` array operation accepts. The index and trap rules the
     /// array operations share are in `design/tribute-dialects.md` § "`adt`
     /// 배열".
-    #[implements(ManagedRefType)]
+    #[implements(ManagedRefType, DescriptorLayoutType)]
     struct Array<Element>;
 
     /// `adt.variant`: the field types of one variant of an `adt.enum`, which
@@ -371,6 +373,50 @@ mod adt {
 impl ManagedRefType for Struct {}
 impl ManagedRefType for Enum {}
 impl ManagedRefType for Array {}
+
+// Each allocation's runtime descriptor is keyed by its layout type.
+impl DescriptorLayoutType for Struct {
+    fn descriptor_fields<'a>(
+        &self,
+        ctx: &'a IrContext,
+        tag: Option<u32>,
+    ) -> Result<&'a [TypeRef], DescriptorFieldsError> {
+        match tag {
+            None => Ok(self.fields(ctx)),
+            Some(_) => Err(DescriptorFieldsError::UnexpectedTag {
+                layout: "adt.struct",
+            }),
+        }
+    }
+}
+
+impl DescriptorLayoutType for Enum {
+    fn descriptor_fields<'a>(
+        &self,
+        ctx: &'a IrContext,
+        tag: Option<u32>,
+    ) -> Result<&'a [TypeRef], DescriptorFieldsError> {
+        let tag = tag.ok_or(DescriptorFieldsError::MissingTag)?;
+        self.variant_fields(ctx, tag)
+            .ok_or(DescriptorFieldsError::NoVariant { tag })
+    }
+}
+
+impl DescriptorLayoutType for Array {
+    fn descriptor_fields<'a>(
+        &self,
+        ctx: &'a IrContext,
+        tag: Option<u32>,
+    ) -> Result<&'a [TypeRef], DescriptorFieldsError> {
+        match tag {
+            // An array's only parameter is its element type.
+            None => Ok(&ctx.get_type(self.as_type_ref()).params),
+            Some(_) => Err(DescriptorFieldsError::UnexpectedTag {
+                layout: "adt.array",
+            }),
+        }
+    }
+}
 
 /// An `adt` layout type, `adt.struct` or `adt.enum`: a literal layout, a
 /// nominal layout's key, or a row instance (`design/tribute-dialects.md`
