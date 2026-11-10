@@ -17,6 +17,7 @@
 //! `tribute_rt.anyref` → `wasm.anyref`) are handled by backend-specific
 //! type converters.
 
+use tribute_ir::dialect::adt::is_nominal_value;
 use tribute_ir::dialect::tribute_rt;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::core;
@@ -26,10 +27,6 @@ use trunk_ir::rewrite::type_converter::{MaterializeResult, TypeConverter};
 
 fn is_adt_struct_type(ctx: &IrContext, ty: TypeRef) -> bool {
     tribute_ir::dialect::adt::Struct::matches(ctx, ty)
-}
-
-fn is_nominal_value(ctx: &IrContext, ty: TypeRef) -> bool {
-    tribute_ir::dialect::adt::is_nominal_value(ctx, ty)
 }
 
 /// Create an TypeConverter configured for target-agnostic type conversions.

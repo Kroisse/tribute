@@ -3,10 +3,9 @@
 
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use trunk_ir::context::IrContext;
-use trunk_ir::ops::DialectType;
 use trunk_ir::refs::TypeRef;
 
-use super::{Enum, STRUCT_NAME_ATTR, Struct, bind_layout_body};
+use super::{STRUCT_NAME_ATTR, bind_layout_body};
 
 /// A type conversion that rebuilds a type from its converted parts without
 /// looking into the bodies of identified types: it converts a nominal
@@ -180,9 +179,9 @@ impl Settler<'_> {
     }
 }
 
+/// Whether `ty` is a nominal layout's key, which a body is bound to.
 fn is_nominal_layout(ctx: &IrContext, ty: TypeRef) -> bool {
-    Struct::from_type_ref(ctx, ty).is_some_and(|layout| layout.is_nominal(ctx))
-        || Enum::from_type_ref(ctx, ty).is_some_and(|layout| layout.is_nominal(ctx))
+    super::is_nominal(ctx, ty) && ctx.type_attrs(ty).contains_key(STRUCT_NAME_ATTR)
 }
 
 /// Collect the nominal layout keys `ty` is or holds, without entering

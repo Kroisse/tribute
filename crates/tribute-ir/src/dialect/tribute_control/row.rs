@@ -28,6 +28,30 @@ pub const ROW_PARAMS_ATTR: &str = "row_params";
 /// quantifies, in instantiation order.
 pub const QUANTIFIED_ROWS_ATTR: &str = "quantified_rows";
 
+/// A nominal layout type that takes row arguments: a layout that declares
+/// row binders, or a row instance that applies one to its arguments
+/// (`design/tribute-dialects.md` § "Nominal row 인자"). `adt.struct` and
+/// `adt.enum` implement it.
+///
+/// Like any type interface's methods, these are queried only on types that
+/// pass their definition's verifier. Code that reads unverified IR asks
+/// [`DynRowParameterized::is_implemented`] and reads the attributes, as
+/// `adt::row_instance_def` does.
+#[trunk_ir::type_interface]
+pub trait RowParameterized: DialectType {
+    /// The number of row binders this layout declares, `None` when it
+    /// declares none.
+    fn row_param_count(&self, ctx: &IrContext) -> Option<u32>;
+
+    /// The layout key this row instance applies, its `def`; `None` when the
+    /// type is no row instance.
+    fn instance_def(&self, ctx: &IrContext) -> Option<TypeRef>;
+
+    /// The rows this row instance passes to its layout's binders, in order;
+    /// empty when the type is no row instance.
+    fn instance_rows(&self, ctx: &IrContext) -> Vec<Row>;
+}
+
 const LOGICAL_TUPLE_PREFIX: &str = "__logical_tuple_";
 
 /// An ability row: a set of ability instances, sorted by path without repeats,
@@ -590,13 +614,9 @@ pub fn logical_tuple_type(ctx: &mut IrContext, elements: &[TypeRef]) -> TypeRef 
 /// a layout key or of a row instance's `def` (`design/tribute-dialects.md`
 /// § "Nominal 값 타입"); `None` for a literal layout or any other type.
 fn nominal_value_name(ctx: &IrContext, ty: TypeRef) -> Option<&str> {
-    let data = ctx.get_type(ty);
-    let value =
-        (data.name == adt::Struct::NAME || data.name == adt::Enum::NAME) && data.params.is_empty();
-    if !value {
-        return None;
-    }
-    adt::nominal_name(ctx, ty)
+    adt::is_nominal_value(ctx, ty)
+        .then(|| adt::nominal_name(ctx, ty))
+        .flatten()
 }
 
 /// The element types of a compiler-generated tuple layout, whose value type
@@ -797,9 +817,7 @@ impl<S: TypeSink> Substitution<'_, S> {
 /// Whether `ty` is a nominal layout that declares row binders, which the
 /// rows inside it name.
 fn binds_rows(ctx: &IrContext, ty: TypeRef) -> bool {
-    let data = ctx.get_type(ty);
-    (data.name == adt::Struct::NAME || data.name == adt::Enum::NAME)
-        && data.attrs.view(ctx).contains_key(ROW_PARAMS_ATTR)
+    DynRowParameterized::is_implemented(ctx, ty) && ctx.type_attrs(ty).contains_key(ROW_PARAMS_ATTR)
 }
 
 /// Replace, in every callable type inside `ty`, a tail that `args` names
