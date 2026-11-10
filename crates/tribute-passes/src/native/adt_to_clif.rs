@@ -343,8 +343,8 @@ mod tests {
     fn test_ref_null_to_clif() {
         let result = run_pass(
             r#"core.module @test {
-  func.func @test_fn() -> core.ptr {
-    %0 = adt.ref_null : core.ptr
+  func.func @test_fn() -> tribute_rt.anyref {
+    %0 = adt.ref_null : tribute_rt.anyref
     func.return %0
   }
 }"#,
@@ -356,9 +356,9 @@ mod tests {
     fn test_ref_cast_to_clif() {
         let result = run_pass(
             r#"core.module @test {
-  func.func @test_fn() -> core.ptr {
-    %0 = clif.iconst 100 : core.ptr
-    %1 = adt.ref_cast %0 : core.ptr to core.ptr
+  !S = adt.struct<"S", (core.i32)>
+  func.func @test_fn(%0: tribute_rt.anyref) -> !S {
+    %1 = adt.ref_cast %0 : tribute_rt.anyref to !S
     func.return %1
   }
 }"#,

@@ -448,7 +448,8 @@ impl OpRewritePattern for UnboxFloatPattern {
         let f64_ty = f64_type(ctx);
 
         // Cast anyref to BoxedF64 struct first
-        let cast_op = adt::RefCast::operands(value)
+        let cast_op = trunk_ir::dialect::wasm_gc::RefCast::operands(value)
+            .target_type(boxed_f64_ty)
             .results(boxed_f64_ty)
             .build(ctx, location);
         let cast_result = cast_op.result(ctx);

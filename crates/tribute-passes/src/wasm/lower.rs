@@ -172,6 +172,7 @@ impl Pass for ConvertBuiltinLayouts {
         target: core::Module,
         _analyses: &mut AnalysisCache,
     ) -> PassRunResult {
+        super::adt_to_wasm::lower_references(ctx, target.into());
         super::type_converter::convert_builtin_layouts(ctx, target.into());
         Ok(())
     }

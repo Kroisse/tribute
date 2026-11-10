@@ -138,6 +138,16 @@ fn descriptor_operand(
     Some(constant.result(ctx))
 }
 
+/// Lower `adt.ref_null` and `adt.ref_cast` to their `wasm_gc` operations,
+/// before builtin layout conversion replaces the managed reference types
+/// they hold with Wasm types they do not accept.
+pub(crate) fn lower_references(ctx: &mut IrContext, module: Module) {
+    PatternApplicator::new(TypeConverter::new())
+        .add_pattern(RefNullPattern)
+        .add_pattern(RefCastPattern)
+        .apply_partial(ctx, module);
+}
+
 /// Lower adt dialect to wasm dialect using arena IR.
 ///
 /// The `type_converter` parameter allows language-specific backends to provide
@@ -164,9 +174,7 @@ pub(crate) fn lower(ctx: &mut IrContext, module: Module, type_converter: TypeCon
         .add_pattern(ArrayGetPattern)
         .add_pattern(ArraySetPattern)
         .add_pattern(ArrayLenPattern)
-        .add_pattern(RefNullPattern)
         .add_pattern(RefIsNullPattern)
-        .add_pattern(RefCastPattern)
         .add_pattern(adt::EraseNominalDecls);
     applicator.apply_partial(ctx, module);
     for layout in tribute_rtti::Layout::declared(ctx, module) {
@@ -1216,6 +1224,7 @@ mod tests {
 }"#,
         );
 
+        lower_references(&mut ctx, module);
         lower(&mut ctx, module, TypeConverter::new());
 
         let func = module.ops(&ctx)[0];

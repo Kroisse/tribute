@@ -4,7 +4,7 @@ use crate::dialect::tribute_control::{
     DynRowParameterized, ROW_ARGS_ATTR, ROW_PARAMS_ATTR, Row, RowParameterized,
     display_layout_binders, parse_layout_binders,
 };
-use crate::dialect::tribute_rtti::ManagedRefType;
+use crate::dialect::tribute_rtti::{ManagedRef, ManagedRefType};
 use trunk_ir::asm_format::TypeAliasHint;
 use trunk_ir::dialect::core::Index;
 use trunk_ir::op_flag::Pure;
@@ -320,7 +320,7 @@ mod adt {
     /// ```
     #[flags(Pure)]
     #[asm_format(attr_dict_bare ":" type(result))]
-    fn ref_null() -> Value<_> {}
+    fn ref_null() -> Value<impl ManagedRef> {}
 
     #[flags(Pure)]
     #[asm_format(r#ref attr_dict_bare ":" type(result))]
@@ -338,7 +338,7 @@ mod adt {
     #[implements(Fold)]
     #[flags(Pure)]
     #[asm_format(r#ref attr_dict_bare ":" type(r#ref) "to" type(result))]
-    fn ref_cast(r#ref: Value<_>) -> Value<_> {}
+    fn ref_cast(r#ref: Value<impl ManagedRef>) -> Value<impl ManagedRef> {}
 
     /// A string constant: a value of the canonical String type holding
     /// `value`, written as `arith.constant` writes its value.
