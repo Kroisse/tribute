@@ -82,7 +82,7 @@ pub fn evidence_wasm_type(ctx: &mut IrContext) -> TypeRef {
 /// no `adt` operation reads it.
 pub(crate) fn convert_evidence_arrays(ctx: &mut IrContext, module: trunk_ir::rewrite::Module) {
     let evidence = evidence_wasm_type(ctx);
-    crate::closure_lower::substitute_module_types(ctx, module, |ctx, ty| {
+    crate::closure_lower::substitute_module_types(ctx, module, "evidence", |ctx, ty| {
         is_evidence_type_ref(ctx, ty).then_some(evidence)
     });
 }
@@ -257,7 +257,7 @@ pub(crate) fn convert_builtin_layouts(ctx: &mut IrContext, module: trunk_ir::rew
     let f64_ty = core::F64::type_ref(ctx);
     let anyref_ty = wasm_dialect::Anyref::params().intern(ctx).as_type_ref();
     let i31ref_ty = wasm_dialect::I31ref::params().intern(ctx).as_type_ref();
-    crate::closure_lower::substitute_module_types(ctx, module, move |ctx, ty| {
+    crate::closure_lower::substitute_module_types(ctx, module, "wasm", move |ctx, ty| {
         if ty == shared_closure {
             return Some(closure);
         }
@@ -799,14 +799,15 @@ mod tests {
 
         let printed = module.op().display(&ctx).to_string();
         assert!(!printed.contains("tribute_rt."), "{printed}");
+        // The layouts' fields change, so they get new keys.
         assert!(
             printed.contains(
-                "\"Sample\", (core.i32, core.i32, core.i32, core.f64, wasm.i31ref, wasm.anyref)"
+                "\"Sample$wasm\", (core.i32, core.i32, core.i32, core.f64, wasm.i31ref, wasm.anyref)"
             ),
             "{printed}"
         );
         assert!(
-            printed.contains("\"Option\", [(), (wasm.anyref)]"),
+            printed.contains("\"Option$wasm\", [(), (wasm.anyref)]"),
             "{printed}"
         );
         assert!(printed.contains(": (wasm.anyref) -> core.i32"), "{printed}");

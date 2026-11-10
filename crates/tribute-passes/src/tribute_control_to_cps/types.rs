@@ -3,6 +3,30 @@
 
 use super::*;
 
+impl tribute_ir::dialect::adt::convert::LayoutBlindConversion for Converter<'_> {
+    type Error = std::convert::Infallible;
+
+    fn ctx(&self) -> &IrContext {
+        self.ctx
+    }
+
+    fn ctx_mut(&mut self) -> &mut IrContext {
+        self.ctx
+    }
+
+    fn convert(&mut self, ty: TypeRef) -> Result<TypeRef, Self::Error> {
+        Ok(self.convert_type(ty))
+    }
+
+    fn fix(&mut self, from: TypeRef, to: TypeRef) {
+        self.converted_types.insert(from, to);
+    }
+
+    fn reset(&mut self) {
+        self.converted_types.clear();
+    }
+}
+
 impl Converter<'_> {
     pub(super) fn never_type(&mut self) -> TypeRef {
         core::Never::params().intern(self.ctx).as_type_ref()

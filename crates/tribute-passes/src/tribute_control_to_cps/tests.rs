@@ -514,7 +514,11 @@ fn textual_nested_attribute_types_convert_atomically() {
     let (mut ctx, module) = parse(input);
     tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default()).unwrap();
     let printed = module.op().display(&ctx).to_string();
-    assert!(printed.contains("adt.struct<\"CallbackRecord\", ("));
+    // The layout's field changes, so it gets a new key.
+    assert!(
+        printed.contains("adt.struct<\"CallbackRecord$cps\", ("),
+        "{printed}"
+    );
     assert!(
         printed.contains("closure.closure<func.func_sig<(core.i32) -> core.i32, {metadata"),
         "{printed}"
@@ -598,7 +602,7 @@ fn tuple_layouts_differing_in_rows_merge() {
     let box_layout = ctx.type_alias_by_text("Box").unwrap();
     let field = adt::Struct::from_type_ref(&ctx, box_layout)
         .unwrap()
-        .field_types(&ctx)[0];
+        .fields(&ctx)[0];
     assert_eq!(adt::nominal_name(&ctx, field), Some(&*name.to_string()));
 
     let printed = module.op().display(&ctx).to_string();

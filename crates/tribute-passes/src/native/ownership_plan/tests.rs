@@ -456,7 +456,7 @@ fn native_evidence_hands_the_dispatcher_to_the_runtime_as_a_managed_value() {
   !Evidence = adt.array<adt.typeref<{name = "std::runtime::evidence::Marker"}>>
   !"std::Option$std::runtime::Dispatch" = adt.enum<"std::Option$std::runtime::Dispatch", [(), (!_closure)]>
   !OptionRef = adt.typeref<{name = "std::Option$std::runtime::Dispatch"}>
-  adt.enum_decl !"std::Option$std::runtime::Dispatch" ["None", "Some"]
+  adt.enum_decl "std::Option$std::runtime::Dispatch" !"std::Option$std::runtime::Dispatch" ["None", "Some"]
   func.func @"std::runtime::evidence::extend"(%ev: !Evidence, %id: core.i32, %prompt: core.i32, %tr: !OptionRef, %outer: !Evidence) -> !Evidence {
     func.return %ev
   }
@@ -2821,12 +2821,6 @@ fn stale_identity_unsupported_regions_and_malformed_calls_fail_unchanged() {
 }"#,
         r#"core.module @test {
   !R = adt.typeref<{name = "R"}>
-  !First = adt.struct<"R",(core.i32)>
-  !Second = adt.struct<"R",(core.i64)>
-  func.func @f(%value: !R) -> !R { func.return %value }
-}"#,
-        r#"core.module @test {
-  !R = adt.typeref<{name = "R"}>
   !Layout = adt.struct<"R",(core.i32)>
   func.func @foreign(%value: !R) -> !R
 }"#,
@@ -2925,7 +2919,7 @@ fn reachable_missing_nominal_typeref_still_fails_before_planning() {
       func.unreachable
   }
 }"#,
-        "adt.typeref \"Missing\" has no unique native layout",
+        "adt.typeref \"Missing\" has no published native layout",
     );
 }
 
@@ -2976,31 +2970,31 @@ fn nominal_layout_lookup_ignores_unreachable_interner_entries() {
   func.func @f(%value: !R) -> !R { func.return %value }
 }"#,
     );
+    // A layout of the same name under another key, such as one a layout
+    // conversion left behind, does not shadow the one the typeref spells.
     let i64_ty = TypeDataBuilder::new("core.i64").intern(&mut ctx);
-    let stale = tribute_ir::dialect::adt::Struct::from_fields(
-        &mut ctx,
-        "R",
-        [i64_ty],
-        trunk_ir::types::AttributeMap::new(),
-    )
-    .as_type_ref();
+    let mut attrs = trunk_ir::types::AttributeMap::new();
+    attrs
+        .view_mut(&mut ctx)
+        .insert("test.stale", trunk_ir::Attribute::Bool(true));
+    let stale =
+        tribute_ir::dialect::adt::Struct::from_fields(&mut ctx, "R", [i64_ty], attrs).as_type_ref();
     assert!(ctx.type_alias_by_type(stale).is_none());
-    production_plan(&ctx, module)
+    let plan = production_plan(&ctx, module)
         .expect("an unreachable stale layout must not shadow the module declaration");
+    assert!(!plan.is_managed_type(&ctx, stale));
 
+    // One key has one body: a second body for it is no layout at all.
     let mut ambiguous_ctx = IrContext::new();
-    let ambiguous = parse_test_module(
+    let error = trunk_ir::parser::parse_module(
         &mut ambiguous_ctx,
         r#"core.module @test {
-  !R = adt.typeref<{name = "R"}>
   !First = adt.struct<"R",(core.i32)>
   !Second = adt.struct<"R",(core.i64)>
-  func.func @f(%value: !R, %first: !First, %second: !Second) -> !R {
-    func.return %value
-  }
 }"#,
-    );
-    assert!(production_plan(&ambiguous_ctx, ambiguous).is_err());
+    )
+    .expect_err("a second body for one layout");
+    assert!(error.message.contains("differs"), "{}", error.message);
 }
 
 #[test]
@@ -3194,7 +3188,10 @@ fn rtti_identity_never_falls_back_to_same_name_or_shape() {
         .types()
         .iter()
         .filter_map(|(ty, data)| {
-            (data.name.is(&ctx, "adt.struct") && ty != plan.rtti_types()[0].ty).then_some(ty)
+            (data.name.is(&ctx, "adt.struct")
+                && trunk_ir::type_def::is_identified(&ctx, ty)
+                && ty != plan.rtti_types()[0].ty)
+                .then_some(ty)
         })
         .collect::<Vec<_>>();
     assert_eq!(candidates.len(), 2);

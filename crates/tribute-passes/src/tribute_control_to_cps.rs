@@ -513,8 +513,14 @@ pub fn tribute_control_to_cps(
         ops: Default::default(),
         parent_region: None,
     });
+    let layout_roots: Vec<_> = trunk_ir::walk::reachable_types(ctx, module.op())
+        .into_iter()
+        .chain(source_aliases.iter().map(|&(_, ty)| ty))
+        .collect();
     {
         let mut converter = Converter::new(ctx, new_block, graph);
+        let Ok(_) =
+            tribute_ir::dialect::adt::convert::convert_layouts(&mut converter, layout_roots, "cps");
         let mut mapping = HashMap::default();
         let source_ops = converter.ctx.block(source_blocks[0]).ops.clone();
         for source in source_ops {

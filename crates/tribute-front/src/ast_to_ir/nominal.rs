@@ -9,7 +9,7 @@ use tribute_ir::dialect::tribute_rt;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::core;
 use trunk_ir::refs::TypeRef;
-use trunk_ir::types::{Attribute, AttributeMap, Location, TypeDataBuilder};
+use trunk_ir::types::{Attribute, AttributeMap, TypeDataBuilder};
 use trunk_ir::{Symbol, SymbolPath};
 
 use crate::ast::{CtorId, RowVar, TypeKind, TypeScheme};
@@ -569,23 +569,6 @@ impl<'db> NominalTypes<'db> {
         row_params: u32,
     ) -> TypeRef {
         let attrs = Self::layout_attrs(ir, row_params, AttributeMap::new());
-        Self::enum_type(ir, name, variants, attrs)
-    }
-
-    /// Create an `adt.enum` type that records where it was declared.
-    pub(crate) fn adt_enum_type_with_definition(
-        &self,
-        ir: &mut IrContext,
-        name: &Symbol,
-        variants: &[Vec<TypeRef>],
-        row_params: u32,
-        definition: Location,
-    ) -> TypeRef {
-        let mut attrs = AttributeMap::new();
-        attrs
-            .view_mut(ir)
-            .insert("tribute.definition", Attribute::Location(definition));
-        let attrs = Self::layout_attrs(ir, row_params, attrs);
         Self::enum_type(ir, name, variants, attrs)
     }
 

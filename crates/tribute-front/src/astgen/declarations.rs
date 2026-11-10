@@ -594,6 +594,7 @@ fn lower_struct(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Option<StructDecl> 
         row_params,
         type_params,
         fields,
+        spelling: None,
     })
 }
 
@@ -669,6 +670,7 @@ fn lower_enum(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Option<EnumDecl> {
         row_params,
         type_params,
         variants,
+        spelling: None,
     })
 }
 

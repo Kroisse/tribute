@@ -609,13 +609,14 @@ pub fn logical_tuple_elements(ctx: &IrContext, ty: TypeRef) -> Option<&[TypeRef]
 }
 
 /// The element types of `ty` when it is the `adt.struct` layout of a
-/// compiler-generated tuple, which an operation's `type` attribute can name
-/// directly.
+/// compiler-generated tuple with a bound body, which an operation's `type`
+/// attribute can name directly.
 pub fn logical_tuple_layout_elements(ctx: &IrContext, ty: TypeRef) -> Option<&[TypeRef]> {
     let layout = adt::Struct::from_type_ref(ctx, ty)?;
-    let name = ctx.type_attrs(ty).get_str(adt::STRUCT_NAME_ATTR)?;
+    let name = layout.name(ctx)?;
+    ctx.type_body(ty)?;
     name.starts_with(LOGICAL_TUPLE_PREFIX)
-        .then(|| layout.field_types(ctx))
+        .then(|| layout.fields(ctx))
 }
 
 /// Where substitution finds or makes the types it produces.

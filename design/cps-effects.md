@@ -571,9 +571,9 @@ closure는 convention마다 다른 entry ABI로 불리므로 `S`에서 hidden pa
 Environment를 받는 `func.func`는 entry block의 environment 인자에
 `bind_name = "__env"` 표식을 단다. 표식은 함수 하나에 하나이고, 그 위치는 함수
 convention의 environment index와 같으며, 그 인자의 type은 그 closure의 exact closure
-type이다([closure 저장 layout](ir.md#closure-저장-layout)). 본문이 없는 선언은
-environment를 받을 수 없다. 물리화 검증은 이 표식으로 entry 함수를 알아보고 slot을
-대조하며, type이나 arity로 slot을 추측하지 않는다.
+type이다([closure 저장 layout](tribute-dialects.md#closure-저장-layout)). 본문이
+없는 선언은 environment를 받을 수 없다. 물리화 검증은 이 표식으로 entry 함수를
+알아보고 slot을 대조하며, type이나 arity로 slot을 추측하지 않는다.
 
 생성한 physical definition, `func_ref` entry 함수, direct/indirect call에는 그 정의,
 entry, 이전이 가진 convention을 기존 `tribute.calling_convention` attribute로
@@ -1068,8 +1068,9 @@ Evidence는 [`Slots(Marker)`](types.md#slots)다. 아래에서 `Evidence`는
 - `outer`: 그 handler를 설치한 지점의 evidence
 
 `Dispatch`는 runtime 모듈 전용 compiler 소유 타입이며 IR에서
-[closure base](ir.md#closure-저장-layout) 타입이다. 위의 `tr_dispatch_fn` signature를 가진
-closure를 담는다. Runtime code는 이 값을 저장하고 돌려주기만 하며 부르지 않는다.
+[closure base](tribute-dialects.md#closure-저장-layout) 타입이다. 위의
+`tr_dispatch_fn` signature를 가진 closure를 담는다. Runtime code는 이 값을
+저장하고 돌려주기만 하며 부르지 않는다.
 
 Evidence는 ability id 기준으로 정렬된 marker 배열이다. 각 칸은 그 ability의 가장
 위 marker이며, marker는 자신이 가린 같은 ability의 marker를 `shadowed`로 가리킨다.
@@ -1250,9 +1251,10 @@ Root wrapper의 생성은 exact root contract에 따르며, 별도의 호환 clo
 `ability.handle_dispatch`가 있다. Shared ability/evidence pass와 strict target
 ABI validation은 `closure.closure` type의 callable과 closure transfer의 convention을
 그대로 소비한다. 그 뒤 경계 안에서 closure operation과 모든 type-bearing storage
-surface를 [closure 저장 layout](ir.md#closure-저장-layout)으로 함께 바꾸고 target evidence/runtime
-lowering이 이를 소비한다. 경계 이후의 proper tail transfer lowering은 이 layout을
-명시적 layout 식별자로 구별하며 이름으로 판별하지 않는다. Closure lowering이
+surface를 [closure 저장 layout](tribute-dialects.md#closure-저장-layout)으로 함께
+바꾸고 target evidence/runtime lowering이 이를 소비한다. 경계 이후의 proper tail
+transfer lowering은 이 layout을 명시적 layout 식별자로 구별하며 이름으로 판별하지
+않는다. Closure lowering이
 `closure.new`를 capture layout 할당으로 바꾸면 남은 사용처는
 `core.unrealized_conversion_cast`로 exact closure type을 유지한다. Storage
 finalization이 closure type을 closure base로 바꾸면 이 cast는 capture layout에서
