@@ -4,7 +4,7 @@ use crate::dialect::tribute_control::{
     DynRowParameterized, ROW_ARGS_ATTR, ROW_PARAMS_ATTR, Row, RowParameterized,
     display_layout_binders, parse_layout_binders,
 };
-use crate::dialect::tribute_rtti::{DescriptorLayoutType, ManagedRefType};
+use crate::dialect::tribute_rtti::{DescriptorFieldsError, DescriptorLayoutType, ManagedRefType};
 use trunk_ir::asm_format::TypeAliasHint;
 use trunk_ir::dialect::core::Index;
 use trunk_ir::op_flag::Pure;
@@ -355,9 +355,48 @@ impl ManagedRefType for Enum {}
 impl ManagedRefType for Array {}
 
 // Each allocation's runtime descriptor is keyed by its layout type.
-impl DescriptorLayoutType for Struct {}
-impl DescriptorLayoutType for Enum {}
-impl DescriptorLayoutType for Array {}
+impl DescriptorLayoutType for Struct {
+    fn descriptor_fields<'a>(
+        &self,
+        ctx: &'a IrContext,
+        tag: Option<u32>,
+    ) -> Result<&'a [TypeRef], DescriptorFieldsError> {
+        match tag {
+            None => Ok(self.fields(ctx)),
+            Some(_) => Err(DescriptorFieldsError::UnexpectedTag {
+                layout: "adt.struct",
+            }),
+        }
+    }
+}
+
+impl DescriptorLayoutType for Enum {
+    fn descriptor_fields<'a>(
+        &self,
+        ctx: &'a IrContext,
+        tag: Option<u32>,
+    ) -> Result<&'a [TypeRef], DescriptorFieldsError> {
+        let tag = tag.ok_or(DescriptorFieldsError::MissingTag)?;
+        self.variant_fields(ctx, tag)
+            .ok_or(DescriptorFieldsError::NoVariant { tag })
+    }
+}
+
+impl DescriptorLayoutType for Array {
+    fn descriptor_fields<'a>(
+        &self,
+        ctx: &'a IrContext,
+        tag: Option<u32>,
+    ) -> Result<&'a [TypeRef], DescriptorFieldsError> {
+        match tag {
+            // An array's only parameter is its element type.
+            None => Ok(&ctx.get_type(self.as_type_ref()).params),
+            Some(_) => Err(DescriptorFieldsError::UnexpectedTag {
+                layout: "adt.array",
+            }),
+        }
+    }
+}
 
 /// An `adt` layout type, `adt.struct` or `adt.enum`: a literal layout, a
 /// nominal layout's key, or a row instance (`design/tribute-dialects.md`

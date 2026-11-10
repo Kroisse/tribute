@@ -17,7 +17,7 @@ use std::ops::ControlFlow;
 
 use tribute_ir::dialect::adt;
 use tribute_ir::dialect::tribute_rtti::{
-    self, FieldKind, allocation_descriptor, descriptor_field_types,
+    self, DynDescriptorLayoutType, FieldKind, allocation_descriptor,
 };
 use trunk_ir::context::IrContext;
 use trunk_ir::ops::DialectType;
@@ -58,7 +58,7 @@ pub(crate) fn declare(ctx: &mut IrContext, module: Module) {
     for (ty, tag) in descriptors {
         // An allocation whose type does not resolve to its layout stays
         // undeclared; `adt_to_wasm` leaves it for the backend boundary to reject.
-        let Ok(field_types) = descriptor_field_types(ctx, ty, tag) else {
+        let Ok(field_types) = DynDescriptorLayoutType::fields_of(ctx, ty, tag) else {
             continue;
         };
         let index = match tag {
@@ -78,8 +78,8 @@ pub(crate) fn declare(ctx: &mut IrContext, module: Module) {
             }
         };
         let fields = field_types
-            .into_iter()
-            .map(|field| field_kind(ctx, field))
+            .iter()
+            .map(|&field| field_kind(ctx, field))
             .collect::<Vec<_>>();
         let layout = tribute_rtti::Layout::declare(ctx, location, ty, tag, index, &fields);
         ctx.push_op(module_block, layout.op_ref());
