@@ -87,7 +87,7 @@ pub(super) fn lower_expr<'db>(
             Some(value.result(builder.ir))
         }
         ExprKind::StringLit(value) => {
-            let ty = builder.ctx.anyref_type(builder.ir);
+            let ty = expr_type_for_id(builder, expr.id);
             let value = builder.ir.intern_str(&value);
             let value = adt::StringConst::operands()
                 .value(value)

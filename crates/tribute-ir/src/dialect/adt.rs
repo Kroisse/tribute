@@ -102,7 +102,9 @@ mod adt {
     /// A new struct whose fields are `fields` in order, of the struct layout
     /// its result type names: a literal layout, a nominal layout's key, or
     /// a row instance's `def` ([`StructNew::layout`]). The verifier rejects
-    /// any other result type.
+    /// any other result type, a nominal layout without a body, and field
+    /// operands that are not one value of each of the layout's field types,
+    /// as the result type sees them.
     ///
     /// ```text
     /// %p = adt.struct_new(%x, %y) : (core.f64, core.f64) -> !Point
@@ -144,9 +146,10 @@ mod adt {
     /// The text writes `tag` before the field operands and otherwise follows
     /// `adt.struct_new`. `tag` is a static `core.index`: the variant's
     /// position among the layout's variants, in declaration order, as
-    /// `adt.variant_tag` returns it at run time; the verifier
-    /// rejects a result type that names no enum layout and a position the
-    /// layout does not have.
+    /// `adt.variant_tag` returns it at run time. The verifier rejects a
+    /// result type that names no enum layout, a position the layout does not
+    /// have, and field operands that are not one value of each of the
+    /// variant's field types, as the result type sees them.
     ///
     /// When the layout declares row parameters, each field operand has the
     /// layout's field type with the layout's row binders replaced by the
@@ -326,12 +329,23 @@ mod adt {
     #[asm_format(r#ref attr_dict_bare ":" type(result))]
     fn ref_cast(r#type: Attr<Type>, r#ref: Value<_>) -> Value<_> {}
 
+    /// A string constant: a value of the canonical String type holding
+    /// `value`, written as `arith.constant` writes its value.
+    ///
+    /// ```text
+    /// %s = adt.string_const "hello" : !"std::String"
+    /// ```
     #[flags(Pure)]
-    #[asm_format(attr_dict_bare ":" type(result))]
+    #[asm_format(value attr_dict_bare ":" type(result))]
     fn string_const(value: Attr<String>) -> Value<_> {}
 
+    /// A bytes constant holding `value`.
+    ///
+    /// ```text
+    /// %b = adt.bytes_const b"\x01\x02" : core.bytes
+    /// ```
     #[flags(Pure)]
-    #[asm_format(attr_dict_bare ":" type(result))]
+    #[asm_format(value attr_dict_bare ":" type(result))]
     fn bytes_const(value: Attr<Bytes>) -> Value<_> {}
 }
 
@@ -906,12 +920,66 @@ impl StructNew {
 
 impl trunk_ir::ops::Verify for StructNew {
     fn verify(&self, ctx: &IrContext) -> Result<(), trunk_ir::ops::VerificationError> {
-        if Struct::matches(ctx, self.layout(ctx)) {
-            Ok(())
-        } else {
-            Err(ConstructionLayoutError { kind: "adt.struct" }.into())
+        let Some(layout) = Struct::from_type_ref(ctx, self.layout(ctx)) else {
+            return Err(ConstructionLayoutError { kind: "adt.struct" }.into());
+        };
+        if layout.is_nominal(ctx) && layout.body(ctx).is_none() {
+            return Err(ConstructionFieldError::NoBody.into());
+        }
+        let result = ctx.op_result_types(self.op_ref())[0];
+        let fields = self.fields(ctx);
+        let expected = (0..fields.len())
+            .map(|index| find_field_type(ctx, layout, result, index))
+            .collect::<Vec<_>>();
+        verify_construction_fields(ctx, fields, &expected, layout.fields(ctx).len())
+    }
+}
+
+/// A construction whose field operands are not the fields of its layout.
+#[derive(Debug, derive_more::Display, derive_more::Error)]
+pub enum ConstructionFieldError {
+    #[display("the result type names a nominal layout without a body")]
+    NoBody,
+    #[display("{operands} field operand(s) for {fields} field(s)")]
+    Count { operands: usize, fields: usize },
+    #[display("field {index} operand has type {actual}, but the layout declares {expected}")]
+    Type {
+        index: usize,
+        actual: String,
+        expected: String,
+    },
+}
+
+/// Check that `operands` are one value of each field type in `expected`, of
+/// which the layout declares `count`.
+fn verify_construction_fields(
+    ctx: &IrContext,
+    operands: &[trunk_ir::refs::ValueRef],
+    expected: &[Option<TypeRef>],
+    count: usize,
+) -> Result<(), trunk_ir::ops::VerificationError> {
+    if operands.len() != count {
+        return Err(ConstructionFieldError::Count {
+            operands: operands.len(),
+            fields: count,
+        }
+        .into());
+    }
+    for (index, (&operand, &expected)) in operands.iter().zip(expected).enumerate() {
+        let actual = ctx.value_ty(operand);
+        if expected != Some(actual) {
+            return Err(ConstructionFieldError::Type {
+                index,
+                actual: actual.display(ctx).to_string(),
+                expected: expected.map_or_else(
+                    || "no field type".to_owned(),
+                    |ty| ty.display(ctx).to_string(),
+                ),
+            }
+            .into());
         }
     }
+    Ok(())
 }
 
 impl VariantNew {
@@ -925,11 +993,21 @@ impl VariantNew {
 
 impl trunk_ir::ops::Verify for VariantNew {
     fn verify(&self, ctx: &IrContext) -> Result<(), trunk_ir::ops::VerificationError> {
-        let layout = self.layout(ctx);
-        if !Enum::matches(ctx, layout) {
+        let Some(layout) = Enum::from_type_ref(ctx, self.layout(ctx)) else {
             return Err(ConstructionLayoutError { kind: "adt.enum" }.into());
+        };
+        if layout.is_nominal(ctx) && layout.body(ctx).is_none() {
+            return Err(ConstructionFieldError::NoBody.into());
         }
-        verify_variant_tag(ctx, layout, self.tag(ctx))
+        verify_variant_tag(ctx, layout.as_type_ref(), self.tag(ctx))?;
+        let tag = self.variant(ctx);
+        let result = ctx.op_result_types(self.op_ref())[0];
+        let fields = self.fields(ctx);
+        let expected = (0..fields.len())
+            .map(|index| find_variant_field_type(ctx, layout, result, tag, index))
+            .collect::<Vec<_>>();
+        let count = layout.variant_fields(ctx, tag).map_or(0, <[_]>::len);
+        verify_construction_fields(ctx, fields, &expected, count)
     }
 }
 
@@ -2088,7 +2166,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  %0 = adt.string_const {value = "hi"} : core.ptr
+  %0 = adt.string_const "hi" : core.ptr
 }"#,
         );
         let op = module.ops(&ctx)[0];
@@ -2596,7 +2674,9 @@ mod tests {
     fn variant_operations_take_a_position_of_their_enum() {
         let valid = r#"core.module @test {
   !Shape = adt.enum<"Shape", [(), (core.f64, core.f64)]>
+  !Point = adt.struct<"Point", (core.f64)>
   func.func @f(%x: core.f64, %shape: !Shape) -> core.f64 {
+    %point = adt.struct_new(%x) : (core.f64) -> !Point
     %dot = adt.variant_new 0() : () -> !Shape
     %rect = adt.variant_new 1(%x, %x) : (core.f64, core.f64) -> !Shape
     %is_rect = adt.variant_is %shape {tag = 1, type = !Shape} : core.i1
@@ -2638,6 +2718,23 @@ mod tests {
             (
                 "adt.struct_new() : () -> !Shape",
                 "the result type names no `adt.struct` layout",
+            ),
+            // Its field operands are the fields of its layout.
+            (
+                "adt.variant_new 1(%x) : (core.f64) -> !Shape",
+                "1 field operand(s) for 2 field(s)",
+            ),
+            (
+                "adt.variant_new 1(%x, %shape) : (core.f64, !Shape) -> !Shape",
+                "field 1 operand has type adt.enum<\"Shape\"",
+            ),
+            (
+                "adt.struct_new(%shape) : (!Shape) -> !Point",
+                "field 0 operand has type adt.enum<\"Shape\"",
+            ),
+            (
+                "adt.struct_new() : () -> !Point",
+                "0 field operand(s) for 1 field(s)",
             ),
         ] {
             let mut ctx = IrContext::new();
