@@ -22,6 +22,13 @@ pub trait LayoutBlindConversion {
     /// Convert `ty`.
     fn convert(&mut self, ty: TypeRef) -> Result<TypeRef, Self::Error>;
 
+    /// Whether [`convert`](Self::convert) derives `layout`'s new key from
+    /// its body's fields, as a key named by its fields is; the changed
+    /// layouts those fields hold then get their new keys first.
+    fn key_follows_body(&self, _layout: TypeRef) -> bool {
+        false
+    }
+
     /// Make [`convert`](Self::convert) return `to` for `from` from now on.
     fn fix(&mut self, from: TypeRef, to: TypeRef);
 
@@ -127,7 +134,8 @@ pub fn convert_layouts<C: LayoutBlindConversion>(
 }
 
 /// Fixes the conversion of each changed layout, after the changed layouts
-/// its key attributes hold.
+/// its key attributes hold, and those its body holds when its key follows
+/// the body.
 struct Settler<'a> {
     changed: &'a HashSet<TypeRef>,
     tag: &'a str,
@@ -148,6 +156,12 @@ impl Settler<'_> {
         let mut held = Vec::new();
         for attr in ctx.get_type(layout).attrs.values() {
             attr.visit_types(&mut |nested| collect_layouts(ctx, nested, &mut held));
+        }
+        if conversion.key_follows_body(layout) {
+            let body = ctx.type_body(layout).expect("a changed layout has a body");
+            trunk_ir::walk::visit_type_children(ctx, body, &mut |child| {
+                collect_layouts(ctx, child, &mut held)
+            });
         }
         for nested in held {
             assert_ne!(

@@ -890,7 +890,8 @@ adt.struct<(core.ptr, core.i32),
 - [Compiler-generated tuple layout](#compiler-generated-tuple-layout)의 이름은
   원소에서 정해지므로 tuple은 위 두 규칙의 예외다. 원소가 바뀐 tuple layout의 새
   키는 변환한 원소로 이름 함수가 다시 계산한 이름이며 tag를 붙이지 않는다.
-  Tuple의 값 타입은 옛 키든 그 이름을 가리키는 `adt.typeref`든 새 키가 된다.
+  그래서 원소가 담은 바뀌는 layout의 새 키를 먼저 정한 뒤에 tuple의 새 키를
+  정한다. Tuple의 값 타입은 옛 키든 그 이름을 가리키는 `adt.typeref`든 새 키가 된다.
 
 #### Nominal 수준과 structural 수준
 

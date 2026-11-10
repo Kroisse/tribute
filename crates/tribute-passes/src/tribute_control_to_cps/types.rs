@@ -18,6 +18,10 @@ impl tribute_ir::dialect::adt::convert::LayoutBlindConversion for Converter<'_> 
         Ok(self.convert_type(ty))
     }
 
+    fn key_follows_body(&self, layout: TypeRef) -> bool {
+        tribute_control::logical_tuple_elements(self.ctx, layout).is_some()
+    }
+
     fn fix(&mut self, from: TypeRef, to: TypeRef) {
         self.converted_types.insert(from, to);
     }

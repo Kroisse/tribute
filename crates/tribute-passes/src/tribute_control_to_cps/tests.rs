@@ -615,6 +615,46 @@ fn tuple_layouts_differing_in_rows_merge() {
 }
 
 #[test]
+fn tuple_layouts_are_renamed_after_the_layouts_they_hold() {
+    // The module reaches the tuple before the layout it holds, which
+    // converts too.
+    let input = r#"core.module @test {
+  !Box = adt.struct<"Box", (tribute_control.func_sig<() -> core.i32>)>
+  !__logical_tuple_pair = adt.struct<"__logical_tuple_pair", (!Box, tribute_control.func_sig<() -> core.i32>)>
+  tribute_cps.func @second(%pair: !__logical_tuple_pair) -> tribute_control.func_sig<() -> core.i32> convention(direct) {
+    %f = adt.struct_get %pair {field = 1, type = !__logical_tuple_pair} : tribute_control.func_sig<() -> core.i32>
+    tribute_control.return %f
+  }
+}"#;
+    let (mut ctx, module) = parse(input);
+    tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default()).unwrap();
+
+    let box_layout = ctx.type_alias_by_text("Box").unwrap();
+    let tuples: Vec<_> = ctx
+        .type_aliases()
+        .iter()
+        .filter(|(name, _)| name.with_str(|name| name.starts_with("__logical_tuple_")))
+        .map(|&(_, layout)| layout)
+        .collect();
+    let [tuple] = tuples[..] else {
+        panic!("expected one tuple alias, found {tuples:?}");
+    };
+    let fields = adt::Struct::from_type_ref(&ctx, tuple)
+        .unwrap()
+        .fields(&ctx);
+    assert_eq!(fields[0], box_layout);
+    assert_eq!(
+        adt::nominal_name(&ctx, tuple),
+        Some(&*tribute_control::logical_tuple_name(&ctx, fields))
+    );
+
+    let printed = module.op().display(&ctx).to_string();
+    let mut reparsed = IrContext::new();
+    let reparsed_module = parse_test_module(&mut reparsed, &printed);
+    verify_tribute_control_post_cps(&reparsed, reparsed_module, &mut Default::default()).unwrap();
+}
+
+#[test]
 fn source_signature_metadata_roundtrips_before_conversion() {
     let source = r#"core.module @test {
   !inner = tribute_control.func_sig<(core.i32) -> core.i32>
