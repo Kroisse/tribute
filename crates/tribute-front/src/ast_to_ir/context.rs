@@ -413,9 +413,10 @@ impl<'db> IrLoweringCtx<'db> {
         self.nominal.get_type(name)
     }
 
-    /// Mark a nominal source type as known before its layout is complete.
-    pub fn declare_logical_nominal(&mut self, name: Symbol) {
-        self.nominal.declare_logical_nominal(name)
+    /// Record `key`, the layout key of the nominal source type `name`, before
+    /// its layout's body is built.
+    pub fn declare_logical_nominal(&mut self, name: Symbol, key: TypeRef) {
+        self.nominal.declare_logical_nominal(name, key)
     }
 
     /// Get the type of an AST node by NodeId.
@@ -533,15 +534,16 @@ impl<'db> IrLoweringCtx<'db> {
         self.nominal.adt_enum_type(ir, name, variants, row_params)
     }
 
-    /// Create an `adt.typeref` type — a reference to a named type, passing
-    /// `row_args` to its row parameters.
-    pub fn adt_typeref(
-        &self,
-        ir: &mut IrContext,
-        name: &Symbol,
-        row_args: impl IntoIterator<Item = Row>,
-    ) -> TypeRef {
-        self.nominal.adt_typeref(ir, name, row_args)
+    /// The key of the `adt.struct` layout named `name` with `row_params` row
+    /// binders, before its body is bound.
+    pub fn adt_struct_key(&self, ir: &mut IrContext, name: &Symbol, row_params: u32) -> TypeRef {
+        self.nominal.adt_struct_key(ir, name, row_params)
+    }
+
+    /// The key of the `adt.enum` layout named `name` with `row_params` row
+    /// binders, before its body is bound.
+    pub fn adt_enum_key(&self, ir: &mut IrContext, name: &Symbol, row_params: u32) -> TypeRef {
+        self.nominal.adt_enum_key(ir, name, row_params)
     }
 
     /// Read types with `binders` as the row binders in scope, as the fields
@@ -676,7 +678,8 @@ mod tests {
         );
 
         let nominal_name = Symbol::new("Nested::Forward");
-        ctx.declare_logical_nominal(nominal_name.clone());
+        let forward_key = ctx.adt_struct_key(&mut ir, &nominal_name, 0);
+        ctx.declare_logical_nominal(nominal_name.clone(), forward_key);
         let forward = AstType::new(
             &db,
             TypeKind::Named {
@@ -689,15 +692,14 @@ mod tests {
                 args: vec![],
             },
         );
-        assert_eq!(
-            ctx.convert_logical_type(&mut ir, forward),
-            ctx.adt_typeref(&mut ir, &nominal_name, [])
-        );
+        // A forward reference is the key, before its body is bound.
+        assert_eq!(ctx.convert_logical_type(&mut ir, forward), forward_key);
 
         // A source declaration named List must not capture the builtin type,
         // including when it occurs recursively inside a callable or tuple.
         let list_name = Symbol::new("List");
-        ctx.declare_logical_nominal(list_name.clone());
+        let nominal_list = ctx.adt_enum_key(&mut ir, &list_name, 0);
+        ctx.declare_logical_nominal(list_name.clone(), nominal_list);
         let source_list = AstType::new(
             &db,
             TypeKind::Named {
@@ -731,7 +733,6 @@ mod tests {
         let list_signature =
             tribute_ir::dialect::tribute_control::FuncSig::from_type_ref(&ir, callable_ir).unwrap();
         let anyref = ctx.anyref_type(&mut ir);
-        let nominal_list = ctx.adt_typeref(&mut ir, &list_name, []);
         assert_eq!(list_signature.inputs(&ir), &[anyref, nominal_list]);
         assert_eq!(list_signature.result(&ir), anyref);
         let tuple = AstType::new(&db, TypeKind::Tuple(vec![builtin_list, source_list]));

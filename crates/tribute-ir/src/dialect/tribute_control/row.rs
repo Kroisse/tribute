@@ -492,13 +492,13 @@ fn type_key(ctx: &IrContext, ty: TypeRef) -> String {
         );
     }
     let data = ctx.get_type(ty);
-    if let Some(typeref) = adt::Typeref::from_type_ref(ctx, ty) {
+    if let Some(name) = nominal_value_name(ctx, ty) {
         // Row arguments are part of the type, so they tell tuples apart.
         return key(
             "named",
-            [text(typeref.name(ctx))]
+            [text(name)]
                 .into_iter()
-                .chain(typeref.rows(ctx).iter().map(row_key)),
+                .chain(adt::value_rows(ctx, ty).iter().map(row_key)),
         );
     }
     let attributes = |reserved: &[&str]| -> Vec<String> {
@@ -567,37 +567,45 @@ fn attribute_key(ctx: &IrContext, attr: &Attribute) -> String {
     }
 }
 
-/// The tuple layout of `elements` and its name, registered under that name.
-fn register_tuple_layout(ctx: &mut IrContext, elements: &[TypeRef]) -> (String, TypeRef) {
-    let name = logical_tuple_name(ctx, elements);
-    let layout = adt::Struct::from_fields(
+fn tuple_layout_data(ctx: &mut IrContext, name: &str, elements: &[TypeRef]) -> TypeRef {
+    adt::Struct::from_fields(
         ctx,
-        name.clone(),
+        name.to_owned(),
         elements.iter().copied(),
         AttributeMap::new(),
     )
-    .as_type_ref();
-    ctx.register_type_alias(Symbol::new(&name), layout);
-    (name, layout)
+    .as_type_ref()
 }
 
-/// The compiler-generated tuple layout of `elements`: an `adt.typeref` whose
-/// layout is registered under its name.
+/// The compiler-generated tuple layout of `elements`, whose key is the value
+/// type of its tuples, published under its name.
 pub fn logical_tuple_type(ctx: &mut IrContext, elements: &[TypeRef]) -> TypeRef {
-    let (name, _) = register_tuple_layout(ctx, elements);
-    adt::Typeref::named(ctx, name, []).as_type_ref()
+    let name = logical_tuple_name(ctx, elements);
+    let layout = tuple_layout_data(ctx, &name, elements);
+    ctx.register_type_alias(Symbol::new(&name), layout);
+    layout
 }
 
-/// The `adt.struct` layout of [`logical_tuple_type`]`(ctx, elements)`,
-/// registered under its name.
-pub fn logical_tuple_layout(ctx: &mut IrContext, elements: &[TypeRef]) -> TypeRef {
-    register_tuple_layout(ctx, elements).1
+/// The name of the layout a nominal value type `ty` refers to: an
+/// `adt.typeref`'s name, or the name of a layout key or of a row instance's
+/// `def` (`design/tribute-dialects.md` § "Nominal 값 타입"); `None` for a literal layout or
+/// any other type.
+fn nominal_value_name(ctx: &IrContext, ty: TypeRef) -> Option<&str> {
+    let data = ctx.get_type(ty);
+    let value = data.name == adt::Typeref::NAME
+        || ((data.name == adt::Struct::NAME || data.name == adt::Enum::NAME)
+            && data.params.is_empty());
+    if !value {
+        return None;
+    }
+    adt::nominal_name(ctx, ty)
 }
 
-/// The element types of a compiler-generated tuple layout.
+/// The element types of a compiler-generated tuple layout, whose value type
+/// is its key or an `adt.typeref` to it.
 pub fn logical_tuple_elements(ctx: &IrContext, ty: TypeRef) -> Option<&[TypeRef]> {
     let data = ctx.get_type(ty);
-    if data.name != crate::dialect::adt::Typeref::NAME {
+    if data.name != crate::dialect::adt::Typeref::NAME && data.name != adt::Struct::NAME {
         return None;
     }
     let name = data.attrs.view(ctx).get_str("name")?;
@@ -605,18 +613,9 @@ pub fn logical_tuple_elements(ctx: &IrContext, ty: TypeRef) -> Option<&[TypeRef]
         return None;
     }
     let layout = adt::layout_of(ctx, ty)?;
-    logical_tuple_layout_elements(ctx, layout)
-}
-
-/// The element types of `ty` when it is the `adt.struct` layout of a
-/// compiler-generated tuple with a bound body, which an operation's `type`
-/// attribute can name directly.
-pub fn logical_tuple_layout_elements(ctx: &IrContext, ty: TypeRef) -> Option<&[TypeRef]> {
-    let layout = adt::Struct::from_type_ref(ctx, ty)?;
-    let name = layout.name(ctx)?;
-    ctx.type_body(ty)?;
-    name.starts_with(LOGICAL_TUPLE_PREFIX)
-        .then(|| layout.fields(ctx))
+    let layout = adt::Struct::from_type_ref(ctx, layout)?;
+    layout.body(ctx)?;
+    Some(layout.fields(ctx))
 }
 
 /// Where substitution finds or makes the types it produces.
@@ -674,7 +673,7 @@ impl TypeSink for Lookup<'_> {
             Attribute::String(self.0.lookup_str(&name)?),
         );
         let ty = self.0.types().lookup(&TypeData {
-            name: crate::dialect::adt::Typeref::NAME,
+            name: adt::Struct::NAME,
             params: Default::default(),
             attrs: AttributeMap::from_refs(self.0, [entry]),
         })?;
@@ -722,8 +721,8 @@ impl<S: TypeSink> Substitution<'_, S> {
             };
         }
         let ctx = self.sink.ctx();
-        if let Some(typeref) = adt::Typeref::from_type_ref(ctx, ty) {
-            return self.typeref(ty, typeref);
+        if adt::Typeref::matches(ctx, ty) || adt::row_instance_def(ctx, ty).is_some() {
+            return self.row_args(ty);
         }
         // A layout's own rows name its binders, not the substituted ones.
         if binds_rows(ctx, ty) {
@@ -760,10 +759,10 @@ impl<S: TypeSink> Substitution<'_, S> {
         }
     }
 
-    /// `typeref` with its row arguments substituted.
-    fn typeref(&mut self, ty: TypeRef, typeref: adt::Typeref) -> Option<TypeRef> {
+    /// The typeref or row instance `ty` with its row arguments substituted.
+    fn row_args(&mut self, ty: TypeRef) -> Option<TypeRef> {
         let ctx = self.sink.ctx();
-        let rows = typeref.rows(ctx);
+        let rows = adt::value_rows(ctx, ty);
         if rows.is_empty() {
             return Some(ty);
         }
@@ -860,7 +859,7 @@ fn visit_rows_in(
         return;
     }
     let data = ctx.get_type(ty);
-    if data.name == adt::Typeref::NAME {
+    if data.name == adt::Typeref::NAME || adt::row_instance_def(ctx, ty).is_some() {
         if let Some(Attribute::List(rows)) = data.attrs.view(ctx).get(ROW_ARGS_ATTR) {
             for row in rows {
                 visit(Row::from_attribute(ctx, row));

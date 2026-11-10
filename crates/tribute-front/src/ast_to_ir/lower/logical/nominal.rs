@@ -185,6 +185,7 @@ fn declare(ctx: &IrLoweringCtx<'_>, ir: &mut IrContext, decl: OpRef) {
 /// values even while their concrete layout is still being assembled.
 pub(super) fn collect_logical_nominal_identities<'db>(
     ctx: &mut IrLoweringCtx<'db>,
+    ir: &mut IrContext,
     entries: &[DeclEntry<TypedRef<'db>>],
 ) {
     for entry in entries {
@@ -193,7 +194,11 @@ pub(super) fn collect_logical_nominal_identities<'db>(
             Decl::Struct(structure) => {
                 let qualified = prefix.child(structure.name.clone());
                 let ctor = CtorId::new(ctx.db, qualified);
-                ctx.declare_logical_nominal(super::super::qualified_type_name(ctx.db, &ctor));
+                let name = super::super::qualified_type_name(ctx.db, &ctor);
+                let row_params = u32::try_from(structure.row_params.len())
+                    .expect("a declaration has fewer than 2^32 row parameters");
+                let key = ctx.adt_struct_key(ir, &name, row_params);
+                ctx.declare_logical_nominal(name, key);
                 ctx.register_struct_fields(
                     ctor,
                     structure
@@ -206,7 +211,11 @@ pub(super) fn collect_logical_nominal_identities<'db>(
             Decl::Enum(enumeration) => {
                 let qualified = prefix.child(enumeration.name.clone());
                 let ctor = CtorId::new(ctx.db, qualified);
-                ctx.declare_logical_nominal(super::super::qualified_type_name(ctx.db, &ctor));
+                let name = super::super::qualified_type_name(ctx.db, &ctor);
+                let row_params = u32::try_from(enumeration.row_params.len())
+                    .expect("a declaration has fewer than 2^32 row parameters");
+                let key = ctx.adt_enum_key(ir, &name, row_params);
+                ctx.declare_logical_nominal(name, key);
             }
             _ => {}
         }

@@ -16,7 +16,7 @@ use super::{
     COMPILER_INTRINSIC_ATTR, Call, CallIndirect, CallingConvention, CompilerIntrinsicDeclaration,
     DeclarationUse, Func, FuncRef, FuncSig, Handle, Instantiate, Lambda, OperationDeclaration,
     OperationDeclarationUse, Perform, Resume, SourceCallIndirect, SourceCallable, SourceFunc,
-    SourceTailCallIndirect, ValidationError, Yield, compiler_intrinsic_map, contains_adt_typeref,
+    SourceTailCallIndirect, ValidationError, Yield, compiler_intrinsic_map, contains_nominal_value,
     func_sig_parts, nominal_identity, push_op_error, push_type_error, walk_region_ops,
 };
 use crate::dialect::{adt, list, tribute_cps};
@@ -682,13 +682,13 @@ pub(super) fn validate_callable_origins(
                 let trusted_c_ffi = ctx.op_attrs(op).get_str("abi") == Some("C");
                 if !exact_intrinsic
                     && !trusted_c_ffi
-                    && contains_adt_typeref(ctx, func_sig_type, &mut HashSet::default())
+                    && contains_nominal_value(ctx, func_sig_type, &mut HashSet::default())
                 {
                     push_op_error(
                         ctx,
                         op,
                         errors,
-                        "unclassified bodyless external declaration cannot use managed adt.typeref",
+                        "unclassified bodyless external declaration cannot use managed nominal values",
                     );
                 }
             }

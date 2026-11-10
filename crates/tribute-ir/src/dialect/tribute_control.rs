@@ -90,9 +90,8 @@ pub use callable_origin::{CallableArgumentOrigin, CallableQuery, CallableResultO
 pub use row::{
     ABILITY_ROW_ATTR, INFERRED_ROW_ATTR, QUANTIFIED_ROWS_ATTR, ROW_ARGS_ATTR, ROW_BINDERS_ATTR,
     ROW_PARAMS_ATTR, ROW_UNIONS_ATTR, Row, RowArgs, RowBinder, RowUnion, find_substituted_rows,
-    logical_tuple_elements, logical_tuple_layout, logical_tuple_layout_elements,
-    logical_tuple_name, logical_tuple_type, quantified_count, quantified_rows, row_args,
-    row_binders, row_unions, substitute_rows, visit_rows,
+    logical_tuple_elements, logical_tuple_name, logical_tuple_type, quantified_count,
+    quantified_rows, row_args, row_binders, row_unions, substitute_rows, visit_rows,
 };
 
 /// Exact semantic identity copied from the trusted compiler-intrinsic registry.

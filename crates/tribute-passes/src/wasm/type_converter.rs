@@ -23,7 +23,7 @@
 //! a base enum type to a variant type), the converter can insert `wasm.ref_cast`
 //! operations.
 
-use tribute_ir::dialect::ability::is_evidence_type_ref;
+use tribute_ir::dialect::ability::{is_evidence_of, is_evidence_type};
 use tribute_ir::dialect::adt;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::core;
@@ -83,7 +83,7 @@ pub fn evidence_wasm_type(ctx: &mut IrContext) -> TypeRef {
 pub(crate) fn convert_evidence_arrays(ctx: &mut IrContext, module: trunk_ir::rewrite::Module) {
     let evidence = evidence_wasm_type(ctx);
     crate::closure_lower::substitute_module_types(ctx, module, "evidence", |ctx, ty| {
-        is_evidence_type_ref(ctx, ty).then_some(evidence)
+        is_evidence_type(ctx, module, ty).then_some(evidence)
     });
 }
 
@@ -94,13 +94,15 @@ pub(crate) fn convert_evidence_arrays(ctx: &mut IrContext, module: trunk_ir::rew
 pub fn gc_array_type(ctx: &mut IrContext, ty: TypeRef) -> TypeRef {
     use tribute_ir::runtime_layout::LAYOUT_ATTR;
 
-    if is_evidence_type_ref(ctx, ty) {
-        return evidence_wasm_type(ctx);
-    }
     let Some(array) = tribute_ir::dialect::adt::Array::from_type_ref(ctx, ty) else {
         return ty;
     };
-    let element = array.element(ctx);
+    let mut element = array.element(ctx);
+    // A nominal element is stored as `wasm.structref`, as a nominal field
+    // is, since it may hold the array; evidence is such an array.
+    if adt::is_nominal_value(ctx, element) {
+        element = wasm_dialect::Structref::params().intern(ctx).as_type_ref();
+    }
     let layout = ctx.type_attrs(ty).get_string_ref(LAYOUT_ATTR);
     let mut builder =
         trunk_ir::types::TypeDataBuilder::new(trunk_ir::dialect::wasm_gc::Array::NAME)
@@ -120,15 +122,10 @@ fn is_adt_struct_type(ctx: &IrContext, ty: TypeRef) -> bool {
     tribute_ir::dialect::adt::Struct::matches(ctx, ty)
 }
 
-/// Check if a type is an `adt.typeref` type.
-fn is_adt_typeref(ctx: &IrContext, ty: TypeRef) -> bool {
-    tribute_ir::dialect::adt::Typeref::matches(ctx, ty)
-}
-
 /// Check if a type is a struct-like reference type.
 ///
-/// This includes `wasm.structref`, `wasm.anyref`, ADT struct/typeref types,
-/// and the structural `wasm_gc.struct` of user structs and variants.
+/// This includes `wasm.structref`, `wasm.anyref`, ADT structs, nominal
+/// values, and the structural `wasm_gc.struct` of user structs and variants.
 fn is_struct_like(ctx: &IrContext, ty: TypeRef) -> bool {
     // wasm.structref or wasm.anyref
     if trunk_ir::dialect::wasm::Structref::matches(ctx, ty)
@@ -137,8 +134,8 @@ fn is_struct_like(ctx: &IrContext, ty: TypeRef) -> bool {
         return true;
     }
 
-    // adt.typeref (generic struct references)
-    if is_adt_typeref(ctx, ty) {
+    // Nominal values (generic struct references)
+    if adt::is_nominal_value(ctx, ty) {
         return true;
     }
 
@@ -288,7 +285,20 @@ pub(crate) fn convert_builtin_layouts(ctx: &mut IrContext, module: trunk_ir::rew
 /// This converter handles the IR-level type transformations needed during
 /// lowering passes. It complements the emit-phase `gc_types::type_to_field_type`
 /// by performing conversions at the IR level.
-pub fn wasm_type_converter(ctx: &mut IrContext) -> TypeConverter {
+///
+/// Evidence is the array of the marker the root module `module` publishes;
+/// any other array of a nominal struct converts as an ordinary array.
+pub fn wasm_type_converter(
+    ctx: &mut IrContext,
+    module: trunk_ir::rewrite::Module,
+) -> TypeConverter {
+    let marker = tribute_ir::runtime_items::runtime_type(
+        ctx,
+        module,
+        tribute_ir::runtime_items::evidence::MARKER,
+    );
+    let is_evidence =
+        move |ctx: &IrContext, ty| marker.is_some_and(|marker| is_evidence_of(ctx, marker, ty));
     // Pre-compute commonly used types (TypeRef is Copy)
     let i32_ty = core::I32::type_ref(ctx);
     let f64_ty = core::F64::type_ref(ctx);
@@ -389,9 +399,11 @@ pub fn wasm_type_converter(ctx: &mut IrContext) -> TypeConverter {
         }
     });
 
-    // Convert adt.typeref -> wasm.structref (generic struct reference)
+    // Convert a nominal value, a layout's key, row instance or adt.typeref,
+    // -> wasm.structref (generic struct reference). A nominal layout may
+    // hold itself, so its value is not its structural type.
     tc.add_conversion(move |ctx, ty| {
-        if is_adt_typeref(ctx, ty) {
+        if adt::is_nominal_value(ctx, ty) {
             Some(structref_ty)
         } else {
             None
@@ -416,7 +428,7 @@ pub fn wasm_type_converter(ctx: &mut IrContext) -> TypeConverter {
     // every operation that reads it as one; `convert-evidence-arrays` then
     // replaces it with its GC array everywhere, as `convert-struct-layouts`
     // does for user structs.
-    tc.add_conversion(move |ctx, ty| is_evidence_type_ref(ctx, ty).then_some(ty));
+    tc.add_conversion(move |ctx, ty| is_evidence(ctx, ty).then_some(ty));
 
     // The bytes backing array keeps its layout identifier rather than
     // becoming an erased `wasm.arrayref`.
@@ -587,7 +599,7 @@ pub fn wasm_type_converter(ctx: &mut IrContext) -> TypeConverter {
 
         let from_is_any = trunk_ir::dialect::wasm::Anyref::matches(ctx, from_ty)
             || tribute_ir::dialect::tribute_rt::Anyref::matches(ctx, from_ty);
-        if from_is_any && is_evidence_type_ref(ctx, to_ty) {
+        if from_is_any && is_evidence(ctx, to_ty) {
             let cast_op = wasm_gc_dialect::RefCast::operands(value)
                 .target_type(to_ty)
                 .results(to_ty)
@@ -622,10 +634,36 @@ mod tests {
     use trunk_ir::ops::DialectType;
     use trunk_ir::types::Attribute;
 
+    fn empty_module(ctx: &mut IrContext) -> trunk_ir::rewrite::Module {
+        trunk_ir::parser::parse_test_module(ctx, "core.module @test {}")
+    }
+
+    #[test]
+    fn only_the_published_marker_array_stays_evidence() {
+        let mut ctx = IrContext::new();
+        let module = crate::test_support::parse_with_evidence_marker(
+            &mut ctx,
+            r#"core.module @test {
+  !Evidence = adt.array<adt.struct<"std::runtime::evidence::Marker">>
+  !Pairs = adt.array<adt.struct<"Pair">>
+}"#,
+        );
+        let [evidence, pairs] =
+            ["Evidence", "Pairs"].map(|name| ctx.type_alias_by_text(name).expect("fixture alias"));
+        let tc = wasm_type_converter(&mut ctx, module);
+        let arrayref = wasm_dialect::Arrayref::params()
+            .intern(&mut ctx)
+            .as_type_ref();
+
+        assert_eq!(tc.convert_type(&ctx, evidence), Some(evidence));
+        assert_eq!(tc.convert_type(&ctx, pairs), Some(arrayref));
+    }
+
     #[test]
     fn wasm_type_converter_maps_index_to_the_array_index_width() {
         let mut ctx = IrContext::new();
-        let type_converter = wasm_type_converter(&mut ctx);
+        let module = empty_module(&mut ctx);
+        let type_converter = wasm_type_converter(&mut ctx, module);
         let index = trunk_ir::dialect::core::Index::type_ref(&mut ctx);
         let i32_ty = trunk_ir::dialect::core::I32::type_ref(&mut ctx);
 
@@ -683,7 +721,7 @@ mod tests {
   }
 }"#,
         );
-        let tc = wasm_type_converter(&mut ctx);
+        let tc = wasm_type_converter(&mut ctx, module);
 
         let result = trunk_ir::rewrite::PatternApplicator::new(tc)
             .add_pattern(UnrealizedCastConversionPattern)
@@ -708,7 +746,8 @@ mod tests {
         let mut ctx = IrContext::new();
         let path = ctx.intern_path("test.trb");
         let location = Location::new(path, trunk_ir::location::Span::new(0, 0));
-        let tc = wasm_type_converter(&mut ctx);
+        let module = empty_module(&mut ctx);
+        let tc = wasm_type_converter(&mut ctx, module);
         let anyref = wasm_dialect::Anyref::params()
             .intern(&mut ctx)
             .as_type_ref();
@@ -744,7 +783,7 @@ mod tests {
   }
 }"#,
         );
-        let tc = wasm_type_converter(&mut ctx);
+        let tc = wasm_type_converter(&mut ctx, module);
 
         trunk_ir::rewrite::PatternApplicator::new(tc)
             .add_pattern(trunk_ir::conversion::UnrealizedCastConversionPattern)
@@ -826,7 +865,8 @@ mod tests {
             .view_mut(&mut ctx)
             .insert("unrelated", Attribute::Bool(true));
         let near = ctx.intern_type(near);
-        let converter = wasm_type_converter(&mut ctx);
+        let module = empty_module(&mut ctx);
+        let converter = wasm_type_converter(&mut ctx, module);
         assert_eq!(converter.convert_type_or_identity(&ctx, shared), target);
         assert_eq!(converter.convert_type_or_identity(&ctx, near), near);
         assert_eq!(converter.convert_type_or_identity(&ctx, generic), generic);

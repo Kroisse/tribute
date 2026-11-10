@@ -32,8 +32,11 @@ impl Converter<'_> {
         core::Never::params().intern(self.ctx).as_type_ref()
     }
 
+    /// The converted evidence type: that of the source module's marker,
+    /// whose layout this conversion may give a new key.
     pub(super) fn evidence_type(&mut self) -> TypeRef {
-        ability::evidence_adt_type_ref(self.ctx)
+        let source = ability::evidence_type(self.ctx, self.module);
+        self.convert_type(source)
     }
 
     pub(super) fn resumption_type(&mut self, input: TypeRef, answer: TypeRef) -> TypeRef {
@@ -110,29 +113,26 @@ impl Converter<'_> {
         // A tuple layout is named by its element types, so converting them
         // renames it, and tuples that differed only in rows become one
         // (`design/tribute-dialects.md` § "Nominal layout의 게시").
-        let tuple = tribute_control::logical_tuple_elements(self.ctx, ty)
-            .map(|elements| (elements.to_vec(), false))
-            .or_else(|| {
-                tribute_control::logical_tuple_layout_elements(self.ctx, ty)
-                    .map(|elements| (elements.to_vec(), true))
-            });
-        if let Some((elements, is_layout)) = tuple {
+        if let Some(elements) = tribute_control::logical_tuple_elements(self.ctx, ty) {
             let elements: Vec<_> = elements
+                .to_vec()
                 .into_iter()
                 .map(|element| self.convert_type(element))
                 .collect();
-            let converted = if is_layout {
-                tribute_control::logical_tuple_layout(self.ctx, &elements)
-            } else {
-                tribute_control::logical_tuple_type(self.ctx, &elements)
-            };
+            let converted = tribute_control::logical_tuple_type(self.ctx, &elements);
             self.converted_types.insert(ty, converted);
             return converted;
         }
 
         // Nominal row arguments and layout row binders stay inside the
         // source-logical boundary, as callable rows do
-        // (`design/tribute-dialects.md` § "Nominal row 인자").
+        // (`design/tribute-dialects.md` § "Nominal row 인자"): a row
+        // instance becomes its layout's key.
+        if let Some(def) = tribute_ir::dialect::adt::row_instance_def(self.ctx, ty) {
+            let converted = self.convert_type(def);
+            self.converted_types.insert(ty, converted);
+            return converted;
+        }
         let erased = if data.name == tribute_ir::dialect::adt::Typeref::NAME {
             Some(tribute_control::ROW_ARGS_ATTR)
         } else if tribute_ir::dialect::adt::is_nominal(self.ctx, ty) {

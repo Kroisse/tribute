@@ -112,8 +112,10 @@ fn contains_forbidden_logical_component(
     ty: TypeRef,
     visiting: &mut HashSet<TypeRef>,
 ) -> bool {
+    // A type met again is a recursive nominal layout, which the first visit
+    // checks.
     if !visiting.insert(ty) {
-        return true;
+        return false;
     }
     let data = ctx.get_type(ty);
     let forbidden = (data.name.is(ctx, "func.func_sig"))

@@ -46,8 +46,12 @@ pub(crate) fn lower_closure_lambda(ctx: &mut IrContext, module: Module) {
         None => return,
     };
 
+    if collect_closure_lambdas(ctx, module).is_empty() {
+        return;
+    }
     let mut namer = LambdaNamer::new();
-    let mut tables = ConventionTables::new(ExpandedFrames);
+    let evidence = tribute_ir::dialect::ability::evidence_type(ctx, module);
+    let mut tables = ConventionTables::new(ExpandedFrames { evidence });
 
     // Iterate until no more closure.lambda ops remain.
     // Multiple iterations handle nested lambdas: the first pass converts
@@ -463,7 +467,9 @@ mod tests {
             .region(module_region)
             .build(ctx);
         let module_ref = ctx.create_op(module_op);
-        (Module::new(ctx, module_ref).unwrap(), module_block)
+        let module = Module::new(ctx, module_ref).unwrap();
+        crate::test_support::publish_evidence_marker(ctx, module);
+        (module, module_block)
     }
 
     fn make_anyref_ty(ctx: &mut IrContext) -> TypeRef {
@@ -601,7 +607,7 @@ mod tests {
             let (mut ctx, loc) = test_ctx();
             let (module, module_block) = make_module(&mut ctx, loc);
             let anyref_ty = make_anyref_ty(&mut ctx);
-            let evidence_ty = tribute_ir::dialect::ability::evidence_adt_type_ref(&mut ctx);
+            let evidence_ty = crate::test_support::publish_evidence_marker(&mut ctx, module);
 
             // Without a convention nothing places the environment, and a
             // nullary `Cps` callable has no slot 1 for it.
