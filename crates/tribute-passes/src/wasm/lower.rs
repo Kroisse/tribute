@@ -1272,6 +1272,52 @@ mod tests {
     }
 
     #[test]
+    fn variant_payloads_keep_scalar_arrays_typed() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  !Ints = adt.array<core.i32>
+  !E = adt.enum<"E", [(!Ints)]>
+  !ERef = adt.enum<"E">
+  adt.enum_decl "E" !E ["Wrap"]
+  func.func @wrap(%ints: !Ints) -> !ERef {
+    %e = adt.variant_new 0(%ints) : (!Ints) -> !ERef
+    func.return %e
+  }
+  func.func @unwrap(%e: !ERef) -> !Ints {
+    %ints = adt.variant_get %e {type = !E, tag = 0, field = 0} : !Ints
+    func.return %ints
+  }
+}"#,
+        );
+
+        let root = core::Module::from_op(&ctx, module.op()).expect("core.module");
+        let mut pm = trunk_ir::pass::PassManager::new();
+        add_lowering_passes(&mut pm);
+        pm.add_pass(LegalizeUnrealizedCasts)
+            .add_pass(trunk_ir::conversion::ReconcileUnrealizedCasts)
+            .add_pass(FinalizeWasmGcTypes);
+        pm.run(&mut ctx, root, &mut Default::default())
+            .expect("a variant of a scalar array should lower and finalize");
+        let bytes = trunk_ir_wasm_backend::emit_module_to_wasm(&mut ctx, module)
+            .expect("emit")
+            .bytes;
+
+        // The variant's field is the array itself, so reading it needs no
+        // cast from an abstract array reference; the one cast left narrows
+        // the enum reference to the variant.
+        let output = module.op().display(&ctx).to_string();
+        assert!(!output.contains("wasm.arrayref"), "{output}");
+        assert_eq!(output.matches("wasm.ref_cast").count(), 1, "{output}");
+        assert!(
+            output.contains("wasm_gc.struct<core.i32, !Ints"),
+            "{output}"
+        );
+        assert!(!bytes.is_empty());
+    }
+
+    #[test]
     fn lower_to_wasm_recovers_a_scalar_array_from_an_erased_value() {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
