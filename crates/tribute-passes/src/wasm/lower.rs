@@ -51,7 +51,8 @@ pub fn wasm_emission_ready_target() -> ConversionTarget {
 /// an import, or linear memory, declares it in the IR.
 pub fn add_lowering_passes(pm: &mut PassManager) {
     pm.add_pass(CheckLowerableStructuredControl);
-    pm.add_pass(ConvertBuiltinLayouts)
+    pm.add_pass(AdtReferencesToWasm)
+        .add_pass(ConvertBuiltinLayouts)
         .add_pass(IoToWasm)
         // Pattern-based lowering (trunk-ir-wasm-backend).
         .add_pass(ArithToWasm)
@@ -157,6 +158,31 @@ pub(crate) fn lower_to_wasm(
     pm.run(ctx, root, analyses)
 }
 
+/// Lowers `adt.ref_null`, `adt.ref_is_null`, and `adt.ref_cast` to their
+/// Wasm operations. It runs before `convert-builtin-layouts`, whose type
+/// substitution replaces the managed reference types these operations
+/// require with Wasm types they do not accept, and then rewrites the Wasm
+/// operations' types as it does every other type.
+struct AdtReferencesToWasm;
+
+impl Pass for AdtReferencesToWasm {
+    type Target = core::Module;
+
+    fn name(&self) -> &'static str {
+        "adt-references-to-wasm"
+    }
+
+    fn run(
+        &mut self,
+        ctx: &mut IrContext,
+        target: core::Module,
+        _analyses: &mut AnalysisCache,
+    ) -> PassRunResult {
+        super::adt_to_wasm::lower_references(ctx, target.into());
+        Ok(())
+    }
+}
+
 struct ConvertBuiltinLayouts;
 
 impl Pass for ConvertBuiltinLayouts {
@@ -172,7 +198,6 @@ impl Pass for ConvertBuiltinLayouts {
         target: core::Module,
         _analyses: &mut AnalysisCache,
     ) -> PassRunResult {
-        super::adt_to_wasm::lower_references(ctx, target.into());
         super::type_converter::convert_builtin_layouts(ctx, target.into());
         Ok(())
     }

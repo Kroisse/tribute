@@ -139,8 +139,7 @@ fn descriptor_operand(
 }
 
 /// Lower `adt.ref_null`, `adt.ref_is_null`, and `adt.ref_cast` to their
-/// Wasm operations, before builtin layout conversion replaces the managed
-/// reference types they hold with Wasm types they do not accept.
+/// Wasm operations, the `adt-references-to-wasm` pass.
 pub(crate) fn lower_references(ctx: &mut IrContext, module: Module) {
     PatternApplicator::new(TypeConverter::new())
         .add_pattern(RefNullPattern)
