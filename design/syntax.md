@@ -1138,7 +1138,7 @@ bits.bit_not  // ~bits (비트 부정)
 ### Case Expression
 
 ```ebnf
-CaseExpr ::= 'case' Expression '{' CaseArm+ '}'
+CaseExpr ::= 'case' Expression '{' CaseArm* '}'
 
 CaseArm ::= Pattern ('&&' Expression)? '->' Expression
 ```
@@ -1180,6 +1180,8 @@ case result {
 
 `case`는 망라적이어야 한다. 망라성 검사와 도달 불가 arm 규칙은
 [types.md의 망라성과 도달 불가 arm](types.md#망라성과-도달-불가-arm)을 따른다.
+Arm이 없는 `case x {}`는 `x`의 타입이
+[빈 타입](types.md#빈-타입과-명시적-제거)일 때만 망라적이다.
 
 ## Patterns
 

@@ -2,7 +2,7 @@
 
 mod common;
 
-use self::common::ast_pipeline_error_messages;
+use self::common::{ast_pipeline_diagnostics, ast_pipeline_error_messages};
 use salsa_test_macros::salsa_test;
 use tribute_front::{
     SourceCst,
@@ -969,10 +969,14 @@ fn as_value(o: Option(Never)) -> Nat { apply(absurd, o) }
 fn never_tail(v: Void) -> Never { case v {} }
 "#,
     );
-    let errors = ast_pipeline_error_messages(db, source);
+    let diagnostics: Vec<String> = ast_pipeline_diagnostics(db, source)
+        .into_iter()
+        .map(|diagnostic| diagnostic.message.to_owned())
+        .collect();
     assert!(
-        errors.is_empty(),
-        "a case without arms covers an empty type: {errors:#?}"
+        diagnostics.is_empty(),
+        "a case without arms covers an empty type, and a wildcard over one is \
+         not reported: {diagnostics:#?}"
     );
     let tail = function_tail_type(db, source, "never_tail");
     assert!(
