@@ -703,6 +703,15 @@ impl LspServer {
                 let in_scope: Vec<_> = completions_in(all_items, &module).cloned().collect();
                 completions.extend(filter_completions(&in_scope, &prefix).cloned());
 
+                // A method call may read a field the module sees.
+                if matches!(dot, DotContext::Method | DotContext::Either) {
+                    completions.extend(
+                        filter_completions(completion_index::field_items(db, unit), &prefix)
+                            .filter(|item| item.module.as_ref().is_none_or(|own| *own == module))
+                            .cloned(),
+                    );
+                }
+
                 // A line-leading `.` either continues the line before it or
                 // starts an implicit constructor.
                 if dot == DotContext::Either {
@@ -1337,9 +1346,10 @@ fn span_to_range(rope: &Rope, span: trunk_ir::Span) -> lsp_types::Range {
 /// What a `.` right before a name being completed starts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DotContext {
-    /// No `.`, or one that continues the expression right before it (a
-    /// method call) or another `.` (a spread).
+    /// No `.`, or one that continues another `.` (a spread).
     Other,
+    /// A `.` that continues the expression right before it: a method call.
+    Method,
     /// An implicit constructor (`.Some`): no expression ends before the `.`.
     ImplicitConstructor,
     /// A line-leading `.`, which continues the line before it as a method
@@ -1393,7 +1403,7 @@ fn dot_context(rope: &Rope, tree: &tree_sitter::Tree, start: usize) -> DotContex
         return if EXPRESSION_KEYWORDS.contains(&token.kind()) {
             DotContext::ImplicitConstructor
         } else if ends_expression(token) {
-            DotContext::Other
+            DotContext::Method
         } else {
             DotContext::ImplicitConstructor
         };
@@ -1808,21 +1818,21 @@ mod tests {
         assert_eq!(at("xs\n    .|"), DotContext::Either);
         assert_eq!(at("case x {\n    .|"), DotContext::Either);
         // Right after an expression, `.` continues a method call.
-        assert_eq!(at("xs.|"), DotContext::Other);
-        assert_eq!(at("outlet.|"), DotContext::Other);
-        assert_eq!(at("r#let.|"), DotContext::Other);
+        assert_eq!(at("xs.|"), DotContext::Method);
+        assert_eq!(at("outlet.|"), DotContext::Method);
+        assert_eq!(at("r#let.|"), DotContext::Method);
         // Hash-delimited literals end an expression too.
-        assert_eq!(at("r#\"text\"#.|"), DotContext::Other);
-        assert_eq!(at("#\"text\"#.|"), DotContext::Other);
-        assert_eq!(at("?a.|"), DotContext::Other);
+        assert_eq!(at("r#\"text\"#.|"), DotContext::Method);
+        assert_eq!(at("#\"text\"#.|"), DotContext::Method);
+        assert_eq!(at("?a.|"), DotContext::Method);
         // Block comments before the `.` are skipped.
-        assert_eq!(at("xs /* why */ .|"), DotContext::Other);
-        assert_eq!(at("xs /* a /* nested */ b */.|"), DotContext::Other);
+        assert_eq!(at("xs /* why */ .|"), DotContext::Method);
+        assert_eq!(at("xs /* a /* nested */ b */.|"), DotContext::Method);
         assert_eq!(at("f(a, /* first */ .|"), DotContext::ImplicitConstructor);
         assert_eq!(at("xs\n    /* note */ .|"), DotContext::Either);
         assert_eq!(at("xs /* note\n    begun */ .|"), DotContext::Either);
-        assert_eq!(at("f(x).|"), DotContext::Other);
-        assert_eq!(at("\"s\".|"), DotContext::Other);
+        assert_eq!(at("f(x).|"), DotContext::Method);
+        assert_eq!(at("\"s\".|"), DotContext::Method);
         // `..` is a spread, and no `.` is no constructor.
         assert_eq!(at("User { ..|"), DotContext::Other);
         assert_eq!(at("let x = |"), DotContext::Other);
@@ -3179,6 +3189,46 @@ mod tests {
         };
         let labels: Vec<_> = list.items.iter().map(|item| item.label.as_str()).collect();
         assert_eq!(labels, ["Rect"]);
+    }
+
+    #[test]
+    fn test_completion_after_a_method_dot_offers_visible_fields() {
+        let mut harness = TestHarness::new();
+        let uri = test_uri("completion_fields");
+        let source = "mod m {\n    pub struct Window { pub label: String, data: Nat }\n}\nuse m::Window\nfn read(window: Window) -> String {\n    window.\n}";
+
+        harness.open_document(&uri, source);
+
+        let params = CompletionParams {
+            text_document_position: TextDocumentPositionParams {
+                text_document: lsp_types::TextDocumentIdentifier { uri },
+                position: lsp_types::Position {
+                    line: 5,
+                    character: 11, // After `window.`
+                },
+            },
+            work_done_progress_params: Default::default(),
+            partial_result_params: Default::default(),
+            context: None,
+        };
+
+        let result: Option<lsp_types::CompletionResponse> = harness.request::<Completion>(params);
+        let Some(lsp_types::CompletionResponse::List(list)) = result else {
+            panic!("Should return a completion list");
+        };
+        let kind_of = |label: &str| {
+            list.items
+                .iter()
+                .find(|item| item.label == label)
+                .and_then(|item| item.kind)
+        };
+        assert_eq!(kind_of("label"), Some(lsp_types::CompletionItemKind::FIELD));
+        assert_eq!(kind_of("data"), None, "a private field is hidden here");
+        assert_eq!(
+            kind_of("read"),
+            Some(lsp_types::CompletionItemKind::FUNCTION),
+            "functions the module names remain method candidates"
+        );
     }
 
     #[test]

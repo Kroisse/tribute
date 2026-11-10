@@ -12,7 +12,7 @@ use tribute_front::ast::{
     UnresolvedName,
 };
 use tribute_front::query as ast_query;
-use tribute_front::resolve::Binding;
+use tribute_front::resolve::{Binding, Location};
 
 // =============================================================================
 // Completion
@@ -29,6 +29,7 @@ pub enum CompletionKind {
     Variable,
     Keyword,
     Constructor,
+    Field,
 }
 
 impl From<CompletionKind> for lsp_types::CompletionItemKind {
@@ -42,6 +43,7 @@ impl From<CompletionKind> for lsp_types::CompletionItemKind {
             CompletionKind::Variable => lsp_types::CompletionItemKind::VARIABLE,
             CompletionKind::Keyword => lsp_types::CompletionItemKind::KEYWORD,
             CompletionKind::Constructor => lsp_types::CompletionItemKind::CONSTRUCTOR,
+            CompletionKind::Field => lsp_types::CompletionItemKind::FIELD,
         }
     }
 }
@@ -255,6 +257,91 @@ pub fn constructor_items(db: &dyn salsa::Database, unit: AnalysisUnit) -> Vec<As
             kind: CompletionKind::Constructor,
             module: None,
         });
+    }
+    items
+}
+
+/// The struct fields a method call `x.f` in each module may read: those of
+/// the structs the module declares or imports, then those of the prelude's
+/// structs, as name resolution offers their getters `T::f`. Only the fields
+/// the module sees are offered (`design/modules.md` § Struct field의
+/// 가시성). Each item's detail is the getter's path through its struct as
+/// the module names the struct.
+#[salsa::tracked]
+pub fn field_items(db: &dyn salsa::Database, unit: AnalysisUnit) -> Vec<AstCompletionItem> {
+    let (Some(output), Some(tree)) = (unit.typed(db), unit.tree(db)) else {
+        return Vec::new();
+    };
+    let package = unit.package_name(db);
+    let dependencies = tribute_front::analysis::dependencies(db, unit.dependencies(db));
+    let own =
+        tribute_front::resolve::build_package_env(db, tree.module(db), &package, &dependencies);
+    let scope = tribute_front::resolve::ScopeRef::new(&own, &dependencies);
+
+    // The fields of the struct at `location` that the module `module` of
+    // the package sees, or every public one for `None`. A field's getter
+    // `T::f` is also the namespace of its setter and modifier, which a
+    // companion function of `T` is not.
+    let fields = |location: &Location, module: Option<&SymbolPath>| -> Vec<Symbol> {
+        if !matches!(
+            scope.lookup_path(location),
+            Some(Binding::Constructor { tag: None, .. })
+        ) {
+            return Vec::new();
+        }
+        let module = module.and_then(|module| package.module_path(module));
+        scope
+            .iter_namespace(location)
+            .filter(|(name, binding)| {
+                matches!(binding, Binding::Function { .. })
+                    && scope
+                        .iter_namespace(&location.child(name.clone()))
+                        .any(|(lens, _)| lens == "set")
+                    && scope.restriction(binding).is_none_or(|restriction| {
+                        module.is_some_and(|module| restriction.is_visible_from(&package, module))
+                    })
+            })
+            .map(|(name, _)| name)
+            .collect()
+    };
+
+    let mut items = Vec::new();
+    let mut add = |module: Option<&SymbolPath>, ty: &Symbol, location: &Location| {
+        for field in fields(location, module) {
+            items.push(AstCompletionItem {
+                detail: Some(format!("{ty}::{field}")),
+                name: field,
+                kind: CompletionKind::Field,
+                module: module.cloned(),
+            });
+        }
+    };
+    for entry in &output.module(db).entries {
+        let (ty, identity) = match &entry.decl {
+            Decl::Struct(s) => (&s.name, entry.module.child(s.name.clone())),
+            Decl::Use(u) => {
+                let Some(target) = &u.target else { continue };
+                let Some(name) = u.alias.as_ref().or(target.last()) else {
+                    continue;
+                };
+                (name, SymbolPath::new(target.iter().cloned()))
+            }
+            _ => continue,
+        };
+        if let Some(location) = scope.locate(&identity) {
+            add(Some(&entry.module), ty, &location);
+        }
+    }
+
+    for (name, binding) in prelude_names(db) {
+        if !matches!(binding, Binding::Constructor { tag: None, .. }) {
+            continue;
+        }
+        let Some(location) = scope.library_namespace(&name) else {
+            continue;
+        };
+        let ty = Symbol::new(&format!("{}::{name}", tribute_front::resolve::STD_PACKAGE));
+        add(None, &ty, &location);
     }
     items
 }
@@ -925,6 +1012,54 @@ mod tests {
             text.find("fn local").unwrap(),
         );
         assert!(completions_in(items, &module).any(|item| item.name == "local"));
+    }
+
+    #[test]
+    fn test_field_items_are_the_fields_each_module_sees() {
+        let db = salsa::DatabaseImpl::default();
+        let text = "pub mod shapes {\n    pub struct Window { pub label: String, pub(pkg) size: Nat, data: Nat }\n    pub mod Window {\n        pub fn area(window: Window) -> Nat { window.data }\n    }\n    pub mod inner {\n        use super::Window as W\n    }\n}\nuse shapes::Window\n";
+        let source = make_source(&db, text);
+        let items = field_items(&db, AnalysisUnit::Executable(source));
+        let at = |module: &[&str]| -> Vec<(String, String)> {
+            let module = SymbolPath::new(module.iter().copied());
+            let mut found: Vec<_> = items
+                .iter()
+                .filter(|item| item.module.as_ref() == Some(&module))
+                .map(|item| {
+                    assert_eq!(item.kind, CompletionKind::Field);
+                    (
+                        item.name.to_string(),
+                        item.detail.clone().unwrap_or_default(),
+                    )
+                })
+                .collect();
+            found.sort();
+            found
+        };
+        let pair = |name: &str, detail: &str| (name.to_owned(), detail.to_owned());
+        // The struct's module and below see every field; a companion
+        // function is no field.
+        assert_eq!(
+            at(&["pkg", "shapes"]),
+            [
+                pair("data", "Window::data"),
+                pair("label", "Window::label"),
+                pair("size", "Window::size"),
+            ]
+        );
+        assert_eq!(
+            at(&["pkg", "shapes", "inner"]),
+            [
+                pair("data", "W::data"),
+                pair("label", "W::label"),
+                pair("size", "W::size"),
+            ]
+        );
+        // Elsewhere only the fields declared visible there.
+        assert_eq!(
+            at(&["pkg"]),
+            [pair("label", "Window::label"), pair("size", "Window::size")]
+        );
     }
 
     #[test]
