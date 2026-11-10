@@ -2551,6 +2551,50 @@ fn main() ->{Io} Nil {
     );
 }
 
+/// A `Bytes` field is public, so a value may name a range outside its
+/// array; every read checks the range, so an out-of-range read or slice ends
+/// the execution instead of reading other memory.
+#[test]
+fn test_native_bytes_out_of_range_reads_trap() {
+    for (name, body) in [
+        ("get_past_end", "print_line(bs.get_or_panic(5).to_string)"),
+        (
+            "slice_past_end",
+            "print_line(String::from_bytes(bs.slice_or_panic(1, 6)))",
+        ),
+        (
+            "slice_reversed",
+            "print_line(String::from_bytes(bs.slice_or_panic(3, 2)))",
+        ),
+        (
+            "forged_range",
+            "print_line(Bytes { data: bs.data, start: 3, len: 4 }.get_or_panic(3).to_string)",
+        ),
+    ] {
+        let source = format!(
+            r#"
+use std::io::{{Io, print_line}}
+
+fn main() ->{{Io}} Nil {{
+    let bs = b"hello"
+    {body}
+}}
+"#
+        );
+        for output in [
+            compile_and_run_native(&format!("bytes_{name}.trb"), &source),
+            compile_and_run_native_asan(&format!("bytes_{name}_asan.trb"), &source),
+        ] {
+            assert!(
+                !output.status.success(),
+                "{name} must trap, stdout: {}",
+                String::from_utf8_lossy(&output.stdout)
+            );
+            assert!(output.stdout.is_empty(), "{name} printed a byte");
+        }
+    }
+}
+
 #[test]
 fn test_native_bytes_slice_safe() {
     assert_native_output(

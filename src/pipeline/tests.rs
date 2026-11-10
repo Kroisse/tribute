@@ -1242,6 +1242,39 @@ fn main() -> Nil {
     }
 }
 
+/// A byte literal is a byte array constant wrapped in the prelude `Bytes`
+/// that views all of it (`design/string.md` § "Constant lowering").
+#[salsa_test]
+fn bytes_literal_wraps_a_byte_array_constant(db: &salsa::DatabaseImpl) {
+    let source = source_from_str(
+        "bytes_literal.trb",
+        r#"
+fn data() -> Bytes {
+    b"payload"
+}
+
+fn main() -> Nil {
+    let _ = data()
+}
+"#,
+    );
+
+    let (ctx, module) = compile_ast(db, source)
+        .expect("pipeline should not fail")
+        .expect("pipeline should produce a module");
+    let output = module.op().display(&ctx).to_string();
+
+    assert!(
+        output.contains(r#"adt.bytes_const b"payload" : adt.array<core.i8>"#),
+        "{output}"
+    );
+    assert!(
+        output.contains(r#"-> !"std::Bytes""#) && output.contains("adt.struct_new"),
+        "{output}"
+    );
+    assert!(!output.contains("core.bytes"), "{output}");
+}
+
 #[salsa_test]
 fn test_std_io_lowers_to_shared_dialect(db: &salsa::DatabaseImpl) {
     let source = source_from_str(
