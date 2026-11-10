@@ -399,6 +399,8 @@ Cranelift 타겟에서는 **Reference Counting**을 채택한다.
 
 - "Liberating Effects with Rows and Handlers" (Koka)
 - "Do Be Do Be Do" (Frank)
+- "Generalized Evidence Passing for Effect Handlers" (Koka)
+- "Effect Handlers, Evidently" (scoped resumption)
 - "Effekt: Capability-passing style for type- and effect-safe,
   extensible effect handlers"
 - "Perceus: Garbage-Free Reference Counting with Reuse" (Koka)

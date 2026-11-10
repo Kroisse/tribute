@@ -25,7 +25,7 @@ use crate::typeck::{
 };
 
 /// A library package: its name, the source of its root module, and the
-/// packages its dependency table names (`design/implementation.md`).
+/// packages its dependency table names (`design/frontend.md`).
 /// Package `std` is one whose table is empty.
 #[salsa::input(debug)]
 pub struct Package {

@@ -344,7 +344,7 @@ fn note_package_root_file(path: &Path) {
     );
 }
 
-/// Print the files the build of `input` reads (`design/implementation.md`
+/// Print the files the build of `input` reads (`design/frontend.md`
 /// § 패키지 source 트리와 파일 입력): with `candidates`, also the paths with
 /// no file yet.
 fn list_files(input: &Path, deps: bool, candidates: bool) {

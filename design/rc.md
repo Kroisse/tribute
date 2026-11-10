@@ -3,8 +3,7 @@
 > This document defines the RC memory management strategy for the Cranelift
 > native backend. The WASM backend uses WasmGC and is not affected.
 >
-> See also: [cranelift-backend.md](cranelift-backend.md),
-> [implementation.md](implementation.md)
+> See also: [cranelift-backend.md](cranelift-backend.md)
 
 ## Overview
 

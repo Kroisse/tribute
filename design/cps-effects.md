@@ -2,9 +2,8 @@
 
 이 문서는 직접형 IR을 CPS로 바꾸는 conversion source of truth다. Operation
 구조와 verifier 계약은
-[tribute-dialects.md](tribute-dialects.md#direct-style-control), 계층별 소유권과
-pipeline 조합은 [implementation.md](implementation.md#직접형-제어-소유권)를
-따른다.
+[tribute-dialects.md](tribute-dialects.md#direct-style-control), pass 순서는
+[lowering.md](lowering.md#pipeline-order)를 따른다.
 
 핵심 전략은 **tail-call CPS + evidence-based handler dispatch**이다.
 모든 CPS 이전은 proper tail call이며 제어 값을 반환하지 않는다.
@@ -610,8 +609,8 @@ Legalization 출구 검증과 물리화 입구는 module 전체의 convention을
 이 결정은 `CallableAbi`에 encode하지 않으며 pass가 operation kind를 추론하거나
 변경해서는 안 된다.
 
-Root `main`과 external ABI 조합 책임은
-[implementation.md](implementation.md#직접형-제어-소유권)을 따른다.
+Root `main`의 조합은 [Root `main`](#root-main)을, external ABI의 물리 계약은
+[representation/ABI 경계](abi-boundary.md#representationabi-경계)를 따른다.
 
 ### 논리적 CPS 적법화
 
@@ -1105,6 +1104,78 @@ code는 runtime 모듈 안에만 있으며, effect lowering과 그 밖의 pass�
 (shadow). Lookup은 가장 위의 marker를 고르고, 가려진 marker는 아래에 남는다.
 호출의 evidence 선택이 이 순서를 row 구조에 맞추므로, 가장 위의 marker는 항상
 현재 callable row의 명시 label에 묶인 handler다.
+
+#### Prompt와 handler 인스턴스
+
+중첩된 handler에서 올바른 경계를 찾기 위해 prompt가 필요하다:
+
+```text
+스택 (아래가 바닥)
+─────────────────────
+[State prompt: P1]     ← 바깥쪽 run_state
+[Logger prompt: P2]    ← run_logger
+[State prompt: P3]     ← 안쪽 run_state (같은 ability 중첩)
+[현재 실행 지점]        ← State::get() 호출
+─────────────────────
+```
+
+`State::get()`은 evidence에서 State의 가장 위 marker를 조회한다. 그 marker는 호출
+지점의 row가 명시한 State에 묶인 handler의 것이다. Shared CPS
+conversion이 만든 suffix continuation과 frame이 담은 handle 층의 dispatcher는 그 marker의
+prompt(P3)를 기준으로 handler boundary와 resume 경로를 연결한다. 이 그림은
+논리적 delimiter 중첩이며 machine stack을 runtime에 탐색한다는 뜻이 아니다.
+
+Evidence 기반 dispatch에서 두 식별자가 협력한다:
+
+| 식별자 | 역할 | 결정 시점 | 범위 |
+| ------ | ---- | --------- | ---- |
+| `ability_id` | 어떤 ability인지 식별 | 컴파일 타임 | 프로그램 전역 |
+| `prompt_tag` | 어떤 handler 인스턴스인지 식별 | 런타임 | 동적으로 생성 |
+
+둘은 N:N 관계다. 같은 ability를 중첩하면 `ability_id`는 같고 `prompt_tag`는
+다르다. 한 handle이 여러 ability를 처리하면 `ability_id`는 다르고, 그 handle의 모든
+ability marker가 같은 `prompt_tag`를 공유한다.
+
+```rust
+fn inner(comp: fn() ->{e, State(Int)} Int) ->{e} Int {
+    handle comp() {                      // prompt_tag = P2
+        op State::get() { resume 10 }
+        op State::set(v) { resume Nil }
+    }
+}
+
+fn nested_state_example() -> Int {
+    handle inner(fn() State::get()) {    // prompt_tag = P1
+        op State::get() { resume 20 }
+        op State::set(v) { resume Nil }
+    }
+}
+```
+
+`comp` 안의 `State::get()`은 다음 순서로 처리된다.
+
+1. Evidence에서 `ability_id`로 marker를 조회한다. 그 instance의 가장 위 marker,
+   곧 안쪽 handle(P2)의 marker가 선택된다.
+2. Marker의 `prompt_tag`(P2)와 ability/operation identity를 frame의 dispatcher에
+   전달한다.
+3. Dispatcher가 이미 생성된 suffix continuation과 안쪽 handler를 연결한다.
+
+#### Runtime identity와 ordering
+
+`ability::compute_ability_id`는 ability instance를 선언하는 `ability.decl`의
+symbol, 곧 instance key의 hash로 31-bit runtime key를 만든다. Operation index는 그
+symbol과 operation 이름의 hash다. 둘 다 참조만으로 계산하며 선언을 읽지 않는다.
+Marker의 `i32` slot에 음수가 아닌 값으로 저장하고, 음수 key는 위의 tail 칸이 쓴다.
+Call-site와 handler 설치가 같은 함수를 사용한다. Type parameter가 다른
+ability instance는 별도 key를 가진다.
+
+Instance key는 frontend가 typecheck된 source type argument에서 만들어
+`ability.decl`의 `sym_name`으로 쓴다. Lowering된 표현
+타입에서 만들지 않는다. 표현이 같은 source 타입(`Int`와 `Nat`)이나 모양이 같은
+서로 다른 nominal 타입도 별도 instance다. Instance의 타입 인자는 IR에 나타나지
+않으므로 이후 단계의 타입 변환은 runtime key를 바꿀 수 없다. Runtime array는 이
+key로 정렬하고 binary search로 그 instance의 marker 칸을 찾는다. 표준 ability와
+사용자 ability에 별도 연속 번호 대역을 예약하지 않는다.
 
 <!-- markdownlint-disable-next-line MD033 -->
 <a id="row-directed-evidence"></a>
