@@ -159,10 +159,10 @@ target pipeline 이전에는 제거된다. Shared contract는 target ABI를 포�
 
 ### Wasm Runtime Boundary
 
-현재 Wasm backend의 `Bytes`는 WasmGC `array i8`와 slice offset/length를 가진
-struct다. WASI preview1 `fd_write`의 iovec은 linear memory에 있어야 하므로 GC array
-reference를 직접 전달할 수 없다. 첫 구현은 instance-local linear scratch buffer를
-사용한다.
+Wasm backend의 `Bytes`는 WasmGC `array i8`과 범위 시작/길이를 field로 가진 일반
+사용자 struct다([string.md](string.md#bytes-1)). WASI preview1 `fd_write`의
+iovec은 linear memory에 있어야 하므로 GC array reference를 직접 전달할 수 없다.
+첫 구현은 instance-local linear scratch buffer를 사용한다.
 
 - 출력할 `Bytes` slice를 GC array에서 scratch buffer로 복사한다.
 - `print_line`은 payload 끝에 `\n` 하나를 붙여 하나의 연속 구간으로 쓴다.
@@ -187,25 +187,31 @@ Native lowering은 다음 private C ABI를 사용한다. 이 ABI는 source API�
 `tribute-runtime`과 native compiler pipeline 사이에서만 공유된다.
 
 ```text
-__tribute_io_write(bytes: *const TributeBytes, newline: u32) -> void
+__tribute_io_write(data: *const ByteArray, start: u32, len: u32, newline: u32) -> void
 __tribute_io_read_line() -> *mut NativeReadLineResult
 __tribute_io_read_line_result_dealloc(result: *mut NativeReadLineResult) -> void
 
 NativeReadLineResult = repr(C) {
     tag: u32,                  // 0 Line, 1 EOF, 2 InvalidEncoding, 3 System
     code: i32,                // System에서만 사용
-    bytes: *mut TributeBytes, // Line에서만 사용
-    message: *mut TributeBytes, // System에서만 사용, valid UTF-8
+    bytes: *mut ByteArray,    // Line에서만 사용
+    message: *mut ByteArray,  // System에서만 사용, valid UTF-8
 }
 ```
 
-Runtime은 Tribute enum이나 RTTI layout을 직접 생성하지 않는다. Native lowering이
-descriptor의 필드를 읽어 `std::io::ReadLineResult` ADT를 만들고 descriptor를 즉시
-해제한다. `bytes`와 `message`는 RC-managed `Bytes` payload이며 해당 variant로 소유권이
-이전된다. 사용하지 않는 pointer field는 null이다.
+`ByteArray`는 [byte 배열](rc.md#bytes) 객체의 payload(`[len: i64] [bytes...]`)다.
+`__tribute_io_write`는 `data`를 호출 동안 빌리고 `[start, start + len)`를 쓴다.
+Native lowering은 `Bytes`의 `data`, `start`, `len` field를 읽어 넘긴다. Runtime은
+범위가 배열 안인지 검사하고, 벗어나면 실행을 끝낸다.
 
-`newline`은 native ABI에서 `u32` 0/1로 전달한다. Runtime은 `bytes`를 먼저 모두 쓰고,
-값이 1일 때만 `\n` 하나를 추가한다.
+Runtime은 Tribute enum, struct, `Bytes`를 직접 생성하지 않으며, 직접 할당하는 RC 객체는
+예약 RTTI index의 byte 배열뿐이다. Native lowering이 descriptor의 필드를 읽어
+`std::io::ReadLineResult` ADT를 만들고 descriptor를 즉시 해제한다. `bytes`와
+`message`는 unit 하나를 가진 byte 배열이며, lowering이 배열 전체를 보는 `Bytes`로
+감싸 해당 variant로 소유권을 이전한다. 사용하지 않는 pointer field는 null이다.
+
+`newline`은 native ABI에서 `u32` 0/1로 전달한다. Runtime은 byte 범위를 먼저 모두
+쓰고, 값이 1일 때만 `\n` 하나를 추가한다.
 
 `String` 출력은 rope를 `Bytes` chunk로 순회하거나 flatten하여 처리할 수 있지만,
 source-level `Io` 계약과 target-independent boundary는 어느 표현을 선택하든

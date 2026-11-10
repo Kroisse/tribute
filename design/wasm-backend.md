@@ -40,7 +40,7 @@ tribute-passes/           # tribute-ir 의존
 ├── wasm/adt_to_wasm.rs   # adt.* → wasm_gc.*
 ├── wasm/struct_layouts.rs
 │                         # 사용자 struct와 variant의 wasm_gc.struct 타입
-├── wasm/bytes.rs         # bytes layout 타입과 경계 안 bytes 읽기 intrinsic lowering
+├── wasm/bytes.rs         # 경계 안 byte 배열 읽기 intrinsic lowering
 ├── wasm/intrinsic_to_wasm.rs
 │                         # 출구 뒤: extern "C" bytes helper를 GC 연산으로 바인딩
 ├── wasm/convert_signatures.rs
@@ -473,24 +473,20 @@ user-defined type은 그 뒤에 배치된다:
 | Index | Type |
 | ---: | --- |
 | 0 | `BoxedF64` |
-| 1 | `BytesArray` |
-| 2 | `BytesStruct` |
-| 3 | `Closure { entries: i32 }`, 모든 closure 값의 base |
-| 4 | `Described { descriptor: i32 }`, 사용자 struct와 variant의 공통 supertype |
-| 5+ | user-defined structs, arrays, variants, closure capture layouts |
+| 1 | `Closure { entries: i32 }`, 모든 closure 값의 base |
+| 2 | `Described { descriptor: i32 }`, 사용자 struct와 variant의 공통 supertype |
+| 3+ | user-defined structs, arrays, variants, closure capture layouts |
 
 이 표는 backend-ready builtin layout의 규범적 최종 계약이다. Emitter와 layout
-verifier는 closure 3, described 4, user-defined type 5+를 정확히
+verifier는 closure 1, described 2, user-defined type 3+를 정확히
 사용하며 CPS control carrier나 trampoline placeholder index를 예약하지 않는다.
-Index 0은 `"boxed_f64"`, index 1은 `"bytes_data"`, index 2는 `"bytes"`,
-index 3과 4는 `"closure"`, `"described"`
-[runtime layout 식별자](ir.md#runtime-layout-식별자)로만 정해진다. 경계 출구의
-명목 타입 `core.bytes`는 Wasm lowering의 첫 단계에서 `"bytes"` layout struct로
-바뀐다. 이 변환은 alias, 연산 속성, 결과와 block 인자뿐 아니라 ADT field, variant
-payload, signature처럼 다른 타입 안에 들어 있는 `core.bytes`까지 구조적으로 바꾼다.
-이후 단계가 만드는 bytes 값도 `"bytes"` struct 타입을 가지므로, 그 뒤의 Wasm IR과
-backend에는 `core.bytes`가 나타나지 않는다.
-같은 첫 단계가 `tribute_rt` primitive 타입도 같은 범위에서 Wasm 표현으로 바꾼다.
+Index 0은 `"boxed_f64"`, index 1과 2는 `"closure"`, `"described"`
+[runtime layout 식별자](ir.md#runtime-layout-식별자)로만 정해진다. `Bytes`는
+prelude struct이므로 다른 사용자 struct와 같은 GC 타입을 받고, 그 byte 배열
+`adt.array<core.i8>`은 다른 배열과 같은 GC 배열이다([string.md](string.md#bytes-1)).
+Wasm lowering의 첫 단계는 `tribute_rt` primitive 타입을 Wasm 표현으로 바꾼다. 이
+변환은 alias, 연산 속성, 결과와 block 인자뿐 아니라 ADT field, variant payload,
+signature처럼 다른 타입 안에 들어 있는 타입까지 구조적으로 바꾼다.
 `tribute_rt.int`/`nat`/`bool`은 `core.i32`, `tribute_rt.float`는 `core.f64`,
 `tribute_rt.anyref`는 `wasm.anyref`, `tribute_rt.intref`는 `wasm.i31ref`가 된다.
 선언된 field 타입과 그 field의 값이 같은 타입 표기를 쓰므로, 이후 단계는 두 표기를
@@ -504,7 +500,6 @@ Wasm dialect lowering의 마지막 단계가 없앤다.
 `core.index` 연산을 그 폭의 연산으로 바꾼다.
 
 Struct 이름이나 원소 타입이 같더라도 식별자가 없는 타입은 builtin layout이 아니다.
-원소가 `core.i8`인 배열도 `"bytes_data"`가 없으면 bytes 배열이 아니다.
 Closure는 environment를 따로 두지 않는다.
 
 ```wasm
@@ -550,10 +545,17 @@ descriptor](runtime-types.md#wasm-배치) index를 두어 runtime identity를 �
   된다.
 - 배열 연산의 GC 타입은 `wasm_gc.array<E>`다. `adt_to_wasm`은 `adt.array<E>`를
   같은 매개변수와 속성의 `wasm_gc.array`로 바꿔 `wasm_gc` 배열 연산에 쓰고, 원소
-  타입이 같은 배열은 같은 GC 타입이다. `layout`을 가진 builtin 배열(Bytes backing
-  배열)은 그 식별자로 예약 index를 받는다. Builtin이 아닌 배열은 값과 signature에서
-  erased `wasm.arrayref`가 된다. Wasm backend는 unmanaged `core.array`를 GC 배열로
-  다루지 않는다.
+  타입이 같은 배열은 같은 GC 타입이다. Builtin 배열 layout은 없다. 값, 필드,
+  signature에서의 표현은 원소 타입으로 정한다.
+  - 원소가 scalar인 배열은 자기 `wasm_gc.array<E>`를 그대로 쓰고, 배열 연산은
+    cast 없이 쓴다. 원소가 다른 타입을 가리키지 않으므로 재귀 GC 타입이 생기지
+    않는다. `Bytes`의 byte 배열이 여기에 든다.
+  - 원소가 참조인 배열은 erased `wasm.arrayref`가 되고, 배열 연산은 operand를 자기
+    GC 배열 타입으로 cast한 뒤 쓴다. 원소가 그 배열을 담은 struct를 다시 가리키면
+    재귀 GC 타입이 되기 때문이다([WasmGC evidence](cps-effects.md#wasmgc)의
+    `Slots(Marker)`).
+
+  Wasm backend는 unmanaged `core.array`를 GC 배열로 다루지 않는다.
 - Backend에 도달하는 `adt` 타입은 [`layout`](ir.md#runtime-layout-식별자)을 가진
   builtin layout뿐이다. Backend는 builtin layout을 `layout` 식별자로만 식별하고,
   그 타입의 dialect나 이름을 보지 않는다. 연산이나 값이 가리키지 않는 소스 layout
@@ -605,7 +607,7 @@ WasmGC subtype 관계는 `wasm_gc.struct`의 type 속성 `supertype`으로만 �
 [Closure 저장 layout](tribute-dialects.md#closure-저장-layout)은 closure base
 하나와 capture layout들로 이루어진다.
 
-- Closure base(`layout = "closure"`)는 예약 index 3의 `{ entries: i32 }`이며 final이
+- Closure base(`layout = "closure"`)는 예약 index 1의 `{ entries: i32 }`이며 final이
   아니다. Entries 필드는 immutable이며 function table 안의
   [convention table](tribute-dialects.md#convention-entry) 시작 index다. Function table은
   `func.constant`가 가리키는 함수와 convention table이 함께 쓰는 table 하나이며,
@@ -688,11 +690,10 @@ WasmGC의 서브타이핑은 non-coercive이고 concrete struct 타입은 `struc
 | 값 타입 | 슬롯 | 판정 |
 | --- | --- | --- |
 | builtin 레이아웃 인덱스를 갖는 타입 | 같은 인덱스를 갖는 다른 표기 | 허용 |
-| builtin 레이아웃 인덱스를 갖는 struct (`"bytes"`, closure 등) | `structref`, `anyref` | 허용 |
+| builtin 레이아웃 인덱스를 갖는 struct (closure 등) | `structref`, `anyref` | 허용 |
 | `supertype`을 가진 `wasm_gc.struct` | 그 supertype과 그 위의 supertype | 허용 |
 | supertype | 그 subtype | 거부 (downcast) |
 | `wasm_gc.struct` (사용자 struct, variant, closure capture layout) | `structref`, `anyref` | 허용 |
-| builtin 배열 레이아웃 (Bytes backing array) | `arrayref`, `anyref` | 허용 |
 | `wasm_gc.array` | `arrayref`, `anyref` | 허용 |
 | 등록 근거가 없는 타입 표기 | `structref`, `anyref` | 거부 |
 | `anyref` | `structref` | 거부 (downcast) |

@@ -446,6 +446,27 @@ aggregate이면 배열은 그 object에 대한 managed 참조를 담는다.
 그대로 두고 새 배열을 만든다. `get`, `remove`, `replace`는 `at < len`을,
 `insert`는 `at ≤ len`을 요구하며, target은 이를 어긴 실행을 trap으로 끝낸다.
 
+## ByteArray
+
+`std::runtime::ByteArray`는 byte를 담는 고정 길이 불변 배열이며 prelude의
+[`Bytes`](string.md#bytes)가 byte를 담는 데 쓴다. `Slots`처럼 compiler 소유
+타입이고 패키지 `std` 밖에서는 이름으로 가리킬 수 없다. 소스 언어에는 `core.i8`로
+내려가는 숫자 타입이 없으므로 `Slots(a)`의 인스턴스로 쓰지 않는다. IR에서는
+[`adt.array<core.i8>`](tribute-dialects.md#adt-배열)이다.
+
+연산은 `std::runtime::ByteArray`의 compiler intrinsic이다. 위치와 길이는 `Nat`이고
+byte 값은 `0`–`255`의 `Nat`이다.
+
+| 연산 | 뜻 | `adt` operation |
+| --- | --- | --- |
+| `len(bytes: ByteArray) -> Nat` | byte 수 | `adt.array_len` |
+| `get(bytes: ByteArray, at: Nat) -> Nat` | `at`번째 byte를 부호 없이 넓힌 값 | `adt.array_get` |
+
+`get`은 `at < len`을 요구하며, target은 이를 어긴 실행을 trap으로 끝낸다. 새 byte
+배열은 byte literal(`adt.bytes_const`)과 runtime 함수가 만든다. 두 byte 배열을 이어
+붙이는 일처럼 새 byte를 만드는 연산은 runtime 함수이며, 배열과 범위를 받아
+새 배열을 돌려준다([rc.md](rc.md#bytes)).
+
 ---
 
 ## Field Access
