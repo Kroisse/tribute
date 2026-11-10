@@ -568,12 +568,10 @@ fn tuple_layouts_differing_in_rows_merge() {
     let input = r#"core.module @test {
   !__logical_tuple_open = adt.struct<"__logical_tuple_open", (tribute_control.func_sig<() -> core.i32 row(| 'a0)>, core.i32)>
   !__logical_tuple_closed = adt.struct<"__logical_tuple_closed", (tribute_control.func_sig<() -> core.i32>, core.i32)>
-  !open = adt.typeref<"__logical_tuple_open">
-  !closed = adt.typeref<"__logical_tuple_closed">
-  !Box = adt.struct<"Box"['a0], (!open)>
-  !closed_box = adt.typeref<"Box"[row()]>
+  !Box = adt.struct<"Box"['a0], (!__logical_tuple_open)>
+  !closed_box = adt.struct<"Box"[row()]>
   tribute_cps.func @first(%box: !closed_box) -> core.i32 convention(direct) {
-    %pair = adt.struct_get %box {field = 0, type = !Box} : !closed
+    %pair = adt.struct_get %box {field = 0, type = !Box} : !__logical_tuple_closed
     %n = adt.struct_get %pair {field = 1, type = !__logical_tuple_closed} : core.i32
     tribute_control.return %n
   }
