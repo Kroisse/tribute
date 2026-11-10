@@ -749,9 +749,9 @@ Closure 저장 layout은 두 종류다.
   cast를 검증하고 물리화한다. Target은 base와 capture layout의 관계를
   `closure_base`로만 정하고, 필드 모양이 prefix처럼 보인다는 사실에서 추론하지
   않는다.
-- Capture layout의 identity는 base와 capture 필드 타입 목록이다. Capture 타입 목록이
-  같은 두 closure는 같은 layout을 쓴다. Base와 capture layout은 이름 없는
-  [literal layout](#adtstruct-nominal-layout-type)이다.
+- Capture layout의 identity는 base와 capture 필드 타입 목록이다. Base와 capture
+  타입 목록이 같은 두 closure는 같은 layout을 쓴다. Base와 capture layout은 이름
+  없는 [literal layout](#adtstruct-nominal-layout-type)이다.
 - Convention table 필드의 타입은 경계 안에서 `tribute_rt.convention_table_ref`이고,
   target이 자기 정적 table 참조 표현으로 바꾼다. 이 필드는 managed 참조가 아니며
   해제하지 않는다. Target은 closure의 callable type `S`마다 base를
@@ -767,8 +767,9 @@ Closure 저장 layout은 두 종류다.
 closure operation lowering과
 storage 확정은 다음 변환을 함께 적용한다.
 
-- `closure.new`는 convention table 참조와 capture를 필드로 가진 할당 하나가 된다. 결과는
-  capture layout에서 base로의 upcast다. Table 참조는 entry 함수 목록을 담은
+- `closure.new`는 convention table 참조와 capture를 필드로 가진 할당 하나가 된다.
+  Capture가 있으면 결과는 capture layout에서 base로의 upcast이고, 없으면 base
+  할당 그대로다. Table 참조는 entry 함수 목록을 담은
   `tribute_rt.convention_table`이 만든다.
 - `closure.entry`는 base의 convention table 필드를 읽고 그 table에서
   `tribute_rt.convention_entry`로 convention의 entry를 읽는 일이 된다. 간접 호출은
