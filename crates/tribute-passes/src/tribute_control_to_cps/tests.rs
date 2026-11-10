@@ -551,6 +551,62 @@ fn nominal_row_arguments_and_binders_are_erased() {
     verify_tribute_control_post_cps(&reparsed, reparsed_module, &mut Default::default()).unwrap();
 }
 
+/// Tuple layouts that differ only in their rows are renamed by their
+/// converted elements and become one layout under one alias.
+#[test]
+fn tuple_layouts_differing_in_rows_merge() {
+    let input = r#"core.module @test {
+  !__logical_tuple_open = adt.struct<"__logical_tuple_open", (tribute_control.func_sig<() -> core.i32 row(| 'a0)>, core.i32)>
+  !__logical_tuple_closed = adt.struct<"__logical_tuple_closed", (tribute_control.func_sig<() -> core.i32>, core.i32)>
+  !open = adt.typeref<"__logical_tuple_open">
+  !closed = adt.typeref<"__logical_tuple_closed">
+  !Box = adt.struct<"Box"['a0], (!open)>
+  !closed_box = adt.typeref<"Box"[row()]>
+  tribute_cps.func @first(%box: !closed_box) -> core.i32 convention(direct) {
+    %pair = adt.struct_get %box {field = 0, type = !Box} : !closed
+    %n = adt.struct_get %pair {field = 1, type = !__logical_tuple_closed} : core.i32
+    tribute_control.return %n
+  }
+}"#;
+    let (mut ctx, module) = parse(input);
+    tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default()).unwrap();
+
+    let tuples: Vec<_> = ctx
+        .type_aliases()
+        .iter()
+        .filter(|(name, _)| name.with_str(|name| name.starts_with("__logical_tuple_")))
+        .cloned()
+        .collect();
+    let [(name, layout)] = tuples.as_slice() else {
+        panic!("expected one tuple alias, found {tuples:?}");
+    };
+    for old in ["__logical_tuple_open", "__logical_tuple_closed"] {
+        assert_eq!(ctx.type_alias_by_text(old), None, "{old}");
+    }
+    let mut projections = Vec::new();
+    let _ = trunk_ir::walk::walk_op::<()>(&ctx, module.op(), &mut |op| {
+        if let Ok(get) = adt::StructGet::from_op(&ctx, op) {
+            projections.push((get.r#type(&ctx), ctx.value_ty(get.result(&ctx))));
+        }
+        std::ops::ControlFlow::Continue(trunk_ir::walk::WalkAction::Advance)
+    });
+    let [(_, pair_ty), (pair_layout, _)] = projections[..] else {
+        panic!("expected two projections, found {projections:?}");
+    };
+    assert_eq!(adt::layout_of(&ctx, pair_ty), Some(*layout));
+    assert_eq!(pair_layout, *layout);
+    let box_layout = ctx.type_alias_by_text("Box").unwrap();
+    let field = adt::Struct::from_type_ref(&ctx, box_layout)
+        .unwrap()
+        .field_types(&ctx)[0];
+    assert_eq!(adt::nominal_name(&ctx, field), Some(&*name.to_string()));
+
+    let printed = module.op().display(&ctx).to_string();
+    let mut reparsed = IrContext::new();
+    let reparsed_module = parse_test_module(&mut reparsed, &printed);
+    verify_tribute_control_post_cps(&reparsed, reparsed_module, &mut Default::default()).unwrap();
+}
+
 #[test]
 fn source_signature_metadata_roundtrips_before_conversion() {
     let source = r#"core.module @test {
@@ -803,6 +859,8 @@ fn post_candidate_failure_restores_alias_maps_and_canonical_ir() {
     let (alias_name, source_type) = source_aliases[0].clone();
     let converted_type = TypeDataBuilder::new("core.i32").intern(&mut ctx);
     ctx.register_type_alias(alias_name.clone(), converted_type);
+    let renamed = Symbol::new("__logical_tuple_renamed");
+    ctx.register_type_alias(renamed.clone(), converted_type);
 
     let error = verify_candidate_or_restore_aliases(
         &mut ctx,
@@ -815,6 +873,8 @@ fn post_candidate_failure_restores_alias_maps_and_canonical_ir() {
     assert_eq!(ctx.type_alias_by_name(&alias_name), Some(source_type));
     assert_eq!(ctx.type_alias_by_type(source_type), Some(alias_name));
     assert_eq!(ctx.type_alias_by_type(converted_type), None);
+    assert_eq!(ctx.type_alias_by_name(&renamed), None);
+    assert_eq!(ctx.type_aliases(), source_aliases);
     assert_eq!(candidate.op().display(&ctx).to_string(), before);
 }
 

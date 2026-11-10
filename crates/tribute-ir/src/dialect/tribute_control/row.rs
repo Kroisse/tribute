@@ -567,23 +567,31 @@ fn attribute_key(ctx: &IrContext, attr: &Attribute) -> String {
     }
 }
 
-fn tuple_layout_data(ctx: &mut IrContext, name: &str, elements: &[TypeRef]) -> TypeRef {
-    adt::Struct::from_fields(
+/// The tuple layout of `elements` and its name, registered under that name.
+fn register_tuple_layout(ctx: &mut IrContext, elements: &[TypeRef]) -> (String, TypeRef) {
+    let name = logical_tuple_name(ctx, elements);
+    let layout = adt::Struct::from_fields(
         ctx,
-        name.to_owned(),
+        name.clone(),
         elements.iter().copied(),
         AttributeMap::new(),
     )
-    .as_type_ref()
+    .as_type_ref();
+    ctx.register_type_alias(Symbol::new(&name), layout);
+    (name, layout)
 }
 
 /// The compiler-generated tuple layout of `elements`: an `adt.typeref` whose
 /// layout is registered under its name.
 pub fn logical_tuple_type(ctx: &mut IrContext, elements: &[TypeRef]) -> TypeRef {
-    let name = logical_tuple_name(ctx, elements);
-    let layout = tuple_layout_data(ctx, &name, elements);
-    ctx.register_type_alias(Symbol::new(&name), layout);
+    let (name, _) = register_tuple_layout(ctx, elements);
     adt::Typeref::named(ctx, name, []).as_type_ref()
+}
+
+/// The `adt.struct` layout of [`logical_tuple_type`]`(ctx, elements)`,
+/// registered under its name.
+pub fn logical_tuple_layout(ctx: &mut IrContext, elements: &[TypeRef]) -> TypeRef {
+    register_tuple_layout(ctx, elements).1
 }
 
 /// The element types of a compiler-generated tuple layout.
@@ -597,7 +605,17 @@ pub fn logical_tuple_elements(ctx: &IrContext, ty: TypeRef) -> Option<&[TypeRef]
         return None;
     }
     let layout = adt::layout_of(ctx, ty)?;
-    adt::Struct::from_type_ref(ctx, layout).map(|layout| layout.field_types(ctx))
+    logical_tuple_layout_elements(ctx, layout)
+}
+
+/// The element types of `ty` when it is the `adt.struct` layout of a
+/// compiler-generated tuple, which an operation's `type` attribute can name
+/// directly.
+pub fn logical_tuple_layout_elements(ctx: &IrContext, ty: TypeRef) -> Option<&[TypeRef]> {
+    let layout = adt::Struct::from_type_ref(ctx, ty)?;
+    let name = ctx.type_attrs(ty).get_str(adt::STRUCT_NAME_ATTR)?;
+    name.starts_with(LOGICAL_TUPLE_PREFIX)
+        .then(|| layout.field_types(ctx))
 }
 
 /// Where substitution finds or makes the types it produces.

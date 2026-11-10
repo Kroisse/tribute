@@ -83,6 +83,28 @@ impl Converter<'_> {
             self.converted_types.insert(ty, converted);
             return converted;
         }
+        // A tuple layout is named by its element types, so converting them
+        // renames it, and tuples that differed only in rows become one
+        // (`design/tribute-dialects.md` § "Nominal layout의 게시").
+        let tuple = tribute_control::logical_tuple_elements(self.ctx, ty)
+            .map(|elements| (elements.to_vec(), false))
+            .or_else(|| {
+                tribute_control::logical_tuple_layout_elements(self.ctx, ty)
+                    .map(|elements| (elements.to_vec(), true))
+            });
+        if let Some((elements, is_layout)) = tuple {
+            let elements: Vec<_> = elements
+                .into_iter()
+                .map(|element| self.convert_type(element))
+                .collect();
+            let converted = if is_layout {
+                tribute_control::logical_tuple_layout(self.ctx, &elements)
+            } else {
+                tribute_control::logical_tuple_type(self.ctx, &elements)
+            };
+            self.converted_types.insert(ty, converted);
+            return converted;
+        }
 
         // Nominal row arguments and layout row binders stay inside the
         // source-logical boundary, as callable rows do
