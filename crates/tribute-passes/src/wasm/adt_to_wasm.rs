@@ -138,12 +138,13 @@ fn descriptor_operand(
     Some(constant.result(ctx))
 }
 
-/// Lower `adt.ref_null` and `adt.ref_cast` to their `wasm_gc` operations,
-/// before builtin layout conversion replaces the managed reference types
-/// they hold with Wasm types they do not accept.
+/// Lower `adt.ref_null`, `adt.ref_is_null`, and `adt.ref_cast` to their
+/// Wasm operations, before builtin layout conversion replaces the managed
+/// reference types they hold with Wasm types they do not accept.
 pub(crate) fn lower_references(ctx: &mut IrContext, module: Module) {
     PatternApplicator::new(TypeConverter::new())
         .add_pattern(RefNullPattern)
+        .add_pattern(RefIsNullPattern)
         .add_pattern(RefCastPattern)
         .apply_partial(ctx, module);
 }
@@ -174,7 +175,6 @@ pub(crate) fn lower(ctx: &mut IrContext, module: Module, type_converter: TypeCon
         .add_pattern(ArrayGetPattern)
         .add_pattern(ArraySetPattern)
         .add_pattern(ArrayLenPattern)
-        .add_pattern(RefIsNullPattern)
         .add_pattern(adt::EraseNominalDecls);
     applicator.apply_partial(ctx, module);
     for layout in tribute_rtti::Layout::declared(ctx, module) {
@@ -1217,7 +1217,7 @@ mod tests {
     %length = adt.array_len %filled : core.index
 
     %null = adt.ref_null : !S
-    %is_null = adt.ref_is_null %null : core.i32
+    %is_null = adt.ref_is_null %null : !S
     %ref = adt.ref_cast %null : !S to !S
     wasm.return
   }

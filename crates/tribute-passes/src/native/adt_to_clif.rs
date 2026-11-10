@@ -273,8 +273,11 @@ impl trunk_ir::pass::Pass for AdtToClif {
 #[cfg(test)]
 mod tests {
     use trunk_ir::context::IrContext;
+    use trunk_ir::dialect::core;
+    use trunk_ir::ops::DialectType;
     use trunk_ir::parser::parse_test_module;
     use trunk_ir::rewrite::TypeConverter;
+    use trunk_ir::types::TypeDataBuilder;
 
     fn run_pass_result(ir: &str) -> Result<String, trunk_ir::rewrite::ConversionError> {
         let mut ctx = IrContext::new();
@@ -286,6 +289,27 @@ mod tests {
 
     fn run_pass(ir: &str) -> String {
         run_pass_result(ir).unwrap()
+    }
+
+    /// Lower `ir` with a converter that turns managed references into
+    /// `core.ptr` and `core.i1` flags into `flag`, as a native converter does.
+    fn run_pass_with_flag(ir: &str, flag: &'static str) -> String {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, ir);
+        let ptr = core::Ptr::params().intern(&mut ctx).as_type_ref();
+        let flag = TypeDataBuilder::new(flag).intern(&mut ctx);
+        let mut type_converter = TypeConverter::new();
+        type_converter.add_conversion(move |ctx, ty| {
+            if core::I1::matches(ctx, ty) {
+                Some(flag)
+            } else if tribute_ir::dialect::tribute_rt::Anyref::matches(ctx, ty) {
+                Some(ptr)
+            } else {
+                None
+            }
+        });
+        super::lower(&mut ctx, module, type_converter).unwrap();
+        module.op().display(&ctx).to_string()
     }
 
     #[test]
@@ -368,28 +392,30 @@ mod tests {
 
     #[test]
     fn test_ref_is_null_to_clif() {
-        let result = run_pass(
+        let result = run_pass_with_flag(
             r#"core.module @test {
-  func.func @test_fn() -> core.i32 {
-    %0 = clif.iconst 42 : core.ptr
-    %1 = adt.ref_is_null %0 : core.i32
+  func.func @test_fn() -> core.i1 {
+    %0 = adt.ref_null : tribute_rt.anyref
+    %1 = adt.ref_is_null %0 : tribute_rt.anyref
     func.return %1
   }
 }"#,
+            "core.i32",
         );
         insta::assert_snapshot!(result);
     }
 
     #[test]
     fn test_ref_is_null_i8_needs_no_extension() {
-        let result = run_pass(
+        let result = run_pass_with_flag(
             r#"core.module @test {
-  func.func @test_fn() -> core.i8 {
-    %0 = clif.iconst 42 : core.ptr
-    %1 = adt.ref_is_null %0 : core.i8
+  func.func @test_fn() -> core.i1 {
+    %0 = adt.ref_null : tribute_rt.anyref
+    %1 = adt.ref_is_null %0 : tribute_rt.anyref
     func.return %1
   }
 }"#,
+            "core.i8",
         );
         assert!(result.contains("clif.icmp"));
         assert!(!result.contains("clif.uextend"));
@@ -463,8 +489,8 @@ mod tests {
         let result = run_pass_result(
             r#"core.module @test {
   func.func @test_fn() -> core.i1 {
-    %0 = clif.iconst 42 : core.ptr
-    %1 = adt.ref_is_null %0 : core.i1
+    %0 = adt.ref_null : tribute_rt.anyref
+    %1 = adt.ref_is_null %0 : tribute_rt.anyref
     func.return %1
   }
 }"#,

@@ -14,7 +14,7 @@ use trunk_ir::rewrite::{
     PatternRewriter, TypeConverter,
 };
 use trunk_ir::smallvec::smallvec;
-use trunk_ir::types::{AttributeMap, TypeDataBuilder};
+use trunk_ir::types::AttributeMap;
 use trunk_ir::walk::{WalkAction, walk_op};
 
 fn lower(ctx: &mut IrContext, module: Module) -> Result<(), ConversionError> {
@@ -109,10 +109,7 @@ fn lower_observation(
     ctx.block_mut(trap_block).parent_region = Some(region);
     ctx.block_mut(projection_block).parent_region = Some(region);
 
-    let bool_ty = TypeDataBuilder::new("core.i1").intern(ctx);
-    let empty = adt::RefIsNull::operands(list)
-        .results(bool_ty)
-        .build(ctx, location);
+    let empty = adt::RefIsNull::operands(list).build(ctx, location);
     let branch = cf::CondBr::operands(empty.result(ctx))
         .successors(trap_block, projection_block)
         .build(ctx, location);
@@ -201,10 +198,7 @@ impl OpRewritePattern for IsEmptyPattern {
         rewriter: &mut PatternRewriter<'_>,
     ) -> Option<()> {
         let op = is_empty.op_ref();
-        let result_ty = ctx.op_result_types(op)[0];
-        let check = adt::RefIsNull::operands(is_empty.list(ctx))
-            .results(result_ty)
-            .build(ctx, ctx.op(op).location);
+        let check = adt::RefIsNull::operands(is_empty.list(ctx)).build(ctx, ctx.op(op).location);
         rewriter.replace_op(check.op_ref());
         Some(())
     }

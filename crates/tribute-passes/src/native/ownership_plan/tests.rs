@@ -2361,7 +2361,7 @@ fn value_dying_on_a_back_edge_to_the_entry_block_is_rejected() {
     ^entry:
       %child = adt.ref_null : !ChildRef
       %value = adt.struct_new(%child) : (!ChildRef) -> !BoxRef
-      %again = adt.ref_is_null %child : core.i1
+      %again = adt.ref_is_null %child : !ChildRef
       cf.cond_br %again [^back, ^use]
     ^back:
       cf.cond_br %again [^entry, ^use]

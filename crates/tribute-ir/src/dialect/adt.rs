@@ -6,7 +6,7 @@ use crate::dialect::tribute_control::{
 };
 use crate::dialect::tribute_rtti::{ManagedRef, ManagedRefType};
 use trunk_ir::asm_format::TypeAliasHint;
-use trunk_ir::dialect::core::Index;
+use trunk_ir::dialect::core::{I1, Index};
 use trunk_ir::op_flag::Pure;
 
 #[trunk_ir::dialect]
@@ -322,9 +322,16 @@ mod adt {
     #[asm_format(attr_dict_bare ":" type(result))]
     fn ref_null() -> Value<impl ManagedRef> {}
 
+    /// Whether the managed reference `ref` is the null inhabitant of its
+    /// type. The text writes the operand's type, as `adt.ref_cast` does; the
+    /// result is a `core.i1`.
+    ///
+    /// ```text
+    /// %empty = adt.ref_is_null %list : tribute_rt.anyref
+    /// ```
     #[flags(Pure)]
-    #[asm_format(r#ref attr_dict_bare ":" type(result))]
-    fn ref_is_null(r#ref: Value<_>) -> Value<_> {}
+    #[asm_format(r#ref attr_dict_bare ":" type(r#ref))]
+    fn ref_is_null(r#ref: Value<impl ManagedRef>) -> Value<I1> {}
 
     /// `ref` as its result type, a managed reference type such as a nominal
     /// value type (a layout key or a row instance). It is allowed only
