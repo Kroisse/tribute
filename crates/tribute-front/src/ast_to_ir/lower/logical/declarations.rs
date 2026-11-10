@@ -389,7 +389,6 @@ pub(super) fn lower_struct_accessors<'db>(
                 })
                 .collect();
             let updated = adt::StructNew::operands(values)
-                .r#type(layout_type)
                 .results(struct_type)
                 .build(ir, location);
             ir.push_op(entry, updated.op_ref());

@@ -398,7 +398,7 @@ fn ownership_callable_body(ctx: &IrContext, op: OpRef) -> Result<CallableBody, O
 /// The layout allocated by `op` when it constructs a semantic closure.
 fn closure_allocation_layout(ctx: &IrContext, op: OpRef) -> Option<TypeRef> {
     let new = adt::StructNew::from_op(ctx, op).ok()?;
-    let layout = new.r#type(ctx);
+    let layout = new.layout(ctx);
     crate::closure_lower::is_closure_layout(ctx, layout).then_some(layout)
 }
 
@@ -459,12 +459,12 @@ impl ManagedLayoutCollector {
             }
         }
         if let Ok(new) = adt::StructNew::from_op(ctx, op) {
-            let layout = new.r#type(ctx);
+            let layout = new.layout(ctx);
             if get_struct_fields(ctx, layout).is_some() {
                 self.layouts.insert(layout);
             }
         } else if let Ok(new) = adt::VariantNew::from_op(ctx, op) {
-            let layout = new.r#type(ctx);
+            let layout = new.layout(ctx);
             if get_enum_variants(ctx, layout).is_some() {
                 self.layouts.insert(layout);
             }

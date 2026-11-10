@@ -218,10 +218,8 @@ impl OpRewritePattern for AdaptClosureStructNew {
         rewriter: &mut PatternRewriter<'_>,
     ) -> Option<()> {
         let op = struct_new.op_ref();
-        let native_ty = native_closure_layout(ctx, struct_new.r#type(ctx))?;
+        let native_ty = native_closure_layout(ctx, struct_new.layout(ctx))?;
         let new_op = rebuild_op_as(ctx, op, "adt.struct_new");
-        ctx.op_attrs_mut(new_op)
-            .insert("type", Attribute::Type(native_ty));
         let Some(&original_ty) = ctx.op_result_types(new_op).first() else {
             rewriter.replace_op(new_op);
             return Some(());
@@ -287,7 +285,7 @@ mod tests {
   tribute_rtti.layout {type = !Base, index = 33, fields = ["raw"]}
   tribute_rtti.layout {type = !Other, index = 34, fields = ["dynamic"]}
   func.func @make(%table: core.i32, %env: tribute_rt.anyref) -> !Captures {
-    %closure = adt.struct_new %table, %env {type = !Captures} : !Captures
+    %closure = adt.struct_new %table, %env : !Captures
     %loaded = adt.struct_get %closure {field = 1, type = !Captures} : tribute_rt.anyref
     func.return %closure
   }
@@ -398,7 +396,7 @@ mod tests {
   func.func @test_fn() -> core.i32 {
     %0 = tribute_rt.convention_table [@lifted_fn] : tribute_rt.convention_table_ref
     %1 = mem.null : core.ptr
-    %2 = adt.struct_new %0, %1 {type = !Captures} : !Captures
+    %2 = adt.struct_new %0, %1 : !Captures
     %3 = adt.struct_get %2 {field = 0, type = !Captures} : tribute_rt.convention_table_ref
     %4 = adt.struct_get %2 {field = 1, type = !Captures} : core.ptr
     %6 = tribute_rt.convention_entry %3 {index = 0} : core.i32
@@ -418,7 +416,7 @@ mod tests {
   !Captures = adt.struct<(tribute_rt.convention_table_ref, tribute_rt.anyref),{closure_base = !Base, layout = "closure_captures"}>
   func.func @test_fn(%1: tribute_rt.anyref) -> core.i32 {
     %0 = tribute_rt.convention_table [@lifted_fn] : tribute_rt.convention_table_ref
-    %2 = adt.struct_new %0, %1 {type = !Captures} : !Captures
+    %2 = adt.struct_new %0, %1 : !Captures
     %3 = adt.struct_get %2 {field = 0, type = !Captures} : tribute_rt.convention_table_ref
     %4 = adt.struct_get %2 {field = 1, type = !Captures} : tribute_rt.anyref
     %6 = tribute_rt.convention_entry %3 {index = 0} : core.i32

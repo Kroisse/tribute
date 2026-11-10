@@ -95,7 +95,6 @@ enum ContractPhase {
 #[derive(Clone, Copy)]
 struct RootFrameContract {
     reference: TypeRef,
-    layout: TypeRef,
     done: TypeRef,
     dispatch: TypeRef,
 }
@@ -907,7 +906,6 @@ impl TerminalFunctions {
         };
         ops.push(initial);
         let cell_new = adt::StructNew::operands([ctx.op_result(initial, 0)])
-            .r#type(self.cell_ty)
             .results(self.cell_ty)
             .build(ctx, location);
         ops.push(cell_new.op_ref());
@@ -934,7 +932,6 @@ impl TerminalFunctions {
         let done = member(ctx, done_entries, &[cell_new.result(ctx)], self.frame.done);
         let dispatch = member(ctx, dispatch_entries, &[], self.frame.dispatch);
         let frame = adt::StructNew::operands([done, dispatch])
-            .r#type(self.frame.layout)
             .results(self.frame.reference)
             .build(ctx, location);
         ops.push(frame.op_ref());
@@ -1119,7 +1116,6 @@ fn validate_root_continuation_frame(
             "target root bridge: worker frame must have an exact nominal layout",
         ));
     }
-    let layout = frame;
     // `continuation_frame::layout_type` places Done then Dispatch.
     let [done, dispatch] = layout_struct.fields(ctx) else {
         return Err(TargetAbiError::new(
@@ -1130,7 +1126,6 @@ fn validate_root_continuation_frame(
     validate_root_dispatch_type(ctx, *dispatch, frame, evidence, physical_results)?;
     Ok(RootFrameContract {
         reference: frame,
-        layout,
         done: *done,
         dispatch: *dispatch,
     })

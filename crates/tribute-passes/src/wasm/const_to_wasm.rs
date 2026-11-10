@@ -278,11 +278,10 @@ impl OpRewritePattern for StringConstPattern<'_> {
             .len(len)
             .results(bytes_ty)
             .build(ctx, location);
-        let result_ty = ctx.op_result_types(op)[0];
+        // The string's value is the leaf itself, of the String enum's type.
         let leaf = adt::VariantNew::operands([bytes.result(ctx)])
-            .r#type(string_enum_ty)
             .tag(leaf_tag)
-            .results(result_ty)
+            .results(string_enum_ty)
             .build(ctx, location);
 
         rewriter.insert_op(bytes.op_ref());

@@ -19,7 +19,7 @@ const CROSS_BLOCK_BORROW: &str = r#"core.module @test {
   }
   func.func @load(%child: !ChildRef) -> core.nil {
     ^entry:
-      %owner = adt.struct_new %child {type = !Box} : !BoxRef
+      %owner = adt.struct_new %child : !BoxRef
       %loaded = adt.struct_get %owner {field = 0, type = !Box} : !ChildRef
       cf.br [^next]
     ^next:
@@ -76,8 +76,8 @@ const NESTED_PROJECTION: &str = r#"core.module @test {
   }
   func.func @load(%child: !ChildRef) -> core.nil {
     ^entry:
-      %inner = adt.struct_new %child {type = !Inner} : !InnerRef
-      %owner = adt.struct_new %inner {type = !Box} : !Box
+      %inner = adt.struct_new %child : !InnerRef
+      %owner = adt.struct_new %inner : !Box
       %loaded = adt.struct_get %owner {field = 0, type = !Box} : !InnerRef
       %erased = adt.ref_cast %loaded {type = tribute_rt.anyref} : tribute_rt.anyref
       %restored = adt.ref_cast %erased {type = !InnerRef} : !InnerRef

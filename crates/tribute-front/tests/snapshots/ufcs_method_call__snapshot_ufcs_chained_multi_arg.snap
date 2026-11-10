@@ -21,14 +21,14 @@ core.module @test {
   }
   tribute_control.func @"pkg::Pair::x::set"(%0: !"pkg::Pair", %1: core.i32) -> !"pkg::Pair" {
       %2 = adt.struct_get %0 {field = 1, type = !"pkg::Pair"} : core.i32
-      %3 = adt.struct_new %1, %2 {type = !"pkg::Pair"} : !"pkg::Pair"
+      %3 = adt.struct_new %1, %2 : !"pkg::Pair"
       tribute_control.return %3
   }
   tribute_control.func @"pkg::Pair::x::modify"['a0](%0: !"pkg::Pair", %1: !t0) -> !"pkg::Pair" row(| 'a0) {
       %2 = adt.struct_get %0 {field = 0, type = !"pkg::Pair"} : core.i32
       %3 = tribute_control.call_indirect %1(%2) : (core.i32) -> core.i32 row(| 'a0)
       %4 = adt.struct_get %0 {field = 1, type = !"pkg::Pair"} : core.i32
-      %5 = adt.struct_new %3, %4 {type = !"pkg::Pair"} : !"pkg::Pair"
+      %5 = adt.struct_new %3, %4 : !"pkg::Pair"
       tribute_control.return %5
   }
   tribute_control.func @"pkg::Pair::y"(%0: !"pkg::Pair") -> core.i32 {
@@ -37,14 +37,14 @@ core.module @test {
   }
   tribute_control.func @"pkg::Pair::y::set"(%0: !"pkg::Pair", %1: core.i32) -> !"pkg::Pair" {
       %2 = adt.struct_get %0 {field = 0, type = !"pkg::Pair"} : core.i32
-      %3 = adt.struct_new %2, %1 {type = !"pkg::Pair"} : !"pkg::Pair"
+      %3 = adt.struct_new %2, %1 : !"pkg::Pair"
       tribute_control.return %3
   }
   tribute_control.func @"pkg::Pair::y::modify"['a0](%0: !"pkg::Pair", %1: !t0) -> !"pkg::Pair" row(| 'a0) {
       %2 = adt.struct_get %0 {field = 1, type = !"pkg::Pair"} : core.i32
       %3 = tribute_control.call_indirect %1(%2) : (core.i32) -> core.i32 row(| 'a0)
       %4 = adt.struct_get %0 {field = 0, type = !"pkg::Pair"} : core.i32
-      %5 = adt.struct_new %4, %3 {type = !"pkg::Pair"} : !"pkg::Pair"
+      %5 = adt.struct_new %4, %3 : !"pkg::Pair"
       tribute_control.return %5
   }
   tribute_control.func @"pkg::Triple::x"(%0: !"pkg::Triple") -> core.i32 {
@@ -54,7 +54,7 @@ core.module @test {
   tribute_control.func @"pkg::Triple::x::set"(%0: !"pkg::Triple", %1: core.i32) -> !"pkg::Triple" {
       %2 = adt.struct_get %0 {field = 1, type = !"pkg::Triple"} : core.i32
       %3 = adt.struct_get %0 {field = 2, type = !"pkg::Triple"} : core.i32
-      %4 = adt.struct_new %1, %2, %3 {type = !"pkg::Triple"} : !"pkg::Triple"
+      %4 = adt.struct_new %1, %2, %3 : !"pkg::Triple"
       tribute_control.return %4
   }
   tribute_control.func @"pkg::Triple::x::modify"['a0](%0: !"pkg::Triple", %1: !t0) -> !"pkg::Triple" row(| 'a0) {
@@ -62,7 +62,7 @@ core.module @test {
       %3 = tribute_control.call_indirect %1(%2) : (core.i32) -> core.i32 row(| 'a0)
       %4 = adt.struct_get %0 {field = 1, type = !"pkg::Triple"} : core.i32
       %5 = adt.struct_get %0 {field = 2, type = !"pkg::Triple"} : core.i32
-      %6 = adt.struct_new %3, %4, %5 {type = !"pkg::Triple"} : !"pkg::Triple"
+      %6 = adt.struct_new %3, %4, %5 : !"pkg::Triple"
       tribute_control.return %6
   }
   tribute_control.func @"pkg::Triple::y"(%0: !"pkg::Triple") -> core.i32 {
@@ -72,7 +72,7 @@ core.module @test {
   tribute_control.func @"pkg::Triple::y::set"(%0: !"pkg::Triple", %1: core.i32) -> !"pkg::Triple" {
       %2 = adt.struct_get %0 {field = 0, type = !"pkg::Triple"} : core.i32
       %3 = adt.struct_get %0 {field = 2, type = !"pkg::Triple"} : core.i32
-      %4 = adt.struct_new %2, %1, %3 {type = !"pkg::Triple"} : !"pkg::Triple"
+      %4 = adt.struct_new %2, %1, %3 : !"pkg::Triple"
       tribute_control.return %4
   }
   tribute_control.func @"pkg::Triple::y::modify"['a0](%0: !"pkg::Triple", %1: !t0) -> !"pkg::Triple" row(| 'a0) {
@@ -80,7 +80,7 @@ core.module @test {
       %3 = tribute_control.call_indirect %1(%2) : (core.i32) -> core.i32 row(| 'a0)
       %4 = adt.struct_get %0 {field = 0, type = !"pkg::Triple"} : core.i32
       %5 = adt.struct_get %0 {field = 2, type = !"pkg::Triple"} : core.i32
-      %6 = adt.struct_new %4, %3, %5 {type = !"pkg::Triple"} : !"pkg::Triple"
+      %6 = adt.struct_new %4, %3, %5 : !"pkg::Triple"
       tribute_control.return %6
   }
   tribute_control.func @"pkg::Triple::z"(%0: !"pkg::Triple") -> core.i32 {
@@ -90,7 +90,7 @@ core.module @test {
   tribute_control.func @"pkg::Triple::z::set"(%0: !"pkg::Triple", %1: core.i32) -> !"pkg::Triple" {
       %2 = adt.struct_get %0 {field = 0, type = !"pkg::Triple"} : core.i32
       %3 = adt.struct_get %0 {field = 1, type = !"pkg::Triple"} : core.i32
-      %4 = adt.struct_new %2, %3, %1 {type = !"pkg::Triple"} : !"pkg::Triple"
+      %4 = adt.struct_new %2, %3, %1 : !"pkg::Triple"
       tribute_control.return %4
   }
   tribute_control.func @"pkg::Triple::z::modify"['a0](%0: !"pkg::Triple", %1: !t0) -> !"pkg::Triple" row(| 'a0) {
@@ -98,13 +98,13 @@ core.module @test {
       %3 = tribute_control.call_indirect %1(%2) : (core.i32) -> core.i32 row(| 'a0)
       %4 = adt.struct_get %0 {field = 0, type = !"pkg::Triple"} : core.i32
       %5 = adt.struct_get %0 {field = 1, type = !"pkg::Triple"} : core.i32
-      %6 = adt.struct_new %4, %5, %3 {type = !"pkg::Triple"} : !"pkg::Triple"
+      %6 = adt.struct_new %4, %5, %3 : !"pkg::Triple"
       tribute_control.return %6
   }
   tribute_control.func @"pkg::Pair::extend"['a0](%0: !"pkg::Pair", %1: core.i32) -> !"pkg::Triple" row(| 'a0) inferred {
       %2 = tribute_control.call @"pkg::Pair::x"(%0) : (!"pkg::Pair") -> core.i32
       %3 = tribute_control.call @"pkg::Pair::y"(%0) : (!"pkg::Pair") -> core.i32
-      %4 = adt.struct_new %2, %3, %1 {type = !"pkg::Triple"} : !"pkg::Triple"
+      %4 = adt.struct_new %2, %3, %1 : !"pkg::Triple"
       tribute_control.return %4
   }
   tribute_control.func @"std::Nat::+"(%arg0: core.i32, %arg1: core.i32) -> core.i32

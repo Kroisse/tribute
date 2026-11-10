@@ -156,7 +156,6 @@ impl OpRewritePattern for LowerClosureNewArena<'_> {
             closure_captures_type_ref(ctx, &capture_types)
         };
         let struct_new_op = adt::StructNew::operands(std::iter::once(table).chain(captures))
-            .r#type(struct_ty)
             .results(struct_ty)
             .build(ctx, loc);
         // %closure = core.unrealized_conversion_cast %pack : adt.struct<..> to closure.closure<..>
@@ -1594,7 +1593,7 @@ mod tests {
         let [allocation] = allocations[..] else {
             panic!("one allocation per closure");
         };
-        assert_eq!(allocation.r#type(&ctx), layout);
+        assert_eq!(allocation.layout(&ctx), layout);
         assert_eq!(allocation.fields(&ctx).len(), 3);
 
         // The entry function downcasts its base environment once, then reads
@@ -1713,7 +1712,7 @@ mod tests {
   func.func @run(%callee: !outer, %evidence: {evidence}, %done: core.i32) -> core.never attributes {{tribute.calling_convention = "cps"}} {{
     %function = func.constant @actual_fn : ({evidence}, core.i32, core.i1) -> core.never
     %environment = adt.ref_null {{type = tribute_rt.anyref}} : tribute_rt.anyref
-    %pack = adt.struct_new %function, %environment {{type = !_closure}} : !_closure
+    %pack = adt.struct_new %function, %environment : !_closure
     %argument = core.unrealized_conversion_cast %pack : !_closure to !actual
     func.tail_call_indirect %callee(%evidence, %done, %argument) attributes {{tribute.calling_convention = "cps"}} : ({evidence}, core.i32, !expected) -> core.never
   }}

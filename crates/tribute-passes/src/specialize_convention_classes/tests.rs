@@ -161,7 +161,7 @@ fn a_layout_keeps_its_callable_field() {
     %l = tribute_control.lambda(%y: core.i32) -> core.i32 captures [] {
       tribute_control.return %y
     }
-    %h = adt.struct_new %l {type = !Holder} : !Holder
+    %h = adt.struct_new %l : !Holder
     %f = tribute_control.call @"Holder::callback"(%h) : (!Holder) -> !cb
     %r = tribute_control.call_indirect %f(%x) : (core.i32) -> core.i32
     tribute_control.return %r
@@ -173,7 +173,7 @@ fn a_layout_keeps_its_callable_field() {
         &[
             "!Holder = adt.struct<\"Holder\", (!cb)>",
             "%1 = adt.struct_get %0 {field = 0, type = !Holder} : !cb",
-            "%3 = adt.struct_new %1 {type = !Holder} : !Holder",
+            "%3 = adt.struct_new %1 : !Holder",
             "%5 = tribute_cps.call_indirect %4(%0) attributes {convention = \"direct\"} : (core.i32) -> core.i32",
         ],
     );

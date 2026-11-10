@@ -728,7 +728,7 @@ fn test_closure_lowering() {
         let additions = function_ops::<arith::Addi>(&ctx, lifted);
         assert_eq!(additions.len(), 1);
         let capture = adt::StructGet::from_op(&ctx, defining_op(&ctx, additions[0].rhs(&ctx))).unwrap();
-        assert_eq!(capture.r#type(&ctx), pack.r#type(&ctx));
+        assert_eq!(capture.r#type(&ctx), pack.layout(&ctx));
         assert_eq!(capture.field(&ctx), 1);
         let transfer = only_indirect_call(&ctx, lifted);
         assert_indirect_signature(&ctx, lifted, transfer);

@@ -170,7 +170,7 @@ impl OpRewritePattern for StructNewPattern {
         rewriter: &mut PatternRewriter<'_>,
     ) -> Option<()> {
         let op = struct_new.op_ref();
-        let struct_ty = struct_new.r#type(ctx);
+        let struct_ty = struct_new.layout(ctx);
         let tc = rewriter.type_converter();
 
         let Some(layout) = compute_struct_layout(ctx, struct_ty, tc) else {
@@ -284,7 +284,7 @@ impl OpRewritePattern for VariantNewPattern {
         rewriter: &mut PatternRewriter<'_>,
     ) -> Option<()> {
         let op = variant_new.op_ref();
-        let enum_ty = variant_new.r#type(ctx);
+        let enum_ty = variant_new.layout(ctx);
         let tag = variant_new.tag(ctx);
         let tc = rewriter.type_converter();
 

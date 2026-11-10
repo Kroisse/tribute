@@ -490,22 +490,23 @@ impl ActionPlanner<'_> {
             return Ok(());
         }
         if let Ok(new) = adt::StructNew::from_op(self.ir, op) {
-            let fields = get_struct_fields(self.ir, new.r#type(self.ir)).ok_or_else(|| {
+            let layout = new.layout(self.ir);
+            let fields = get_struct_fields(self.ir, layout).ok_or_else(|| {
                 OwnershipPlanError::new(format!(
-                    "struct_new {op:?} has invalid layout {} ({:?})",
-                    new.r#type(self.ir),
-                    self.ir.get_type(new.r#type(self.ir))
+                    "struct_new {op:?} has invalid layout {layout} ({:?})",
+                    self.ir.get_type(layout)
                 ))
             })?;
-            validate_allocation_result(self.ir, op, new.r#type(self.ir), self.managed_layouts)?;
+            validate_allocation_result(self.ir, op, layout, self.managed_layouts)?;
             return self.plan_owning_operands(op, 0, fields.iter().copied());
         }
         if let Ok(new) = adt::VariantNew::from_op(self.ir, op) {
-            let fields = adt::Enum::from_type_ref(self.ir, new.r#type(self.ir))
+            let layout = new.layout(self.ir);
+            let fields = adt::Enum::from_type_ref(self.ir, layout)
                 .ok_or_else(|| OwnershipPlanError::new("variant_new has invalid layout"))?
                 .variant_fields(self.ir, new.tag(self.ir))
                 .ok_or_else(|| OwnershipPlanError::new("variant_new tag is stale"))?;
-            validate_allocation_result(self.ir, op, new.r#type(self.ir), self.managed_layouts)?;
+            validate_allocation_result(self.ir, op, layout, self.managed_layouts)?;
             return self.plan_owning_operands(op, 0, fields.iter().copied());
         }
         if let Ok(of) = adt::ArrayOf::from_op(self.ir, op) {

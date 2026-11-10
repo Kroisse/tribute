@@ -1359,8 +1359,8 @@ fn from_list(callback: fn(Int) ->{e} Int) ->{e} Int {
         logical_function(ir, function)
             .split("adt.struct_new")
             .nth(1)
-            .and_then(|line| line.split("{type = !").nth(1))
-            .and_then(|suffix| suffix.split('}').next())
+            .and_then(|rest| rest.lines().next())
+            .and_then(|line| line.split(" : !").nth(1))
             .expect("tuple fixture must construct a logical tuple")
     };
     let tuple_int_layout = tuple_layout("tuple_int");

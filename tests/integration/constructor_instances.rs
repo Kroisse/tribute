@@ -76,8 +76,8 @@ fn main() -> Nil {
     for (name, representation) in [("Boxed$Int", "core.i32"), ("Boxed$Bool", "core.i1")] {
         let layout = format!("type = !\"pkg::{name}\"");
         assert!(
-            ir.lines()
-                .any(|line| line.contains("adt.variant_new") && line.contains(&layout)),
+            ir.lines().any(|line| line.contains("adt.variant_new")
+                && line.ends_with(&format!(": !\"pkg::{name}\""))),
             "missing construction for {name}"
         );
         assert!(

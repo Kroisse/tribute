@@ -102,7 +102,6 @@ pub(super) fn pack_frame(
     dispatch: ValueRef,
 ) -> ValueRef {
     let packed = adt::StructNew::operands([done, dispatch])
-        .r#type(frame.layout)
         .results(frame.reference)
         .build(ctx, location);
     ctx.push_op(block, packed.op_ref());

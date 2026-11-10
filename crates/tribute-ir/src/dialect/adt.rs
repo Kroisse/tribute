@@ -98,15 +98,23 @@ mod adt {
     /// addresses it by its position.
     struct Variant<#[rest] Fields>;
 
-    /// A new struct of layout `type` whose fields are `fields` in order.
+    /// A new struct whose fields are `fields` in order, of the struct layout
+    /// its result type names: a literal layout, a nominal layout's key, or
+    /// a row instance's `def` ([`StructNew::layout`]). The verifier rejects
+    /// any other result type.
+    ///
+    /// ```text
+    /// %p = adt.struct_new %x, %y : !Point
+    /// ```
     ///
     /// When the layout declares row parameters, each field operand has the
     /// layout's field type with the layout's row binders replaced by the
     /// `row_args` of the result's row instance, using call-site row
     /// substitution; see `design/tribute-dialects.md` § "Nominal row 인자".
     #[flags(Pure)]
+    #[verify]
     #[asm_format(fields attr_dict_bare ":" type(result))]
-    fn struct_new(r#type: Attr<Type>, fields: Variadic<_>) -> Value<_> {}
+    fn struct_new(fields: Variadic<_>) -> Value<_> {}
 
     /// Field `field` of the struct `ref` of layout `type`.
     ///
@@ -121,16 +129,18 @@ mod adt {
     #[asm_format(r#ref "," value attr_dict_bare)]
     fn struct_set(r#type: Attr<Type>, field: Attr<u32>, r#ref: Value<_>, value: Value<_>) {}
 
-    /// A new value of variant `tag` of enum layout `type` whose fields are
-    /// `fields` in order.
+    /// A new value of variant `tag` whose fields are `fields` in order, of
+    /// the enum layout its result type names: a nominal layout's key or a
+    /// row instance's `def` ([`VariantNew::layout`]).
     ///
     /// ```text
-    /// %dot = adt.variant_new %x, %y {tag = 1, type = !Shape} : !Shape
+    /// %dot = adt.variant_new %x, %y {tag = 1} : !Shape
     /// ```
     ///
     /// `tag` is the variant's position among the layout's variants, in
     /// declaration order, as `adt.variant_tag` returns it; the verifier
-    /// rejects a position the layout does not have.
+    /// rejects a result type that names no enum layout and a position the
+    /// layout does not have.
     ///
     /// When the layout declares row parameters, each field operand has the
     /// layout's field type with the layout's row binders replaced by the
@@ -139,7 +149,7 @@ mod adt {
     #[flags(Pure)]
     #[verify]
     #[asm_format(fields attr_dict_bare ":" type(result))]
-    fn variant_new(r#type: Attr<Type>, tag: Attr<u32>, fields: Variadic<_>) -> Value<_> {}
+    fn variant_new(tag: Attr<u32>, fields: Variadic<_>) -> Value<_> {}
 
     /// Whether `ref`, a value of enum layout `type`, is of variant `tag`, the
     /// variant's position as for `adt.variant_new`.
@@ -433,7 +443,7 @@ impl OpRewritePattern for ForwardStructGet {
             return None;
         };
         let new = StructNew::from_op(ctx, producer).ok()?;
-        if new.r#type(ctx) != get.r#type(ctx) {
+        if new.layout(ctx) != get.r#type(ctx) {
             return None;
         }
         let &stored = ctx.op_operands(producer).get(get.field(ctx) as usize)?;
@@ -834,9 +844,48 @@ fn verify_variant_tag(
     }
 }
 
+/// A construction whose result type names no layout of its kind.
+#[derive(Debug, derive_more::Display, derive_more::Error)]
+#[display("the result type names no `{kind}` layout")]
+pub struct ConstructionLayoutError {
+    kind: &'static str,
+}
+
+impl StructNew {
+    /// The struct layout the result type names: a literal layout or a
+    /// nominal layout's key itself, or a row instance's `def`.
+    pub fn layout(self, ctx: &IrContext) -> TypeRef {
+        let result = ctx.op_result_types(self.op_ref())[0];
+        layout_of(ctx, result).unwrap_or(result)
+    }
+}
+
+impl trunk_ir::ops::Verify for StructNew {
+    fn verify(&self, ctx: &IrContext) -> Result<(), trunk_ir::ops::VerificationError> {
+        if Struct::matches(ctx, self.layout(ctx)) {
+            Ok(())
+        } else {
+            Err(ConstructionLayoutError { kind: "adt.struct" }.into())
+        }
+    }
+}
+
+impl VariantNew {
+    /// The enum layout the result type names: a nominal layout's key itself
+    /// or a row instance's `def`.
+    pub fn layout(self, ctx: &IrContext) -> TypeRef {
+        let result = ctx.op_result_types(self.op_ref())[0];
+        layout_of(ctx, result).unwrap_or(result)
+    }
+}
+
 impl trunk_ir::ops::Verify for VariantNew {
     fn verify(&self, ctx: &IrContext) -> Result<(), trunk_ir::ops::VerificationError> {
-        verify_variant_tag(ctx, self.r#type(ctx), self.tag(ctx))
+        let layout = self.layout(ctx);
+        if !Enum::matches(ctx, layout) {
+            return Err(ConstructionLayoutError { kind: "adt.enum" }.into());
+        }
+        verify_variant_tag(ctx, layout, self.tag(ctx))
     }
 }
 
@@ -2462,8 +2511,8 @@ mod tests {
         let valid = r#"core.module @test {
   !Shape = adt.enum<"Shape", [(), (core.f64, core.f64)]>
   func.func @f(%x: core.f64, %shape: !Shape) -> core.f64 {
-    %dot = adt.variant_new {tag = 0, type = !Shape} : !Shape
-    %rect = adt.variant_new %x, %x {tag = 1, type = !Shape} : !Shape
+    %dot = adt.variant_new {tag = 0} : !Shape
+    %rect = adt.variant_new %x, %x {tag = 1} : !Shape
     %is_rect = adt.variant_is %shape {tag = 1, type = !Shape} : core.i1
     %width = adt.variant_get %shape {field = 0, tag = 1, type = !Shape} : core.f64
     func.return %width
@@ -2476,7 +2525,7 @@ mod tests {
 
         for (invalid, expected) in [
             (
-                "adt.variant_new {tag = 2, type = !Shape} : !Shape",
+                "adt.variant_new {tag = 2} : !Shape",
                 "tag 2 is not a variant of an enum with 2 variant(s)",
             ),
             (
@@ -2539,7 +2588,7 @@ mod canonicalize_tests {
     const PAIR: &str = r#"core.module @test {
   !pair = adt.struct<"Pair", (core.i32, core.i64)>
   func.func @f(%x: core.i32, %y: core.i64) -> core.i64 {
-    %p = adt.struct_new %x, %y {type = !pair} : !pair
+    %p = adt.struct_new %x, %y : !pair
     %r = adt.struct_get %p {type = !pair, field = 1} : core.i64
     func.return %r
   }
@@ -2581,7 +2630,7 @@ mod canonicalize_tests {
   !pair = adt.struct<"Pair", (core.i32, core.i64)>
   !other = adt.struct<"Other", (core.i32, core.i64)>
   func.func @f(%x: core.i32, %y: core.i64) -> core.i64 {
-    %p = adt.struct_new %x, %y {type = !pair} : !pair
+    %p = adt.struct_new %x, %y : !pair
     %r = adt.struct_get %p {type = !other, field = 1} : core.i64
     func.return %r
   }
@@ -2597,7 +2646,7 @@ mod canonicalize_tests {
             r#"core.module @test {
   !pair = adt.struct<"Pair", (core.i32, core.i64)>
   func.func @f(%x: core.i32, %y: core.i64) -> core.i32 {
-    %p = adt.struct_new %x, %y {type = !pair} : !pair
+    %p = adt.struct_new %x, %y : !pair
     %r = adt.struct_get %p {type = !pair, field = 1} : core.i32
     func.return %r
   }
@@ -2613,7 +2662,7 @@ mod canonicalize_tests {
             r#"core.module @test {
   !pair = adt.struct<"Pair", (core.i32, core.i64)>
   func.func @f(%x: core.i32, %y: core.i64) -> core.i64 {
-    %p = adt.struct_new %x, %y {type = !pair} : !pair
+    %p = adt.struct_new %x, %y : !pair
     %r = adt.struct_get %p {type = !pair, field = 2} : core.i64
     func.return %r
   }
@@ -2629,7 +2678,7 @@ mod canonicalize_tests {
             r#"core.module @test {
   !pair = adt.struct<"Pair", (core.i32, core.i64)>
   func.func @f(%x: core.i32, %y: core.i64, %z: core.i64) -> core.i64 {
-    %p = adt.struct_new %x, %y {type = !pair} : !pair
+    %p = adt.struct_new %x, %y : !pair
     %any = adt.ref_cast %p {type = tribute_rt.anyref} : tribute_rt.anyref
     %alias = adt.ref_cast %any {type = !pair} : !pair
     adt.struct_set %alias, %z {type = !pair, field = 1}
@@ -2652,7 +2701,7 @@ mod canonicalize_tests {
     func.return
   }
   func.func @f(%x: core.i32, %y: core.i64) -> core.i64 {
-    %p = adt.struct_new %x, %y {type = !pair} : !pair
+    %p = adt.struct_new %x, %y : !pair
     %r = adt.struct_get %p {type = !pair, field = 1} : core.i64
     func.return %r
   }
@@ -2668,7 +2717,7 @@ mod canonicalize_tests {
             r#"core.module @test {
   !pair = adt.struct<"Pair", (core.i32, core.i64)>
   func.func @f(%x: core.i32, %y: core.i64, %z: core.i64) -> core.i64 {
-    %p = adt.struct_new %x, %y {type = !pair} : !pair
+    %p = adt.struct_new %x, %y : !pair
     adt.struct_set %p, %z {type = !pair, field = 1}
     %r = adt.struct_get %p {type = !pair, field = 1} : core.i64
     func.return %r
@@ -2685,7 +2734,7 @@ mod canonicalize_tests {
             r#"core.module @test {
   !pair = adt.struct<"Pair", (core.i32, core.i64)>
   func.func @f(%x: core.i32, %y: core.i64) -> core.i64 {
-    %p = adt.struct_new %x, %y {type = !pair} : !pair
+    %p = adt.struct_new %x, %y : !pair
     %r = adt.struct_get %p {type = !pair, field = 1} : core.i64
     tribute_rt.release %p {alloc_size = 24}
     func.return %r

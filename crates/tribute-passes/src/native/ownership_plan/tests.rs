@@ -358,7 +358,7 @@ fn continuation_frame_capture_has_entry_store_and_deep_release_plan() {
   !FrameRef = adt.struct<"ContinuationFrame">
   !Env = adt.struct<"continuation_env",(!FrameRef, func.func_sig<() -> core.nil>)>
   func.func @capture(%frame: !FrameRef, %code: func.func_sig<() -> core.nil>) -> core.nil {
-    %env = adt.struct_new %frame, %code {type = !Env} : !Env
+    %env = adt.struct_new %frame, %code : !Env
     func.return
   }
 }"#,
@@ -387,7 +387,7 @@ fn continuation_frame_capture_materializes_the_typed_entry_and_store_actions() {
   !FrameRef = adt.struct<"ContinuationFrame">
   !Env = adt.struct<"continuation_env",(!FrameRef, func.func_sig<() -> core.nil>)>
   func.func @capture(%frame: !FrameRef, %code: func.func_sig<() -> core.nil>) -> core.nil {
-    %env = adt.struct_new %frame, %code {type = !Env} : !Env
+    %env = adt.struct_new %frame, %code : !Env
     func.return
   }
 }"#;
@@ -431,7 +431,7 @@ fn nested_continuation_frame_closure_releases_use_exact_header_inclusive_sizes()
   !_closure = adt.struct<(tribute_rt.convention_table_ref, !FrameRef), {closure_base = !Base, layout = "closure_captures"}>
   func.func @capture(%frame: !FrameRef) -> core.nil {
     %code = arith.constant 0 : core.i32
-    %closure = adt.struct_new %code, %frame {type = !_closure} : !_closure
+    %closure = adt.struct_new %code, %frame : !_closure
     func.return
   }
 }"#,
@@ -462,7 +462,7 @@ fn native_evidence_hands_the_dispatcher_to_the_runtime_as_a_managed_value() {
   }
   func.func @install(%evidence: !Evidence, %prompt: core.i32) -> !Evidence {
     %code = arith.constant 0 : core.i32
-    %closure = adt.struct_new %code {type = !_closure} : !_closure
+    %closure = adt.struct_new %code : !_closure
     %extended = effect.extend @State %evidence, %prompt, %closure, %evidence : !Evidence
     func.return %extended
   }
@@ -500,7 +500,7 @@ fn internal_closure_raw_pointer_handoff_outside_native_evidence_fails_closed() {
   func.func @install() -> core.nil {
     %code = arith.constant 0 : core.i32
     %env = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
-    %closure = adt.struct_new %code {type = !_closure} : !_closure
+    %closure = adt.struct_new %code : !_closure
     %raw = core.unrealized_conversion_cast %closure : !_closure to core.ptr
     %result = func.call @escape(%raw) : (core.ptr) -> core.nil
     func.return
@@ -518,7 +518,7 @@ fn into_raw_transfers_one_exact_closure_unit_without_materializing_rc() {
   func.func @install() -> core.nil {
     %code = arith.constant 0 : core.i32
     %env = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
-    %closure = adt.struct_new %code {type = !_closure} : !_closure
+    %closure = adt.struct_new %code : !_closure
     %raw = tribute_rt.into_raw %closure : core.ptr
     func.return
   }
@@ -553,7 +553,7 @@ fn into_raw_fixture(transfers: &str) -> String {
   func.func @transfers() -> core.nil {
     %code = arith.constant 0 : core.i32
     %env = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
-    %closure = adt.struct_new %code {type = !_closure} : !_closure
+    %closure = adt.struct_new %code : !_closure
 "#,
         transfers,
         r#"
@@ -578,8 +578,8 @@ fn nested_field_borrow_keeps_the_outer_owner_alive_through_the_last_use() {
     func.return %value
   }
   func.func @load(%child: !ChildRef) -> core.nil {
-    %inner = adt.struct_new %child {type = !Inner} : !InnerRef
-    %owner = adt.struct_new %inner {type = !Box} : !Box
+    %inner = adt.struct_new %child : !InnerRef
+    %owner = adt.struct_new %inner : !Box
     %loaded = adt.struct_get %owner {field = 0, type = !Box} : !InnerRef
     %erased = adt.ref_cast %loaded {type = tribute_rt.anyref} : tribute_rt.anyref
     %restored = adt.ref_cast %erased {type = !InnerRef} : !InnerRef
@@ -596,7 +596,7 @@ fn nested_field_borrow_keeps_the_outer_owner_alive_through_the_last_use() {
     let mut owner = None;
     let mut call = None;
     for &op in &ctx.block(block).ops {
-        if adt::StructNew::from_op(&ctx, op).is_ok_and(|new| new.r#type(&ctx) == box_layout) {
+        if adt::StructNew::from_op(&ctx, op).is_ok_and(|new| new.layout(&ctx) == box_layout) {
             owner = Some(ctx.op_result(op, 0));
         }
         if func::Call::matches(&ctx, op) {
@@ -672,8 +672,8 @@ fn into_raw_group_validation_ignores_preserved_field_borrow_acquire() {
   func.func @transfers() -> core.nil {
     %code = arith.constant 0 : core.i32
     %env = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
-    %stored = adt.struct_new %code {type = !_closure} : !_closure
-    %owner = adt.struct_new %stored {type = !Owner} : !Owner
+    %stored = adt.struct_new %code : !_closure
+    %owner = adt.struct_new %stored : !Owner
     %closure = adt.struct_get %owner {field = 0, type = !Owner} : !_closure
     %first = tribute_rt.into_raw %closure : core.ptr
     %second = tribute_rt.into_raw %closure : core.ptr
@@ -719,7 +719,7 @@ fn into_raw_rejects_non_transfer_and_cross_block_uses_before_mutation() {
   func.func @later_use() -> !_closure {
     %code = arith.constant 0 : core.i32
     %env = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
-    %closure = adt.struct_new %code {type = !_closure} : !_closure
+    %closure = adt.struct_new %code : !_closure
     %raw = tribute_rt.into_raw %closure : core.ptr
     func.return %closure
   }
@@ -733,7 +733,7 @@ fn into_raw_rejects_non_transfer_and_cross_block_uses_before_mutation() {
     ^entry:
       %code = arith.constant 0 : core.i32
       %env = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
-      %closure = adt.struct_new %code {type = !_closure} : !_closure
+      %closure = adt.struct_new %code : !_closure
       %first = tribute_rt.into_raw %closure : core.ptr
       cf.br [^next]
     ^next:
@@ -831,7 +831,7 @@ fn duplicate_owning_destinations_and_null_are_explicit() {
   !NodeRef = adt.struct<"Node">
   !Node = adt.struct<"Node",(!NodeRef, !NodeRef)>
   func.func @duplicate(%value: !NodeRef) -> !NodeRef {
-    %node = adt.struct_new %value, %value {type = !Node} : !NodeRef
+    %node = adt.struct_new %value, %value : !NodeRef
     func.return %node
   }
   func.func @null() -> !NodeRef {
@@ -875,18 +875,18 @@ const LAST_USE_MOVES: &str = r#"core.module @test {
     func.unreachable
   }
   func.func @store_last(%child: !ChildRef) -> !BoxRef {
-    %box = adt.struct_new %child {type = !Box} : !BoxRef
+    %box = adt.struct_new %child : !BoxRef
     func.return %box
   }
   func.func @store_then_call(%child: !ChildRef) -> !BoxRef {
-    %box = adt.struct_new %child {type = !Box} : !BoxRef
+    %box = adt.struct_new %child : !BoxRef
     func.call @sink(%child) : (!ChildRef) -> ()
     func.return %box
   }
   func.func @store_owner_then_read(%child: !ChildRef) -> core.i32 {
-    %owner = adt.struct_new %child {type = !Box} : !BoxRef
+    %owner = adt.struct_new %child : !BoxRef
     %loaded = adt.struct_get %owner {field = 0, type = !Box} : !ChildRef
-    %outer = adt.struct_new %owner {type = !Outer} : !OuterRef
+    %outer = adt.struct_new %owner : !OuterRef
     %value = adt.struct_get %loaded {field = 0, type = !Child} : core.i32
     func.return %value
   }
@@ -900,7 +900,7 @@ const LAST_USE_MOVES: &str = r#"core.module @test {
   }
   func.func @live_across(%condition: core.i1, %child: !ChildRef) -> !BoxRef {
     ^entry:
-      %box = adt.struct_new %child {type = !Box} : !BoxRef
+      %box = adt.struct_new %child : !BoxRef
       cf.cond_br %condition [^use, ^skip]
     ^use:
       func.call @sink(%child) : (!ChildRef) -> ()
@@ -1099,13 +1099,13 @@ const FIELD_MOVES: &str = r#"core.module @test {
   }
   func.func @store_one(%pair: !PairRef {tribute.ownership = "consumed"}) -> !WrapperRef {
     %left = adt.struct_get %pair {field = 0, type = !Pair} : !EnvRef
-    %wrapper = adt.struct_new %left {type = !Wrapper} : !WrapperRef
+    %wrapper = adt.struct_new %left : !WrapperRef
     func.return %wrapper
   }
   func.func @owner_used_after(%outer: !OuterRef {tribute.ownership = "consumed"}) -> core.i32 {
     %inner = adt.struct_get %outer {field = 0, type = !Outer} : !InnerRef
     %env = adt.struct_get %inner {field = 0, type = !Inner} : !EnvRef
-    %wrapper = adt.struct_new %env {type = !Wrapper} : !WrapperRef
+    %wrapper = adt.struct_new %env : !WrapperRef
     %count = adt.struct_get %outer {field = 1, type = !Outer} : core.i32
     func.return %count
   }
@@ -1113,13 +1113,13 @@ const FIELD_MOVES: &str = r#"core.module @test {
     %left = adt.struct_get %pair {field = 0, type = !Pair} : !EnvRef
     %again = adt.struct_get %pair {field = 0, type = !Pair} : !EnvRef
     %value = adt.struct_get %again {field = 0, type = !Env} : core.i32
-    %wrapper = adt.struct_new %left {type = !Wrapper} : !WrapperRef
+    %wrapper = adt.struct_new %left : !WrapperRef
     func.return %wrapper
   }
   func.func @owner_live_across(%condition: core.i1, %pair: !PairRef {tribute.ownership = "consumed"}) -> !WrapperRef {
     ^entry:
       %left = adt.struct_get %pair {field = 0, type = !Pair} : !EnvRef
-      %wrapper = adt.struct_new %left {type = !Wrapper} : !WrapperRef
+      %wrapper = adt.struct_new %left : !WrapperRef
       cf.cond_br %condition [^read, ^skip]
     ^read:
       %right = adt.struct_get %pair {field = 1, type = !Pair} : !EnvRef
@@ -1195,8 +1195,8 @@ fn a_moved_field_used_twice_acquires_once_and_moves_at_its_last_use() {
   !WrapperRef = adt.struct<"Wrapper">
   func.func @twice(%pair: !PairRef {tribute.ownership = "consumed"}) -> !PairRef {
     %left = adt.struct_get %pair {field = 0, type = !Pair} : !EnvRef
-    %first = adt.struct_new %left {type = !Wrapper} : !WrapperRef
-    %second = adt.struct_new %left, %left {type = !Pair} : !PairRef
+    %first = adt.struct_new %left : !WrapperRef
+    %second = adt.struct_new %left, %left : !PairRef
     func.return %second
   }
 }"#,
@@ -1236,7 +1236,7 @@ fn owners_released_after_the_same_operation_move_their_own_fields() {
     %left = adt.struct_get %first {field = 0, type = !Pair} : !EnvRef
     %right = adt.struct_get %second {field = 1, type = !Pair} : !EnvRef
     func.call @peek(%first, %second) : (!PairRef, !PairRef) -> ()
-    %pair = adt.struct_new %left, %right {type = !Pair} : !PairRef
+    %pair = adt.struct_new %left, %right : !PairRef
     func.return %pair
   }
 }"#,
@@ -1291,7 +1291,7 @@ fn a_replaceable_layout_keeps_its_projection_unit_instead_of_moving() {
   }
   func.func @store_one(%pair: !PairRef {tribute.ownership = "consumed"}) -> !WrapperRef {
     %left = adt.struct_get %pair {field = 0, type = !Pair} : !EnvRef
-    %wrapper = adt.struct_new %left {type = !Wrapper} : !WrapperRef
+    %wrapper = adt.struct_new %left : !WrapperRef
     func.return %wrapper
   }
 }"#,
@@ -1572,7 +1572,7 @@ fn borrowed_projection_ordinary_call_to_a_consumed_parameter_acquires_its_unit()
     func.unreachable
   }
   func.func @load(%child: !ChildRef) -> core.nil {
-    %owner = adt.struct_new %child {type = !Box} : !BoxRef
+    %owner = adt.struct_new %child : !BoxRef
     %loaded = adt.struct_get %owner {field = 0, type = !Box} : !ChildRef
     func.call @sink(%loaded) : (!ChildRef) -> ()
     func.return
@@ -1621,9 +1621,9 @@ fn borrowed_projection_stored_in_an_aggregate_acquires_the_field_unit() {
   !Capture = adt.struct<"Capture",(!ChildRef)>
   !CaptureRef = adt.struct<"Capture">
   func.func @capture(%child: !ChildRef) -> !CaptureRef {
-    %owner = adt.struct_new %child {type = !Box} : !BoxRef
+    %owner = adt.struct_new %child : !BoxRef
     %loaded = adt.struct_get %owner {field = 0, type = !Box} : !ChildRef
-    %captured = adt.struct_new %loaded {type = !Capture} : !CaptureRef
+    %captured = adt.struct_new %loaded : !CaptureRef
     func.return %captured
   }
 }"#,
@@ -1661,7 +1661,7 @@ fn loop_carried_borrowed_projection_acquires_before_the_previous_owner_dies() {
   !Node = adt.struct<"Node",(!NodeRef)>
   func.func @walk(%condition: core.i1, %tail: !NodeRef) -> core.nil {
     ^entry:
-      %head = adt.struct_new %tail {type = !Node} : !NodeRef
+      %head = adt.struct_new %tail : !NodeRef
       cf.br %head [^loop]
     ^loop(%current: !NodeRef):
       %next = adt.struct_get %current {field = 0, type = !Node} : !NodeRef
@@ -1711,7 +1711,7 @@ fn enum_release_leaves_the_size_to_the_descriptor() {
   !Choice = adt.enum<"Choice",[(), (core.i64, core.i64)]>
   !ChoiceRef = adt.enum<"Choice">
   func.func @drop() -> core.nil {
-    %choice = adt.variant_new {tag = 0, type = !Choice} : !ChoiceRef
+    %choice = adt.variant_new {tag = 0} : !ChoiceRef
     func.return
   }
 }"#,
@@ -1920,7 +1920,7 @@ fn cross_block_borrowed_load_keeps_owner_alive_without_releasing_the_load() {
   }
   func.func @load(%child: !ChildRef) -> core.nil {
     ^entry:
-      %owner = adt.struct_new %child {type = !Box} : !BoxRef
+      %owner = adt.struct_new %child : !BoxRef
       %loaded = adt.struct_get %owner {field = 0, type = !Box} : !ChildRef
       cf.br [^next]
     ^next:
@@ -2030,7 +2030,7 @@ fn branch_transfer_of_a_value_live_afterwards_acquires_the_destination_unit() {
   }
   func.func @used_after(%child: !ChildRef) -> core.nil {
     ^entry:
-      %value = adt.struct_new %child {type = !Box} : !BoxRef
+      %value = adt.struct_new %child : !BoxRef
       cf.br %value [^next]
     ^next(%moved: !BoxRef):
       func.call @sink(%value) : (!BoxRef) -> ()
@@ -2038,7 +2038,7 @@ fn branch_transfer_of_a_value_live_afterwards_acquires_the_destination_unit() {
   }
   func.func @projection_used_after(%child: !ChildRef) -> core.nil {
     ^entry:
-      %owner = adt.struct_new %child {type = !Box} : !BoxRef
+      %owner = adt.struct_new %child : !BoxRef
       %loaded = adt.struct_get %owner {field = 0, type = !Box} : !ChildRef
       cf.br %owner [^next]
     ^next(%moved: !BoxRef):
@@ -2047,7 +2047,7 @@ fn branch_transfer_of_a_value_live_afterwards_acquires_the_destination_unit() {
   }
   func.func @moved(%child: !ChildRef) -> core.nil {
     ^entry:
-      %value = adt.struct_new %child {type = !Box} : !BoxRef
+      %value = adt.struct_new %child : !BoxRef
       cf.br %value [^next]
     ^next(%moved: !BoxRef):
       func.return
@@ -2137,7 +2137,7 @@ const EDGE_DEATHS: &str = r#"core.module @test {
   }
   func.func @one_arm(%condition: core.i1, %child: !ChildRef) -> core.nil {
     ^entry:
-      %value = adt.struct_new %child {type = !Box} : !BoxRef
+      %value = adt.struct_new %child : !BoxRef
       cf.cond_br %condition [^use, ^skip]
     ^use:
       func.call @sink(%value) : (!BoxRef) -> ()
@@ -2149,7 +2149,7 @@ const EDGE_DEATHS: &str = r#"core.module @test {
   }
   func.func @nested(%outer: core.i1, %inner: core.i1, %child: !ChildRef) -> core.nil {
     ^entry:
-      %value = adt.struct_new %child {type = !Box} : !BoxRef
+      %value = adt.struct_new %child : !BoxRef
       cf.cond_br %outer [^inside, ^outer_skip]
     ^inside:
       cf.cond_br %inner [^use, ^inner_skip]
@@ -2165,7 +2165,7 @@ const EDGE_DEATHS: &str = r#"core.module @test {
   }
   func.func @loop_exit(%condition: core.i1, %child: !ChildRef) -> core.nil {
     ^entry:
-      %value = adt.struct_new %child {type = !Box} : !BoxRef
+      %value = adt.struct_new %child : !BoxRef
       cf.br [^loop]
     ^loop:
       func.call @sink(%value) : (!BoxRef) -> ()
@@ -2175,7 +2175,7 @@ const EDGE_DEATHS: &str = r#"core.module @test {
   }
   func.func @projection_one_arm(%condition: core.i1, %child: !ChildRef) -> core.nil {
     ^entry:
-      %owner = adt.struct_new %child {type = !Box} : !BoxRef
+      %owner = adt.struct_new %child : !BoxRef
       %loaded = adt.struct_get %owner {field = 0, type = !Box} : !ChildRef
       cf.cond_br %condition [^use, ^skip]
     ^use:
@@ -2327,7 +2327,7 @@ fn value_dying_on_an_edge_into_a_shared_successor_is_rejected() {
   }
   func.func @shared(%outer: core.i1, %inner: core.i1, %child: !ChildRef) -> core.nil {
     ^entry:
-      %value = adt.struct_new %child {type = !Box} : !BoxRef
+      %value = adt.struct_new %child : !BoxRef
       cf.cond_br %outer [^inside, ^other]
     ^inside:
       cf.cond_br %inner [^join, ^use]
@@ -2360,7 +2360,7 @@ fn value_dying_on_a_back_edge_to_the_entry_block_is_rejected() {
   func.func @restart() -> core.nil {
     ^entry:
       %child = adt.ref_null {type = !ChildRef} : !ChildRef
-      %value = adt.struct_new %child {type = !Box} : !BoxRef
+      %value = adt.struct_new %child : !BoxRef
       %again = adt.ref_is_null %child : core.i1
       cf.cond_br %again [^back, ^use]
     ^back:
@@ -2414,7 +2414,7 @@ fn enum_rtti_uses_the_same_nested_managed_predicate() {
   !ChildRef = adt.struct<"Child">
   !Choice = adt.enum<"Choice",[(), (!ChildRef, core.ptr), (core.bytes)]>
   func.func @some(%child: !ChildRef, %raw: core.ptr) -> !Choice {
-    %choice = adt.variant_new %child, %raw {tag = 1, type = !Choice} : !Choice
+    %choice = adt.variant_new %child, %raw {tag = 1} : !Choice
     func.return %choice
   }
 }"#,
@@ -2458,7 +2458,7 @@ fn bytes_is_a_managed_reference_with_its_own_units() {
   !LeafRef = adt.struct<"Leaf">
   func.func @wrap(%raw: core.ptr) -> !LeafRef {
     %bytes = tribute_rt.from_raw %raw : core.bytes
-    %leaf = adt.struct_new %bytes {type = !Leaf} : !LeafRef
+    %leaf = adt.struct_new %bytes : !LeafRef
     func.return %leaf
   }
 }"#,
@@ -2853,7 +2853,7 @@ fn stale_identity_unsupported_regions_and_malformed_calls_fail_unchanged() {
   !B = adt.struct<"B",(core.i32)>
   !Env = adt.struct<"Env",(!ARef)>
   func.func @f(%value: !BRef) -> core.nil {
-    %env = adt.struct_new %value {type = !Env} : !Env
+    %env = adt.struct_new %value : !Env
     func.return
   }
 }"#,
@@ -2908,7 +2908,7 @@ fn reachable_recursive_nominal_layout_is_validated_once() {
   !CursorRef = adt.struct<"Cursor">
   !Cursor = adt.struct<"Cursor",(!CursorRef)>
   func.func @make(%next: !CursorRef) -> !CursorRef {
-    %cursor = adt.struct_new %next {type = !Cursor} : !CursorRef
+    %cursor = adt.struct_new %next : !CursorRef
     func.return %cursor
   }
 }"#,
@@ -3015,8 +3015,8 @@ fn stale_plan_and_ambiguous_rtti_rewrites_fail_without_mutation() {
   !B = adt.struct<"B",(core.i32)>
   !R = adt.struct<"A">
   func.func @make(%x: core.i32, %value: !R, %raw: core.ptr) -> !R {
-    %a = adt.struct_new %x {type = !A} : !R
-    %b = adt.struct_new %x {type = !B} : !B
+    %a = adt.struct_new %x : !R
+    %b = adt.struct_new %x : !B
     func.return %a
   }
   func.func @other(%value: !R) -> !R { func.return %value }
@@ -3109,7 +3109,7 @@ fn closure_rtti_declaration_follows_the_native_closure_layout() {
   !Base = adt.struct<(tribute_rt.convention_table_ref), {layout = "closure"}>
   !Closure = adt.struct<(tribute_rt.convention_table_ref, tribute_rt.anyref), {closure_base = !Base, layout = "closure_captures"}>
   func.func @make(%code: core.i32, %env: tribute_rt.anyref) -> !Closure {
-    %closure = adt.struct_new %code, %env {type = !Closure} : !Closure
+    %closure = adt.struct_new %code, %env : !Closure
     func.return %closure
   }
 }"#,
@@ -3148,7 +3148,7 @@ fn rtti_identity_never_falls_back_to_same_name_or_shape() {
   !SameNameShape = adt.struct<"R",(core.i32), {test.identity = 1}>
   !Stale = adt.struct<"Stale",(core.i32)>
   func.func @make(%x: core.i32) -> !Exact {
-    %value = adt.struct_new %x {type = !Exact} : !Exact
+    %value = adt.struct_new %x : !Exact
     func.return %value
   }
 }"#,
@@ -3176,8 +3176,7 @@ fn rtti_identity_never_falls_back_to_same_name_or_shape() {
 
     let (type_converter, _) = native_type_converter(&mut ctx);
     for &candidate in &candidates {
-        ctx.op_attrs_mut(allocation)
-            .insert("type", trunk_ir::Attribute::Type(candidate));
+        ctx.set_op_result_type(allocation, 0, candidate);
         assert!(plan.validate_against(&ctx, module).is_err());
         assert!(
             crate::native::rtti::generate_rtti(&mut ctx, module, &type_converter).is_err(),

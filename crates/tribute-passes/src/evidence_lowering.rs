@@ -241,10 +241,7 @@ fn some_dispatch(
         cast.result(ctx)
     };
     // The parameter is a reference to the published `Option` instance.
-    let option_layout =
-        adt::layout_of(ctx, option_ty).expect("the Option(Dispatch) layout is published");
     let some = adt::VariantNew::operands([dispatch])
-        .r#type(option_layout)
         .tag(some)
         .results(option_ty)
         .build(ctx, location);
@@ -628,7 +625,7 @@ mod tests {
             "{printed}"
         );
         assert!(
-            printed.contains("adt.variant_new %2 {tag = 1, "),
+            printed.contains("adt.variant_new %2 {tag = 1} : "),
             "{printed}"
         );
     }

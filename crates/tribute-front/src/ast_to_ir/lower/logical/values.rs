@@ -345,7 +345,6 @@ pub(super) fn lower_constructor<'db>(
     let (tag, _) =
         super::super::expr::constructor_variant(builder.ctx, builder.ir, type_attr, &variant);
     let variant = adt::VariantNew::operands(values)
-        .r#type(type_attr)
         .tag(tag)
         .results(result_ty)
         .build(builder.ir, location);
@@ -364,12 +363,10 @@ pub(super) fn lower_tuple<'db>(
         .into_iter()
         .map(|element| lower_expr(builder, element, declarations))
         .collect::<Option<Vec<_>>>()?;
-    let (_, type_attr) =
-        super::super::get_or_create_logical_tuple_type(builder.ctx, builder.ir, id)
-            .unwrap_or_else(|| panic!("missing typechecked tuple layout"));
+    super::super::get_or_create_logical_tuple_type(builder.ctx, builder.ir, id)
+        .unwrap_or_else(|| panic!("missing typechecked tuple layout"));
     let result_ty = expr_type_for_id(builder, id);
     let tuple = adt::StructNew::operands(values)
-        .r#type(type_attr)
         .results(result_ty)
         .build(builder.ir, location);
     builder.ir.push_op(builder.block, tuple.op_ref());
@@ -500,7 +497,6 @@ pub(super) fn lower_record<'db>(
     }
     let result_ty = expr_type_for_id(builder, id);
     let record = adt::StructNew::operands(ordered)
-        .r#type(layout)
         .results(result_ty)
         .build(builder.ir, location);
     builder.ir.push_op(builder.block, record.op_ref());
@@ -548,7 +544,6 @@ pub(super) fn lower_variant_record<'db>(
     let (tag, _) =
         super::super::expr::constructor_variant(builder.ctx, builder.ir, layout, variant);
     let value = adt::VariantNew::operands(ordered)
-        .r#type(layout)
         .tag(tag)
         .results(result_ty)
         .build(builder.ir, location);

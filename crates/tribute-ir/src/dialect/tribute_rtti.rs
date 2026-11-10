@@ -243,10 +243,10 @@ pub fn allocation_descriptor(
     op: trunk_ir::OpRef,
 ) -> Option<(TypeRef, Option<u32>)> {
     if let Ok(new) = adt::StructNew::from_op(ctx, op) {
-        return Some((new.r#type(ctx), None));
+        return Some((new.layout(ctx), None));
     }
     let new = adt::VariantNew::from_op(ctx, op).ok()?;
-    Some((new.r#type(ctx), Some(new.tag(ctx))))
+    Some((new.layout(ctx), Some(new.tag(ctx))))
 }
 
 /// The runtime type descriptor a native allocation operation creates: an

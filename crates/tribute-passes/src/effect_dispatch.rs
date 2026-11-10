@@ -269,7 +269,6 @@ pub(crate) fn pack_payload(
         })
         .collect::<Vec<_>>();
     let payload = adt::StructNew::operands(dynamic_values)
-        .r#type(payload_type)
         .results(payload_type)
         .build(ctx, location);
     rewriter.insert_op(payload.op_ref());
