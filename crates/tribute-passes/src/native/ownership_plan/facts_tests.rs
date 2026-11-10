@@ -32,8 +32,8 @@ const CAST_FIXTURE: &str = r#"core.module @test {
   !Choice = adt.enum<"Choice",[(!ChildRef)]>
   !ChoiceRef = adt.enum<"Choice">
   func.func @load(%choice: !ChoiceRef) -> !ChildRef {
-    %erased = adt.ref_cast %choice {type = tribute_rt.anyref} : tribute_rt.anyref
-    %restored = adt.ref_cast %erased {type = !ChoiceRef} : !ChoiceRef
+    %erased = adt.ref_cast %choice : !ChoiceRef to tribute_rt.anyref
+    %restored = adt.ref_cast %erased : tribute_rt.anyref to !ChoiceRef
     %child = adt.variant_get %restored {type = !Choice, tag = 0, field = 0} : !ChildRef
     func.return %child
   }

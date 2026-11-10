@@ -367,10 +367,9 @@ fn build_aliases(
                     ctx.value_ty(*output)
                 )));
             }
-            if let Ok(cast) = adt::RefCast::from_op(ctx, op) {
-                let target = cast.r#type(ctx);
-                if ctx.value_ty(*output) != target
-                    || !input_managed
+            if adt::RefCast::matches(ctx, op) {
+                let target = ctx.value_ty(*output);
+                if !input_managed
                     || !output_managed
                     || (!is_anyref_type(ctx, ctx.value_ty(*input))
                         && !is_anyref_type(ctx, target)
