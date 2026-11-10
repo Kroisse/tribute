@@ -1115,7 +1115,7 @@ mod tests {
     }
 
     #[test]
-    fn lower_to_wasm_rejects_non_reference_string_constant_result() {
+    fn lower_to_wasm_rejects_a_string_constant_of_another_type() {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
             &mut ctx,
@@ -1144,7 +1144,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("adt.string_const must produce wasm.anyref"),
+                .contains("adt.string_const must produce a value of the canonical String type"),
             "{error}"
         );
     }

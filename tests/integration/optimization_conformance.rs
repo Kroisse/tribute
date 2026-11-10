@@ -423,11 +423,20 @@ fn keep(pair: Pair, n: Int) -> Pair {
     }
 }
 
+// Recursion keeps the holder's fields opaque, so a read of them is not
+// forwarded from its construction.
+fn hold(holder: Holder, n: Int) -> Holder {
+    case n == +0 {
+        True -> holder
+        False -> hold(holder, n - +1)
+    }
+}
+
 fn first(holder: Holder) -> String { shout(holder.name) }
 
 fn main() ->{Io} Nil {
     print_line(first(Holder { name: "unique", count: +1 }))
-    let holder = Holder { name: "shared", count: +2 }
+    let holder = hold(Holder { name: "shared", count: +2 }, +2)
     let pair = keep(Pair { left: holder, right: holder }, +3)
     print_line(first(holder))
     print_line(pair.left.name)
