@@ -460,6 +460,44 @@ Native **native-run**, WasmGC **not-yet-verified**.
   imported `Io` completion protocol evidence in `src/lsp/server.rs`.
 - No Wasm calculator execution claim is made.
 
+The calculator is a single-file, public-API-only native program. It is the
+executable integration contract for canonical `String`, `Bytes`, `List`, `Int`,
+and `std::io`; it does not expose compiler intrinsics, runtime ABI symbols, or
+test helpers.
+
+```text
+line             := horizontal-space* (quit | calculation) horizontal-space*
+quit             := "quit"
+calculation      := operator horizontal-space+ integer horizontal-space+ integer
+operator         := "add" | "sub" | "mul"
+integer          := [+-]?[0-9]+
+horizontal-space := ASCII space | ASCII tab
+```
+
+The tokenizer ignores leading, trailing, and repeated horizontal space.
+`std::io::read_line` removes the input line ending before the tokenizer sees
+the line. Dispatch compares the first token with `"add"`, `"sub"`, and
+`"mul"` through public `String` equality. The source keeps byte tokenization,
+List-based command parsing/dispatch, and recursive I/O handling in separate
+functions.
+
+- A successful calculation prints only `Int::to_string(result)` followed by
+  one newline.
+- `Int::ParseError::InvalidSyntax` prints `error: invalid integer`.
+- `Int::ParseError::OutOfRange` prints `error: integer out of range`.
+- An unknown command, blank line, or wrong arity prints
+  `error: expected 'add|sub|mul <int> <int>' or 'quit'`.
+- Every command error is recoverable: the recursive input loop reads the next
+  line after printing it.
+- Exact `quit` prints nothing and terminates without reading later input.
+- `std::io::Error::EndOfFile` prints nothing and terminates normally.
+- `std::io::Error::InvalidEncoding` and `std::io::Error::System(_)` print
+  `error: input failure` once and terminate. No `Throw(std::io::Error)` escapes
+  the entrypoint.
+
+Arithmetic overflow policy and additional operators are outside this integration
+contract. Its executable fixtures use only representable operands and results.
+
 ### Summary of Wasm execution claims
 
 The complete list of **wasm-run** language-level claims above is: `Nat`
@@ -512,7 +550,7 @@ the database's file provider in `src/database.rs`.
 package directory or a manifest-less source file reads, from the paths its
 source trees and manifests asked the file provider about, including paths with
 no file yet
-([implementation.md](../design/implementation.md#패키지-source-트리와-파일-입력)).
+([frontend.md](../design/frontend.md#패키지-source-트리와-파일-입력)).
 
 - `a_package_lists_the_files_its_build_reads` and
   `editing_a_file_reuses_the_list_unless_its_modules_change` in

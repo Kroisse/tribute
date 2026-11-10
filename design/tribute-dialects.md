@@ -29,6 +29,14 @@ verifier가 검사하는 것은
 [`FuncSig` 선언](../crates/tribute-ir/src/dialect/tribute_control/func_sig.rs)이
 정한다.
 
+Type은 한 번 intern되어 모든 phase가 공유하므로 type verifier는 component
+type을 검사하지 않는다. 이 경계의 `tribute_control` validator가 검사한다.
+Component는 어느 깊이에도 미해결 type, resume token, physical callable type을
+담지 않는다. Physical callable type은 calling convention의 ABI로 들어가는
+callable의 type이며 `PhysicalCallableType` type interface를 구현한다.
+`func.func_sig`, `clif.func_sig`, `wasm.func_sig`, `closure.closure`가 여기에
+속한다. `tribute_rt.anyref`와 `core.ptr`는 source-logical type이다.
+
 Convention 값은 keyword 문자열 `"direct"`, `"evidence_direct"`, `"cps"` 가운데
 하나다. 이 문자열이 convention의 유일한 저장 형식이다. 정수나 다른 값은 잘못된
 convention이다. Convention은 [CPS 전략](cps-effects.md#row와-호출-규약)이
@@ -188,7 +196,8 @@ adt.struct<"Callback"[row()]>
 - Row 인자는 다른 row와 같이 source-logical 경계 안에만 있다. CPS
   legalization은 `row_args`와 `row_params`를 버리고, 바뀐 layout을
   [nominal layout 변환](#nominal-layout-변환) 규칙으로 새 키로 만든다. Row
-  인스턴스는 그 `def`의 새 키가 된다.
+  인스턴스는 그 `def`의 새 키가 된다. Tuple layout은
+  [새 이름](#compiler-generated-tuple-layout)으로 다시 만든다.
   Representation/ABI 경계의 출구는 `row_args`와 `row_params`를 거부한다.
 
 ### Tail의 합집합
@@ -884,6 +893,11 @@ adt.struct<(core.ptr, core.i32),
   다시 게시한다.
 - 이름에서 tag를 떼어 원래 이름을 되찾지 않는다. Source 이름이 필요한 단계는
   [nominal 선언](#nominal-선언)에서 읽는다.
+- [Compiler-generated tuple layout](#compiler-generated-tuple-layout)의 이름은
+  원소에서 정해지므로 tuple은 위 두 규칙의 예외다. 원소가 바뀐 tuple layout의 새
+  키는 변환한 원소로 이름 함수가 다시 계산한 이름이며 tag를 붙이지 않는다.
+  그래서 원소가 담은 바뀌는 layout의 새 키를 먼저 정한 뒤에 tuple의 새 키를
+  정한다.
 
 #### Nominal 수준과 structural 수준
 
@@ -1133,11 +1147,12 @@ Compiler-generated tuple layout의 이름은 원소의 logical type에서 정해
 layout을 같은 함수로 다시 만든다. 이 함수는 IR 계층이 소유하며 frontend와
 pass가 함께 쓴다.
 
-Row를 버리는 CPS legalization은 tuple layout도 다른 nominal layout처럼
-[nominal layout 변환](#nominal-layout-변환) 규칙으로 변환한다. 원소가
-바뀐 tuple layout은 tag를 붙인 새 키를 가지며, 그 tuple 이름의 alias가 새 키를
-가리킨다. Row만 다른 두 tuple layout은 legalization 뒤에도 필드가 같은 서로 다른
-layout으로 남는다.
+Row를 버리는 CPS legalization은 tuple layout을 변환한 원소로 같은 함수로 다시
+만든다([nominal layout 변환](#nominal-layout-변환)의 tuple 예외). Tuple의 값
+타입과 게시된 alias도 새 이름으로 바꾼다. Row만 다른 tuple layout은
+legalization 뒤에 하나가 된다. Nominal layout의 필드 type과, row 인자로 치환한
+그 필드 type을 쓰는 `adt` 생성·접근 operation도 같은 tuple layout을 가리키게
+된다.
 
 특수화된 enum의 variant 필드 타입은 해당 인스턴스에 함께 치환된 constructor
 스킴에서 가져온다. 원본 generic 스킴이나 생성·패턴 표현식으로 필드 표현을

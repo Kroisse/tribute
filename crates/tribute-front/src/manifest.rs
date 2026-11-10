@@ -2,7 +2,7 @@
 //! (`design/modules.md` § 매니페스트 (`tribute.toml`)).
 //!
 //! Manifests are read through the same per-URI file inputs as source files
-//! (`design/implementation.md` § 패키지 source 트리와 파일 입력), so a
+//! (`design/frontend.md` § 패키지 source 트리와 파일 입력), so a
 //! query that reads a manifest depends on that file alone. Each manifest is
 //! parsed by its own query, and each package directory gets its
 //! [`Package`] input from a query keyed by its manifest file: editing a
@@ -227,7 +227,7 @@ fn loaded_dependencies(db: &dyn salsa::Database, file: FileEntry) -> Vec<FileEnt
 }
 
 /// The manifest of the package of each root source a tool analyzes as a
-/// package root (`design/implementation.md` § 패키지 source 트리와 파일
+/// package root (`design/frontend.md` § 패키지 source 트리와 파일
 /// 입력). The CLI registers a package directory's `src/main.trb`. The
 /// language server instead finds the package of any source by its path,
 /// with `by_path`.

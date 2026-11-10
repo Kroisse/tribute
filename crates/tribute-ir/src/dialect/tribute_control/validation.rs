@@ -118,8 +118,7 @@ fn contains_forbidden_logical_component(
         return false;
     }
     let data = ctx.get_type(ty);
-    let forbidden = (data.name.is(ctx, "func.func_sig"))
-        || (data.name.is(ctx, "closure.closure"))
+    let forbidden = DynPhysicalCallableType::is_implemented(ctx, ty)
         || ResumeToken::matches(ctx, ty)
         || is_unresolved_type(ctx, ty)
         || data
@@ -150,7 +149,7 @@ pub(super) fn validate_control_types(ctx: &IrContext, errors: &mut Vec<Validatio
                     push_type_error(
                         errors,
                         format!(
-                            "{ty}: callable component {component} is unresolved, recursive, physical, or contains a resume token"
+                            "{ty}: callable component {component} contains an unresolved type, a resume token, or a physical callable type"
                         ),
                     );
                 }

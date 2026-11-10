@@ -14,7 +14,7 @@ use tribute_ir::callable_abi::CallableAbi;
 use tribute_ir::calling_convention::{
     CallingConvention, cps_completion_type, cps_resume_exact_type, physical_closure_type,
 };
-use tribute_ir::dialect::{ability, closure, effect, tribute_control, tribute_cps};
+use tribute_ir::dialect::{ability, adt, closure, effect, tribute_control, tribute_cps};
 use trunk_ir::OpList;
 use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::{BlockData, IrContext, RegionData};
@@ -480,9 +480,7 @@ fn verify_candidate_or_restore_aliases(
     analyses: &mut AnalysisCache,
 ) -> Result<(), TributeControlToCpsError> {
     if let Err(error) = verify_tribute_control_post_cps(ctx, candidate, analyses) {
-        for (name, ty) in source_aliases {
-            ctx.register_type_alias(name.clone(), *ty);
-        }
+        ctx.replace_type_aliases(source_aliases.iter().cloned());
         ctx.remove_op(candidate.op());
         return Err(error);
     }
@@ -564,11 +562,17 @@ pub fn tribute_control_to_cps(
                 converter.ctx.push_op(new_block, cloned);
             }
         }
-        converted_aliases.extend(
-            source_aliases
-                .iter()
-                .map(|(name, ty)| (name.clone(), converter.convert_type(*ty))),
-        );
+        for (name, ty) in &source_aliases {
+            let converted = converter.convert_type(*ty);
+            // A converted tuple layout carries its new name; tuples that
+            // differed only in rows now share one alias.
+            let name = tribute_control::logical_tuple_elements(converter.ctx, converted)
+                .and(adt::nominal_name(converter.ctx, converted))
+                .map_or_else(|| name.clone(), Symbol::new);
+            if !converted_aliases.iter().any(|(seen, _)| *seen == name) {
+                converted_aliases.push((name, converted));
+            }
+        }
         // The module's own attributes, such as the published runtime types,
         // follow the converted layouts too.
         let module_attrs: Vec<_> = converter
@@ -600,9 +604,7 @@ pub fn tribute_control_to_cps(
         ctx.op_attrs_mut(candidate.op())
             .insert(*name, value.clone());
     }
-    for (name, ty) in &converted_aliases {
-        ctx.register_type_alias(name.clone(), *ty);
-    }
+    ctx.replace_type_aliases(converted_aliases);
     verify_candidate_or_restore_aliases(ctx, candidate, &source_aliases, analyses)?;
 
     ctx.detach_region(new_region);
@@ -617,9 +619,7 @@ pub fn tribute_control_to_cps(
         ctx.detach_region(new_region);
         ctx.push_op_region(module.op(), source_region);
         ctx.op_mut(module.op()).attributes = source_module_attrs;
-        for (name, ty) in &source_aliases {
-            ctx.register_type_alias(name.clone(), *ty);
-        }
+        ctx.replace_type_aliases(source_aliases);
         return Err(error);
     }
     Ok(())

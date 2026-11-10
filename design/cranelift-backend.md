@@ -307,7 +307,7 @@ machine 호출이 잘못된 register와 stack 배치를 쓴다.
 
 ## 메모리 관리: Reference Counting
 
-상세 내용은 [implementation.md](implementation.md#cranelift-reference-counting)를 참조.
+상세 내용은 [rc.md](rc.md)를 참조.
 
 Private native runtime helper는 target stage에서 exact physical callable ABI로만
 선언한다. 이 helper의 parameter와 result는 `core.ptr` 또는 scalar physical type이며

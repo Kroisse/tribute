@@ -162,3 +162,96 @@ fn main() ->{Io} Nil {
         "12\n102\n8",
     );
 }
+
+/// A tuple field read at an open, a closed, and a `Tick` row argument: its
+/// tuple layouts differ only in their rows and are one after CPS
+/// legalization (`design/tribute-dialects.md` § "Nominal layout의 게시").
+#[test]
+fn tuple_fields_differing_in_rows_run_on_both_targets() {
+    assert_output_on_both_targets(
+        "nominal_row_param_tuples.trb",
+        r#"
+use std::io::{Io, print_line}
+
+ability Tick {
+    op tick() -> Nil
+}
+
+struct Box({e}) { pair: #(fn() ->{e} Nat, Nat) }
+
+fn run(b: Box({e})) ->{e} Nat {
+    let #(f, n) = b.pair
+    f() + n
+}
+
+fn closed(b: Box({})) ->{} Nat {
+    let #(f, n) = b.pair
+    f() + n
+}
+
+fn count(comp: fn() ->{e, Tick} Nat) ->{e} Nat {
+    handle comp() {
+        do result { result }
+        op Tick::tick() { 10 + count(fn() { resume Nil }) }
+    }
+}
+
+fn main() ->{Io} Nil {
+    let b = Box { pair: #(fn() { 2 }, 1) }
+    print_line(closed(b).to_string)
+    print_line(run(b).to_string)
+    print_line(count(fn() {
+        run(Box { pair: #(fn() {
+            Tick::tick()
+            3
+        }, 1) })
+    }).to_string)
+}
+"#,
+        "3\n3\n14",
+    );
+}
+
+/// A tuple a row-polymorphic function returns, destructured in its caller
+/// and passed to another row-polymorphic function.
+#[test]
+fn row_polymorphic_tuples_run_on_both_targets() {
+    assert_output_on_both_targets(
+        "row_polymorphic_tuples.trb",
+        r#"
+use std::io::{Io, print_line}
+
+ability Tick {
+    op tick() -> Nil
+}
+
+fn pair(f: fn() ->{e} Nat) -> #(fn() ->{e} Nat, Nat) { #(f, 1) }
+
+fn run(p: #(fn() ->{e} Nat, Nat)) ->{e} Nat {
+    let #(f, n) = p
+    f() + n
+}
+
+fn count(comp: fn() ->{e, Tick} Nat) ->{e} Nat {
+    handle comp() {
+        do result { result }
+        op Tick::tick() { 10 + count(fn() { resume Nil }) }
+    }
+}
+
+fn main() ->{Io} Nil {
+    let p = pair(fn() { 2 })
+    let #(f, n) = p
+    print_line({ f() + n }.to_string)
+    print_line(run(p).to_string)
+    print_line(count(fn() {
+        run(pair(fn() {
+            Tick::tick()
+            3
+        }))
+    }).to_string)
+}
+"#,
+        "3\n3\n14",
+    );
+}

@@ -162,7 +162,7 @@ pub fn registered_compiler_intrinsics<V>(
 
 /// The module and metadata IR lowering reads, built only from a
 /// specialization result by [`LoweringInput::from_specialization`]
-/// (`design/implementation.md`, "프론트엔드 단계 경계와 정보 소유권").
+/// (`design/frontend.md`, "프론트엔드 단계 경계와 정보 소유권").
 pub struct LoweringInput<'db> {
     pub(crate) ast: DeclTable<TypedRef<'db>>,
     /// The span maps of the module's merged sources.
@@ -207,7 +207,7 @@ pub struct LoweringEnvironment<'db> {
 impl<'db> LoweringInput<'db> {
     /// The lowering input of `specialized`, in the environment the root
     /// crate's preparation supplies
-    /// (`design/implementation.md`, "프론트엔드 단계 경계와 정보 소유권").
+    /// (`design/frontend.md`, "프론트엔드 단계 경계와 정보 소유권").
     pub fn from_specialization(
         db: &'db dyn salsa::Database,
         specialized: SpecializationOutput<'db>,
