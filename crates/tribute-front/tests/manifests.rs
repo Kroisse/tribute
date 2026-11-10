@@ -14,7 +14,7 @@ use trunk_ir::Symbol;
 const PRELUDE: &str = include_str!("../../../lib/std/prelude.trb");
 
 const GEOMETRY: &str = "\
-pub struct Rect { w: Nat, h: Nat }
+pub struct Rect { pub w: Nat, pub h: Nat }
 
 pub fn area(rect: Rect) -> Nat { rect.w * rect.h }
 ";

@@ -453,7 +453,7 @@ UFCS의 후보는 호출 위치의 스코프에서만 찾는다. `x.f(y)`의 후
 
 ```rust
 mod shapes {
-    pub struct Point { x: Nat }
+    pub struct Point { pub x: Nat }
     pub mod Point {
         pub fn double(p: Point) -> Nat { p.x * 2 }
     }
@@ -1003,7 +1003,8 @@ pub fn public_api() -> Int { 42 }            // 어디서든
 철자가 아니라 선언이 속한 패키지로 정한다. 다른 패키지에서는 `pub` 항목만 보이므로,
 사용자 패키지는 `std`의 `pub` 항목만 보고 `pub(pkg)`인 `std::runtime`은 보지 못한다.
 
-가시성 수식자는 함수, extern 함수, `struct`, `enum`, `ability`, `mod`, `use`에 붙는다.
+가시성 수식자는 함수, extern 함수, `struct`, `enum`, `ability`, `mod`, `use`, 그리고
+struct의 field에 붙는다.
 
 **제한된 가시성의 경로.** `pub(…)`의 괄호 안은 모듈 경로이며, 그 모듈과 그 하위 모듈에서
 항목이 보인다. 경로는 [경로 키워드](#경로-키워드)로 시작하고 `use` 경로와 같이 해석한다.
@@ -1019,13 +1020,53 @@ pub fn public_api() -> Int { 42 }            // 어디서든
 가리키면 이름 해석 오류이며, 진단은 그 항목이나 그 항목을 가린 모듈의 식별 경로와
 선언된 가시성을 표시한다.
 
-**타입의 구성원.** 가시성 수식자는 선언 단위로 붙는다. Enum의 variant는 enum의
-가시성을 따르고, struct의 field와 field 함수(`T::f`, `T::f::set`, `T::f::modify`)는
-struct의 가시성을 따른다. Ability의 operation은 ability의 가시성을 따른다.
+**타입의 구성원.** 가시성 수식자는 선언 단위로 붙는다. Enum의 variant와 그 field는
+enum의 가시성을 따르고, ability의 operation은 ability의 가시성을 따른다. Variant의
+field에는 수식자를 쓸 수 없으며, 쓰면 이름 해석 오류다. Struct의 field는 자기 가시성을
+가진다(아래).
+
+**Struct field의 가시성.** Struct의 이름 있는 field는 각자 가시성 수식자를 가진다.
+수식자가 없는 field는 다른 선언과 같이 struct를 선언한 모듈과 그 하위 모듈에서만
+보인다. 그래서 공개 struct도 field를 공개하려면 `pub`을 붙인다.
+
+```rust
+pub struct Span {
+    pub start: Nat           // 어디서든
+    pub(pkg) len: Nat        // 이 패키지 안에서
+    source: String           // 이 모듈 안에서
+}
+```
+
+- `pub(path)`의 경로는 struct를 선언한 모듈을 기준으로 해석하며, 그 모듈 자신이거나
+  조상 모듈이어야 한다.
+- Field는 struct가 보이는 곳에서만 보인다. Field의 범위는 field의 수식자와 struct의
+  가시성이 함께 허용하는 범위이며, [경로의 모든 모듈](#가시성-visibility) 규칙과 같다.
+  Struct보다 넓은 수식자를 field에 써도 오류는 아니다.
+- Field의 가시성은 그 field를 읽고 바꾸는 권한이다. Field 함수 `T::f`, `T::f::set`,
+  `T::f::modify`는 모두 field `f`의 가시성을 가진다. 보이지 않는 field 함수는 다른
+  보이지 않는 함수처럼 UFCS 후보가 아니므로, `x.f`도 `f`가 보이는 곳에서만 field를
+  읽는다.
+- **Spread.** `T { ..x, f: e }`는 setter와 같이 기존 값의 field 일부를 바꾸므로, 직접
+  쓴 field가 보이면 쓸 수 있다. 생략한 field는 보이지 않아도 원래 값에서 그대로 복사한다.
+- **새 값의 생성.** Spread 없이 struct 값을 만드는 형식은 모든 field의 값을 정하므로,
+  모든 field가 보이는 곳에서만 쓸 수 있다. Spread 없는 레코드 `T { f: e }`, 위치 인자
+  `T(a, b)`, 함수 값으로 쓴 생성자 `T`, 암묵적 생성자가 모두 그렇다. 그래서 보이지 않는
+  field가 있는 struct는 그 field가 보이는 곳에서만 새로 만들 수 있다. Field 사이의
+  불변식은 보이지 않는 field로 지킨다. 바깥에서 바꿀 수 있는 공개 field는 불변식에
+  참여할 수 없으므로, 불변식이 있는 값은 field를 숨기고 함수로 노출한다.
+- **패턴.** 레코드 패턴 `T { f, .. }`는 struct가 보이는 곳에서 쓸 수 있다. 이름으로 쓴
+  field는 보여야 하며, 보이지 않는 field는 `..`로만 생략한다. `..`가 없는 레코드 패턴과
+  위치 패턴 `T(a, b)`는 모든 field를 매칭하므로 모든 field가 보이는 곳에서만 쓴다.
+  `T { .. }`는 field를 쓰지 않으므로 struct가 보이면 쓸 수 있다.
+- **진단.** Field 함수의 경로와 UFCS는 다른 항목과 같은 "보이지 않음" 진단을 낸다.
+  생성과 패턴이 보이지 않는 field를 요구하면 이름 해석 오류이며, 진단은 그 field의
+  식별 경로와 선언된 가시성을 표시한다. 보이지 않는 field를 존재하지 않는 field로
+  진단하지 않는다.
 
 **Companion 모듈.** 타입과 같은 이름의 companion 모듈은 별개의 선언이며 자기 가시성을
 가진다. `T::f`처럼 경로가 companion 모듈을 지나면 그 모듈의 가시성이 적용되고, 타입의
-가시성은 타입과 생성자에만 적용된다. 그래서 공개 타입의 companion 모듈도 함수를
+가시성은 타입과 생성자에 적용된다. Struct의 field 함수에는 field의 가시성과 struct의
+가시성이 함께 적용된다. 그래서 공개 타입의 companion 모듈도 함수를
 공개하려면 `pub mod`로 선언한다.
 
 **`use`와 re-export.** `use`의 대상은 `use`를 선언한 모듈에서 보여야 한다. 가져온
@@ -1072,8 +1113,8 @@ pub use pkg::api::{Request, Response}
 
 // src/internal.trb
 pub struct Config {
-    debug: Bool
-    timeout: Int
+    pub debug: Bool
+    pub timeout: Int
 }
 
 
@@ -1082,13 +1123,13 @@ use pkg::internal::Config
 use super::internal    // 또는 pkg::internal
 
 pub struct Request {
-    path: String
-    config: Config
+    pub path: String
+    pub config: Config
 }
 
 pub struct Response {
-    status: Int
-    body: String
+    pub status: Int
+    pub body: String
 }
 
 pub fn handle(req: Request) -> Response {

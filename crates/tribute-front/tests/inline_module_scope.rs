@@ -189,7 +189,7 @@ fn imports_build_on_other_imports(db: &salsa::DatabaseImpl) {
         db,
         r#"
 mod other {
-    pub struct Point { x: Nat }
+    pub struct Point { pub x: Nat }
     pub fn f() -> Nat { 2 }
 }
 
@@ -216,7 +216,7 @@ fn imports_take_precedence_over_the_module_name(db: &salsa::DatabaseImpl) {
         db,
         r#"
 mod other {
-    pub struct Point { x: Nat }
+    pub struct Point { pub x: Nat }
 }
 
 mod m {
@@ -272,7 +272,7 @@ fn main() -> Nil { }
 fn methods_come_from_the_names_in_scope(db: &salsa::DatabaseImpl) {
     const SHAPES: &str = r#"
 mod shapes {
-    pub struct Point { x: Nat }
+    pub struct Point { pub x: Nat }
     pub mod Point {
         pub fn double(p: Point) -> Nat { p.x + p.x }
     }

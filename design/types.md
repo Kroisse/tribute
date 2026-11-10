@@ -147,6 +147,22 @@ struct Pair(a, b) {
 struct Flags { read: Bool, write: Bool, execute: Bool }
 ```
 
+Field마다 가시성 수식자를 붙인다. 수식자가 없는 field는 struct를 선언한 모듈과 그 하위
+모듈에서만 보이며, 보이지 않는 field가 있는 struct는 그 field가 보이는 곳에서만 새로 만들
+수 있다. 규칙은 [modules.md의 Struct field의 가시성](modules.md#가시성-visibility)을
+따른다.
+
+```rust
+// 이 모듈과 하위 모듈 밖에서는 label만 읽고 바꿀 수 있고, Window를 새로 만들 수 없다.
+// start + count ≤ len(data)는 숨긴 field로 지킨다.
+pub struct Window {
+    pub label: String
+    data: List(Int)
+    start: Nat
+    count: Nat
+}
+```
+
 ### Enum (Sum Type)
 
 ```rust
@@ -395,6 +411,10 @@ Constructor는 nominal struct이거나 모든 필드에 이름이 있는 enum va
 명시한 필드는 해당 선언에 속해야 하며, 같은 필드를 두 번 지정할 수 없다.
 Spread가 없으면 모든 선언 필드를 지정해야 한다. Spread는 생략한 필드를 제공하지만,
 알 수 없는 필드나 중복 필드를 허용하지는 않는다.
+
+명시한 field는 쓰는 자리에서 보여야 하고, spread가 없으면 모든 선언 필드가 보여야
+한다. 이 검사는 [field의 가시성](modules.md#가시성-visibility)에 따라 이름 해석
+단계에서 한다.
 
 Spread는 struct 레코드에만 쓸 수 있다. Enum 타입의 값은 어느 variant인지 정적으로
 알 수 없으므로, variant 레코드는 모든 필드를 명시해야 한다. 위치 기반 필드를 가진
