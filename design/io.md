@@ -244,8 +244,22 @@ EOF는 잘못된 encoding과 같은 `Throw(Error)` 채널로 알리므로 반환
   함께 쓰는 코드를 `Write` 층에서 어떻게 표현할지 정해야 한다. 이름 붙인 instance
   ([중복 Label 금지](type-inference.md#중복-label-금지))나 별도 ability가 후보다.
   같은 문제는 파일 두 개에 함께 쓰는 코드에도 있으며, 지금은 `Io`를 직접 쓴다.
-- **줄 단위 입력.** `read_line`은 한 줄보다 많이 읽은 byte를 다음 호출에 남겨야 한다.
-  그 byte를 `Read` handler가 보관할지, 줄 단위 입력을 위한 ability나 handler를 따로
-  둘지 정해야 한다.
+- **줄 단위 입력.** 한 호출 안에서 줄을 모으는 일은 Tribute source로 쓸 수 있다.
+  읽은 조각을 `String`에 이어 붙이고 진행 상태를 재귀 호출의 인자로 넘기면 되며,
+  줄 분리와 `\r` 제거, UTF-8 검사도 `read_line`의 몫이다. 정해야 하는 것은 호출
+  사이의 상태다. `read(max)`로 조각 단위로 읽으면 개행 뒤에 남은 byte를 다음
+  `read_line`까지 누군가 보관해야 한다. 후보는 다음과 같다.
+  - `Read`를 처리하는 handler가 보관한다. `from_input`이 남은 byte를 자기 상태로 두고,
+    `read`보다 먼저 그 byte를 돌려준다. 공개 API는 그대로지만 `Read`에 남은 byte를
+    되돌려 놓는 operation이 필요하다.
+  - 줄 단위 입력을 위한 ability나 handler를 따로 둔다. `read_line`의 row가 바뀐다.
+  - Host가 보관한다. `InStream`이 read-ahead buffer를 가지며, 출력 buffering을 경계
+    아래에 두는 규칙과 대칭이다. Host interface에 줄 단위 읽기나 peek이 필요하다.
+  - Reader 값을 사용자에게 내어 주어 상태를 들고 다니게 한다. 공개 API가 바뀐다.
+  - 1 byte씩 읽는다. 상태는 없지만 byte마다 `read`를 perform한다.
+
+  어느 쪽이든 보관 위치는 instance 전역 상태가 아니라 handler나 resource 하나여야
+  한다. 그래야 같은 입력을 읽는 task가 여럿일 때의 규칙이 그 handler나 resource의
+  규칙으로 정해진다.
 - **범용 stream ability.** 원소 타입으로 일반화한 `Emit(a)`, `Ask(a)`를 두고 byte
   입출력을 그 instance로 볼지 정해야 한다.
