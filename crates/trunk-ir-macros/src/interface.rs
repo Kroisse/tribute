@@ -492,8 +492,26 @@ fn generate(def: &InterfaceTrait) -> TokenStream {
             Kind::Type => "A",
         }
     );
-    let get_doc =
-        format!("The [`{name_str}`] implementation of `{subject}`'s {noun}, if it has one.");
+    // A type's handle is only for a type its wrapper accepts, which passes
+    // its definition's verifier, so every method may be called on it.
+    let (accepts_field, accepts_init, accepts_filter) = match kind {
+        Kind::Op => (TokenStream::new(), TokenStream::new(), TokenStream::new()),
+        Kind::Type => (
+            quote!(accepts: fn(&#krate::IrContext, #ref_ty) -> bool,),
+            quote!(accepts: |ctx, ty| <T as #wrapper>::#from_ref(ctx, ty).is_some(),),
+            quote!(.filter(|vtable| (vtable.accepts)(ctx, #subject))),
+        ),
+    };
+    let get_doc = match kind {
+        Kind::Op => {
+            format!("The [`{name_str}`] implementation of `{subject}`'s {noun}, if it has one.")
+        }
+        Kind::Type => format!(
+            "The [`{name_str}`] implementation of `{subject}`'s {noun}, if it has one and \
+             `{subject}` passes its definition's shape and verifier, so every method may be \
+             queried on the handle. [`Self::is_implemented`] answers by name alone."
+        ),
+    };
     let is_implemented_doc = format!("Whether `{subject}`'s {noun} implements this interface.");
     let implementors_doc = format!(
         "The names of every {noun} that implements this interface, in no particular order."
@@ -514,6 +532,7 @@ fn generate(def: &InterfaceTrait) -> TokenStream {
         #[doc(hidden)]
         #vis struct #vtable {
             name: #name_ty,
+            #accepts_field
             #(#fields,)*
         }
 
@@ -521,6 +540,7 @@ fn generate(def: &InterfaceTrait) -> TokenStream {
             pub const fn new<T: #name>() -> Self {
                 Self {
                     name: <T as #wrapper>::NAME,
+                    #accepts_init
                     #(#inits,)*
                 }
             }
@@ -559,6 +579,7 @@ fn generate(def: &InterfaceTrait) -> TokenStream {
             pub fn get(ctx: &#krate::IrContext, #subject: #ref_ty) -> Option<Self> {
                 #vtable::registry()
                     .get(&#subject_name)
+                    #accepts_filter
                     .map(|vtable| Self { #subject, vtable })
             }
 
@@ -702,7 +723,12 @@ mod tests {
         .unwrap()
         .to_string();
         assert!(
-            out.contains("pub struct __SizedVTable { name : :: trunk_ir :: TypeName , size : fn (& IrContext , :: trunk_ir :: TypeRef) -> u32 , }"),
+            out.contains("pub struct __SizedVTable { name : :: trunk_ir :: TypeName , accepts : fn (& :: trunk_ir :: IrContext , :: trunk_ir :: TypeRef) -> bool , size : fn (& IrContext , :: trunk_ir :: TypeRef) -> u32 , }"),
+            "got: {out}"
+        );
+        // A handle is only for a type its wrapper accepts.
+        assert!(
+            out.contains("accepts : | ctx , ty | < T as :: trunk_ir :: ops :: DialectType > :: from_type_ref (ctx , ty) . is_some ()"),
             "got: {out}"
         );
         assert!(
@@ -710,7 +736,7 @@ mod tests {
             "got: {out}"
         );
         assert!(
-            out.contains("pub fn get (ctx : & :: trunk_ir :: IrContext , ty : :: trunk_ir :: TypeRef) -> Option < Self > { __SizedVTable :: registry () . get (& ctx . get_type (ty) . name)"),
+            out.contains("pub fn get (ctx : & :: trunk_ir :: IrContext , ty : :: trunk_ir :: TypeRef) -> Option < Self > { __SizedVTable :: registry () . get (& ctx . get_type (ty) . name) . filter (| vtable | (vtable . accepts) (ctx , ty))"),
             "got: {out}"
         );
         assert!(
