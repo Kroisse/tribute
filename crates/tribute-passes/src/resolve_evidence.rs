@@ -68,6 +68,7 @@ struct FinalHandleDispatchShape {
 
 fn final_handle_dispatch_shape(
     ctx: &IrContext,
+    module: Module,
     op: OpRef,
 ) -> Result<FinalHandleDispatchShape, ResolveEvidenceError> {
     let error = |message: String| resolve_error(ctx, op, message);
@@ -99,7 +100,7 @@ fn final_handle_dispatch_shape(
         ));
     };
     if ctx.value_ty(*body_evidence) != ctx.value_ty(evidence)
-        || !ability::is_evidence_type_ref(ctx, ctx.value_ty(evidence))
+        || !ability::is_evidence_type(ctx, module, ctx.value_ty(evidence))
     {
         return Err(error(
             "final ability.handle_dispatch evidence operand and body argument must have the evidence type"
@@ -128,7 +129,7 @@ pub(crate) fn validate_final_handle_dispatches(
     ctx: &IrContext,
     module: Module,
 ) -> Result<(), ResolveEvidenceError> {
-    fn visit(ctx: &IrContext, op: OpRef) -> Result<(), ResolveEvidenceError> {
+    fn visit(ctx: &IrContext, module: Module, op: OpRef) -> Result<(), ResolveEvidenceError> {
         if ability::HandleDispatch::matches(ctx, op) {
             // The shape checks below assume the operation's definition.
             let violations = ability::HandleDispatch::DEF.verify(ctx, op);
@@ -142,18 +143,18 @@ pub(crate) fn validate_final_handle_dispatches(
                     ),
                 ));
             }
-            final_handle_dispatch_shape(ctx, op)?;
+            final_handle_dispatch_shape(ctx, module, op)?;
         }
         for region in ctx.op_regions(op) {
             for block in ctx.region(region).blocks.iter().copied() {
                 for child in ctx.block(block).ops.iter().copied() {
-                    visit(ctx, child)?;
+                    visit(ctx, module, child)?;
                 }
             }
         }
         Ok(())
     }
-    visit(ctx, module.op())
+    visit(ctx, module, module.op())
 }
 
 // ============================================================================
@@ -297,7 +298,7 @@ fn apply_evidence_plan(
 }
 
 /// The operand index of the evidence a call passes to its callee.
-fn call_evidence_operand(ctx: &IrContext, op: OpRef) -> Option<u32> {
+fn call_evidence_operand(ctx: &IrContext, module: Module, op: OpRef) -> Option<u32> {
     let index = if func::Call::matches(ctx, op) || func::TailCall::matches(ctx, op) {
         0
     } else if func::CallIndirect::matches(ctx, op) || func::TailCallIndirect::matches(ctx, op) {
@@ -310,20 +311,21 @@ fn call_evidence_operand(ctx: &IrContext, op: OpRef) -> Option<u32> {
         && ctx
             .op_operands(op)
             .get(index as usize)
-            .is_some_and(|&value| ability::is_evidence_type_ref(ctx, ctx.value_ty(value)));
+            .is_some_and(|&value| ability::is_evidence_type(ctx, module, ctx.value_ty(value)));
     passes_evidence.then_some(index)
 }
 
 /// Select the evidence a call passes according to its `evidence_plan`.
 fn resolve_call_selection(
     ctx: &mut IrContext,
+    module: Module,
     block: BlockRef,
     op: OpRef,
 ) -> Result<(), ResolveEvidenceError> {
     if !ctx.op_attrs(op).contains_key(EVIDENCE_PLAN_ATTR) {
         return Ok(());
     }
-    let Some(index) = call_evidence_operand(ctx, op) else {
+    let Some(index) = call_evidence_operand(ctx, module, op) else {
         return Err(resolve_error(
             ctx,
             op,
@@ -350,7 +352,7 @@ fn resolve_delimiters(
         for op in ops {
             if ability::HandleDispatch::from_op(ctx, op).is_ok() {
                 let location = ctx.op(op).location;
-                let shape = final_handle_dispatch_shape(ctx, op)?;
+                let shape = final_handle_dispatch_shape(ctx, module, op)?;
                 let plan = take_evidence_plan(ctx, op)?;
                 let mut current_ev = apply_evidence_plan(ctx, block, op, shape.evidence, &plan);
                 let mut prompt_tag = shape.prompt_tag;
@@ -384,7 +386,7 @@ fn resolve_delimiters(
 
                 ctx.replace_all_uses(shape.body_evidence, current_ev);
             } else {
-                resolve_call_selection(ctx, block, op)?;
+                resolve_call_selection(ctx, module, block, op)?;
             }
             let regions = ctx.op_regions(op).collect::<trunk_ir::RegionList>();
             for region in regions {
@@ -435,8 +437,8 @@ impl Pass for ResolveEvidenceDispatch {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::parse_with_evidence_marker;
     use std::ops::ControlFlow;
-    use trunk_ir::parser::parse_test_module;
     use trunk_ir::walk::{WalkAction, walk_op};
 
     #[test]
@@ -472,7 +474,7 @@ mod tests {
     }"#,
         );
         let mut ctx = IrContext::new();
-        let module = parse_test_module(&mut ctx, &input);
+        let module = parse_with_evidence_marker(&mut ctx, &input);
         resolve_evidence_dispatch(&mut ctx, module).unwrap();
         let resolved = module.op().display(&ctx).to_string();
         assert_eq!(resolved.matches("effect.extend").count(), 2);
@@ -499,7 +501,7 @@ mod tests {
         assert!(lowered.contains("func.unreachable"));
 
         let mut reparsed = IrContext::new();
-        parse_test_module(&mut reparsed, &lowered);
+        parse_with_evidence_marker(&mut reparsed, &lowered);
     }
 
     /// The printed operations of `@test`, one per line. `%0`..`%3` are its
@@ -527,7 +529,7 @@ mod tests {
     }"#,
         );
         let mut ctx = IrContext::new();
-        let module = parse_test_module(&mut ctx, &input);
+        let module = parse_with_evidence_marker(&mut ctx, &input);
 
         resolve_evidence_dispatch(&mut ctx, module).unwrap();
 
@@ -550,7 +552,7 @@ mod tests {
     func.tail_call_indirect %tr(%ev, %direct) attributes {tribute.calling_convention = "cps", evidence_plan = [{dup = @State}]} : (!evidence, core.i32) -> core.never"#,
         );
         let mut ctx = IrContext::new();
-        let module = parse_test_module(&mut ctx, &input);
+        let module = parse_with_evidence_marker(&mut ctx, &input);
 
         resolve_evidence_dispatch(&mut ctx, module).unwrap();
 
@@ -575,7 +577,7 @@ mod tests {
     func.tail_call_indirect %tr(%ev, %direct) attributes {tribute.calling_convention = "cps", evidence_plan = [{dup = @State}, {tails = [[], [{mask = @State}]]}]} : (!evidence, core.i32) -> core.never"#,
         );
         let mut ctx = IrContext::new();
-        let module = parse_test_module(&mut ctx, &input);
+        let module = parse_with_evidence_marker(&mut ctx, &input);
 
         resolve_evidence_dispatch(&mut ctx, module).unwrap();
 
@@ -603,7 +605,7 @@ mod tests {
     func.unreachable"#,
         );
         let mut ctx = IrContext::new();
-        let module = parse_test_module(&mut ctx, &input);
+        let module = parse_with_evidence_marker(&mut ctx, &input);
 
         let error = resolve_evidence_dispatch(&mut ctx, module).unwrap_err();
 
@@ -620,7 +622,7 @@ mod tests {
     }"#,
         );
         let mut ctx = IrContext::new();
-        let module = parse_test_module(&mut ctx, &input);
+        let module = parse_with_evidence_marker(&mut ctx, &input);
 
         resolve_evidence_dispatch(&mut ctx, module).unwrap();
 
@@ -702,7 +704,7 @@ mod tests {
         for (operation, expected) in malformed {
             let input = final_dispatch_fixture(operation);
             let mut ctx = IrContext::new();
-            let module = parse_test_module(&mut ctx, &input);
+            let module = parse_with_evidence_marker(&mut ctx, &input);
             let before = module.op().display(&ctx).to_string();
             let error = resolve_evidence_dispatch(&mut ctx, module).unwrap_err();
             assert!(error.to_string().contains(expected), "{error}");
@@ -724,7 +726,7 @@ mod tests {
     }"#,
         );
         let mut ctx = IrContext::new();
-        let module = parse_test_module(&mut ctx, &input);
+        let module = parse_with_evidence_marker(&mut ctx, &input);
         validate_final_handle_dispatches(&ctx, module).unwrap();
     }
 
@@ -737,14 +739,14 @@ mod tests {
     }"#,
         );
         let mut ctx = IrContext::new();
-        let module = parse_test_module(&mut ctx, &input);
+        let module = parse_with_evidence_marker(&mut ctx, &input);
         validate_final_handle_dispatches(&ctx, module).unwrap();
     }
 
     #[test]
     fn bodyless_declarations_are_preserved_during_evidence_resolution() {
         let input = r#"core.module @test {
-  !marker = adt.typeref<{name = "std::runtime::evidence::Marker"}>
+  !marker = adt.struct<"std::runtime::evidence::Marker">
   !evidence = adt.array<!marker>
   func.func @plain_external() -> core.i32
   func.func @evidence_external(%ev: !evidence) -> !marker
@@ -756,7 +758,7 @@ mod tests {
   }
 }"#;
         let mut ctx = IrContext::new();
-        let module = parse_test_module(&mut ctx, input);
+        let module = parse_with_evidence_marker(&mut ctx, input);
 
         resolve_evidence_dispatch(&mut ctx, module).unwrap();
 

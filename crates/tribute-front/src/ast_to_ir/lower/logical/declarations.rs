@@ -159,7 +159,7 @@ pub(super) fn prescan_struct_accessor_signatures<'db>(
         let layout = ctx
             .get_type(&type_name)
             .unwrap_or_else(|| panic!("missing logical struct layout for accessor"));
-        let (struct_type, row_params) = accessor_struct_type(ctx, ir, &type_name, layout);
+        let (struct_type, row_params) = accessor_struct_type(ir, layout);
         let layout_fields = tribute_ir::dialect::adt::layout::get_struct_fields(ir, layout)
             .unwrap_or_else(|| panic!("malformed logical struct layout"));
         for (index, field) in declaration.fields.iter().enumerate() {
@@ -213,17 +213,12 @@ pub(super) fn prescan_struct_accessor_signatures<'db>(
 /// first, as the struct's scheme does, and pass each binder to the
 /// parameter at its position, so the layout's field types are the
 /// accessors' field types as they are.
-fn accessor_struct_type(
-    ctx: &IrLoweringCtx<'_>,
-    ir: &mut IrContext,
-    type_name: &Symbol,
-    layout: TypeRef,
-) -> (TypeRef, u32) {
+fn accessor_struct_type(ir: &mut IrContext, layout: TypeRef) -> (TypeRef, u32) {
     let row_params = adt::Struct::from_type_ref(ir, layout)
         .and_then(|layout| layout.row_params(ir))
         .unwrap_or(0);
     let row_args = (0..row_params).map(|binder| Row::new([], Some(binder)));
-    (ctx.adt_typeref(ir, type_name, row_args), row_params)
+    (adt::value_type(ir, layout, row_args), row_params)
 }
 
 /// The binders of an accessor of a struct with `row_params` row
@@ -277,7 +272,7 @@ pub(super) fn lower_struct_accessors<'db>(
     let layout_type = ctx
         .get_type(&type_name)
         .unwrap_or_else(|| panic!("prescan did not register struct layout {type_name}"));
-    let (struct_type, row_params) = accessor_struct_type(ctx, ir, &type_name, layout_type);
+    let (struct_type, row_params) = accessor_struct_type(ir, layout_type);
     for (index, field) in declaration.fields.iter().enumerate() {
         let field_name = field.name.clone().unwrap_or_else(|| Symbol::new("_"));
         let getter_name = prefix

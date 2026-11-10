@@ -80,7 +80,9 @@ impl Converter<'_> {
             .iter()
             .map(|&convention| self.lower_callable_signature(logical_ty, convention))
             .collect();
-        let adapters = self.tables.adapters(
+        self.ensure_tables();
+        let tables = self.tables.as_mut().expect("the tables were just made");
+        let adapters = tables.adapters(
             self.ctx,
             self.module_block,
             location,
@@ -211,14 +213,16 @@ impl Converter<'_> {
             bodies.push((*convention, entry));
         }
         let conventions: Vec<_> = bodies.iter().map(|&(convention, _)| convention).collect();
-        let adapters = self.tables.adapters(
+        self.ensure_tables();
+        let tables = self.tables.as_mut().expect("the tables were just made");
+        let adapters = tables.adapters(
             self.ctx,
             self.module_block,
             location,
             closure_ty,
             &conventions,
         );
-        Ok(self.tables.table(
+        Ok(tables.table(
             self.ctx,
             self.module_block,
             location,

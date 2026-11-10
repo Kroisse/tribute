@@ -268,10 +268,10 @@ fn quiet(x: Nil) ->{} Nil { run_twice(Callback { run: fn(y) { y } }, x) }
     let ir = run_ast_pipeline_with_ir(db, source);
     for expected in [
         "adt.struct<\"pkg::Callback$Nil\"['a0], (tribute_control.func_sig<(core.nil) -> core.nil row(| 'a0)>)>",
-        "adt.enum<\"pkg::Step\"['a0], [(tribute_control.func_sig<() -> adt.typeref<\"pkg::Step\"[row(| 'a0)]> row(| 'a0)>), ()]>",
+        "adt.enum<\"pkg::Step\"['a0], [(tribute_control.func_sig<() -> adt.enum<\"pkg::Step\"[row(| 'a0)]> row(| 'a0)>), ()]>",
         "adt.struct<\"pkg::Logged\"['a0], (tribute_control.func_sig<() -> core.nil row(@\"ability_1_8_pkg::Log\" | 'a0)>, tribute_control.func_sig<() -> core.nil>)>",
-        "adt.typeref<\"pkg::Callback$Nil\"[row(| 'a0)]>",
-        "adt.typeref<\"pkg::Callback$Nil\"[row()]>",
+        "adt.struct<\"pkg::Callback$Nil\"[row(| 'a0)]>",
+        "adt.struct<\"pkg::Callback$Nil\"[row()]>",
         "ability.decl @\"ability_1_8_pkg::Log\"",
     ] {
         assert!(ir.contains(expected), "missing `{expected}`:\n{ir}");

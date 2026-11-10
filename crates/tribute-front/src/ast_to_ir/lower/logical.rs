@@ -117,7 +117,7 @@ pub(super) fn lower_module<'db>(
     prescan_row_binders(&mut ctx, &ast.entries, &declarations);
     let mut well_known_type_prescan = super::decl::WellKnownTypePrescan::new(well_known_types);
     let mut published_runtime_types = Vec::new();
-    collect_logical_nominal_identities(&mut ctx, &ast.entries);
+    collect_logical_nominal_identities(&mut ctx, ir, &ast.entries);
     let layouts = prescan_logical_nominal_layouts(
         &mut ctx,
         ir,
@@ -242,7 +242,7 @@ mod tests {
             .build(&mut ir, location);
         ir.push_op(block, value.op_ref());
         let value = value.result(&ir);
-        let parameter = ctx.adt_typeref(&mut ir, &Symbol::new("String"), []);
+        let parameter = ctx.adt_enum_key(&mut ir, &Symbol::new("String"), 0);
         let declaration = OperationDeclaration::new(
             SymbolPath::new(["Test"]),
             ir.intern_str("throw"),

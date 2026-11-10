@@ -7,7 +7,7 @@ use trunk_ir::dialect::func;
 use trunk_ir::ops::DialectType;
 use trunk_ir::refs::{TypeRef, ValueRef};
 
-use super::{Frame, Handle, SuffixFrame, is_evidence_type_ref};
+use super::{Frame, Handle, SuffixFrame, is_evidence_shaped};
 use crate::dialect::tribute_control::{
     EvidencePlanSite, HandlerBinding, OperationKind, verify_evidence_plan,
 };
@@ -105,7 +105,7 @@ fn cps_closure_rest<'a>(
     }
     match signature.inputs(ctx) {
         [evidence, input_frame, rest @ ..]
-            if is_evidence_type_ref(ctx, *evidence) && *input_frame == frame =>
+            if is_evidence_shaped(ctx, *evidence) && *input_frame == frame =>
         {
             Ok(rest)
         }
@@ -206,7 +206,7 @@ fn verify_arm(
             let Some(signature) = closure_signature(ctx, ctx.value_ty(arm)) else {
                 return Err(format!("arm of fn operation {name} must be a closure"));
             };
-            if !matches!(signature.inputs(ctx), [evidence, ..] if is_evidence_type_ref(ctx, *evidence))
+            if !matches!(signature.inputs(ctx), [evidence, ..] if is_evidence_shaped(ctx, *evidence))
             {
                 return Err(format!(
                     "arm of fn operation {name} must take the evidence first"
@@ -250,7 +250,7 @@ fn is_resume_exact(ctx: &IrContext, ty: TypeRef, frame: TypeRef, input: TypeRef)
             matches!(
                 signature.inputs(ctx),
                 [evidence, input_frame, value]
-                    if is_evidence_type_ref(ctx, *evidence)
+                    if is_evidence_shaped(ctx, *evidence)
                         && *input_frame == frame
                         && *value == input
             )
@@ -264,7 +264,7 @@ mod tests {
     use trunk_ir::rewrite::Module;
     use trunk_ir::validation::validate_operation_verifiers;
 
-    const TYPES: &str = r#"  !marker = adt.typeref<{name = "std::runtime::evidence::Marker"}>
+    const TYPES: &str = r#"  !marker = adt.struct<"std::runtime::evidence::Marker">
   !ev = adt.array<!marker>
   !frame_i32 = ability.frame<core.i32>
   !frame_nil = ability.frame<core.nil>

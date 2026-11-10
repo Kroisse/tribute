@@ -8,9 +8,10 @@
 //!
 //! `adt_to_wasm` builds variant types here. After every `adt` operation is
 //! lowered, `convert` replaces each user `adt.struct` with its
-//! `wasm_gc.struct` wherever it occurs. An `adt.typeref` becomes the
-//! structural type of the struct it names, or the abstract struct reference
-//! when it names an enum, whose variants have different types.
+//! `wasm_gc.struct` wherever it occurs. A nominal value type, a layout's
+//! key, row instance or `adt.typeref`, becomes the structural type of the
+//! struct it names, or the abstract struct reference when it names an enum,
+//! whose variants have different types.
 
 use tribute_ir::dialect::adt::layout::get_struct_fields;
 use trunk_ir::context::IrContext;
@@ -65,16 +66,19 @@ pub fn variant_type(ctx: &mut IrContext, enum_ty: TypeRef, tag: u32) -> Option<T
 /// each `adt.typeref` with the type of the layout it names.
 pub(crate) fn convert(ctx: &mut IrContext, module: Module) {
     crate::closure_lower::substitute_module_types(ctx, module, "gc", |ctx, ty| {
-        if ctx.get_type(ty).name == tribute_ir::dialect::adt::Typeref::NAME {
+        let reference = tribute_ir::dialect::adt::Typeref::matches(ctx, ty)
+            || tribute_ir::dialect::adt::row_instance_def(ctx, ty).is_some()
+            || tribute_ir::dialect::adt::Enum::matches(ctx, ty);
+        if reference {
             return Some(reference_type(ctx, ty));
         }
         struct_type(ctx, ty)
     });
 }
 
-/// The Wasm type of a value of the `adt.typeref` `ty`: the structural type of
-/// the user struct it names, or `wasm.structref` for an enum or an
-/// unresolved name.
+/// The Wasm type of a value of the nominal type `ty`, an `adt.typeref`, a
+/// row instance, or an enum layout: the structural type of the user struct
+/// it names, or `wasm.structref` for an enum or an unresolved name.
 fn reference_type(ctx: &mut IrContext, ty: TypeRef) -> TypeRef {
     tribute_ir::dialect::adt::layout_of(ctx, ty)
         .and_then(|layout| struct_type(ctx, layout))
@@ -98,12 +102,13 @@ fn described_struct(ctx: &mut IrContext, fields: impl IntoIterator<Item = TypeRe
 
 /// The Wasm storage representation of a source field of type `ty`.
 ///
-/// Bool storage is `i32`. A recursive reference is the abstract struct
-/// supertype, an array the abstract array supertype, and an enum value the
-/// erased reference it is emitted as; a read casts each back to its value's
-/// type. Structural types cannot refer to themselves, and an array field may
-/// hold its own struct, as a marker's `outer` evidence does. A nested user
-/// struct is its own structural type; any other field keeps its type.
+/// Bool storage is `i32`. A nominal value, which may be recursive, is the
+/// abstract struct supertype, an array the abstract array supertype, and a
+/// literal enum value the erased reference it is emitted as; a read casts
+/// each back to its value's type. Structural types cannot refer to themselves,
+/// and an array field may hold its own struct, as a marker's `outer`
+/// evidence does. A nested literal struct is its own structural type; any
+/// other field keeps its type.
 fn field_type(ctx: &mut IrContext, ty: TypeRef) -> TypeRef {
     let data = ctx.get_type(ty);
     if data.name == core::I1::NAME {
@@ -112,7 +117,7 @@ fn field_type(ctx: &mut IrContext, ty: TypeRef) -> TypeRef {
     if tribute_ir::dialect::adt::Array::matches(ctx, ty) {
         return wasm::Arrayref::params().intern(ctx).as_type_ref();
     }
-    if data.name == tribute_ir::dialect::adt::Typeref::NAME {
+    if tribute_ir::dialect::adt::is_nominal_value(ctx, ty) {
         return wasm::Structref::params().intern(ctx).as_type_ref();
     }
     if tribute_ir::dialect::adt::Enum::matches(ctx, ty) {
@@ -205,20 +210,21 @@ mod tests {
   !Closure = adt.struct<(tribute_rt.convention_table_ref), {layout = "closure"}>
   !Inner = adt.struct<"Inner", (core.i64)>
   !E = adt.enum<"E", [()]>
-  !Outer = adt.struct<"Outer", (core.i1, adt.typeref<{name = "Outer"}>, !E, !Inner, !Closure)>
+  !Outer = adt.struct<"Outer", (core.i1, adt.struct<"Outer">, adt.typeref<{name = "Inner"}>, !E, !Inner, !Closure)>
 }"#,
         );
         let closure = alias(&ctx, "Closure");
-        let [outer, inner] = ["Outer", "Inner"].map(|name| alias(&ctx, name));
+        let outer = alias(&ctx, "Outer");
         let outer = struct_type(&mut ctx, outer).expect("user struct");
-        let inner = struct_type(&mut ctx, inner).expect("user struct");
         let i32_ty = core::I32::type_ref(&mut ctx);
         let structref = wasm::Structref::params().intern(&mut ctx).as_type_ref();
-        let anyref = wasm::Anyref::params().intern(&mut ctx).as_type_ref();
 
+        // Every nominal value, a key or a typeref, is a reference.
         assert_eq!(
             fields(&ctx, outer),
-            [i32_ty, i32_ty, structref, anyref, inner, closure]
+            [
+                i32_ty, i32_ty, structref, structref, structref, structref, closure
+            ]
         );
         assert_eq!(struct_type(&mut ctx, closure), None, "builtin layout");
     }

@@ -33,8 +33,10 @@ pub(crate) trait EntryLayout {
 }
 
 /// Logical entries before frame expansion, whose `Cps` entry takes an
-/// `ability.frame<R>`.
-pub(crate) struct AbstractFrames;
+/// `ability.frame<R>`, with `evidence` as an evidence parameter's type.
+pub(crate) struct AbstractFrames {
+    pub(crate) evidence: TypeRef,
+}
 
 impl EntryLayout for AbstractFrames {
     fn entry_signature(
@@ -43,15 +45,17 @@ impl EntryLayout for AbstractFrames {
         closure_ty: TypeRef,
         convention: CallingConvention,
     ) -> TypeRef {
-        logical_entry_signature(ctx, closure_ty, convention, |ctx, answer| {
+        logical_entry_signature(ctx, closure_ty, convention, self.evidence, |ctx, answer| {
             ability::Frame::params(answer).intern(ctx).as_type_ref()
         })
     }
 }
 
 /// Logical entries after frame expansion, whose `Cps` entry takes the frame
-/// reference of its answer.
-pub(crate) struct ExpandedFrames;
+/// reference of its answer, with `evidence` as an evidence parameter's type.
+pub(crate) struct ExpandedFrames {
+    pub(crate) evidence: TypeRef,
+}
 
 impl EntryLayout for ExpandedFrames {
     fn entry_signature(
@@ -60,7 +64,10 @@ impl EntryLayout for ExpandedFrames {
         closure_ty: TypeRef,
         convention: CallingConvention,
     ) -> TypeRef {
-        logical_entry_signature(ctx, closure_ty, convention, frame_reference)
+        let evidence = self.evidence;
+        logical_entry_signature(ctx, closure_ty, convention, evidence, |ctx, answer| {
+            frame_reference(ctx, evidence, answer)
+        })
     }
 }
 
@@ -337,6 +344,7 @@ fn logical_entry_signature(
     ctx: &mut IrContext,
     closure_ty: TypeRef,
     convention: CallingConvention,
+    evidence: TypeRef,
     frame: impl FnOnce(&mut IrContext, TypeRef) -> TypeRef,
 ) -> TypeRef {
     let callable = closure::Closure::from_type_ref(ctx, closure_ty)
@@ -345,7 +353,6 @@ fn logical_entry_signature(
     let never = core::Never::params().intern(ctx).as_type_ref();
     let result = callable.single_result(ctx).unwrap_or(never);
     let abi = CallableAbi::new(convention, callable.inputs(ctx).to_vec(), result);
-    let evidence = ability::evidence_adt_type_ref(ctx);
     let frame = if convention.needs_continuation_frame() {
         frame(ctx, result)
     } else {
@@ -366,7 +373,7 @@ fn logical_entry_signature(
 
 #[cfg(test)]
 mod tests {
-    use trunk_ir::parser::parse_test_module;
+    use crate::test_support::parse_with_evidence_marker;
     use trunk_ir::symbol_table::SymbolTable;
 
     use super::*;
@@ -461,7 +468,7 @@ mod tests {
     #[test]
     fn a_closure_fills_the_slots_it_does_not_implement_with_shared_trap_entries() {
         let mut ctx = IrContext::new();
-        let module = parse_test_module(
+        let module = parse_with_evidence_marker(
             &mut ctx,
             r#"core.module @test {
   func.func @main(%y: core.i32) -> core.i32 attributes {tribute.calling_convention = "direct"} {
@@ -511,7 +518,7 @@ mod tests {
     #[test]
     fn a_source_closure_fills_its_stronger_slots_with_adapters() {
         let mut ctx = IrContext::new();
-        let module = parse_test_module(
+        let module = parse_with_evidence_marker(
             &mut ctx,
             r#"core.module @test {
   tribute_cps.func @direct(%y: core.i32) -> core.i32 convention(direct) {
@@ -552,8 +559,20 @@ mod tests {
         let printed = module.op().display(&ctx).to_string();
         assert!(printed.contains("adapters = {"), "{printed}");
         let mut ctx = IrContext::new();
-        let module = parse_test_module(&mut ctx, &printed);
-        assert_eq!(module.op().display(&ctx).to_string(), printed);
+        let module = trunk_ir::parser::parse_test_module(&mut ctx, &printed);
+        // The printer orders generated aliases by use and the reparsed ones,
+        // now named, by name, so only the aliases' order may differ.
+        fn sorted_aliases(text: &str) -> (Vec<&str>, &str) {
+            let (aliases, body) = text.split_once("\n\n").expect("aliases precede the body");
+            (
+                itertools::Itertools::sorted(aliases.lines()).collect(),
+                body,
+            )
+        }
+        assert_eq!(
+            sorted_aliases(&module.op().display(&ctx).to_string()),
+            sorted_aliases(&printed)
+        );
         // Frame expansion lowers the exits of the `Cps` adapters.
         crate::lower_continuation_frames::lower_continuation_frames(&mut ctx, module).unwrap();
         let expanded = module.op().display(&ctx).to_string();
