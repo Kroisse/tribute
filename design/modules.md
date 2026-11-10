@@ -1065,7 +1065,8 @@ pub struct Span {
 
 **Companion 모듈.** 타입과 같은 이름의 companion 모듈은 별개의 선언이며 자기 가시성을
 가진다. `T::f`처럼 경로가 companion 모듈을 지나면 그 모듈의 가시성이 적용되고, 타입의
-가시성은 타입과 생성자에만, struct field의 가시성은 그 field 함수에만 적용된다. 그래서 공개 타입의 companion 모듈도 함수를
+가시성은 타입과 생성자에 적용된다. Struct의 field 함수에는 field의 가시성과 struct의
+가시성이 함께 적용된다. 그래서 공개 타입의 companion 모듈도 함수를
 공개하려면 `pub mod`로 선언한다.
 
 **`use`와 re-export.** `use`의 대상은 `use`를 선언한 모듈에서 보여야 한다. 가져온

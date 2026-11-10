@@ -587,6 +587,53 @@ fn respread(window: Window) -> Window { .Window { ..window, label: "c" } }
     );
 }
 
+/// An implicit record form and a restricted re-export cannot reach a hidden
+/// field either.
+#[salsa_test]
+fn other_spellings_cannot_reach_a_hidden_field(db: &salsa::DatabaseImpl) {
+    let errors = errors(
+        db,
+        r#"
+pub mod m {
+    pub struct Window { pub label: String, data: Nat }
+}
+
+mod facade {
+    pub(pkg) use pkg::m::Window
+}
+
+use m::Window
+
+fn respread(window: Window) -> Window { .Window { ..window, data: 1 } }
+
+fn relabel(window: Window) -> Window { .Window { ..window, label: "b" } }
+
+fn matched(window: Window) -> Nat {
+    case window {
+        .Window { data, .. } -> data
+    }
+}
+
+fn labeled(window: Window) -> String {
+    case window {
+        .Window { label, .. } -> label
+    }
+}
+
+fn reexported() -> Window { facade::Window("b", 1) }
+"#,
+    );
+    let hidden = "`m::Window::data` is private";
+    assert_eq!(
+        errors,
+        [
+            format!("`facade::Window` is not visible here: {hidden}"),
+            format!("`m::Window` is not visible here: {hidden}"),
+            format!("`m::Window` is not visible here: {hidden}"),
+        ]
+    );
+}
+
 /// A field's `pub(path)` names the struct's module or a module around it,
 /// and an enum variant's fields take no marker.
 #[salsa_test]

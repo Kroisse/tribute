@@ -147,13 +147,13 @@ struct Pair(a, b) {
 struct Flags { read: Bool, write: Bool, execute: Bool }
 ```
 
-Field마다 가시성 수식자를 붙인다. 수식자가 없는 field는 struct를 선언한 모듈 밖에서
-보이지 않으며, 보이지 않는 field가 있는 struct는 그 field가 보이는 곳에서만 새로 만들
+Field마다 가시성 수식자를 붙인다. 수식자가 없는 field는 struct를 선언한 모듈과 그 하위
+모듈에서만 보이며, 보이지 않는 field가 있는 struct는 그 field가 보이는 곳에서만 새로 만들
 수 있다. 규칙은 [modules.md의 Struct field의 가시성](modules.md#가시성-visibility)을
 따른다.
 
 ```rust
-// 모듈 밖에서는 label만 읽고 바꿀 수 있고, Window는 이 모듈에서만 새로 만든다.
+// 이 모듈과 하위 모듈 밖에서는 label만 읽고 바꿀 수 있고, Window를 새로 만들 수 없다.
 // start + count ≤ len(data)는 숨긴 field로 지킨다.
 pub struct Window {
     pub label: String

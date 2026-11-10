@@ -514,7 +514,7 @@ struct Callback({e}, a) {
 // 한 줄이면 쉼표 필수
 struct Point { x: Int, y: Int }
 
-// 공개 struct의 field도 수식자가 없으면 이 모듈에서만 보인다
+// 공개 struct의 field도 수식자가 없으면 이 모듈과 하위 모듈에서만 보인다
 pub struct Span { pub start: Nat, pub len: Nat, source: String }
 ```
 

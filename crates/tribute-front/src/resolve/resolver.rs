@@ -9,6 +9,7 @@ use rustc_hash::FxHashMap as HashMap;
 
 use itertools::Itertools;
 use salsa::Accumulator;
+use smallvec::SmallVec;
 use tribute_core::diagnostic::{CompilationPhase, DiagnosticSeverity};
 use trunk_ir::{Symbol, SymbolPath};
 
@@ -201,7 +202,8 @@ impl<'e, 'db> Resolver<'e, 'db> {
     }
 
     /// The restriction of the entry `name` of `namespace`, which holds
-    /// `binding`: a re-export's own, or else the binding's.
+    /// `binding`: a re-export's own, or else the binding's. A re-export does
+    /// not widen where a struct constructor builds a value from scratch.
     fn entry_restrictions(
         &self,
         namespace: &Location,
@@ -212,7 +214,10 @@ impl<'e, 'db> Resolver<'e, 'db> {
         if entry.is_empty() {
             self.restriction(binding).into_iter().collect()
         } else {
-            entry.iter().collect()
+            entry
+                .iter()
+                .chain(self.construction_restriction(binding))
+                .collect()
         }
     }
 
@@ -246,13 +251,44 @@ impl<'e, 'db> Resolver<'e, 'db> {
     /// named as a value builds one from scratch, so it is visible only where
     /// every field is.
     fn restriction(&self, binding: &Binding<'db>) -> Option<&Restriction> {
-        if self.constructing.get()
-            && let Binding::Constructor { id, tag: None, .. } = binding
-            && let Some(construction) = self.view().construction_restriction(*id)
-        {
-            return Some(construction);
+        self.construction_restriction(binding)
+            .or_else(|| self.view().restriction(binding))
+    }
+
+    /// Where `binding`, a struct constructor named as a value, builds a
+    /// value from scratch, if a field restricts it more than its struct.
+    fn construction_restriction(&self, binding: &Binding<'db>) -> Option<&Restriction> {
+        match binding {
+            Binding::Constructor { id, tag: None, .. } if self.constructing.get() => {
+                self.view().construction_restriction(*id)
+            }
+            _ => None,
         }
-        self.view().restriction(binding)
+    }
+
+    /// Add to `hidden` each struct constructor named `ctor` that an
+    /// implicit record form naming `fields` may select but must not: one
+    /// with a field among them that the current module does not see.
+    fn hide_record_constructors(
+        &self,
+        hidden: &mut Vec<(CtorId<'db>, String)>,
+        ctor: &Symbol,
+        fields: &[&Symbol],
+    ) {
+        for (id, _) in self.view().construction_restrictions() {
+            if id.name(self.db) != *ctor {
+                continue;
+            }
+            let ctor_path = id.path(self.db);
+            let restriction = fields.iter().find_map(|&field| {
+                let getter = FuncDefId::new(self.db, ctor_path.child(field.clone()));
+                self.hidden(&Binding::Function { id: getter })
+            });
+            if let Some(restriction) = restriction {
+                hidden.push((*id, restriction.display(&self.names()).to_string()));
+            }
+        }
+        hidden.sort_by_key(|(id, _)| id.path(self.db));
     }
 
     /// Run `resolve` with `constructing` set as given.
@@ -1753,9 +1789,9 @@ impl<'r, 'e, 'db> FunctionResolver<'r, 'e, 'db> {
             // A constructor or an ability operation takes the receiver as
             // its first argument without a choice by type.
             Ok(Some((namespace, binding))) => {
-                return MethodCandidates::Callee(
-                    self.module.visible_entry_ref(&namespace, binding, path),
-                );
+                return MethodCandidates::Callee(self.module.with_constructing(true, || {
+                    self.module.visible_entry_ref(&namespace, binding, path)
+                }));
             }
             Ok(None) => {}
             Err(error) => {
@@ -1859,12 +1895,39 @@ impl<'r, 'e, 'db> FunctionResolver<'r, 'e, 'db> {
     }
 
     /// Resolve `name`, the constructor of a record form that names only
-    /// some fields: a spread record or a record pattern. It sees a struct
-    /// constructor where it sees the struct; the caller checks the fields
-    /// it names.
-    fn resolve_record_constructor(&self, name: &UnresolvedName) -> ResolvedRef<'db> {
-        self.module
-            .with_constructing(false, || self.resolve_constructor_seeing(name))
+    /// `fields`: a spread record or a record pattern. It sees a struct
+    /// constructor where it sees the struct, and each field it names must be
+    /// visible: reported here for a named constructor, and for an implicit
+    /// one when type checking selects it.
+    fn resolve_record_constructor<'a>(
+        &self,
+        name: &UnresolvedName,
+        fields: impl IntoIterator<Item = (NodeId, &'a Symbol)>,
+    ) -> ResolvedRef<'db> {
+        let resolved = self
+            .module
+            .with_constructing(false, || self.resolve_constructor_seeing(name));
+        match resolved {
+            ResolvedRef::ImplicitConstructor {
+                name,
+                candidates,
+                mut hidden,
+            } => {
+                let fields: SmallVec<[&Symbol; 4]> =
+                    fields.into_iter().map(|(_, field)| field).collect();
+                self.module
+                    .hide_record_constructors(&mut hidden, &name, &fields);
+                ResolvedRef::ImplicitConstructor {
+                    name,
+                    candidates,
+                    hidden,
+                }
+            }
+            resolved => {
+                self.module.report_hidden_fields(&resolved, fields);
+                resolved
+            }
+        }
     }
 
     /// Resolve the constructor `name` with the visibility the module's
@@ -2089,10 +2152,10 @@ impl<'r, 'e, 'db> FunctionResolver<'r, 'e, 'db> {
                 // without a spread writes every field, as the constructor
                 // does.
                 let resolved_type = if spread.is_some() {
-                    let resolved = self.resolve_record_constructor(type_name);
-                    self.module
-                        .report_hidden_fields(&resolved, fields.iter().map(|f| (f.id, &f.name)));
-                    resolved
+                    self.resolve_record_constructor(
+                        type_name,
+                        fields.iter().map(|f| (f.id, &f.name)),
+                    )
                 } else {
                     self.resolve_constructor(type_name)
                 };
@@ -2390,9 +2453,8 @@ impl<'r, 'e, 'db> FunctionResolver<'r, 'e, 'db> {
             } => {
                 // A record pattern matches only the fields it names; `..`
                 // skips the others, hidden ones included.
-                let resolved_type = self.resolve_record_constructor(type_name);
-                self.module
-                    .report_hidden_fields(&resolved_type, fields.iter().map(|f| (f.id, &f.name)));
+                let resolved_type = self
+                    .resolve_record_constructor(type_name, fields.iter().map(|f| (f.id, &f.name)));
                 let fields = fields
                     .iter()
                     .map(|f| {
