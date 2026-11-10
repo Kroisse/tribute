@@ -2572,6 +2572,19 @@ mod tests {
                 "adt.variant_is %shape {tag = 0, type = core.f64} : core.i1",
                 "`type` is not an `adt.enum` layout",
             ),
+            // A construction's result type names its layout.
+            (
+                "adt.variant_new 0() : () -> core.f64",
+                "the result type names no `adt.enum` layout",
+            ),
+            (
+                "adt.struct_new(%x) : (core.f64) -> core.f64",
+                "the result type names no `adt.struct` layout",
+            ),
+            (
+                "adt.struct_new() : () -> !Shape",
+                "the result type names no `adt.struct` layout",
+            ),
         ] {
             let mut ctx = IrContext::new();
             let text = valid.replace(

@@ -38,14 +38,13 @@ fn adt_projection_has_exact_callable_type(
     }
     if let Ok(get) = adt::VariantGet::from_op(ctx, producer) {
         let (layout, source) = (get.r#type(ctx), get.r#ref(ctx));
+        // The operation is not yet verified, so its tag may be no position.
+        let Ok(tag) = u32::try_from(get.tag(ctx)) else {
+            return false;
+        };
         return projection_source_matches_layout(ctx, source, layout, nominal_layouts)
-            && variant_field_type(
-                ctx,
-                layout,
-                ctx.value_ty(source),
-                get.variant(ctx),
-                get.field(ctx),
-            ) == Some(result_type);
+            && variant_field_type(ctx, layout, ctx.value_ty(source), tag, get.field(ctx))
+                == Some(result_type);
     }
     false
 }

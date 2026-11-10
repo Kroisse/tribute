@@ -79,6 +79,15 @@ pub(super) fn canonical_nominal_layouts(
         let Some(name) = ctx.type_attrs(ty).get_string_ref("name") else {
             continue;
         };
+        // A key without a body is no definition, and nothing reads its
+        // fields.
+        if ctx.type_body(ty).is_none() {
+            push_type_error(
+                errors,
+                format!("nominal layout {:?} has no body ({ty})", ctx.str(name)),
+            );
+            continue;
+        }
         if let Some(previous) = layouts.get(&name).copied() {
             if previous != ty {
                 push_type_error(

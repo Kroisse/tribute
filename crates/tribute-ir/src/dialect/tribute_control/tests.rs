@@ -1815,6 +1815,23 @@ fn managed_return_contracts_fail_closed() {
 }
 
 #[test]
+fn a_nominal_value_of_a_layout_without_a_body_fails_closed() {
+    let (ctx, module) = parse_fixture(
+        r#"core.module @test {
+  tribute_control.func @read(%value: adt.struct<"Missing">) -> adt.struct<"Missing"> {
+    tribute_control.return %value
+  }
+}"#,
+    );
+
+    let result = validate(&ctx, module, &[], &mut Default::default());
+    assert!(
+        messages(&result).contains("nominal layout \"Missing\" has no body"),
+        "{result}"
+    );
+}
+
+#[test]
 fn managed_defined_boundaries_null_and_compatible_cast_are_valid() {
     let (ctx, module) = parse_fixture(
         r#"core.module @test {
