@@ -259,6 +259,11 @@ pub(super) fn lower_expr<'db>(
             let scrutinee = lower_expr(builder, scrutinee, declarations)?;
             let result_ty = expr_type_for_id(builder, expr.id);
             let exhaustive = declarations.exhaustive_cases.contains(&expr.id);
+            // An exhaustive case without arms eliminates a value of an empty
+            // type; its result is that value as `Never`.
+            if arms.is_empty() && exhaustive {
+                return Some(builder.cast_if_needed(location, scrutinee, result_ty));
+            }
             // The unguarded arms of an exhaustive case match every value, so
             // the arms after the last of them never run; typechecking reports
             // them as unreachable. Dropping them leaves no path on which every

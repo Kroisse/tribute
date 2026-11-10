@@ -939,3 +939,146 @@ fn test() -> Nat {
         "a Never operation arm may return the handler result: {errors:#?}"
     );
 }
+
+#[salsa_test]
+fn empty_case_eliminates_empty_types(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "empty_case_eliminates_empty_types.trb",
+        r#"
+enum Void {}
+
+fn from_never(x: Never) -> Nat { case x {} }
+fn from_void(v: Void) -> Nat { case v {} }
+fn void_wildcard(v: Void) -> Nat { case v { _ -> 1 } }
+fn never_wildcard(x: Never) -> Nat { case x { _ -> 1 } }
+fn named(x: Never) -> String { absurd(x) }
+fn lift(o: Option(Never)) -> Option(Nat) {
+    case o {
+        .None -> .None
+        .Some(x) -> .Some(absurd(x))
+    }
+}
+fn apply(f: fn(Never) ->{} Nat, o: Option(Never)) -> Nat {
+    case o {
+        .None -> 0
+        .Some(x) -> f(x)
+    }
+}
+fn as_value(o: Option(Never)) -> Nat { apply(absurd, o) }
+fn never_tail(v: Void) -> Never { case v {} }
+"#,
+    );
+    let errors = ast_pipeline_error_messages(db, source);
+    assert!(
+        errors.is_empty(),
+        "a case without arms covers an empty type: {errors:#?}"
+    );
+    let tail = function_tail_type(db, source, "never_tail");
+    assert!(
+        matches!(tail.kind(db), TypeKind::Never),
+        "a case without arms has type Never, got {}",
+        tail.display(db, &names())
+    );
+}
+
+#[salsa_test]
+fn empty_case_over_inhabited_types_is_rejected(db: &salsa::DatabaseImpl) {
+    for (name, body) in [
+        ("nat", "fn bad(n: Nat) -> Nat { case n {} }"),
+        ("bool", "fn bad(b: Bool) -> Nat { case b {} }"),
+        ("option", "fn bad(o: Option(Nat)) -> Nat { case o {} }"),
+        ("nested", "fn bad(o: Option(Never)) -> Nat { case o {} }"),
+        (
+            "enum",
+            "enum One { Only }\nfn bad(v: One) -> Nat { case v {} }",
+        ),
+    ] {
+        let errors = type_errors(db, name, body);
+        assert_eq!(
+            errors,
+            ["non-exhaustive case expression: no patterns provided"],
+            "{name}"
+        );
+    }
+}
+
+#[salsa_test]
+fn empty_fields_are_not_inferred_empty(db: &salsa::DatabaseImpl) {
+    let errors = type_errors(
+        db,
+        "empty_fields_are_not_inferred_empty.trb",
+        "fn bad(o: Option(Never)) -> Nat { case o { .None -> 0 } }",
+    );
+    assert_eq!(
+        errors,
+        ["non-exhaustive case expression on `std::Option(Never)`: missing patterns: .Some(_)"]
+    );
+}
+
+#[salsa_test]
+fn empty_enums_are_not_never(db: &salsa::DatabaseImpl) {
+    let errors = type_errors(
+        db,
+        "empty_enums_are_not_never.trb",
+        "enum Void {}\nfn bad(v: Void) -> Nat { v }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("expected `Nat`, found `Void`")),
+        "an empty enum value does not eliminate implicitly: {errors:#?}"
+    );
+}
+
+#[salsa_test]
+fn empty_case_lowers_to_a_never_value(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "empty_case_lowering.trb",
+        r#"
+enum Void {}
+fn from_never(x: Never) -> Never { case x {} }
+fn from_void(v: Void) -> Nat { case v {} }
+fn eliminate(x: Never) ->{} a { case x {} }
+fn named(x: Never) -> Nat { eliminate(x) }
+"#,
+    );
+    assert!(ast_pipeline_error_messages(db, source).is_empty());
+    let ir = common::run_ast_pipeline_with_ir(db, source);
+    let lines: Vec<&str> = ir.lines().map(str::trim).collect();
+    let body = |name: &str| -> Vec<&str> {
+        let header = format!("tribute_control.func @\"pkg::{name}\"");
+        let start = lines
+            .iter()
+            .position(|line| line.starts_with(&header))
+            .unwrap_or_else(|| panic!("missing {name}:\n{ir}"));
+        lines[start + 1..]
+            .iter()
+            .take_while(|line| **line != "}")
+            .copied()
+            .collect()
+    };
+    assert_eq!(
+        body("from_never"),
+        ["tribute_control.return %0"],
+        "a case over Never is its scrutinee:\n{ir}"
+    );
+    assert_eq!(
+        body("from_void"),
+        [
+            "%1 = core.unrealized_conversion_cast %0 : !\"pkg::Void\" to core.never",
+            "%2 = core.unrealized_conversion_cast %1 : core.never to core.i32",
+            "tribute_control.return %2",
+        ],
+        "a case over an empty enum eliminates its scrutinee as Never:\n{ir}"
+    );
+    assert_eq!(
+        body("eliminate$Nat"),
+        [
+            "%1 = core.unrealized_conversion_cast %0 : core.never to core.i32",
+            "tribute_control.return %1",
+        ],
+        "{ir}"
+    );
+}

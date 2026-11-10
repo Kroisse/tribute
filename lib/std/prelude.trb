@@ -3,6 +3,12 @@
 
 use collections::List
 
+/// Eliminate a value of the empty type `Never` as a value of any type.
+/// No value of `Never` exists, so a call is never evaluated.
+pub fn absurd(x: Never) ->{} a {
+    case x {}
+}
+
 /// A type that represents an optional value.
 /// Either contains `.Some(value)` or `.None`.
 pub enum Option(a) {
@@ -739,7 +745,7 @@ pub mod io {
 // start with `pkg` so that the prelude does not rely on itself.
 pub mod prelude {
     pub mod v0 {
-        pub use pkg::{Option, Result, String}
+        pub use pkg::{Option, Result, String, absurd}
         pub use pkg::{Int, Nat, Float, Bytes}
         pub use pkg::collections::List
     }
