@@ -188,8 +188,10 @@ of `ast_to_ir`, not a separate pass.
 ## 출력 결정성
 
 같은 compiler binary에 같은 입력(source와 `CompilationConfig`)을 주면 target의
-representation/ABI 경계 출구의 IR text와 두 target의 산출물 바이트가 같다. 새
-database에서 compile하든, 다른 process에서 compile하든 결과는 달라지지 않는다.
+representation/ABI 경계 출구의 IR text, native object의 바이트, Wasm module의
+바이트가 같다. 새 database에서 compile하든, 다른 process에서 compile하든 결과는
+달라지지 않는다. Native object를 runtime library와 link한 실행 파일은 선택한
+sysroot와 linker에 따라 달라지므로 이 계약에 포함하지 않는다.
 
 - Pass는 시간, 메모리 주소, thread 스케줄에 기대어 결정하지 않는다. 최적화
   예산은 시간이 아니라 fuel이나 반복 횟수로 센다.

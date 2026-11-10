@@ -1140,12 +1140,14 @@ ability marker가 같은 `prompt_tag`를 공유한다.
 fn inner(comp: fn() ->{e, State(Int)} Int) ->{e} Int {
     handle comp() {                      // prompt_tag = P2
         op State::get() { resume 10 }
+        op State::set(v) { resume Nil }
     }
 }
 
 fn nested_state_example() -> Int {
     handle inner(fn() State::get()) {    // prompt_tag = P1
         op State::get() { resume 20 }
+        op State::set(v) { resume Nil }
     }
 }
 ```

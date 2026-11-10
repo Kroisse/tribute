@@ -128,7 +128,8 @@ apply + [fn(Int) -> Bool]     → apply$6$0$Int$1$Bool
 swap + [(Int, Bool)]          → swap$7$0$Int$Bool$1
 ```
 
-Mangle은 type argument의 identity에 대해 단사(injective)다. 서로 다른 type
+Mangle은 row variable의 일관된 이름 바꾸기를 제외하면 type argument의 identity에
+대해 단사(injective)다. Row variable의 번호만 다른 경우가 아니면 서로 다른 type
 argument 목록은 서로 다른 이름을 얻는다. 함수 타입은 parameter와 result 외에
 ability row를 함께 인코딩한다. Ability row는 각 ability의 origin과 qualified
 identity, ability argument를 row에 저장된 순서대로 쓰고, 열린 row의 row variable은
