@@ -816,6 +816,39 @@ mod tests {
     }
 
     #[test]
+    fn scalar_arrays_are_recovered_from_anyref_before_and_after_conversion() {
+        let mut ctx = IrContext::new();
+        let path = ctx.intern_path("test.trb");
+        let location = Location::new(path, trunk_ir::location::Span::new(0, 0));
+        let module = empty_module(&mut ctx);
+        let tc = wasm_type_converter(&mut ctx, module);
+        let anyref = wasm_dialect::Anyref::params()
+            .intern(&mut ctx)
+            .as_type_ref();
+        let i32_ty = core::I32::type_ref(&mut ctx);
+        let array = adt::Array::params(i32_ty).intern(&mut ctx).as_type_ref();
+        let gc_array = gc_array_type(&mut ctx, array);
+        let source_data = trunk_ir::OperationDataBuilder::new(location, "test.source")
+            .result(anyref)
+            .build(&mut ctx);
+        let source = ctx.create_op(source_data);
+        let value = ctx.op_result(source, 0);
+
+        // A scalar array keeps its `adt.array` type until `adt` lowering is
+        // done and its GC array after; either is recovered with a cast.
+        for target in [array, gc_array] {
+            let result = tc
+                .materialize(&mut ctx, location, value, anyref, target)
+                .expect("a recovery cast");
+            let [cast] = result.ops[..] else {
+                panic!("one cast to {target:?}");
+            };
+            assert!(wasm_gc_dialect::RefCast::matches(&ctx, cast));
+            assert_eq!(ctx.value_ty(result.value), target);
+        }
+    }
+
+    #[test]
     fn anyref_to_nil_materializes_a_fresh_nil_value() {
         let mut ctx = IrContext::new();
         let module = trunk_ir::parser::parse_test_module(

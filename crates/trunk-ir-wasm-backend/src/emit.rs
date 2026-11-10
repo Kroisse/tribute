@@ -1128,17 +1128,17 @@ mod tests {
             }
         }
         let array_index = array_index.expect("the array has a type of its own");
-        assert!(!params.is_empty());
-        for param in params {
-            let wasmparser::ValType::Ref(reference) = param else {
-                panic!("a reference parameter: {param:?}");
-            };
-            assert_eq!(
-                reference.type_index().and_then(|ty| ty.as_module_index()),
-                Some(array_index),
-                "the parameter names the array, not arrayref"
-            );
-        }
+        let named: Vec<_> = params
+            .iter()
+            .map(|param| match param {
+                wasmparser::ValType::Ref(reference) => {
+                    reference.type_index().and_then(|ty| ty.as_module_index())
+                }
+                _ => None,
+            })
+            .collect();
+        // Both functions take the array, by its own type rather than arrayref.
+        assert_eq!(named, [Some(array_index), Some(array_index)], "{params:?}");
     }
 
     #[test]

@@ -1268,6 +1268,7 @@ mod tests {
         assert!(!output.contains("wasm.arrayref"), "{output}");
         assert!(!output.contains("ref_cast"), "{output}");
         assert!(!output.contains("adt.array"), "{output}");
+        assert_eq!(ConvertTypedArrays.name(), "convert-typed-arrays");
     }
 
     #[test]
