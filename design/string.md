@@ -12,7 +12,7 @@ Tribute는 텍스트와 바이트 데이터를 명확히 구분한다.
 
 **설계 원칙:**
 
-- `Bytes`는 primitive type (ptr, len)
+- `Bytes`는 byte 배열의 한 범위를 보는 prelude struct
 - `String`은 UTF-8 인코딩된 텍스트 (내부적으로 rope 구조)
 - 인코딩 변환은 명시적으로 수행
 
@@ -22,11 +22,21 @@ Tribute는 텍스트와 바이트 데이터를 명확히 구분한다.
 
 ### 내부 표현
 
-```text
-Bytes = (ptr: *const u8, len: usize)
+```rust
+pub struct Bytes { data: ByteArray, start: Nat, len: Nat }
 ```
 
-연속된 메모리 영역을 가리키는 fat pointer. 불변(immutable).
+`Bytes`는 prelude source가 선언한 일반 struct다. Byte는 compiler 소유 불변 배열
+[`std::runtime::ByteArray`](types.md#bytearray)(IR에서 `adt.array<core.i8>`)에 담기고,
+값은 그중 `[start, start + len)`을 본다. 불변(immutable)이다.
+
+- 잘라내기는 같은 `data`를 담은 새 `Bytes`를 만들며 byte를 복사하지 않는다.
+  소유권과 해제는 일반 struct와 배열의 규칙을 따른다([rc.md](rc.md#bytes)).
+- Field는 struct의 가시성을 따르므로 `start + len ≤ len(data)`는 값이 보장하지
+  않는다. Byte를 읽는 모든 연산이 범위를 검사하고, 벗어나면 실행을 끝낸다.
+- `Bytes`는 IR 타입 이름이 아니라 다른 prelude 타입처럼 nominal layout으로
+  내려간다. Literal lowering은 `std::String`처럼 root module의
+  [`tribute.types`](tribute-dialects.md#tributetypes)에 게시된 `std::Bytes`를 읽는다.
 
 ### 리터럴
 
@@ -364,15 +374,18 @@ ability Display {
 ### Bytes
 
 ```wasm
-;; Bytes = (ref $bytes)
-(type $bytes (array (mut i8)))
+;; ByteArray는 원소가 i8인 일반 GC 배열이다. 예약 GC 타입 index를 받지 않는다.
+(type $byte_array (array (mut i8)))
 
-;; 또는 struct로 감싸서 추가 정보 저장
-(type $bytes (struct
-  (field $data (ref (array i8)))
-  (field $offset i32)
-  (field $len i32)))
+;; Bytes는 다른 사용자 struct와 같은 structural GC 타입이다.
+(type $bytes (sub $described (struct
+  (field $descriptor i32)
+  (field $data arrayref)     ;; 다른 배열처럼 erased arrayref로 저장
+  (field $start i32)
+  (field $len i32))))
 ```
+
+Byte를 읽는 곳은 `data`를 `$byte_array`로 cast한 뒤 `array.get_u`로 읽는다.
 
 ### String (Rope)
 
@@ -395,22 +408,28 @@ ability Display {
 
 ### Constant lowering
 
-`adt.bytes_const`와 `adt.string_const`는 같은 passive data-segment index 공간을
-사용한다.
+`adt.bytes_const`의 결과는 byte 배열 `adt.array<core.i8>`이다. Frontend는
+`b"..."` 리터럴을 그 배열 전체를 보는 `Bytes`로 감싸고, `"..."` 리터럴을 다시
+`String::Leaf`로 감싼다.
 
 ```text
-adt.bytes_const(bytes)
-  -> passive data segment
-  -> Bytes { data: array.new_data, offset: 0, len }
-
-adt.string_const(text)
-  -> UTF-8 passive data segment
-  -> Bytes { data: array.new_data, offset: 0, len }
-  -> String::Leaf(bytes)
+b"..."  ->  Bytes { data: adt.bytes_const(bytes), start: 0, len }
+"..."   ->  String::Leaf(Bytes { data: adt.bytes_const(utf8), start: 0, len })
 ```
 
-동일한 payload는 `String`과 `Bytes` 리터럴 사이에서도 data segment를 재사용할 수
-있다. Constant lowering은 자신이 참조하는 data segment를 같은 단계에서 모듈에
+Target은 byte 배열을 다음처럼 만든다. 표현은 의미에 드러나지 않으므로
+([runtime-types.md](runtime-types.md#표현은-의미에-드러나지-않는다)) 두 target의
+선택은 서로 달라도 된다.
+
+- Native는 literal마다 [정적 객체](rc.md#정적-객체) 하나를 data에 두고, 평가할
+  때마다 그 객체를 retain한다. 할당과 byte 복사가 없다.
+- Wasm은 평가할 때마다 passive data segment에서 `array.new_data`로 새 배열을
+  만든다. `array.new_data`는 상수식이 아니므로 global 초기화식으로 쓸 수 없다.
+
+`Bytes` struct는 두 target 모두 평가마다 일반 할당이다. Wasm에서
+`adt.bytes_const`와 `adt.string_const`는 같은 passive data-segment index 공간을
+사용하며, 동일한 payload는 `String`과 `Bytes` 리터럴 사이에서도 data segment를
+재사용할 수 있다. Constant lowering은 자신이 참조하는 data segment를 같은 단계에서 모듈에
 선언한다([모듈 수준 자원의 선언][wasm-resources]). `String::Leaf` 생성은 target의
 일반 enum/variant lowering보다 먼저 일어나고, 그 이후에는 source에서 작성한
 `.Leaf(bytes)`와 똑같은 ADT 경로를 따른다.
@@ -438,7 +457,8 @@ Native와 Wasm 모두 이 의미적 경계를 공유한다. Public I/O wrapper�
 | 타입 이름 | `String` (보편적인 이름 원칙) |
 | String 인코딩 | UTF-8 |
 | String 구조 | Rope |
-| Bytes 표현 | (ptr, len) |
+| Bytes 표현 | byte 배열 위의 prelude struct `{ data, start, len }` |
+| Bytes 리터럴 | native는 정적 byte 배열 객체, Wasm은 평가마다 `array.new_data` |
 | Rune 표현 | u32 |
 | 인코딩 변환 | 명시적 |
 | `"..."` 리터럴 타입 | String |

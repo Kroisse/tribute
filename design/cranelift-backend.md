@@ -356,11 +356,11 @@ Native RC materialization은 같은 type-erasure 전 경계에서 검증된 plan
 Struct: [fields in order, naturally aligned]
 Enum:   [the variant's fields in order, naturally aligned], sized per variant
 Array:  [length: i64] [elements, stride = element size]
-Bytes:  [ptr] [len: u64] [owner] [cap: u64] [bytes...]
 ```
 
-`Bytes`의 소유 규칙은 [rc.md](rc.md#bytes)를, 배열의 stride, 할당 크기와 소유
-규칙은 [rc.md](rc.md#array)를 따른다.
+`Bytes`는 byte 배열(`adt.array<core.i8>`) 위의 일반 struct다([rc.md](rc.md#bytes)).
+배열의 stride, 할당 크기와 소유 규칙은 [rc.md](rc.md#array)를, byte literal의 정적
+객체는 [rc.md](rc.md#정적-객체)를 따른다.
 
 [`adt` 배열 operation](tribute-dialects.md#adt-배열)은 RC header lowering 단계에서
 struct 할당과 함께 낮춘다. [할당 크기](rc.md#array)로 `__tribute_alloc`을 부르고 header에 배열

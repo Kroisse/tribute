@@ -1177,7 +1177,7 @@ wasm.struct_get { type_idx = 9, field_idx = 1 }
 ```
 
 Builtin layouts follow the same rule. Lowering refers to canonical semantic
-types such as `core.bytes` or the closure base; the layout pass
+types such as the closure base; the layout pass
 maps those identities to reserved indices. The Wasm emitter accepts no residual
 `wasm_gc.*` operations and does not infer missing indices. Function-signature
 indices used by `call_indirect` are a separate concern and are not GC heap-type
@@ -1195,9 +1195,11 @@ Pipeline 단계의 불변 조건과 representation/ABI 경계 계약은
 
 ## Type Model
 
-Primitive scalar, address-width index, pointer, reference, bytes, array, tuple,
-function, and nil types are represented in TrunkIR. Library data types such as
-`Option`, `Result`, and `Text` lower through ADT and runtime/library
+Primitive scalar, address-width index, pointer, reference, array, tuple,
+function, and nil types are represented in TrunkIR. TrunkIR has no byte-string
+type: byte data is an `adt.array<core.i8>`, and `Bytes` is a prelude struct
+over it ([string.md](string.md#bytes)). Library data types such as
+`Option`, `Result`, `String`, and `Bytes` lower through ADT and runtime/library
 conventions. `List` is an opaque nominal builtin whose shared construction and
 sequence-view observations use `list.*`; target-specific passes choose and
 eliminate its private representation.
@@ -1421,8 +1423,6 @@ Compiler가 소유하는 runtime 저장 layout은 예약 type 속성 `layout`으
 | --- | --- | --- |
 | `"closure"` | closure base `adt.struct` | convention table 참조 필드 하나로 이루어진 closure 값의 공통 저장. Capture 없는 closure의 저장이기도 하다 |
 | `"closure_captures"` | closure capture `adt.struct` | closure base의 필드 뒤에 capture를 순서대로 둔 closure 저장. `closure_base`가 그 base다 |
-| `"bytes"` | Wasm bytes `adt.struct` | backing 배열, 시작 offset, 길이로 이루어진 `Bytes` 저장 |
-| `"bytes_data"` | Wasm bytes backing `adt.array<core.i8>` | `Bytes`가 가리키는 byte 배열 |
 | `"boxed_f64"` | Wasm boxed float `adt.struct` | uniform 참조 자리에 놓이는 `f64` 필드 하나짜리 `Float` 저장 |
 | `"described"` | Wasm `Described` `adt.struct` | descriptor 필드 하나로 이루어진 사용자 struct와 variant의 공통 supertype |
 
