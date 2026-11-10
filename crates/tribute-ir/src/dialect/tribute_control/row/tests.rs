@@ -338,8 +338,8 @@ fn substitution_rebuilds_callables_and_tuple_layouts() {
 
 const NOMINAL_ROWS: &str = r#"core.module @test {
   !Callback = adt.struct<"Callback"['a0], (tribute_control.func_sig<() -> core.i32 row(@B | 'a0)>)>
-  !open = adt.typeref<"Callback"[row(@A | 'a0)]>
-  !closed = adt.typeref<"Callback"[row(@A)]>
+  !open = adt.struct<"Callback"[row(@A | 'a0)]>
+  !closed = adt.struct<"Callback"[row(@A)]>
   !holder = tribute_control.func_sig<(!open) -> core.i32>
 }"#;
 
@@ -377,10 +377,10 @@ fn visiting_rows_reads_row_arguments_but_not_layouts() {
 
 #[test]
 fn tuple_names_tell_row_arguments_apart() {
-    let (mut ctx, _) = parse(NOMINAL_ROWS);
+    let (ctx, _) = parse(NOMINAL_ROWS);
     let alias = |ctx: &IrContext, name| ctx.type_alias_by_text(name).expect("fixture alias");
     let [open, closed] = ["open", "closed"].map(|name| alias(&ctx, name));
-    let plain = adt::Typeref::named(&mut ctx, "Callback", []).as_type_ref();
+    let plain = alias(&ctx, "Callback");
     let names = [open, closed, plain].map(|ty| logical_tuple_name(&ctx, &[ty]));
     assert_ne!(names[0], names[1]);
     assert_ne!(names[1], names[2]);
@@ -388,40 +388,11 @@ fn tuple_names_tell_row_arguments_apart() {
 }
 
 #[test]
-fn row_arguments_match_the_layouts_row_binders() {
-    assert_rejects(
-        r#"core.module @test {
-  !Callback = adt.struct<"Callback"['a0], (tribute_control.func_sig<() -> core.i32 row(| 'a0)>)>
-  !Point = adt.struct<"Point", (core.i32)>
-  tribute_control.func @missing(%c: adt.typeref<"Callback">) -> core.i32 {
-    %x = arith.constant 0 : core.i32
-    tribute_control.return %x
-  }
-  tribute_control.func @extra(%p: adt.typeref<"Point"[row()]>) -> core.i32 {
-    %x = arith.constant 0 : core.i32
-    tribute_control.return %x
-  }
-}"#,
-        "passes 0 row arguments to a layout with 1 row binders",
-    );
-    assert_rejects(
-        r#"core.module @test {
-  !Point = adt.struct<"Point", (core.i32)>
-  tribute_control.func @extra(%p: adt.typeref<"Point"[row()]>) -> core.i32 {
-    %x = arith.constant 0 : core.i32
-    tribute_control.return %x
-  }
-}"#,
-        "passes 1 row arguments to a layout with 0 row binders",
-    );
-}
-
-#[test]
 fn a_row_argument_tail_is_a_binder_of_its_definition() {
     assert_rejects(
         r#"core.module @test {
   !Callback = adt.struct<"Callback"['a0], (tribute_control.func_sig<() -> core.i32 row(| 'a0)>)>
-  tribute_control.func @f(%c: adt.typeref<"Callback"[row(| 'a0)]>) -> core.i32 {
+  tribute_control.func @f(%c: adt.struct<"Callback"[row(| 'a0)]>) -> core.i32 {
     %x = arith.constant 0 : core.i32
     tribute_control.return %x
   }

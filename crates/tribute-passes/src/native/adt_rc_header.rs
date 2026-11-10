@@ -170,7 +170,7 @@ impl OpRewritePattern for StructNewPattern {
         rewriter: &mut PatternRewriter<'_>,
     ) -> Option<()> {
         let op = struct_new.op_ref();
-        let struct_ty = struct_new.r#type(ctx);
+        let struct_ty = struct_new.layout(ctx);
         let tc = rewriter.type_converter();
 
         let Some(layout) = compute_struct_layout(ctx, struct_ty, tc) else {
@@ -284,8 +284,8 @@ impl OpRewritePattern for VariantNewPattern {
         rewriter: &mut PatternRewriter<'_>,
     ) -> Option<()> {
         let op = variant_new.op_ref();
-        let enum_ty = variant_new.r#type(ctx);
-        let tag = variant_new.tag(ctx);
+        let enum_ty = variant_new.layout(ctx);
+        let tag = variant_new.variant(ctx);
         let tc = rewriter.type_converter();
 
         let Some(variant_layout) = compute_variant_layout(ctx, enum_ty, tag, tc) else {
@@ -435,12 +435,10 @@ mod tests {
             .map(|i| ctx.block_arg(entry, i as u32))
             .collect();
 
-        let struct_new_data = OperationDataBuilder::new(loc, "adt.struct_new")
-            .operands(field_vals)
-            .result(struct_ty)
-            .attr("type", Attribute::Type(struct_ty))
-            .build(ctx);
-        let struct_new_ref = ctx.create_op(struct_new_data);
+        let struct_new_ref = tribute_ir::dialect::adt::StructNew::operands(field_vals)
+            .results(struct_ty)
+            .build(ctx, loc)
+            .op_ref();
         let struct_result = ctx.op_result(struct_new_ref, 0);
         ctx.push_op(entry, struct_new_ref);
 

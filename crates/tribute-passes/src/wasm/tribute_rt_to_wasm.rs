@@ -410,7 +410,6 @@ impl OpRewritePattern for BoxFloatPattern {
         let boxed_f64_ty = boxed_f64_type(ctx);
 
         let struct_op = adt::StructNew::operands(vec![value])
-            .r#type(boxed_f64_ty)
             .results(boxed_f64_ty)
             .build(ctx, location);
         rewriter.insert_op(struct_op.op_ref());
@@ -619,7 +618,7 @@ mod tests {
         let body = module.body(&ctx).expect("module body");
         let _ = walk_region::<()>(&ctx, body, &mut |op| {
             if let Ok(op) = adt::StructNew::from_op(&ctx, op) {
-                boxed.push(op.r#type(&ctx));
+                boxed.push(op.layout(&ctx));
             } else if let Ok(op) = adt::StructGet::from_op(&ctx, op) {
                 boxed.push(op.r#type(&ctx));
             }

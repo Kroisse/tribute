@@ -758,7 +758,7 @@ mod tests {
   !Frame = adt.struct<"Frame", ()>
   !Env = adt.struct<"Env", (!Closure, !Evidence, !Frame)>
   wasm.func @worker(%evidence: !Evidence, %closure: !Closure, %frame: !Frame) {
-    %env = adt.struct_new %closure, %evidence, %frame {type = !Env} : !Env
+    %env = adt.struct_new(%closure, %evidence, %frame) : (!Closure, !Evidence, !Frame) -> !Env
     %loaded = adt.struct_get %env {field = 1, type = !Env} : !Evidence
     wasm.return
   }

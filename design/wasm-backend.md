@@ -210,7 +210,7 @@ Wasm 검증기는 각 structured block의 `end` 뒤에 branch 내부의 도달 �
 
 Wasm 경계를 넘어 새로 생성되는 모든 `wasm.*` operation의 result type과 block
 argument type은 Wasm target `TypeConverter`가 만든 값이어야 한다. Shared IR
-spelling을 그대로 복사하면 `adt.typeref`나 logical `adt.array`가 backend-ready
+spelling을 그대로 복사하면 nominal 값 타입이나 logical `adt.array`가 backend-ready
 경계까지 남아, physical assignability와 GC layout 검증이 정상 producer를
 거부한다. 이것은 구현 편의가 아니라 [ir.md](ir.md)의 backend-ready 소거
 요구를 Wasm 쪽에서 만족시키는 조건이다.
@@ -495,8 +495,9 @@ backend에는 `core.bytes`가 나타나지 않는다.
 `tribute_rt.anyref`는 `wasm.anyref`, `tribute_rt.intref`는 `wasm.i31ref`가 된다.
 선언된 field 타입과 그 field의 값이 같은 타입 표기를 쓰므로, 이후 단계는 두 표기를
 use site에서 맞추지 않으며 그 뒤의 Wasm IR에는 `tribute_rt` 타입이 나타나지 않는다.
-`adt.typeref`는 이 첫 단계의 대상이 아니다. `adt` 연산이 nominal layout을 읽는
-동안에는 값과 signature에 남고, Wasm dialect lowering의 마지막 단계가 없앤다.
+Layout 필드 안의 [nominal 값 타입](tribute-dialects.md#nominal-값-타입)은 이 첫
+단계의 대상이 아니다. `adt` 연산이 nominal layout을 읽는 동안에는 layout에 남고,
+Wasm dialect lowering의 마지막 단계가 없앤다.
 
 [`core.index`](ir.md#coreindex-주소-폭-정수)는 module memory의 index type이 된다.
 32비트 memory에서는 `core.i32`, memory64에서는 `core.i64`다. `arith` lowering은
@@ -534,19 +535,19 @@ descriptor](runtime-types.md#wasm-배치) index를 두어 runtime identity를 �
 - 사용자 struct와 variant의 타입은 `wasm_gc.struct<T...>`이다. 매개변수는
   descriptor 필드의 `core.i32`와 각 소스 필드의 Wasm 저장 표현이며, 같은 매개변수
   목록은 interning으로 같은 타입이 된다.
-- 소스 필드의 저장 표현은 다음과 같다. `core.i1`은 `core.i32`, `adt.typeref`는
-  `wasm.structref`, `adt.enum` 값은 emission이 쓰는 erased `wasm.anyref`, 중첩된
-  사용자 struct는 그 struct의 `wasm_gc.struct`이다. Builtin layout을 포함한 나머지
-  타입은 그대로 둔다.
+- 소스 필드의 저장 표현은 다음과 같다. `core.i1`은 `core.i32`, nominal 값 타입은
+  자기를 담을 수 있으므로 `wasm.structref`, literal `adt.enum` 값은 emission이
+  쓰는 erased `wasm.anyref`, 중첩된 사용자 struct는 그 struct의
+  `wasm_gc.struct`이다. Builtin layout을 포함한 나머지 타입은 그대로 둔다.
 - Variant의 타입은 그 variant 자신의 필드로 만든다. Enum의 다른 variant 필드를
   복사하지 않는다.
 - Nominal layout을 마지막으로 읽는 단계는 `adt_to_wasm`이다. 그 뒤
   `convert_struct_layouts`가 모듈 전체(alias, 연산 속성, 결과, block 인자, 함수
   signature)의 사용자 `adt.struct`를 `wasm_gc.struct`로 바꾼다. Variant 연산은
-  `adt_to_wasm`이 처음부터 `wasm_gc.struct`로 낮춘다. 같은 단계가 `adt.typeref`도
-  없앤다. Struct를 가리키는 `adt.typeref`는 그 struct의 `wasm_gc.struct`가 되고,
-  enum을 가리키거나 이름을 해석할 수 없는 `adt.typeref`는 variant마다 타입이 다르므로
-  `wasm.structref`가 된다.
+  `adt_to_wasm`이 처음부터 `wasm_gc.struct`로 낮춘다. 같은 단계가 남은 row
+  인스턴스와 enum layout도 없앤다. Struct를 가리키는 row 인스턴스는 그 struct의
+  `wasm_gc.struct`가 되고, enum은 variant마다 타입이 다르므로 `wasm.structref`가
+  된다.
 - 배열 연산의 GC 타입은 `wasm_gc.array<E>`다. `adt_to_wasm`은 `adt.array<E>`를
   같은 매개변수와 속성의 `wasm_gc.array`로 바꿔 `wasm_gc` 배열 연산에 쓰고, 원소
   타입이 같은 배열은 같은 GC 타입이다. `layout`을 가진 builtin 배열(Bytes backing

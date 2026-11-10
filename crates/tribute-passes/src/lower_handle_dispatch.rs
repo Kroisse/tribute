@@ -220,7 +220,7 @@ mod tests {
                 &mut ctx,
                 &format!(
                     r#"core.module @test {{
-  !marker = adt.typeref<{{name = "std::runtime::evidence::Marker"}}>
+  !marker = adt.struct<"std::runtime::evidence::Marker">
   !evidence = adt.array<!marker>
   func.func @run(%ev: !evidence, %prompt: core.i32) -> core.never {{
     {operation}

@@ -18,7 +18,6 @@
 //! | `tribute_rt.anyref` | `core.ptr`  | Uniform representation as pointer  |
 //! | `adt.struct`        | `core.ptr`  | Struct as heap pointer             |
 //! | `adt.variant_inst`  | `core.ptr`  | Variant instance as heap pointer   |
-//! | `adt.typeref<T>`    | `core.ptr`  | Struct reference as pointer        |
 //! | `closure.closure`   | `core.ptr`  | Closure as pointer                 |
 //! | `adt.array<T>`      | `core.ptr`  | Array as heap pointer              |
 //!
@@ -127,7 +126,7 @@ pub fn native_type_converter(ctx: &mut IrContext) -> (TypeConverter, NativeTypeR
         if is_bytes_type(ctx, ty) {
             return Some(r.core_ptr);
         }
-        // ADT struct/enum/variant_instance/typeref → ptr
+        // ADT struct/enum/variant_instance → ptr
         if is_adt_ptr_type(ctx, ty) {
             return Some(r.core_ptr);
         }
@@ -231,7 +230,7 @@ fn materialize_result_noop(
 
 /// Helper: Check if a type is an ADT type that maps to ptr in the native backend.
 fn is_adt_ptr_type(ctx: &IrContext, ty: TypeRef) -> bool {
-    // struct, enum, typeref, variant instance
+    // struct, enum, variant instance
     tribute_ir::dialect::adt::is_nominal(ctx, ty)
         || (ctx.get_type(ty).name.dialect(ctx) == tribute_ir::dialect::adt::DIALECT_NAME
             && ctx.type_attrs(ty).get_bool("is_variant") == Some(true))

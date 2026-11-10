@@ -145,7 +145,7 @@ Binder 종류는 row의 구조만 기록하며 실행 전략을 담지 않는다
 - `ability_arg`: `Cps`다.
 - `body`: 정의 안의 어느 callable type의 매개변수 타입에도 나타나지 않으면 요구
   없음이고, 나타나면 `Cps`다([tail 규칙](cps-effects.md#row와-호출-규약)).
-  매개변수 타입 안의 `adt.typeref` row 인자에 나타난 것도 매개변수 타입에
+  매개변수 타입 안의 [row 인스턴스](#nominal-값-타입) row 인자에 나타난 것도 매개변수 타입에
   나타난 것이다. 이 판정은 binder마다 정의 전체에서 한 번 하므로, 그 binder를
   읽는 모든 자리가 같은 class를 읽는다.
 - `local`: 그것을 소유한 람다의 본문마다 다르며,
@@ -153,7 +153,7 @@ Binder 종류는 row의 구조만 기록하며 실행 전략을 담지 않는다
 
 정의 안의 모든 tail은 이 목록의 index다. Signature, 중첩된 callable type, block
 인자, operation 결과, tuple layout의 원소,
-[`adt.typeref`의 row 인자](#nominal-row-인자)가 모두 같다. Type은 binder를
+[row 인스턴스의 row 인자](#nominal-row-인자)가 모두 같다. Type은 binder를
 도입하지 않는다. 예외는 row 매개변수를 가진 nominal layout 하나이며, 그 binder는
 layout 안의 type에만 미친다.
 [`ability.operation`](../crates/tribute-ir/src/dialect/ability.rs)의 type은
@@ -163,8 +163,8 @@ tail을 가질 수 없다.
 
 [Row 매개변수](types.md#row-매개변수)를 가진 struct·enum의 layout
 (`adt.struct`, `adt.enum`)은 자기 row binder를 type 속성 `row_params`로
-선언하고, 그 선언의 값 type인 [row 인스턴스](#nominal-값-타입)(또는
-`adt.typeref`)는 row 매개변수마다 row 하나를 type 속성 `row_args`로 가진다. 속성의
+선언하고, 그 선언의 값 type인 [row 인스턴스](#nominal-값-타입)는 row
+매개변수마다 row 하나를 type 속성 `row_args`로 가진다. 속성의
 저장 형식, textual form, 정체성 규칙은
 [`adt` dialect 선언](../crates/tribute-ir/src/dialect/adt.rs)이 정한다. Layout의
 binder는 layout 안의 type에만 미치고, `row_args`의 tail은 그 type을 쓴 정의의
@@ -259,7 +259,7 @@ class와 맞는지는 [convention class](cps-effects.md#row-변수의-convention
 규칙이 정한다.
 
 참조가 보는 callee signature는 callee의 type에 row 인자를 치환한 것이다. 치환은
-type 안의 모든 `func_sig`(자기 자신 포함)와 `adt.typeref`의 row 인자에서, tail이
+type 안의 모든 `func_sig`(자기 자신 포함)와 row 인스턴스의 row 인자에서, tail이
 양화된 binder `t`인 row `(I, t)`를 `(I ∪ args[t].instances, args[t].tail)`로
 바꾸고 정렬한다. 다른 속성은 바꾸지 않는다. Layout 안의 type은 치환하지 않는다.
 Tuple layout은 원소를 치환한 뒤 같은 이름 규칙으로 다시
@@ -478,7 +478,7 @@ Textual attribute, symbol spelling, 위치 또는 printed IR만으로 generic
 specialization identity를 복구하거나 승격하지 않는다.
 
 Private runtime helper는 target stage에서만 physical signature로 만든다.
-Private runtime helper는 source-logical `adt.typeref`를 받을 수 없다.
+Private runtime helper는 source-logical [nominal 값 타입](#nominal-값-타입)을 받을 수 없다.
 
 Ordinary bodyless `extern "C"`는 명시적 trusted/unsafe FFI boundary다. 완전한
 signature에 managed semantic parameter나 result가 있어도 허용하며, Tribute의
@@ -759,7 +759,7 @@ Closure 저장 layout은 두 종류다.
   정한다. 모든 `S`에 base 하나를 쓸 수도 있고 `S`마다 다른 base를 둘 수도 있다.
   `S`마다 base를 두고 entry를 typed 함수 참조로 표현하면, entry 함수의 environment
   입력이 다시 그 base이므로 base와 entry 함수 타입은 서로를 가리킨다. 이 재귀는
-  `adt.typeref`로 끊는다.
+  base를 [식별 타입](ir.md#식별-타입)인 nominal layout으로 두고 그 키로 끊는다.
 - Capture layout의 `closure_base`는 `closure.new` 결과 타입의 `S`에서 고른 base다.
 
 #### Storage 확정
@@ -792,14 +792,14 @@ storage 확정은 다음 변환을 함께 적용한다.
 `adt.*`는 target에 독립적인 product, sum, array, reference, literal
 operation을 나타낸다.
 
-`adt.typeref`는 nominal managed reference type이며, 그 계약과 `adt.ref_null`,
+[Nominal 값 타입](#nominal-값-타입)은 managed reference type이며, `adt.ref_null`,
 `adt.ref_cast`의 계약은 [`adt` dialect 선언](../crates/tribute-ir/src/dialect/adt.rs)이
 정한다. `core.ptr`는 항상 unmanaged다. Raw pointer, allocator result, code
-address, Evidence, borrowed buffer와 이를 통과하는 cast chain은 `adt.typeref`가
+address, Evidence, borrowed buffer와 이를 통과하는 cast chain은 nominal 값 타입이
 될 수 없다. Managed 여부에 관한 이 규칙은 typed frontend 경계에서 reachable
 IR을 바꾸기 전에 검사한다.
 
-Dynamic `tribute_rt.anyref`에서 `adt.typeref`로 복원하는 명시적인
+Dynamic `tribute_rt.anyref`에서 nominal 값 타입으로 복원하는 명시적인
 `core.unrealized_conversion_cast`는 generic cleanup에서 no-op으로 소거하지
 않는다. Nominal reference의 정확한 결과 타입은 target 변환까지 보존한다.
 Native는 이를 pointer 표현으로 물리화하고 Wasm은 concrete `ref.cast`를
@@ -878,13 +878,11 @@ adt.struct<(core.ptr, core.i32),
 
 - 변환은 module과 게시된 alias가 닿는 nominal layout을 모두 본다. 키 속성이
   바뀌거나 몸체의 필드 타입이 바뀌는 layout, 그리고 키나 몸체가 그런 layout의 키나
-  row 인스턴스를 담는 layout이 바뀐다. `adt.typeref`는 layout을 이름으로 가리킬
-  뿐이므로, typeref로 가리키는 layout이 바뀌어도 typeref와 그것을 담은 layout은
-  바뀌지 않는다. 나머지 layout은 키와 몸체를 그대로 둔다.
+  row 인스턴스를 담는 layout이 바뀐다. 나머지 layout은 키와 몸체를 그대로 둔다.
 - 바뀌는 layout의 새 키는 변환한 키 속성이다. 키 속성이 그대로이면 새 키의 이름은
   옛 이름 뒤에 `$`와 변환의 tag를 붙인 것이다(`"Point$abi"`).
 - 새 키를 모두 정한 뒤에 몸체를 변환해 묶고, 옛 layout을 가리키던 alias를 새 키로
-  다시 게시한다. 그래서 typeref는 변환 뒤에 새 키로 해석된다.
+  다시 게시한다.
 - 이름에서 tag를 떼어 원래 이름을 되찾지 않는다. Source 이름이 필요한 단계는
   [nominal 선언](#nominal-선언)에서 읽는다.
 - [Compiler-generated tuple layout](#compiler-generated-tuple-layout)의 이름은
@@ -896,8 +894,7 @@ adt.struct<(core.ptr, core.i32),
 #### Nominal 수준과 structural 수준
 
 Struct 이름은 IR에서 nominal layout을 해석하는 단계까지만 의미를 가진다.
-`adt.typeref`를 그 layout으로 해석하는 단계, ownership 계획, ABI
-검증, frontend의 record pattern 해석이 여기에 속한다. 그 아래의 target lowering은
+Ownership 계획, ABI 검증, frontend의 record pattern 해석이 여기에 속한다. 그 아래의 target lowering은
 필드의 물리 표현과 순서만 사용한다. 이름이 필요한 runtime 동작(해제, 값 출력,
 variant 판별)은 [runtime 타입 descriptor](runtime-types.md)가 맡는다. Nominal
 layout을 마지막으로 해석하는 target 경계가 할당에 descriptor 번호를 새긴다.
@@ -995,47 +992,24 @@ adt.enum<"Step"[row(| 'a0)]>
 - Row 매개변수를 가진 layout의 값 타입은 그 layout의 row 인스턴스다. Row
   인스턴스는 이름과 매개변수 없이 type 속성 `def`(layout의 키)와 `row_args`(row
   매개변수마다 row 하나)를 가진, 같은 종류의 `adt.struct` 또는 `adt.enum`이다. 식별
-  타입이 아니며 내용으로 정체가 정해진다. `row_args`의 형식과 tail 규칙은
-  [`adt.typeref`](#adttyperef-nominal-reference-type)의 `row_args`와 같고, 수는
-  `def`의 `row_params`와 같다. Row 매개변수를 가진 키를 그대로 값 타입으로 쓰지
-  않는다.
+  타입이 아니며 내용으로 정체가 정해진다. `row_args`의 수는 `def`의 `row_params`와
+  같다. Row 매개변수를 가진 키를 그대로 값 타입으로 쓰지 않는다.
+- `row_args`의 원소는 선언 순서의 row 매개변수마다 callable의 `ability_row`와 같은
+  형식의 row 하나다. Tail은 그 타입을 쓴 정의의 binder를 가리키고, layout 안에서는
+  그 layout의 binder를 가리킨다. Row 인자는 타입의 정체에 들어가므로, row 인자만 다른
+  두 row 인스턴스는 한 layout의 다른 타입이다.
 - Textual form은 키의 이름 뒤에 row 인자를 쓴다: `adt.struct<"Callback"[row(..)]>`.
-  Binder 목록(`['a0]`)과 달리 원소가 `row(`로 시작한다. Parser는 이름으로
-  [`adt.typeref`와 같은 규칙](#adttyperef-nominal-reference-type)에 따라 키를 찾아
-  `def`로 삼는다.
+  Binder 목록(`['a0]`)과 달리 원소가 `row(`로 시작하며, 빈 row도 `row()`로 생략하지
+  않고 쓴다. 이 문법으로 쓸 수 없는 속성 값은 일반 형식으로 출력한다. Parser는
+  이름과 row 인자의 수로 키를 만들어 `def`로 삼는다. Row 인스턴스는 이름을 alias로
+  제안하지 않으며, alias 안의 tail은
+  [다른 type alias](#사용자-정의-어셈블리-형식)에서처럼 그 alias를 쓴 정의의
+  binder를 가리킨다.
 - 값 타입이 가리키는 layout은 키 자체이거나 row 인스턴스의 `def`다. 필드와 variant의
   타입은 그 layout에서 읽고, row 인스턴스이면 layout binder를 `row_args`로
   치환한다([Nominal row 인자](#nominal-row-인자)).
 - Nominal 값 타입은 이름으로 다른 layout을 찾지 않는다. Compiler가 아는 layout의
   값 타입(evidence marker 등)은 [`tribute.types`](#tributetypes)에서 키를 읽는다.
-
-### `adt.typeref` nominal reference type
-
-`adt.typeref`는 이름으로 nominal layout을 가리키는 값 type이며 전용 textual 문법을
-쓴다. `adt.struct`처럼 이름은 언제나 따옴표로 감싼 문자열로 쓴다. Nominal 값
-타입과 같은 값을 가리키며, pass는 둘을 같은 layout의 값으로 다룬다.
-
-```text
-adt.typeref<"Point">
-adt.typeref<"geo::Shape">
-adt.typeref<"Callback"[row(@"<State(Int)>")]>
-adt.typeref<"Pair"[row(), row(@A | 'a0)]>
-```
-
-- 저장 표현은 type 속성 `name`(문자열)과, row 매개변수를 가진 선언을 가리킬 때의
-  type 속성 `row_args`([Nominal row 인자](#nominal-row-인자))다. 둘 다 전용
-  문법이 소유한다. 나머지 type 속성은 `<…>` 안 마지막 원소로 둔다.
-- Typeref가 가리키는 layout은 typeref의 `name`으로
-  [게시된](#nominal-layout의-게시) type alias가 가리키는 `adt.struct` 또는
-  `adt.enum`이다. 그런 alias가 없으면, typeref의 속성에서 `row_args`를 그 수인
-  `row_params`로 바꾼 키가 몸체를 가질 때 그 layout이다. Typeref의 `name`은
-  source 이름이며, layout의 키가 [변환](#nominal-layout-변환)으로 tag 붙은
-  이름을 가져도 바뀌지 않는다.
-- `row_args`가 없는 typeref는 자기 `name`을 alias 이름으로 제안한다. `row_args`를
-  가진 typeref는 row 인자만 다른 typeref끼리 이름이 겹치므로 제안하지 않으며, 다른
-  제안 없는 타입처럼 번호 이름을 받을 수 있다. Tail 이름은 위치에서 정해지므로 alias
-  안의 tail은 [다른 type alias](#사용자-정의-어셈블리-형식)에서처럼 그 alias를 쓴
-  정의의 binder를 가리킨다.
 
 ### Nominal 선언
 
@@ -1141,7 +1115,7 @@ Source-logical List 패턴의 `list.head` 결과 타입은 `element_type`과 같
 List의 logical representation은 compiler-owned nominal identity로 선택한다.
 동명 source ADT의 등록은 이 선택을 바꾸지 않는다. 현재 lowering이 사용하는
 `tribute_rt.anyref`는 표현상의 선택이며 List의 semantic identity를 대신하지
-않는다. Source nominal의 `adt.typeref`와 layout은 동일한 해석된 선언 및
+않는다. Source nominal의 값 타입과 layout은 동일한 해석된 선언 및
 specialization에 대응해야 한다.
 
 ## Nominal layout의 게시
@@ -1150,9 +1124,8 @@ Source-logical frontend는 nominal layout마다 몸체 없는 키를 먼저 만�
 타입을 다 만든 뒤 그 키에 몸체를 묶는다. 그래서 필드는 재귀나 전방 참조인
 layout도 그 키나 [row 인스턴스](#nominal-값-타입)로 가리킨다. 키는
 normalized nominal symbol의 IR type alias로 게시하며, layout의 `name`(문자열)과
-게시된 alias의 이름은 텍스트가 일치해야 한다. `adt.typeref`는 이 alias로 layout을
-찾으며, layout이 [변환](#nominal-layout-변환)으로 tag 붙은 새 키를 가지면
-alias가 새 키를 가리킨다.
+게시된 alias의 이름은 텍스트가 일치해야 한다. Layout이
+[변환](#nominal-layout-변환)으로 tag 붙은 새 키를 가지면 alias가 새 키를 가리킨다.
 생성 연산 없이 signature에만 등장하는 특수화도 같은 계약을 따르며, 필드에서
 참조하는 compiler-generated nominal tuple layout도 게시한다. 몸체가 묶이지 않은
 키는 정의가 아니다.
@@ -1183,10 +1156,9 @@ Signature나 필드에서만 참조하는 nominal 인스턴스도 의존 layout�
 
 CPS, closure, target ABI 변환은 layout의 필드 타입을
 [nominal layout 변환](#nominal-layout-변환) 규칙으로 변환하고, 게시된
-alias도 변환한 키로 바꾼다. Native ownership 검사는 게시된 정의와 IR에서
-도달하는 layout만 사용하며, 각 reachable typeref가 게시된 alias를 통해 몸체가 묶인
-layout으로 해석되어야 한다. 누락된 layout은 거부하고, interner 전체 검색이나
-이름의 일부를 맞추는 방식으로 layout을 추정하지 않는다.
+alias도 변환한 키로 바꾼다. Native ownership 검사는 IR에서 도달하는 layout만
+사용하며, interner 전체 검색이나 이름의 일부를 맞추는 방식으로 layout을 추정하지
+않는다.
 
 ## `tribute.types`
 

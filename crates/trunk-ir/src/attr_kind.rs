@@ -135,6 +135,25 @@ macro_rules! int_kind {
 
 int_kind!(i32 => I32, i64 => I64, u32 => U32, u64 => U64);
 
+/// `Attr<Index>`, with `core.index`'s type wrapper as its kind: a static
+/// value of `core.index`, such as a position that a `core.index` value
+/// holds at run time, as MLIR's index-typed `IntegerAttr` is. Its domain is
+/// that of `u64`, independent of the target's index width, and a
+/// declarative format writes it as a bare integer.
+impl AttrKind for crate::dialect::core::Index {
+    const KIND: AttributeKind = AttributeKind::U64;
+    type Out<'ctx> = u64;
+    type In = u64;
+
+    fn read<'ctx>(ctx: &'ctx IrContext, attr: &'ctx Attribute) -> u64 {
+        <u64 as AttrKind>::read(ctx, attr)
+    }
+
+    fn write(ctx: &mut IrContext, value: u64) -> Attribute {
+        <u64 as AttrKind>::write(ctx, value)
+    }
+}
+
 /// Declare a keyword attribute kind: an enum stored as a string attribute
 /// holding its keyword, which a declarative format writes bare, as MLIR
 /// writes `arith.cmpi slt, %a, %b`.

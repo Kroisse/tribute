@@ -1127,12 +1127,10 @@ mod tests {
             .map(|i| ctx.block_arg(entry, i as u32))
             .collect();
 
-        let struct_new_data = OperationDataBuilder::new(loc, "adt.struct_new")
-            .operands(field_vals)
-            .result(struct_ty)
-            .attr("type", Attribute::Type(struct_ty))
-            .build(ctx);
-        let struct_new_ref = ctx.create_op(struct_new_data);
+        let struct_new_ref = tribute_ir::dialect::adt::StructNew::operands(field_vals)
+            .results(struct_ty)
+            .build(ctx, loc)
+            .op_ref();
         let struct_result = ctx.op_result(struct_new_ref, 0);
         ctx.push_op(entry, struct_new_ref);
 
@@ -1313,8 +1311,8 @@ mod tests {
             r#"core.module @test {
   !Choice = adt.enum<"Choice", [(), (core.i32, tribute_rt.anyref)]>
   func.func @f(%n: core.i32, %v: tribute_rt.anyref) -> core.nil {
-    %none = adt.variant_new {tag = 0, type = !Choice} : !Choice
-    %pair = adt.variant_new %n, %v {tag = 1, type = !Choice} : !Choice
+    %none = adt.variant_new 0() : () -> !Choice
+    %pair = adt.variant_new 1(%n, %v) : (core.i32, tribute_rt.anyref) -> !Choice
     func.return
   }
 }"#,
@@ -1386,7 +1384,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   !Node = adt.struct<"Node", (core.i32)>
-  !NodeRef = adt.typeref<{name = "Node"}>
+  !NodeRef = adt.struct<"Node">
   !Nodes = adt.array<!NodeRef>
   !Shorts = adt.array<core.i16>
   func.func @nodes(%node: !NodeRef) -> !Nodes {
@@ -1495,21 +1493,17 @@ mod tests {
         let next = ctx.block_arg(entry, 2);
 
         // First struct_new: Point(x, y)
-        let sn1 = OperationDataBuilder::new(loc, "adt.struct_new")
-            .operands([x, y])
-            .result(point_ty)
-            .attr("type", Attribute::Type(point_ty))
-            .build(&mut ctx);
-        let sn1_ref = ctx.create_op(sn1);
+        let sn1_ref = tribute_ir::dialect::adt::StructNew::operands([x, y])
+            .results(point_ty)
+            .build(&mut ctx, loc)
+            .op_ref();
         ctx.push_op(entry, sn1_ref);
 
         // Second struct_new: Node(x, next)
-        let sn2 = OperationDataBuilder::new(loc, "adt.struct_new")
-            .operands([x, next])
-            .result(node_ty)
-            .attr("type", Attribute::Type(node_ty))
-            .build(&mut ctx);
-        let sn2_ref = ctx.create_op(sn2);
+        let sn2_ref = tribute_ir::dialect::adt::StructNew::operands([x, next])
+            .results(node_ty)
+            .build(&mut ctx, loc)
+            .op_ref();
         let sn2_result = ctx.op_result(sn2_ref, 0);
         ctx.push_op(entry, sn2_ref);
 

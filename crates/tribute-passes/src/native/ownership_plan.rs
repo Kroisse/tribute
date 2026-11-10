@@ -302,9 +302,7 @@ fn is_typed_managed_reference(
     if managed_layouts.contains(&ty) {
         return true;
     }
-    let data = ctx.get_type(ty);
-    (data.name == tribute_ir::dialect::adt::Typeref::NAME)
-        || tribute_ir::dialect::tribute_rt::Anyref::matches(ctx, ty)
+    tribute_ir::dialect::tribute_rt::Anyref::matches(ctx, ty)
         || tribute_ir::dialect::tribute_rt::Intref::matches(ctx, ty)
         || trunk_ir::dialect::core::Bytes::matches(ctx, ty)
 }
@@ -400,7 +398,7 @@ fn ownership_callable_body(ctx: &IrContext, op: OpRef) -> Result<CallableBody, O
 /// The layout allocated by `op` when it constructs a semantic closure.
 fn closure_allocation_layout(ctx: &IrContext, op: OpRef) -> Option<TypeRef> {
     let new = adt::StructNew::from_op(ctx, op).ok()?;
-    let layout = new.r#type(ctx);
+    let layout = new.layout(ctx);
     crate::closure_lower::is_closure_layout(ctx, layout).then_some(layout)
 }
 
@@ -431,12 +429,10 @@ fn collect_closure_layouts(
 }
 
 /// Collects the managed nominal layouts reachable from the operations of a
-/// module, then resolves every `adt.typeref` to the layout published for it.
+/// module.
 #[derive(Default)]
 struct ManagedLayoutCollector {
     layouts: HashSet<TypeRef>,
-    typerefs: HashSet<TypeRef>,
-    pending_typerefs: Vec<TypeRef>,
     visited_types: HashSet<TypeRef>,
 }
 
@@ -463,41 +459,20 @@ impl ManagedLayoutCollector {
             }
         }
         if let Ok(new) = adt::StructNew::from_op(ctx, op) {
-            let layout = new.r#type(ctx);
+            let layout = new.layout(ctx);
             if get_struct_fields(ctx, layout).is_some() {
                 self.layouts.insert(layout);
             }
         } else if let Ok(new) = adt::VariantNew::from_op(ctx, op) {
-            let layout = new.r#type(ctx);
+            let layout = new.layout(ctx);
             if get_enum_variants(ctx, layout).is_some() {
                 self.layouts.insert(layout);
             }
         }
     }
 
-    fn finish(mut self, ctx: &IrContext) -> Result<HashSet<TypeRef>, OwnershipPlanError> {
-        while let Some(typeref) = self.pending_typerefs.pop() {
-            let Some(name) = ctx.type_attrs(typeref).get_string_ref("name") else {
-                return Err(OwnershipPlanError::new(
-                    "adt.typeref lacks nominal identity",
-                ));
-            };
-            if !ctx.get_type(typeref).params.is_empty() {
-                return Err(OwnershipPlanError::new(format!(
-                    "adt.typeref {:?} has unexpected parameters",
-                    ctx.str(name)
-                )));
-            }
-            let Some(layout) = adt::layout_of(ctx, typeref) else {
-                return Err(OwnershipPlanError::new(format!(
-                    "adt.typeref {:?} has no published native layout",
-                    ctx.str(name)
-                )));
-            };
-            self.layouts.insert(layout);
-            self.visit_type(ctx, layout);
-        }
-        Ok(self.layouts)
+    fn finish(self) -> HashSet<TypeRef> {
+        self.layouts
     }
 
     fn visit_type(&mut self, ctx: &IrContext, ty: TypeRef) {
@@ -511,9 +486,6 @@ impl ManagedLayoutCollector {
             || tribute_ir::dialect::adt::Array::matches(ctx, ty)
         {
             self.layouts.insert(ty);
-        }
-        if tribute_ir::dialect::adt::Typeref::matches(ctx, ty) && self.typerefs.insert(ty) {
-            self.pending_typerefs.push(ty);
         }
         // A nominal layout's fields are its body's, which is no allocation
         // layout of its own.
@@ -535,8 +507,8 @@ impl ManagedLayoutCollector {
     }
 }
 
-/// Whether two nominal types denote the same layout: a layout itself or the
-/// layout an `adt.typeref` resolves to.
+/// Whether two nominal types denote the same layout: a layout key itself or
+/// a row instance's `def`.
 fn nominal_types_compatible(ctx: &IrContext, left: TypeRef, right: TypeRef) -> bool {
     let identity = |ty| adt::layout_of(ctx, ty).filter(|_| adt::is_nominal(ctx, ty));
     identity(left).is_some() && identity(left) == identity(right)
@@ -612,8 +584,9 @@ fn field_kind(ctx: &IrContext, ty: TypeRef, managed_layouts: &HashSet<TypeRef>) 
     FieldKind::scalar(ctx, ty).unwrap_or(FieldKind::Raw)
 }
 
-/// Resolve an exact semantic managed reference to the unique aggregate layout
-/// that owns its native allocation, among the planned `managed_layouts`.
+/// The aggregate layout that owns the native allocation of a value of the
+/// exact semantic managed reference type `ty`, among the planned
+/// `managed_layouts`: the type itself, a nominal layout's key.
 pub(super) fn allocation_layout(
     ctx: &IrContext,
     managed_layouts: &HashSet<TypeRef>,
@@ -623,16 +596,9 @@ pub(super) fn allocation_layout(
         return Ok(ty);
     }
     let data = ctx.get_type(ty);
-    if data.name != tribute_ir::dialect::adt::Typeref::NAME {
-        return Err(OwnershipPlanError::new(format!(
-            "managed release type {ty} ({data:?}) has no exact nominal allocation layout"
-        )));
-    }
-    adt::layout_of(ctx, ty)
-        .filter(|layout| managed_layouts.contains(layout))
-        .ok_or_else(|| {
-            OwnershipPlanError::new("managed release typeref has no planned allocation layout")
-        })
+    Err(OwnershipPlanError::new(format!(
+        "managed release type {ty} ({data:?}) has no exact nominal allocation layout"
+    )))
 }
 
 fn validate_function_contract(

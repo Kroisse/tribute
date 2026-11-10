@@ -254,9 +254,9 @@ mod tests {
         let errors = |body_type: &str, result: &str| {
             let text = format!(
                 r#"core.module @test {{
-  !marker = adt.typeref<{{name = "std::runtime::evidence::Marker"}}>
+  !marker = adt.struct<"std::runtime::evidence::Marker">
   !ev = adt.array<!marker>
-  !frame = adt.typeref<{{name = "frame_i32", tribute.cps_continuation_frame_result = core.i32}}>
+  !frame = adt.struct<"frame_i32", {{tribute.cps_continuation_frame_result = core.i32}}>
   !body = closure.closure<func.func_sig<{body_type} -> core.never>>
   func.func @run(%ev: !ev, %body: !body) -> {result} {{
     %answer = effect.delimit %body, %ev : {result}
