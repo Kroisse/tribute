@@ -17,6 +17,7 @@
 //! `tribute_rt.anyref` → `wasm.anyref`) are handled by backend-specific
 //! type converters.
 
+use tribute_ir::dialect::adt::is_nominal_value;
 use tribute_ir::dialect::tribute_rt;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::core;
@@ -26,10 +27,6 @@ use trunk_ir::rewrite::type_converter::{MaterializeResult, TypeConverter};
 
 fn is_adt_struct_type(ctx: &IrContext, ty: TypeRef) -> bool {
     tribute_ir::dialect::adt::Struct::matches(ctx, ty)
-}
-
-fn is_adt_typeref(ctx: &IrContext, ty: TypeRef) -> bool {
-    tribute_ir::dialect::adt::Typeref::matches(ctx, ty)
 }
 
 /// Create an TypeConverter configured for target-agnostic type conversions.
@@ -125,9 +122,9 @@ pub fn generic_type_converter(ctx: &mut IrContext) -> TypeConverter {
             });
         }
 
-        // adt.struct/adt.typeref → any: no-op (already a reference type)
+        // adt.struct/nominal value → any: no-op (already a reference type)
         if to_ty == tribute_rt_anyref
-            && (is_adt_struct_type(ctx, from_ty) || is_adt_typeref(ctx, from_ty))
+            && (is_adt_struct_type(ctx, from_ty) || is_nominal_value(ctx, from_ty))
         {
             return Some(MaterializeResult { value, ops: vec![] });
         }
@@ -140,15 +137,15 @@ pub fn generic_type_converter(ctx: &mut IrContext) -> TypeConverter {
                 return None;
             }
 
-            // any → adt.struct: no-op (already a reference type)
-            if is_adt_struct_type(ctx, to_ty) {
-                return Some(MaterializeResult { value, ops: vec![] });
-            }
-
             // Keep dynamic nominal recovery for the target converter. Native
             // lowering can erase it to a pointer, while Wasm needs a ref.cast.
-            if is_adt_typeref(ctx, to_ty) {
+            if is_nominal_value(ctx, to_ty) {
                 return None;
+            }
+
+            // any → literal adt.struct: no-op (already a reference type)
+            if is_adt_struct_type(ctx, to_ty) {
+                return Some(MaterializeResult { value, ops: vec![] });
             }
 
             // Note: any → adt.array conversions
@@ -173,6 +170,7 @@ mod tests {
     use trunk_ir::ops::DialectOp;
     use trunk_ir::pass::Pass;
     use trunk_ir::refs::ValueRef;
+    use trunk_ir::types::AttributeMap;
     use trunk_ir::types::{Attribute, Location};
     use trunk_ir::walk::{WalkAction, walk_op};
 
@@ -190,7 +188,7 @@ mod tests {
                 &mut ctx,
                 &format!(
                     r#"core.module @test {{
-                !Closure = adt.struct<_closure(entries: tribute_rt.convention_table_ref), {{layout = "closure"}}>
+                !Closure = adt.struct<(tribute_rt.convention_table_ref), {{layout = "closure"}}>
                 func.func @transfer(%index: core.i32, %erased: tribute_rt.anyref) {{
                     {cast}
                     func.tail_call_indirect %index({arg}) attributes {{tribute.calling_convention = "cps"}} : (!Closure) -> ()
@@ -219,7 +217,7 @@ mod tests {
                 continue;
             }
             lowered.unwrap();
-            let tc = crate::wasm::type_converter::wasm_type_converter(&mut ctx);
+            let tc = crate::wasm::type_converter::wasm_type_converter(&mut ctx, module);
             trunk_ir::rewrite::PatternApplicator::new(tc)
                 .add_pattern(UnrealizedCastConversionPattern)
                 .apply_partial(&mut ctx, module);
@@ -265,7 +263,7 @@ mod tests {
         let module = trunk_ir::parser::parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !S = adt.struct<S(x: core.i32)>
+  !S = adt.struct<"S", (core.i32)>
   func.func @f(%x: core.i32, %s: !S, %any: tribute_rt.anyref) { func.return }
 }"#,
         );
@@ -338,18 +336,11 @@ mod tests {
     }
 
     fn nominal_reference_type(ctx: &mut IrContext) -> TypeRef {
-        tribute_ir::dialect::adt::Typeref::params()
-            .name("String")
-            .intern(ctx)
-            .as_type_ref()
+        tribute_ir::dialect::adt::Enum::key(ctx, "String", AttributeMap::new()).as_type_ref()
     }
 
     fn struct_type(ctx: &mut IrContext) -> TypeRef {
-        tribute_ir::dialect::adt::Struct::params([])
-            .name("Payload")
-            .intern(ctx)
-            .expect("a struct without fields is valid")
-            .as_type_ref()
+        tribute_ir::dialect::adt::Struct::literal(ctx, [], AttributeMap::new()).as_type_ref()
     }
 
     fn dynamic_value(ctx: &mut IrContext, location: Location) -> ValueRef {
@@ -370,11 +361,15 @@ mod tests {
         let struct_ty = struct_type(&mut ctx);
         let value = dynamic_value(&mut ctx, location);
         let generic_converter = generic_type_converter(&mut ctx);
-        assert!(
-            generic_converter
-                .materialize(&mut ctx, location, value, anyref_ty, nominal_ty)
-                .is_none()
-        );
+        let key = tribute_ir::dialect::adt::Struct::key(&mut ctx, "Payload", AttributeMap::new())
+            .as_type_ref();
+        for nominal in [nominal_ty, key] {
+            assert!(
+                generic_converter
+                    .materialize(&mut ctx, location, value, anyref_ty, nominal)
+                    .is_none()
+            );
+        }
         let struct_result = generic_converter
             .materialize(&mut ctx, location, value, anyref_ty, struct_ty)
             .expect("dynamic struct recovery stays a no-op");
@@ -393,7 +388,8 @@ mod tests {
             Some(native_target)
         );
 
-        let wasm_converter = crate::wasm::type_converter::wasm_type_converter(&mut ctx);
+        let module = trunk_ir::parser::parse_test_module(&mut ctx, "core.module @test {}");
+        let wasm_converter = crate::wasm::type_converter::wasm_type_converter(&mut ctx, module);
         let wasm_target = wasm_converter
             .convert_type(&ctx, nominal_ty)
             .expect("Wasm nominal representation");

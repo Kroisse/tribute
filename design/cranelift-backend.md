@@ -307,15 +307,15 @@ machine 호출이 잘못된 register와 stack 배치를 쓴다.
 
 ## 메모리 관리: Reference Counting
 
-상세 내용은 [implementation.md](implementation.md#cranelift-reference-counting)를 참조.
+상세 내용은 [rc.md](rc.md)를 참조.
 
 Private native runtime helper는 target stage에서 exact physical callable ABI로만
 선언한다. 이 helper의 parameter와 result는 `core.ptr` 또는 scalar physical type이며
-`adt.typeref`를 사용할 수 없다. Source-logical managed reference와 private runtime
+nominal 값 타입을 사용할 수 없다. Source-logical managed reference와 private runtime
 pointer 사이의 경계는 이름, `abi` 문자열 또는 symbol 위치로 추론하지 않는다.
 
 Native ownership/RTTI plan은 `scf_to_cf` 뒤와 `func_to_clif` 앞에서 한 번 만들며
-IR을 변경하지 않는다. `adt.typeref`와 compiler-generated managed layout의 semantic
+IR을 변경하지 않는다. Nominal 값 타입과 compiler-generated managed layout의 semantic
 type, exact callable contract와 CFG liveness만 사용한다. RTTI deep-release field와
 entry/call/store/load/final-use/tail action은 이 plan에 함께 들어간다. 이후
 `core.ptr`는 이미 선택된 explicit RC operation의 physical operand일 뿐이다.
@@ -323,8 +323,9 @@ entry/call/store/load/final-use/tail action은 이 plan에 함께 들어간다. 
 Plan의 RTTI 배치는 plan을 만든 직후 descriptor(struct layout, enum layout의 variant 하나, 또는
 `adt.array` 타입)마다 하나의 `tribute_rtti.layout` 선언으로 모듈에 기록한다. 선언이 담는 내용은
 [runtime-types.md](runtime-types.md#ir에서의-표현)를 따른다. index는 plan의 할당 순서대로 사용자
-RTTI index 공간에서 정한다. [Closure 저장 layout](ir.md#closure-저장-layout)의 base와 각
-capture layout은 서로 다른 할당 descriptor이므로 layout마다 RTTI 선언과 release 함수를 가진다.
+RTTI index 공간에서 정한다.
+[Closure 저장 layout](tribute-dialects.md#closure-저장-layout)의 base와 각 capture
+layout은 서로 다른 할당 descriptor이므로 layout마다 RTTI 선언과 release 함수를 가진다.
 Closure layout을 native 표현으로 바꾸는 일은 Tribute target 단계가 소유하며, 할당 op과 그 layout의
 RTTI 선언을 함께 바꾼다. Native closure 객체는 RC header 뒤 payload offset 0에 [convention
 table](tribute-dialects.md#convention-entry)의 주소를 두고 그 뒤에 capture를 자연 정렬로 둔다. Convention
@@ -337,7 +338,8 @@ layout으로의 cast는 pointer를 바꾸지 않는다. RTTI 생성은 선언이
 붙이는지 검사한 뒤, descriptor별 release 함수, index마다 release 함수 주소와 descriptor 내용을 담는
 RTTI table(`clif.data`와 재배치), table을 통해 해제를 디스패치하는 `__tribute_deep_release`를 IR에
 선언한다. `struct_to_mem`은 struct와 variant field 접근의 nominal layout을
-[`mem.struct`](ir.md#nominal-수준과-structural-수준)로 바꾸며, 선언의 필드 종류에서 해제되는 필드를 읽는다.
+[`mem.struct`](tribute-dialects.md#nominal-수준과-structural-수준)로 바꾸며, 선언의
+필드 종류에서 해제되는 필드를 읽는다.
 같은 단계가 variant 판별을 값의 descriptor 번호(`tribute_rtti.descriptor`)와 선언된 번호의 정수 비교로
 바꾼다. Descriptor 번호를 읽는 연산은 managed 참조만 받으며, native 타입 변환이 그 참조를 pointer로 바꾸기 전에
 RC header의 index를 읽는 `clif.load`가 된다. 비교는 일반 정수 비교로 내려간다. RC header lowering은

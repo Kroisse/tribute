@@ -101,6 +101,8 @@ verifiers should remain responsible for graph-wide invariants that require
 walking use-def chains, symbol tables, or nested region relationships. Operation
 interfaces and flags describe behavior and properties, not validation phases.
 
+## Interface와 flag
+
 Operation interface는 operation wrapper가 구현하는 trait 하나로 선언한다. 같은
 trait이 interface의 이름이고, typed 구현과 dynamic query가 따로 갈라지지 않는다.
 Consumer는 operation 이름으로 registry에서 구현을 찾고, 찾은 handle은 그
@@ -130,7 +132,7 @@ Operation flag는 동작 없이 operation 정의가 선언하는 예/아니오 �
 정의한 dialect만 그 operation의 flag를 정할 수 있다. 메서드가 없더라도 다른 crate가
 남의 operation에 붙여야 하는 성질은 flag가 아니라 interface로 정의한다.
 
-### 선언적 operation schema
+## 선언적 operation schema
 
 Operation verifier의 로컬 계약은 `#[dialect]` operation 정의에서 선언적으로
 기술한다. 모든 operation은 이 문법으로 정의하며, 타입 제약이 없는 entity는 `_`로
@@ -417,6 +419,12 @@ case 목록의 첫 항목으로 쓴다.
 ```text
 cf.switch %flag : core.i32, [default: ^bb1, 42: ^bb2, -1: ^bb3]
 ```
+
+## 어셈블리 형식
+
+모든 operation은 generic 형식으로 읽고 쓰며, 전용 형식을 선언한 operation은
+그 형식으로도 읽고 쓴다. 타입의 textual form은 [타입 모델](#타입-textual-form)이
+정한다.
 
 ### Generic 형식
 
@@ -752,7 +760,7 @@ signature 타입 네 가지와 `adt.struct`, `adt.enum`뿐이다. Signature 타�
 쓴다. `adt.struct`와 `adt.enum`의 문법은 매개변수 속성에서 이름을 꺼내고 variant
 타입을 중첩하므로, 두 소비자만을 위해 타입 형식 문법을 설계하지 않는다.
 
-### 분석 질의와 편집 계약
+## 분석 질의와 편집 계약
 
 분석 캐시의 신선도는 IR 변경에 대해 자동이다. 변경을 관찰하는 주체는
 `IrContext`이고, 결과를 보관하고 신선도를 판정하는 주체는 `AnalysisCache`이며,
@@ -761,7 +769,7 @@ pass와 분석 소비자는 두 값을 명시적인 인자로 받는다. 이 절
 재사용되는지, 반환된 결과의 수명이 어디까지인지, 그리고 IR을 바꾸는 소비자가
 자신이 바꾸는 IR을 요약한 결과를 어떻게 유지하는지.
 
-#### Context identity와 revision
+### Context identity와 revision
 
 `IrContext`는 주소와 무관한 고유 identity와 단조 증가하는 IR revision을
 가진다. Operation, value/use-list, block, region, type·path interner 및 전역
@@ -793,7 +801,7 @@ pass, pass 검증기와 pass 바깥의 분석 소비자가 이를 공유한다. 
 없기 때문이다. 검증기는 IR을 바꾸지 않으므로 검증 중 계산된 분석은 이후 pass를
 위해 캐시에 남는다.
 
-#### 신선도 판정
+### 신선도 판정
 
 캐시의 각 결과는 계산 시점의 identity와 revision을 기록하고, 조회 시 둘이 모두
 같을 때만 신선하다. Revision이 바뀌면 캐시는 모든 결과와 분석 간 의존성
@@ -816,7 +824,7 @@ revision 검사가 거부한 결과를 재사용하게 할 수 없다. 보존 �
 않은 함수를 다시 걷는 비용은, 집계를 쥔 채 IR을 바꾸는 소비자가 그 집계를 직접
 갱신하는 것으로 없앤다(아래 보유 후 갱신).
 
-#### 결과의 수명과 snapshot
+### 결과의 수명과 snapshot
 
 조회가 반환한 `Arc`는 반환 시점에만 현재 IR의 사실이다. 그 뒤로 IR이 바뀌면
 `Arc`는 이전 IR에 대한 snapshot이 되며, 캐시가 그것을 회수할 방법은 없다.
@@ -853,7 +861,7 @@ let fresh = analyses.get::<FunctionFacts>(ctx, f)?;   // 다시 계산; facts는
 pass 뒤에도 revision은 이미 올라가 있으므로, 다음 소비자의 조회는 모든 결과를
 다시 계산한다.
 
-#### 보유 후 갱신
+### 보유 후 갱신
 
 IR을 바꾸는 소비자가 자신이 바꾸는 IR을 요약한 분석 결과를 반복마다 다시
 조회하면, 바뀌지 않은 부분까지 매번 다시 계산한다. 그런 소비자는 결과를 한 번
@@ -878,7 +886,7 @@ call graph가 기록한 호출만 인라인하므로, 갱신할 수 없는 호�
 Call graph를 조회하는 다른 pass는 인라이너가 끝난 뒤 캐시에서 다시 계산한
 결과를 받는다.
 
-#### Pass 경계
+### Pass 경계
 
 Pass manager는 pass에 `&mut IrContext`와 캐시를 그대로 넘긴다. Pass 안의 모든
 변경은 `IrContext` 메서드를 거치므로 revision은 pass가 협력하지 않아도 오른다.
@@ -886,7 +894,7 @@ Pass manager는 revision으로 pass가 IR을 바꿨는지 판정해 검증기 �
 결정한다. 중첩 pass manager의 대상이 `IsolatedFromAbove` operation이어야 한다는
 규칙은 분석 캐시와 무관하게 그대로다.
 
-#### 회귀 기준
+### 회귀 기준
 
 분석 캐시를 바꾸는 변경은 다음을 각각 구별하는 회귀를 갖춘다.
 
@@ -903,7 +911,7 @@ Pass manager는 revision으로 pass가 IR을 바꿨는지 판정해 검증기 �
   Call graph에서는 같은 callee를 부르는 호출 가운데 하나와 마지막 하나의
   인라인을 각각 포함한다.
 
-#### Native ownership 분석
+### Native ownership 분석
 
 Native ownership planning의 policy-neutral 입력은 `scf_to_cf` 이후,
 `func_to_clif` 이전 경계에서 fallible 분석이 소유한다. Module 범위 분석은
@@ -938,7 +946,7 @@ Native managed liveness는 정의된 `func.func`를 대상으로 하는 별도�
 `elide_proven_borrowed_parameters`는 선택에 관여하지 않는다. Action planner는
 선택된 결과를 소비한다.
 
-#### 함수 단위 편집과의 관계
+### 함수 단위 편집과의 관계
 
 이 절의 캐시는 context 하나에 revision 하나를 두며, 결과의 재사용은 IR이
 바뀌지 않은 구간에 한정된다. 함수 하나를 바꾸면서 나머지 함수의 결과를 이어
@@ -947,7 +955,7 @@ Native managed liveness는 정의된 `func.func`를 대상으로 하는 별도�
 revision 판정을 대체할 수 있지만, 결과의 수명과 snapshot 규칙과 보유 후 갱신의
 정확성 의무는 그대로 이어받는다.
 
-### Callable 본문 구조
+## Callable 본문 구조
 
 선택적 본문을 소유하는 callable operation은 region이 없으면 선언이고, region이
 하나이며 entry block이 있으면 정의다. Region은 있지만 entry block이 없거나 region이
@@ -969,6 +977,13 @@ Symbol 사용 질의는 operation-local이다. Container operation이 직접 sym
 갖지 않는다는 사실은 자식 region의 사용을 부정하지 않는다. Symbol 사용을 수집하는
 consumer는 nested region을 재귀적으로 순회해야 하며, "사용 없음"을 자식 순회 생략의
 근거로 삼아서는 안 된다.
+
+## Source Origin
+
+각 operation의 `Location`은 진단의 source origin을 보존한다. 새 operation과
+region/block을 생성하는 pass는 원본 source location을 전달하고, synthetic helper도
+의미 있는 origin을 가져야 한다. 같은 location은 source origin 공유를 뜻하며
+operation identity나 callable provenance를 대신하지 않는다.
 
 ## Core Invariants
 
@@ -1187,6 +1202,10 @@ conventions. `List` is an opaque nominal builtin whose shared construction and
 sequence-view observations use `list.*`; target-specific passes choose and
 eliminate its private representation.
 
+Tribute dialect 타입의 규칙은 tribute-dialects.md가 정한다: `adt.*` layout과
+reference는 [`adt` 절](tribute-dialects.md#adt)이, closure 저장 layout은
+[`closure` 절](tribute-dialects.md#closure-저장-layout)이 정한다.
+
 Dialect 타입의 정의는 그 타입의 type verifier, 전용 textual 문법, printer가
 자동 type alias를 만들 때 쓰는 alias 이름 제안을 함께 소유한다. Alias 이름 제안은
 출력 이름에만 영향을 주며, 전용 문법처럼 선언된 모양과 type verifier를 통과한
@@ -1246,7 +1265,7 @@ WasmGC 배열 명령의 index와 길이는 memory의 index type과 관계없이 
 core.i32
 core.tuple<core.i32, core.ptr {k = "v"}>
 core.ref<core.i32, {nullable = true}>
-adt.typeref<Point>
+adt.struct<"Point">
 func.func_sig<(core.i32 {tribute.ownership = "consumed"}) -> core.i64, {call_conv = "tail"}>
 ```
 
@@ -1284,8 +1303,12 @@ func.func_sig<(core.i32 {tribute.ownership = "consumed"}) -> core.i64, {call_con
 
 식별 타입(identified type)은 키로 정체성이 정해지고, 몸체를 키와 따로 갖는
 타입이다. MLIR의 mutable type storage와 LLVM의 identified struct에 해당한다.
-타입 정의가 식별 타입임을 선언하며, 어느 타입이 식별 타입인지는 정의만 정한다.
 
+- **식별자.** 어느 타입이 식별 타입인지는 타입 정의가 인스턴스마다 정한다.
+  정의는 인스턴스의 저장 표현에서 식별자(이름)를 읽어 돌려주며, 식별자가 있는
+  인스턴스가 식별 타입이다. 식별자가 없는 인스턴스는 내용으로 정체성이 정해지는
+  보통 타입이다. 그래서 한 정의가 LLVM의 struct처럼 식별 타입과 literal 타입을
+  함께 가질 수 있다. 판정은 정의만 하며, 다른 dialect가 붙이거나 바꿀 수 없다.
 - **키.** 식별 타입의 저장 표현(이름, 매개변수, 속성)이 키다. 같은 키는
   같은 타입이며, 몸체는 정체성에 들어가지 않는다. 그래서 몸체가 자기 키를 담아
   재귀할 수 있다.
@@ -1299,8 +1322,8 @@ func.func_sig<(core.i32 {tribute.ownership = "consumed"}) -> core.i64, {call_con
 - **Textual form.** 식별 타입은 자기 type assembly format을 등록해야 한다. 일반
   형식은 몸체를 표현하지 못하기 때문이다. 형식은 키만 쓰거나, 키 뒤에 몸체를
   쓴다. 몸체를 쓴 등장은 그 몸체를 묶고, 이미 묶인 몸체와 다르면 parse 오류다.
-  Printer는 module이 닿는 식별 타입마다 alias를 정의하고, 몸체를 그 alias의 정의
-  줄에 쓴다. 그 alias가 아직 정의되지 않은 자리, 곧 앞선 alias 정의에 나오는
+  Printer는 module이 닿는 식별 타입마다 식별자를 이름으로 하는 alias를 정의하고,
+  몸체를 그 alias의 정의 줄에 쓴다. 그 alias가 아직 정의되지 않은 자리, 곧 앞선 alias 정의에 나오는
   자리에도 몸체를 쓰며, parser는 같은 몸체를 다시 묶는다. 나머지 자리에서는 alias로
   쓴다. 식별 타입의 몸체를 쓰는 동안 그 안에 다시 나오는 식별 타입은 키만 쓴다.
   그래서 재귀와 상호 재귀가 끝나며, 식별 타입 사이에는 alias 정의 순서의 제약이
@@ -1407,7 +1430,7 @@ Compiler가 소유하는 runtime 저장 layout은 예약 type 속성 `layout`으
   같은 의미의 값이라도 저장 layout이 다르면 이 속성으로 구별하지 않는다.
 - 일반 type 속성처럼 interning identity에 참여한다. `layout`이 없는 같은 모양의
   타입과는 다른 타입이다. Textual form은 일반 type 속성과 같다:
-  `adt.struct<_closure(entries: core.ptr), {layout = "closure"}>`.
+  `adt.struct<(core.ptr), {layout = "closure"}>`.
 - 속성은 그 layout을 만드는 compiler의 canonical 생성자만 붙인다. Frontend와
   소스에서 온 타입은 이 속성을 갖지 않는다. 그래서 사용자 타입이 같은 이름이나
   모양을 가져도 compiler layout으로 취급되지 않는다.
@@ -1418,274 +1441,6 @@ Compiler가 소유하는 runtime 저장 layout은 예약 type 속성 `layout`으
   판별한다. Struct 이름, field 모양, element 타입, erased reference 타입으로
   판별하지 않는다. TrunkIR은 값의 의미를 해석하지 않으며, 의미는 이 속성을 정의하는
   언어 계층과 그 layout을 구현하는 target이 소유한다.
-
-### `adt.struct` nominal layout type
-
-`adt.struct`는 이름 있는 nominal struct layout이다. 이름과 필드 이름을 항상 가지며
-전용 textual 문법을 쓴다. 이름은 식별자(`[A-Za-z_][A-Za-z0-9_]*`)면 그대로 쓰고,
-아니면 따옴표 문자열로 쓴다(`adt.struct<"Nested::Closure"(…)>`, `"0": core.i32`).
-Struct 이름과 필드 이름은 타입 이름공간의 이름이며 symbol table의 정의가
-아니므로 `@`를 붙이지 않는다.
-
-```text
-adt.struct<Point(x: core.i32, y: core.i32)>
-adt.struct<Node(value: core.i32 {k = "v"}, next: adt.typeref<Node>)>
-adt.struct<_closure(entries: core.ptr), {layout = "closure"}>
-adt.struct<_closure_captures(entries: core.ptr, _0: core.i32),
-  {layout = "closure_captures",
-   closure_base = adt.struct<_closure(entries: core.ptr), {layout = "closure"}>}>
-adt.struct<Empty()>
-```
-
-- 저장 표현은 다음과 같다. 필드 타입은 `params`에 선언 순서대로 둔다. 필드 이름은
-  각 필드의 [매개변수 속성](#타입-매개변수-속성) `name`(문자열)이고, struct 이름은
-  type 속성 `name`(문자열)이다. 필드 하나의 다른 속성은 같은 매개변수 속성
-  dictionary에 함께 둔다.
-- 이름과 모든 필드 이름은 필수이고, 필드 이름은 struct 안에서 겹치지 않는다.
-  매개변수가 없으면 필드가 없는 struct다. 필드 목록을 담는 별도 type 속성은 없다.
-  Type verifier가 이 규칙을 모든 interned `adt.struct`에 적용한다.
-- 필드 속성 안의 `name`과 type 속성의 `name`, `param_attrs`는 전용 문법이
-  소유한다. Textual form의 필드 속성과 type 속성 dictionary에는 쓰지 않는다.
-  `layout` 같은 나머지 type 속성은 `<…>` 안 마지막 원소로 둔다.
-- 필드 타입이 매개변수이므로 일반 타입 순회와 변환은 필드 타입에 그대로 도달한다.
-  필드 수를 유지하는 변환은 필드 이름과 속성을 위치 그대로 둔다.
-- 재귀 참조는 같은 이름의 `adt.typeref`로 표현한다. `adt.struct`는 자기 자신을
-  매개변수로 갖지 않는다.
-- Row 매개변수를 가진 선언의 layout은 type 속성 `row_params`를 가지며, 필드 type의
-  tail은 그 binder의 index다
-  ([Nominal row 인자](tribute-dialects.md#nominal-row-인자)). Textual form은
-  binder를 이름과 필드 목록 사이에 쓴다: `adt.struct<Callback['a0](run: ...)>`.
-  `row_params`도 전용 문법이 소유한다.
-
-#### Nominal 수준과 structural 수준
-
-Struct 이름과 필드 이름은 IR에서 nominal layout을 해석하는 단계까지만 의미를
-가진다. `adt.typeref`를 같은 이름의 layout으로 해석하는 단계, ownership 계획, ABI
-검증, frontend의 record pattern 해석이 여기에 속한다. 그 아래의 target lowering은
-필드의 물리 표현과 순서만 사용한다. 이름이 필요한 runtime 동작(해제, 값 출력,
-variant 판별)은 [runtime 타입 descriptor](runtime-types.md)가 맡는다. Nominal
-layout을 마지막으로 해석하는 target 경계가 할당에 descriptor 번호를 새긴다.
-
-저수준 struct 타입이 갖는 identity는 runtime 동작이 달라지는 경우로 한정한다.
-Layout과 runtime 동작이 같은 두 소스 타입은 같은 저수준 struct를 쓰고
-descriptor로만 구별된다.
-
-- Native는 nominal layout을 마지막으로 해석하는 경계에서 struct field 접근의
-  `adt.struct`를 이름 없는 `mem.struct<T...>`로 내린다. `mem.struct`는 필드 타입만
-  갖고 자연 정렬 memory layout을 뜻한다. 필드 타입은 target 표현이며, 해제 동작이
-  다른 managed 참조(`tribute_rt.anyref`)와 unmanaged 포인터(`core.ptr`)는 크기가
-  같아도 구분한다. 할당이 해제하는 필드가 managed 참조이며, 이 판정은 ownership
-  계획의 것이고 물리 타입에서 다시 유도하지 않는다. `mem.struct`의 field offset과
-  크기는 같은 nominal layout에서 계산한 할당 크기와 일치한다.
-- 할당은 descriptor를 nominal layout 타입으로 찾으므로 RC header를 새기는 단계가
-  nominal `adt.struct`의 마지막 사용처다. Field offset 계산은 타입 변환 없이
-  `mem.struct`만 읽고, field 접근이 `clif.load`와 `clif.store`의 offset이 될 때
-  `mem.struct`도 사라진다. Cranelift에는 aggregate 타입이 없다.
-- Wasm은 nominal layout을 마지막으로 읽는 `adt_to_wasm` 뒤에 `adt.struct`를 이름
-  없는 `wasm_gc.struct<T...>`로 바꾼다. 이 치환은 함수 signature와 block 인자를
-  포함한 모듈 전체에 적용되므로 모든 위치가 같은 타입을 가진다. Variant는 처음부터
-  자기 필드의 `wasm_gc.struct`로 낮춘다. 필드 표현이 같은 struct와 variant는 같은
-  GC 타입이며, 첫 필드의 descriptor가 runtime identity를 맡는다. Compiler 소유 layout은
-  [`layout`](#runtime-layout-식별자)으로 식별한다.
-- 저수준 struct는 재귀하지 않는다. 재귀 참조는 이미 native pointer나 Wasm 추상
-  reference로 끊겨 있다.
-- 두 target 모두 [`adt.enum`](#adtenum-nominal-layout-type)의 variant 객체를 자기
-  필드만 가진 저수준 struct로 두고, 어느 variant인지는 값의
-  [descriptor](runtime-types.md#variant-판별)로 판별한다. Native에서 필드는 payload의
-  offset 0부터 자연 정렬로 놓이고, variant field 접근은 struct field 접근과 같이 그
-  variant의 `mem.struct`를 읽는다. Variant 객체는 자기 필드의 크기로 할당하므로
-  enum 타입의 값은 하나의 정적 할당 크기를 갖지 않는다. 그 값의 해제 크기는 값의
-  descriptor가 정한다.
-
-### Closure 저장 layout
-
-Closure 값은
-[convention table](tribute-dialects.md#convention-entry) 참조와 capture한 값을
-함께 담은 객체
-하나다. 별도의 environment 객체를 두지 않으며, closure를 만드는 일은 할당 하나이고
-capture를 읽는 일은 closure의 필드 접근 하나다. Closure의 의미적 타입은 capture와 무관하게
-`closure.closure<S>` 하나이고, capture마다 다른 layout은 저장 표현에만 있다.
-
-#### Shared IR 표현
-
-- `closure.new`는 entry 함수 목록과 capture 값을 순서대로 받아 closure를 만든다.
-  Entry 함수 목록은
-  [convention table](tribute-dialects.md#convention-entry)의 순서를
-  따르는 셋이다. 같은
-  목록을 가진 `closure.new`들은 convention table 하나를 공유한다.
-  Capture 목록은 비어 있을 수 있다. Environment를 따로 받지 않는다.
-- Entry 함수의 environment 입력은 그 closure 자신이다. 입력의 타입은
-  `closure.new` 결과의 closure 타입이고, 위치는 그 entry의 바깥 convention이 정한
-  environment index다. 이 입력의 ownership 계약은 다른 물리 입력과 같다
-  ([출구에서 확정되는 물리 계약](abi-boundary.md#출구에서-확정되는-물리-계약)).
-- Entry 함수는 environment 입력에서 capture를 `closure.unpack`으로만 읽는다.
-  `closure.unpack %self`의 결과 타입 목록은 capture 타입 목록이며, entry 함수를
-  참조하는 모든 `closure.new`의 operand 타입 목록과 정확히 같아야 한다. Whole-IR
-  검증은 이 일치를 entry 함수와 그 참조에서 확인하며 struct 이름이나 필드 모양으로
-  대신하지 않는다. Capture가 없는 entry 함수는 `closure.unpack`을 갖지 않는다.
-- `closure.entry`는 closure의 convention table에서 convention 하나의 entry 함수
-  참조를 읽는다. Closure 호출은 자기 convention의 entry를 읽어 호출하고
-  closure 값 자체를 environment 입력으로 넘긴다. Environment를 따로 꺼내는
-  projection은 없다.
-- Lambda lifting, CPS continuation(`Done`, `Dispatch`, resume), `func_ref` entry,
-  target 진입 bridge가 만드는 frame closure를 포함한 모든 closure 생성은
-  `closure.new` 하나로 표현한다. Compiler가 만드는 closure도 같은 convention entry 규칙을
-  따르며, 한 convention으로만 불리는 closure는 그 convention과 더 강한 convention의
-  entry만 의미가 있다. 여러
-  closure가 공유하는 가변 상태는 managed cell 참조를 capture해서 표현하며,
-  closure의 필드는 생성 뒤 바뀌지 않는다.
-
-#### Layout
-
-Closure 저장 layout은 두 종류다.
-
-- **Closure base**(`layout = "closure"`)는 convention table 필드 하나를 가진다. 모든 closure
-  값의 저장 타입이며, closure를 저장하거나 전달하는 위치(signature, block 인자,
-  `ContinuationFrame<R>`의 필드, evidence runtime의 `Dispatch`)는 이 타입을 쓴다. Capture가
-  없는 closure는 이 layout으로 할당한다.
-- **Closure capture layout**(`layout = "closure_captures"`)은 base의 필드 뒤에
-  capture를 `closure.new`의 순서대로 두고, type 속성 `closure_base`로 그 base를
-  가리킨다. Capture가 하나 이상인 closure는 이 layout으로 할당한다.
-- `closure_base`는 closure 저장 계약이 소유하는 속성이다. `layout`처럼 canonical
-  생성자만 붙이고 interning identity에 참여하며, 필드 타입을 바꾸는 타입 변환은
-  이 속성 안의 base도 같은 변환으로 바꾼다. Capture layout의 앞부분 필드는 base의
-  필드와 타입과 이름이 같다. Type verifier가 이 규칙을 `"closure_captures"` layout에
-  적용한다. 이 속성은 저장 표현만 설명하며, Tribute 소스와 의미적 타입 검사에는
-  subtyping이 없다.
-- Capture layout 값은 변환 없이 base 자리에 놓인다(upcast). Base 값을 capture
-  layout으로 보려면 정확한 결과 타입을 가진 명시적 cast가 필요하며, target이 그
-  cast를 검증하고 물리화한다. Target은 base와 capture layout의 관계를
-  `closure_base`로만 정하고, 필드 모양이 prefix처럼 보인다는 사실에서 추론하지
-  않는다.
-- Capture layout의 identity는 base와 capture 필드 타입 목록이다. Capture 타입 목록이
-  같은 두 closure는 같은 layout을 쓴다. 필드 이름과 struct 이름은 canonical
-  생성자가 정하며 의미를 갖지 않는다.
-- Convention table 필드의 타입은 경계 안에서 `tribute_rt.convention_table_ref`이고,
-  target이 자기 정적 table 참조 표현으로 바꾼다. 이 필드는 managed 참조가 아니며
-  해제하지 않는다. Target은 closure의 callable type `S`마다 base를
-  정한다. 모든 `S`에 base 하나를 쓸 수도 있고 `S`마다 다른 base를 둘 수도 있다.
-  `S`마다 base를 두고 entry를 typed 함수 참조로 표현하면, entry 함수의 environment
-  입력이 다시 그 base이므로 base와 entry 함수 타입은 서로를 가리킨다. 이 재귀는
-  `adt.typeref`로 끊는다.
-- Capture layout의 `closure_base`는 `closure.new` 결과 타입의 `S`에서 고른 base다.
-
-#### Storage 확정
-
-[Representation/ABI 경계](abi-boundary.md#representationabi-경계)의
-closure operation lowering과
-storage 확정은 다음 변환을 함께 적용한다.
-
-- `closure.new`는 convention table 참조와 capture를 필드로 가진 할당 하나가 된다. 결과는
-  capture layout에서 base로의 upcast다. Table 참조는 entry 함수 목록을 담은
-  `tribute_rt.convention_table`이 만든다.
-- `closure.entry`는 base의 convention table 필드를 읽고 그 table에서
-  `tribute_rt.convention_entry`로 convention의 entry를 읽는 일이 된다. 간접 호출은
-  closure 필드 하나와 table 원소 하나를 읽는다.
-- 두 `tribute_rt` operation은 경계 출구를 지나며, target 단계가 convention table을 entry
-  함수 목록마다 정적 data 하나로 한 번 만든다.
-- `closure.unpack`은 environment 입력을 base에서 정확한 capture layout으로 바꾸는
-  cast 하나와 capture 필드 읽기가 된다. 이 cast는 `closure.*` dialect 설명의 복원
-  규칙을 따르며, Wasm에서는 `ref.cast`, native에서는 pointer 그대로다.
-- `closure.closure<S>`는 모든 type-bearing surface에서 `S`의 base가 된다.
-- Closure 값이 일반 reference erasure 자리(boxed source value, effect payload 등)를
-  지날 수 있지만, 거기서 closure로 돌아오는 cast는 exact base를 결과 타입으로
-  명시한다.
-  Closure를 저장하는 compiler 소유 layout의 필드는 erased reference가 아니라 base를
-  쓴다.
-
-### `adt.enum` nominal layout type
-
-`adt.enum`은 이름 있는 nominal enum layout이다. 이름과 variant 목록을 가지며 전용
-textual 문법을 쓴다. 이름 표기 규칙은 `adt.struct`와 같다.
-
-```text
-adt.enum<Option { None(), Some(value: T) }>
-adt.enum<List { Empty(), Cons(core.i32, adt.typeref<List>) }>
-adt.enum<"geo::Shape" { Dot(), Rect(core.f64, core.f64 {k = 1}) }, {layout = "x"}>
-adt.enum<Never {}>
-```
-
-- Variant는 이름과 괄호로 감싼 필드 목록이다. 필드가 없어도 괄호를 쓴다. 필드는
-  `name: type` 또는 이름 없이 `type`이며, 어느 쪽이든 그 필드의 다른 속성
-  dictionary가 뒤따를 수 있다.
-- 저장 표현은 다음과 같다. Variant 하나가 `adt.enum`의 타입 매개변수 하나이며 선언
-  순서대로 놓인다. Variant는 `adt.variant` 타입이고, 그 `params`가 필드 타입, type
-  속성 `name`(문자열)이 variant 이름이다. 필드 이름이 있으면 그 필드의
-  [매개변수 속성](#타입-매개변수-속성) `name`(문자열)이다. Enum 이름은 `adt.enum`의
-  type 속성 `name`(문자열)이다.
-- Enum 이름과 모든 variant 이름은 필수이고, variant 이름은 enum 안에서 겹치지
-  않는다. 매개변수가 없으면 variant가 없는 enum이다. Variant 목록을 담는 별도 type
-  속성은 없다. Type verifier가 이 규칙을 모든 interned `adt.enum`에 적용한다.
-- Variant와 필드의 `name`, enum type 속성의 `name`은 전용 문법이 소유한다. Textual
-  form의 속성 dictionary에는 쓰지 않는다. 나머지 type 속성은 `<…>` 안 마지막
-  원소로 둔다.
-- Variant 매개변수는 [매개변수 속성](#타입-매개변수-속성)을 갖지 않는다. 전용 문법에
-  그것을 쓸 자리가 없으므로 `adt.enum`의 `param_attrs`는 type verifier가 거부한다.
-  필드의 속성은 그 variant(`adt.variant`)의 매개변수 속성이다.
-- `adt.variant`는 `adt.enum`의 매개변수로만 쓴다. 값의 타입이나 연산의 타입 속성이
-  되지 않으며, 연산은 enum 타입과 선언 순서의 variant 위치(`tag`)로 variant를
-  가리킨다. 위치는 `adt.variant_tag`가 내는 값과 같다.
-- Variant 필드 타입이 매개변수의 매개변수이므로 일반 타입 순회와 변환은 variant
-  필드 타입에 그대로 도달한다.
-- 재귀 참조는 같은 이름의 `adt.typeref`로 표현한다.
-- Row 매개변수를 가진 선언의 layout은 `adt.struct`와 같이 `row_params`를 가지며,
-  binder를 이름과 variant 목록 사이에 쓴다: `adt.enum<Step['a0] { ... }>`.
-
-### `adt.typeref` nominal reference type
-
-`adt.typeref`는 이름으로 nominal layout을 가리키는 값 type이며 전용 textual 문법을
-쓴다. 이름 표기 규칙은 `adt.struct`와 같다.
-
-```text
-adt.typeref<Point>
-adt.typeref<"geo::Shape">
-adt.typeref<Callback[row(@"<State(Int)>")]>
-adt.typeref<Pair[row(), row(@A | 'a0)]>
-```
-
-- 저장 표현은 type 속성 `name`(문자열)과, row 매개변수를 가진 선언을 가리킬 때의
-  type 속성 `row_args`
-  ([Nominal row 인자](tribute-dialects.md#nominal-row-인자))다. 둘 다 전용
-  문법이 소유한다. 나머지 type 속성은 `<…>` 안 마지막 원소로 둔다.
-- `row_args`가 없는 typeref는 자기 `name`을 alias 이름으로 제안한다. `row_args`를
-  가진 typeref는 row 인자만 다른 typeref끼리 이름이 겹치므로 제안하지 않으며, 다른
-  제안 없는 타입처럼 번호 이름을 받을 수 있다. Tail 이름은 위치에서 정해지므로 alias
-  안의 tail은 [다른 type alias](tribute-dialects.md#사용자-정의-어셈블리-형식)에서처럼 그 alias를 쓴
-  정의의 binder를 가리킨다.
-
-### Nominal 선언
-
-Source가 선언한 struct와 enum은 각각 module 최상위의 선언 operation 하나를 가진다.
-선언은 source 이름을 소유하며, 이름이 필요한 단계는 layout 타입이 아니라 선언에서
-이름을 읽는다. LLVM의 debug metadata가 source 이름을 타입과 따로 두는 것과 같다.
-
-```text
-adt.struct_decl "geo::Point" (x, y)
-adt.enum_decl "geo::Shape" [Dot, Rect]
-```
-
-- `adt.struct_decl`은 struct의 필드 이름을, `adt.enum_decl`은 enum의 variant
-  이름을 선언 순서대로 담는다. 그 수는 layout의 필드 수, variant 수와 같다.
-  Variant의 필드 이름은 담지 않는다.
-- 선언은 이름만 담고 타입은 담지 않는다. 필드와 variant의 타입은 layout이 소유하며,
-  layout을 변환하는 pass는 선언을 고치지 않는다. 텍스트 형식은 이름 목록을 그것이
-  이름 붙이는 layout의 위치 목록과 같은 괄호로 쓴다. 필드는 `(..)`, variant는
-  `[..]`로 쓰며, 식별자가 아닌 이름은 따옴표로 쓴다.
-- 선언은 layout을 그 이름으로 가리킨다. 이름은 frontend가 게시한 alias와 layout의
-  `name`, 그 layout을 가리키는 `adt.typeref`의 `name`과 같다. Layout을 변환하는
-  pass가 변환한 layout을 같은 이름으로 다시 게시하므로 선언은 변환을 따라갈 필요가
-  없다.
-- Frontend는 nominal layout을 게시할 때 그 선언을 함께 내보낸다. 특수화된 enum은
-  인스턴스마다 layout과 선언을 가진다. Compiler가 만든 layout(closure 저장,
-  continuation frame, tuple layout 등)은 선언이 없다.
-- Variant 연산은 이름이 아니라 위치로 variant를 가리킨다. Compiler가 이름으로 아는
-  compiler 소유 variant(문자열 literal이 만드는 `String`의 `Leaf`, evidence의
-  `Option`의 `Some`, `std::io::ReadLineResult`의 각 variant)를 만드는 pass는 그
-  위치를 선언에서 이름으로 찾는다.
-- Native RTTI 생성은 struct·enum의 이름, struct의 필드 이름, variant 이름을 선언에서
-  읽는다([RTTI Table](rc.md#rtti-table)). 선언이 없는 layout의 레코드는 compiler가 정한
-  이름을 쓴다. 선언은 값의 의미를 바꾸지 않으며, `adt` operation을 내리는 target
-  pass가 지운다.
 
 ### `func.func_sig` function type
 
@@ -1774,6 +1529,9 @@ writes `type` in its attribute dictionary. Shared conversion maps
 every input/result and nested type attribute, including types inside
 [parameter attributes](#타입-매개변수-속성), preserving cardinality, and
 checks entry argument arity before changing the signature or entry arguments.
+Each dialect's adapter verifies and decodes its own signature and rebuilds it
+with its own constructor, so the shared traversal selects neither a dialect
+identity nor an ABI.
 Normal `validate_all` combines local operation checks with contextual shared
 function-contract checks. Local checks enforce zero/one ordinary-call results,
 resultless terminators, and exact typed indirect operand/result agreement.

@@ -212,7 +212,7 @@ impl Pass for ArithToWasm {
         target: core::Module,
         _analyses: &mut AnalysisCache,
     ) -> PassRunResult {
-        let tc = wasm_type_converter(ctx);
+        let tc = wasm_type_converter(ctx, target.into());
         trunk_ir_wasm_backend::passes::arith_to_wasm::lower(ctx, target.into(), tc);
         Ok(())
     }
@@ -233,7 +233,7 @@ impl Pass for ScfToWasm {
         target: core::Module,
         analyses: &mut AnalysisCache,
     ) -> PassRunResult {
-        let tc = wasm_type_converter(ctx);
+        let tc = wasm_type_converter(ctx, target.into());
         trunk_ir_wasm_backend::passes::scf_to_wasm::lower(ctx, target.into(), tc, analyses)?;
         Ok(())
     }
@@ -274,7 +274,7 @@ impl Pass for FuncToWasm {
         target: core::Module,
         _analyses: &mut AnalysisCache,
     ) -> PassRunResult {
-        let tc = wasm_type_converter(ctx);
+        let tc = wasm_type_converter(ctx, target.into());
         trunk_ir_wasm_backend::passes::func_to_wasm::lower(ctx, target.into(), tc);
         Ok(())
     }
@@ -295,7 +295,7 @@ impl Pass for WasmFuncSignatureConversion {
         target: core::Module,
         _analyses: &mut AnalysisCache,
     ) -> PassRunResult {
-        let tc = wasm_type_converter(ctx);
+        let tc = wasm_type_converter(ctx, target.into());
         PatternApplicator::new(tc)
             .add_pattern(WasmFuncSignatureConversionPattern)
             .apply_partial(ctx, Module::from(target));
@@ -361,7 +361,7 @@ impl Pass for AdtToWasm {
         _analyses: &mut AnalysisCache,
     ) -> PassRunResult {
         super::descriptors::declare(ctx, target.into());
-        let tc = wasm_type_converter(ctx);
+        let tc = wasm_type_converter(ctx, target.into());
         crate::wasm::adt_to_wasm::lower(ctx, target.into(), tc);
         Ok(())
     }
@@ -504,7 +504,7 @@ impl Pass for LegalizeUnrealizedCasts {
         target: core::Module,
         _analyses: &mut AnalysisCache,
     ) -> PassRunResult {
-        let tc = wasm_type_converter(ctx);
+        let tc = wasm_type_converter(ctx, target.into());
         let result = PatternApplicator::new(tc)
             .add_pattern(UnrealizedCastConversionPattern)
             .add_pattern(ReferenceUpcastPattern)
@@ -750,26 +750,26 @@ mod tests {
     #[test]
     fn adt_struct_get_converts_evidence_result_consistently() {
         let mut ctx = IrContext::new();
-        let module = parse_test_module(
+        let module = crate::test_support::parse_with_evidence_marker(
             &mut ctx,
             r#"core.module @test {
-  !Evidence = adt.array<adt.typeref<{name = "std::runtime::evidence::Marker"}>>
-  !Closure = adt.struct<_closure(entries: tribute_rt.convention_table_ref), {layout = "closure"}>
-  !Frame = adt.struct<Frame()>
-  !Env = adt.struct<Env(closure: !Closure, evidence: !Evidence, frame: !Frame)>
+  !Evidence = adt.array<adt.struct<"std::runtime::evidence::Marker">>
+  !Closure = adt.struct<(tribute_rt.convention_table_ref), {layout = "closure"}>
+  !Frame = adt.struct<"Frame", ()>
+  !Env = adt.struct<"Env", (!Closure, !Evidence, !Frame)>
   wasm.func @worker(%evidence: !Evidence, %closure: !Closure, %frame: !Frame) {
-    %env = adt.struct_new %closure, %evidence, %frame {type = !Env} : !Env
+    %env = adt.struct_new(%closure, %evidence, %frame) : (!Closure, !Evidence, !Frame) -> !Env
     %loaded = adt.struct_get %env {field = 1, type = !Env} : !Evidence
     wasm.return
   }
 }"#,
         );
 
-        let tc = wasm_type_converter(&mut ctx);
+        let tc = wasm_type_converter(&mut ctx, module);
         PatternApplicator::new(tc)
             .add_pattern(WasmFuncSignatureConversionPattern)
             .apply_partial(&mut ctx, module);
-        let tc = wasm_type_converter(&mut ctx);
+        let tc = wasm_type_converter(&mut ctx, module);
         crate::wasm::descriptors::declare(&mut ctx, module);
         crate::wasm::adt_to_wasm::lower(&mut ctx, module, tc);
         crate::wasm::type_converter::convert_evidence_arrays(&mut ctx, module);
@@ -793,9 +793,10 @@ mod tests {
         assert_eq!(ctx.value_ty(struct_new.fields(&ctx)[2]), evidence);
         assert_eq!(struct_get.field_idx(&ctx), 2);
         assert_eq!(struct_get.result_ty(&ctx), evidence);
+        // Converting the evidence field gives the layout a new key.
         assert_eq!(
             ctx.type_attrs(struct_get.r#type(&ctx)).get_str("name"),
-            Some("Env")
+            Some("Env$evidence")
         );
 
         finalize_wasm_gc_types(&mut ctx, module)
@@ -1119,8 +1120,8 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !String = adt.enum<String { Leaf(core.bytes), Branch(tribute_rt.anyref, tribute_rt.anyref, core.i32) }>
-  adt.enum_decl "String" [Leaf, Branch]
+  !String = adt.enum<"String", [(core.bytes), (tribute_rt.anyref, tribute_rt.anyref, core.i32)]>
+  adt.enum_decl "String" !String ["Leaf", "Branch"]
   func.func @main() -> core.nil {
     %string = adt.string_const {value = "wrong"} : core.i32
     func.return

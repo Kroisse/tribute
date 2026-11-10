@@ -627,8 +627,8 @@ fn assert_source_allocation_field_releases(ir: &str) {
         let kind = if ty
             .attrs
             .view(&ctx)
-            .get_str("name")
-            .is_some_and(|name| name == "_closure")
+            .get_str("layout")
+            .is_some_and(|layout| layout == "closure")
         {
             "closure"
         } else if ty

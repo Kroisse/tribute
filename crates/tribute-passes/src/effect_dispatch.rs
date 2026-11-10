@@ -101,10 +101,9 @@ fn canonical_closure(
     cast.result(ctx)
 }
 
-/// Whether `op` is a well-formed tail dispatch: evidence and `anyref`
-/// payload operands, one `anyref` result.
-pub(crate) fn is_valid_tail_dispatch(ctx: &mut IrContext, op: OpRef) -> bool {
-    let evidence_ty = ability::evidence_adt_type_ref(ctx);
+/// Whether `op` is a well-formed tail dispatch: operands of the module's
+/// evidence type `evidence_ty` and an `anyref` payload, one `anyref` result.
+pub(crate) fn is_valid_tail_dispatch(ctx: &mut IrContext, evidence_ty: TypeRef, op: OpRef) -> bool {
     let anyref_ty = tribute_rt::Anyref::params().intern(ctx).as_type_ref();
     let operands = ctx.op_operands(op).to_vec();
     let results = ctx.op_result_types(op).to_vec();
@@ -162,9 +161,9 @@ pub(crate) fn lower_tail_dispatch(
     rewriter.erase_op(vec![call.result(ctx)]);
 }
 
-/// The fixed physical signature of a CPS handler dispatch closure.
-pub(crate) fn cps_dispatch_signature(ctx: &mut IrContext) -> TypeRef {
-    let evidence_ty = ability::evidence_adt_type_ref(ctx);
+/// The fixed physical signature of a CPS handler dispatch closure, taking
+/// the module's evidence type `evidence_ty` first.
+pub(crate) fn cps_dispatch_signature(ctx: &mut IrContext, evidence_ty: TypeRef) -> TypeRef {
     let anyref_ty = tribute_rt::Anyref::params().intern(ctx).as_type_ref();
     let closure_ty = crate::closure_lower::closure_struct_type_ref(ctx);
     let i32_ty = i32_type(ctx);
@@ -188,10 +187,11 @@ pub(crate) fn cps_dispatch_signature(ctx: &mut IrContext) -> TypeRef {
     .as_type_ref()
 }
 
-/// Whether `op` is a well-formed final CPS dispatch: evidence, two closures,
-/// and an `anyref` payload. A malformed one is left for the conversion target
-/// to report, before any helper op is inserted.
-pub(crate) fn is_valid_cps_dispatch(ctx: &mut IrContext, op: OpRef) -> bool {
+/// Whether `op` is a well-formed final CPS dispatch: the module's evidence
+/// of type `evidence_ty`, two closures, and an `anyref` payload. A malformed
+/// one is left for the conversion target to report, before any helper op is
+/// inserted.
+pub(crate) fn is_valid_cps_dispatch(ctx: &mut IrContext, evidence_ty: TypeRef, op: OpRef) -> bool {
     if ctx.op_attrs(op).get_type("answer_type").is_none()
         || ctx.op_attrs(op).get_symbol_ref("ability").is_none()
         || ctx.op_attrs(op).get_string_ref("op_name").is_none()
@@ -199,7 +199,6 @@ pub(crate) fn is_valid_cps_dispatch(ctx: &mut IrContext, op: OpRef) -> bool {
     {
         return false;
     }
-    let evidence_ty = ability::evidence_adt_type_ref(ctx);
     let anyref_ty = tribute_rt::Anyref::params().intern(ctx).as_type_ref();
     let closure_ty = crate::closure_lower::closure_struct_type_ref(ctx);
     let [evidence, dispatch, resume, payload] = ctx.op_operands(op)[..] else {
@@ -233,7 +232,9 @@ pub(crate) fn lower_cps_dispatch(
     let function = insert_closure_function(ctx, loc, dispatch, CallingConvention::Cps, rewriter);
     let resume = canonical_closure(ctx, loc, dispatch_op.resume(ctx), rewriter);
 
-    let signature = cps_dispatch_signature(ctx);
+    // A valid dispatch's evidence operand has the module's evidence type.
+    let evidence_ty = ctx.value_ty(dispatch_op.evidence(ctx));
+    let signature = cps_dispatch_signature(ctx, evidence_ty);
     let tail = func::TailCallIndirect::operands(
         function,
         [
@@ -255,13 +256,10 @@ pub(crate) fn pack_payload(
     ctx: &mut IrContext,
     rewriter: &mut PatternRewriter<'_>,
     location: trunk_ir::types::Location,
-    ability: &SymbolPath,
-    op_name: StringRef,
     values: &[ValueRef],
     anyref: TypeRef,
 ) -> ValueRef {
-    let payload_type =
-        ability::operation_payload_type_ref(ctx, ability, op_name, values.iter().map(|_| anyref));
+    let payload_type = ability::operation_payload_type_ref(ctx, values.iter().map(|_| anyref));
     let dynamic_values = values
         .iter()
         .map(|&value| {
@@ -271,7 +269,6 @@ pub(crate) fn pack_payload(
         })
         .collect::<Vec<_>>();
     let payload = adt::StructNew::operands(dynamic_values)
-        .r#type(payload_type)
         .results(payload_type)
         .build(ctx, location);
     rewriter.insert_op(payload.op_ref());

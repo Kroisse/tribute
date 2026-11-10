@@ -339,12 +339,13 @@ pub(super) fn lower_constructor<'db>(
         &ctor.resolved,
         ctor.ty,
     );
-    let values =
-        super::super::expr::cast_variant_args(builder, location, values, type_attr, &variant);
-    let (tag, _) = super::super::expr::constructor_variant(builder.ir, type_attr, &variant);
+    let values = super::super::expr::cast_variant_args(
+        builder, location, values, type_attr, result_ty, &variant,
+    );
+    let (tag, _) =
+        super::super::expr::constructor_variant(builder.ctx, builder.ir, type_attr, &variant);
     let variant = adt::VariantNew::operands(values)
-        .r#type(type_attr)
-        .tag(tag)
+        .tag(u64::from(tag))
         .results(result_ty)
         .build(builder.ir, location);
     builder.ir.push_op(builder.block, variant.op_ref());
@@ -362,12 +363,10 @@ pub(super) fn lower_tuple<'db>(
         .into_iter()
         .map(|element| lower_expr(builder, element, declarations))
         .collect::<Option<Vec<_>>>()?;
-    let (_, type_attr) =
-        super::super::get_or_create_logical_tuple_type(builder.ctx, builder.ir, id)
-            .unwrap_or_else(|| panic!("missing typechecked tuple layout"));
+    super::super::get_or_create_logical_tuple_type(builder.ctx, builder.ir, id)
+        .unwrap_or_else(|| panic!("missing typechecked tuple layout"));
     let result_ty = expr_type_for_id(builder, id);
     let tuple = adt::StructNew::operands(values)
-        .r#type(type_attr)
         .results(result_ty)
         .build(builder.ir, location);
     builder.ir.push_op(builder.block, tuple.op_ref());
@@ -482,16 +481,15 @@ pub(super) fn lower_record<'db>(
         } else {
             let base =
                 spread.unwrap_or_else(|| panic!("typechecked record is missing field {name}"));
-            // The layout owns concrete field types.  `struct_get` needs a
-            // result type, obtained from the matching getter expression type
-            // only after normal typechecking; use layout metadata directly.
-            let field_types =
-                tribute_ir::dialect::adt::layout::get_struct_fields(builder.ir, layout)
-                    .unwrap_or_else(|| panic!("prescanned struct layout is malformed"));
+            // The layout owns concrete field types, with its row binders
+            // taking the spread value's row arguments.
+            let base_ty = builder.ir.value_ty(base);
+            let field_ty = adt::field_type(builder.ir, base_ty, index)
+                .unwrap_or_else(|| panic!("prescanned struct layout is malformed"));
             let get = adt::StructGet::operands(base)
                 .r#type(layout)
                 .field(index as u32)
-                .results(field_types[index].1)
+                .results(field_ty)
                 .build(builder.ir, location);
             builder.ir.push_op(builder.block, get.op_ref());
             ordered.push(get.result(builder.ir));
@@ -499,7 +497,6 @@ pub(super) fn lower_record<'db>(
     }
     let result_ty = expr_type_for_id(builder, id);
     let record = adt::StructNew::operands(ordered)
-        .r#type(layout)
         .results(result_ty)
         .build(builder.ir, location);
     builder.ir.push_op(builder.block, record.op_ref());
@@ -540,13 +537,14 @@ pub(super) fn lower_variant_record<'db>(
                 .unwrap_or_else(|| panic!("typechecked variant record is missing field {name}"))
         })
         .collect();
-    let ordered =
-        super::super::expr::cast_variant_args(builder, location, ordered, layout, variant);
     let result_ty = expr_type_for_id(builder, id);
-    let (tag, _) = super::super::expr::constructor_variant(builder.ir, layout, variant);
+    let ordered = super::super::expr::cast_variant_args(
+        builder, location, ordered, layout, result_ty, variant,
+    );
+    let (tag, _) =
+        super::super::expr::constructor_variant(builder.ctx, builder.ir, layout, variant);
     let value = adt::VariantNew::operands(ordered)
-        .r#type(layout)
-        .tag(tag)
+        .tag(u64::from(tag))
         .results(result_ty)
         .build(builder.ir, location);
     builder.ir.push_op(builder.block, value.op_ref());

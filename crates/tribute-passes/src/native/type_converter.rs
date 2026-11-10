@@ -18,7 +18,6 @@
 //! | `tribute_rt.anyref` | `core.ptr`  | Uniform representation as pointer  |
 //! | `adt.struct`        | `core.ptr`  | Struct as heap pointer             |
 //! | `adt.variant_inst`  | `core.ptr`  | Variant instance as heap pointer   |
-//! | `adt.typeref<T>`    | `core.ptr`  | Struct reference as pointer        |
 //! | `closure.closure`   | `core.ptr`  | Closure as pointer                 |
 //! | `adt.array<T>`      | `core.ptr`  | Array as heap pointer              |
 //!
@@ -63,16 +62,11 @@ pub struct NativeTypeRefs {
     pub core_nil: TypeRef,
     pub core_i8: TypeRef,
     pub core_index: TypeRef,
-
-    // Special types
-    pub evidence_ty: TypeRef,
-    pub marker_ty: TypeRef,
 }
 
 impl NativeTypeRefs {
     /// Pre-intern all types needed by the native type converter.
     pub fn new(ctx: &mut IrContext) -> Self {
-        use tribute_ir::dialect::ability;
         Self {
             tribute_rt_int: tribute_rt::Int::params().intern(ctx).as_type_ref(),
             tribute_rt_nat: tribute_rt::Nat::params().intern(ctx).as_type_ref(),
@@ -89,9 +83,6 @@ impl NativeTypeRefs {
             core_nil: core::Nil::params().intern(ctx).as_type_ref(),
             core_i8: TypeDataBuilder::new("core.i8").intern(ctx),
             core_index: core::Index::type_ref(ctx),
-
-            evidence_ty: ability::evidence_adt_type_ref(ctx),
-            marker_ty: ability::marker_adt_type_ref(ctx),
         }
     }
 }
@@ -131,15 +122,11 @@ pub fn native_type_converter(ctx: &mut IrContext) -> (TypeConverter, NativeTypeR
         if tribute_rt::ConventionTableRef::matches(ctx, ty) {
             return Some(r.core_ptr);
         }
-        // Evidence type → ptr
-        if ty == r.evidence_ty {
-            return Some(r.core_ptr);
-        }
         // core.bytes → ptr (Bytes is a heap-allocated struct)
         if is_bytes_type(ctx, ty) {
             return Some(r.core_ptr);
         }
-        // ADT struct/enum/variant_instance/typeref → ptr
+        // ADT struct/enum/variant_instance → ptr
         if is_adt_ptr_type(ctx, ty) {
             return Some(r.core_ptr);
         }
@@ -151,8 +138,8 @@ pub fn native_type_converter(ctx: &mut IrContext) -> (TypeConverter, NativeTypeR
         if is_func_type(ctx, ty) {
             return Some(r.core_ptr);
         }
-        // adt.array (non-evidence) and the unmanaged core.array → ptr
-        if is_array_type(ctx, ty) && ty != r.evidence_ty {
+        // adt.array, evidence included, and the unmanaged core.array → ptr
+        if is_array_type(ctx, ty) {
             return Some(r.core_ptr);
         }
         None
@@ -243,7 +230,7 @@ fn materialize_result_noop(
 
 /// Helper: Check if a type is an ADT type that maps to ptr in the native backend.
 fn is_adt_ptr_type(ctx: &IrContext, ty: TypeRef) -> bool {
-    // struct, enum, typeref, variant instance
+    // struct, enum, variant instance
     tribute_ir::dialect::adt::is_nominal(ctx, ty)
         || (ctx.get_type(ty).name.dialect(ctx) == tribute_ir::dialect::adt::DIALECT_NAME
             && ctx.type_attrs(ty).get_bool("is_variant") == Some(true))
@@ -293,8 +280,6 @@ impl NativeTypeRefs {
             core_nil: self.core_nil,
             core_i8: self.core_i8,
             core_index: self.core_index,
-            evidence_ty: self.evidence_ty,
-            marker_ty: self.marker_ty,
         }
     }
 }
@@ -317,8 +302,6 @@ struct NativeTypeRefsCopy {
     core_nil: TypeRef,
     core_i8: TypeRef,
     core_index: TypeRef,
-    evidence_ty: TypeRef,
-    marker_ty: TypeRef,
 }
 
 #[cfg(test)]

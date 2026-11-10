@@ -37,8 +37,7 @@ pub fn closure_base_layout(ctx: &mut IrContext, entries: TypeRef) -> TypeRef {
     let mut attrs = trunk_ir::types::AttributeMap::new();
     let layout = ctx.string_attr(CLOSURE);
     attrs.view_mut(ctx).insert(LAYOUT_ATTR, layout);
-    crate::dialect::adt::Struct::from_fields(ctx, "_closure", [("entries", entries)], attrs)
-        .as_type_ref()
+    crate::dialect::adt::Struct::literal(ctx, [entries], attrs).as_type_ref()
 }
 
 /// The closure base of the source-logical and target-neutral IR, whose

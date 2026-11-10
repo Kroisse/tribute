@@ -1,6 +1,6 @@
 //! Closure dialect — closures and captures.
 
-use crate::calling_convention::CallingConvention;
+use crate::calling_convention::{CallingConvention, PhysicalCallableType};
 use crate::dialect::tribute_rtti::ManagedRefType;
 use trunk_ir::attr_kind::{Dict, SymbolRef, Type};
 use trunk_ir::dialect::func::FuncSig;
@@ -24,7 +24,7 @@ mod closure {
     /// ```text
     /// closure.closure<func.func_sig<(core.i32) -> core.i32>>
     /// ```
-    #[implements(ManagedRefType)]
+    #[implements(ManagedRefType, PhysicalCallableType)]
     struct Closure<FuncType>;
 
     /// A closure whose convention table holds the entry functions `entries`,
@@ -41,7 +41,7 @@ mod closure {
     ///   with `unpack`.
     /// - **Lowering:** closure lowering makes it one allocation of the
     ///   convention table reference (`tribute_rt.convention_table`) and the
-    ///   captures; see the closure storage layout in `design/ir.md`.
+    ///   captures; see the closure storage layout in `design/tribute-dialects.md`.
     ///
     /// ```text
     /// %c = closure.new [@f, @trap_e, @trap_c] %x, %y : closure.closure<S>
@@ -124,6 +124,7 @@ mod closure {
 
 // A closure value points to a reference-counted closure object.
 impl ManagedRefType for Closure {}
+impl PhysicalCallableType for Closure {}
 
 /// One body of a `closure.lambda`: its convention, entry signature, and
 /// region.

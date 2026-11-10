@@ -50,13 +50,7 @@ pub fn bytes_struct_type(ctx: &mut IrContext) -> TypeRef {
     let mut attrs = AttributeMap::new();
     let layout = ctx.string_attr(BYTES);
     attrs.view_mut(ctx).insert(LAYOUT_ATTR, layout);
-    adt::Struct::from_fields(
-        ctx,
-        "_Bytes",
-        [("data", data_ty), ("offset", i32_ty), ("len", i32_ty)],
-        attrs,
-    )
-    .as_type_ref()
+    adt::Struct::literal(ctx, [data_ty, i32_ty, i32_ty], attrs).as_type_ref()
 }
 
 /// Lower calls to the bytes element read intrinsic to `adt` operations on

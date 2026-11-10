@@ -5,10 +5,11 @@
 //! extracted inside the matched region.
 
 use tribute_ir::dialect::adt;
-use tribute_ir::dialect::adt::layout::{get_enum_variants, get_struct_fields};
+use tribute_ir::dialect::adt::layout::get_struct_fields;
 use tribute_ir::dialect::list;
 use trunk_ir::context::{BlockData, IrContext, RegionData};
 use trunk_ir::dialect::{arith, scf};
+use trunk_ir::ops::DialectType;
 use trunk_ir::refs::{BlockRef, TypeRef, ValueRef};
 use trunk_ir::types::{Attribute, Location};
 use trunk_ir::{Symbol, SymbolPath};
@@ -31,11 +32,8 @@ fn logical_tuple_pattern_layout<'db>(
     let struct_ty = super::get_or_create_logical_tuple_type(ctx, ir, pattern)
         .unwrap_or_else(|| panic!("missing typechecked logical tuple layout"))
         .1;
-    let field_tys = get_struct_fields(ir, struct_ty)
-        .expect("logical tuple layout must be an adt.struct")
-        .into_iter()
-        .map(|(_, ty)| ty)
-        .collect();
+    let field_tys =
+        get_struct_fields(ir, struct_ty).expect("logical tuple layout must be an adt.struct");
     (struct_ty, field_tys)
 }
 
@@ -87,7 +85,8 @@ pub(super) fn emit_logical_pattern_check<'db>(
         }
         PatternKind::Variant { .. } | PatternKind::Record { .. } => {
             let (layout, fields) = logical_constructor_pattern(builder.ctx, builder.ir, pattern);
-            match layout {
+            let value_ty = builder.ir.value_ty(scrutinee);
+            match layout.through(builder.ir, value_ty) {
                 ConstructorLayout::Struct {
                     ty,
                     fields: field_tys,
@@ -157,6 +156,52 @@ struct VariantLayout {
     fields: Vec<TypeRef>,
 }
 
+impl ConstructorLayout {
+    /// The layout as a value of type `value_ty` sees it: its field types take
+    /// the value's row arguments in place of the layout's row binders
+    /// (`design/tribute-dialects.md`, "Nominal row 인자").
+    fn through(self, ir: &mut IrContext, value_ty: TypeRef) -> Self {
+        match self {
+            ConstructorLayout::Struct { ty, fields } => {
+                let row_params = adt::Struct::from_type_ref(ir, ty)
+                    .expect("a struct pattern's layout is an adt.struct")
+                    .row_params(ir);
+                ConstructorLayout::Struct {
+                    ty,
+                    fields: fields_through(ir, row_params, value_ty, fields),
+                }
+            }
+            ConstructorLayout::Variant(VariantLayout { ty, tag, fields }) => {
+                let row_params = adt::Enum::from_type_ref(ir, ty)
+                    .expect("a variant pattern's layout is an adt.enum")
+                    .row_params(ir);
+                ConstructorLayout::Variant(VariantLayout {
+                    ty,
+                    tag,
+                    fields: fields_through(ir, row_params, value_ty, fields),
+                })
+            }
+        }
+    }
+}
+
+/// `fields`, written in a layout with `row_params` binders, as seen through a
+/// value of type `value_ty`.
+pub(super) fn fields_through(
+    ir: &mut IrContext,
+    row_params: Option<u32>,
+    value_ty: TypeRef,
+    fields: Vec<TypeRef>,
+) -> Vec<TypeRef> {
+    fields
+        .into_iter()
+        .map(|field| {
+            adt::substitute_layout_binders(ir, row_params, value_ty, field)
+                .expect("a value of a row-parameterized type carries its row arguments")
+        })
+        .collect()
+}
+
 /// The layout of a constructor pattern and its sub-patterns paired with the
 /// field index each one matches. Brace-form fields are matched by name.
 fn logical_constructor_pattern<'p, 'db>(
@@ -177,7 +222,6 @@ fn logical_constructor_pattern<'p, 'db>(
     let ty = super::resolve_enum_type_attr_for_constructor(ctx, ir, &ctor.resolved, ctor.ty);
     let (layout, names) = match get_struct_fields(ir, ty) {
         Some(fields) => {
-            let fields = fields.into_iter().map(|(_, ty)| ty).collect();
             let names = match &*pattern.kind {
                 PatternKind::Record { .. } => ctx
                     .struct_field_names(id)
@@ -188,14 +232,7 @@ fn logical_constructor_pattern<'p, 'db>(
             (ConstructorLayout::Struct { ty, fields }, names)
         }
         None => {
-            let (tag, fields) = get_enum_variants(ir, ty)
-                .expect("logical constructor layout must be a struct or an enum")
-                .into_iter()
-                .enumerate()
-                .find_map(|(position, (tag, fields))| {
-                    (variant == ir.str(tag)).then_some((position as u32, fields))
-                })
-                .expect("resolved logical enum variant must exist");
+            let (tag, fields) = super::expr::constructor_variant(ctx, ir, ty, &variant);
             let names = match &*pattern.kind {
                 PatternKind::Record { .. } => ctx
                     .variant_field_names(ty, variant.clone())
@@ -286,7 +323,7 @@ fn emit_logical_variant_pattern_check<'db>(
     let bool_ty = builder.ctx.bool_type(builder.ir);
     let tag = adt::VariantIs::operands(scrutinee)
         .r#type(enum_ty)
-        .tag(variant)
+        .tag(u64::from(variant))
         .results(bool_ty)
         .build(builder.ir, location);
     builder.ir.push_op(builder.block, tag.op_ref());
@@ -306,7 +343,7 @@ fn emit_logical_variant_pattern_check<'db>(
             let field_ty = variant_fields[index];
             let get = adt::VariantGet::operands(scrutinee)
                 .r#type(enum_ty)
-                .tag(variant)
+                .tag(u64::from(variant))
                 .field(index as u32)
                 .results(field_ty)
                 .build(nested.ir, location);
@@ -718,7 +755,8 @@ pub(super) fn bind_logical_pattern_fields<'db>(
         }
         PatternKind::Variant { .. } | PatternKind::Record { .. } => {
             let (layout, fields) = logical_constructor_pattern(ctx, ir, pattern);
-            match layout {
+            let value_ty = ir.value_ty(scrutinee);
+            match layout.through(ir, value_ty) {
                 ConstructorLayout::Struct {
                     ty,
                     fields: field_tys,
@@ -748,7 +786,7 @@ pub(super) fn bind_logical_pattern_fields<'db>(
                     for (index, field) in fields {
                         let get = adt::VariantGet::operands(scrutinee)
                             .r#type(ty)
-                            .tag(tag)
+                            .tag(u64::from(tag))
                             .field(index as u32)
                             .results(field_tys[index])
                             .build(ir, location);

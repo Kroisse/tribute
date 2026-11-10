@@ -45,6 +45,7 @@ const FORBIDDEN_ATTRIBUTES: &[&str] = &[
     tribute_ir::dialect::tribute_control::INFERRED_ROW_ATTR,
     tribute_ir::dialect::tribute_control::QUANTIFIED_ROWS_ATTR,
     tribute_ir::dialect::tribute_control::ROW_ARGS_ATTR,
+    tribute_ir::dialect::tribute_control::ROW_PARAMS_ATTR,
 ];
 
 /// Prefix of language-specific attributes, which must be classified.
@@ -496,7 +497,8 @@ impl<'a> Verifier<'a> {
             }
             self.attribute_violations(value, &location, &mut found);
         }
-        for &parameter in data.params.iter() {
+        // A nominal layout's fields are in its body.
+        for parameter in data.params.iter().copied().chain(ctx.type_body(ty)) {
             found.extend(self.type_violations(parameter).iter().cloned());
         }
         self.computing.remove(&ty);
@@ -670,7 +672,7 @@ mod tests {
         assert_eq!(
             kinds(
                 r#"core.module @test {
-  !frame = adt.typeref<{name = "Frame", tribute.cps_continuation_frame_result = core.nil}>
+  !frame = adt.struct<"Frame", {tribute.cps_continuation_frame_result = core.nil}>
 }"#
             ),
             [attribute("tribute.cps_continuation_frame_result")]
@@ -679,7 +681,7 @@ mod tests {
         assert_eq!(
             kinds(
                 r#"core.module @test {
-  func.func @run() attributes {evidence = [func.func_sig<(adt.typeref<{name = "Frame", tribute.cps_continuation_frame_result = core.nil}>) -> ()>]} {
+  func.func @run() attributes {evidence = [func.func_sig<(adt.struct<"Frame", {tribute.cps_continuation_frame_result = core.nil}>) -> ()>]} {
     func.return
   }
 }"#
@@ -700,7 +702,7 @@ mod tests {
         assert_eq!(
             kinds(
                 r#"core.module @test {
-  !frame = adt.typeref<{meta = {entry = {tribute.cps_continuation_frame_result = core.nil}}, name = "Frame"}>
+  !frame = adt.struct<"Frame", {meta = {entry = {tribute.cps_continuation_frame_result = core.nil}}}>
 }"#
             ),
             [attribute("tribute.cps_continuation_frame_result")]
@@ -708,7 +710,7 @@ mod tests {
         assert_eq!(
             kinds(
                 r#"core.module @test {
-  func.func @run() attributes {meta = {ty = adt.typeref<{name = "Frame", tribute.cps_continuation_frame_result = core.nil}>}} {
+  func.func @run() attributes {meta = {ty = adt.struct<"Frame", {tribute.cps_continuation_frame_result = core.nil}>}} {
     func.return
   }
 }"#
@@ -925,8 +927,8 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !frame = adt.typeref<{name = "Frame", tribute.cps_continuation_frame_result = core.nil}>
-  !holder = adt.struct<Holder(callback: func.func_sig<(core.ptr) -> !frame>)>
+  !frame = adt.struct<"Frame", {tribute.cps_continuation_frame_result = core.nil}>
+  !holder = adt.struct<"Holder", (func.func_sig<(core.ptr) -> !frame>)>
   func.func @run(%value: !holder) {
     func.return
   }
@@ -945,6 +947,29 @@ mod tests {
             violations.iter().any(|violation| violation.op == Some(run)),
             "the marker must be reported where the function uses it: {violations:#?}"
         );
+    }
+
+    #[test]
+    fn nominal_row_arguments_and_binders_are_forbidden() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  !Holder = adt.struct<"Holder"['a0], (core.ptr)>
+  func.func @run(%value: adt.struct<"Holder"[row()]>, %layout: !Holder) {
+    func.return
+  }
+}"#,
+        );
+        let violations = verify_boundary_exit(&ctx, module, TargetKind::Native);
+        for name in ["row_args", "row_params"] {
+            assert!(
+                violations
+                    .iter()
+                    .any(|violation| violation.kind == attribute(name)),
+                "{name}: {violations:#?}"
+            );
+        }
     }
 
     #[test]
@@ -971,7 +996,7 @@ mod tests {
         };
         let plain = verify(
             r#"core.module @test {
-  !frame = adt.typeref<{name = "Frame"}>
+  !frame = adt.struct<"Frame">
   func.func @run(%frame: !frame) attributes {tribute.calling_convention = "cps"} {
     %same = core.unrealized_conversion_cast %frame : !frame to !frame
     func.return
@@ -981,7 +1006,7 @@ mod tests {
         );
         let annotated = verify(
             r#"core.module @test {
-  !frame = adt.typeref<{name = "Frame", tribute.definition = loc("test.trb" 10:20)}>
+  !frame = adt.struct<"Frame", {tribute.definition = loc("test.trb" 10:20)}>
   func.func @run(%frame: !frame) attributes {tribute.calling_convention = "cps", tribute.definition = loc("test.trb" 30:40)} {
     %same = core.unrealized_conversion_cast %frame : !frame to !frame
     func.return

@@ -182,6 +182,19 @@ mod tests {
         trunk_ir::SymbolPath::new([name])
     }
 
+    /// A type of the evidence's shape: an array of a nominal struct.
+    fn evidence_type(ctx: &mut IrContext) -> trunk_ir::TypeRef {
+        let marker = crate::dialect::adt::Struct::from_fields(
+            ctx,
+            "std::runtime::evidence::Marker",
+            [],
+            trunk_ir::types::AttributeMap::new(),
+        );
+        crate::dialect::adt::Array::params(marker.as_type_ref())
+            .intern(ctx)
+            .as_type_ref()
+    }
+
     fn const_i32(
         ctx: &mut IrContext,
         loc: Location,
@@ -212,7 +225,7 @@ mod tests {
         let ptr_ty = trunk_ir::dialect::core::Ptr::params()
             .intern(&mut ctx)
             .as_type_ref();
-        let evidence_ty = crate::dialect::ability::evidence_adt_type_ref(&mut ctx);
+        let evidence_ty = evidence_type(&mut ctx);
         let ability = ability(&mut ctx, "State");
 
         let evidence = const_i32(&mut ctx, loc, evidence_ty, 0);
@@ -241,9 +254,9 @@ mod tests {
         let errors = |body_type: &str, result: &str| {
             let text = format!(
                 r#"core.module @test {{
-  !marker = adt.typeref<{{name = "std::runtime::evidence::Marker"}}>
+  !marker = adt.struct<"std::runtime::evidence::Marker">
   !ev = adt.array<!marker>
-  !frame = adt.typeref<{{name = "frame_i32", tribute.cps_continuation_frame_result = core.i32}}>
+  !frame = adt.struct<"frame_i32", {{tribute.cps_continuation_frame_result = core.i32}}>
   !body = closure.closure<func.func_sig<{body_type} -> core.never>>
   func.func @run(%ev: !ev, %body: !body) -> {result} {{
     %answer = effect.delimit %body, %ev : {result}
@@ -277,7 +290,7 @@ mod tests {
         let ptr_ty = trunk_ir::dialect::core::Ptr::params()
             .intern(&mut ctx)
             .as_type_ref();
-        let evidence_ty = crate::dialect::ability::evidence_adt_type_ref(&mut ctx);
+        let evidence_ty = evidence_type(&mut ctx);
         let ability = ability(&mut ctx, "State");
         let evidence = const_i32(&mut ctx, loc, evidence_ty, 0);
         let pointer = const_i32(&mut ctx, loc, ptr_ty, 0);
@@ -307,7 +320,7 @@ mod tests {
         let anyref_ty = crate::dialect::tribute_rt::Anyref::params()
             .intern(&mut ctx)
             .as_type_ref();
-        let evidence_ty = crate::dialect::ability::evidence_adt_type_ref(&mut ctx);
+        let evidence_ty = evidence_type(&mut ctx);
         let ability = ability(&mut ctx, "Console");
         let evidence = const_i32(&mut ctx, loc, evidence_ty, 0);
         let closure = const_i32(&mut ctx, loc, anyref_ty, 1);
@@ -336,7 +349,7 @@ mod tests {
             .intern(&mut ctx)
             .as_type_ref();
         let ability = ability(&mut ctx, "Console");
-        let evidence_ty = crate::dialect::ability::evidence_adt_type_ref(&mut ctx);
+        let evidence_ty = evidence_type(&mut ctx);
         let evidence = const_i32(&mut ctx, loc, evidence_ty, 0);
         let payload = const_i32(&mut ctx, loc, anyref_ty, 1);
         let dispatch = const_i32(&mut ctx, loc, anyref_ty, 2);

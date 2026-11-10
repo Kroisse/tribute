@@ -5,9 +5,11 @@
 
 use std::ops::ControlFlow;
 
+use rustc_hash::FxHashSet as HashSet;
+
 use super::context::IrContext;
 use super::ops::DialectOp;
-use super::refs::{BlockRef, OpRef, RegionRef};
+use super::refs::{BlockRef, OpRef, RegionRef, TypeRef};
 
 /// Controls whether to descend into children during a walk.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -75,6 +77,75 @@ where
             ControlFlow::Continue(WalkAction::Advance)
         }
     })
+}
+
+/// Call `f` on each type `ty` refers to directly: its parameters, the types
+/// in its attributes, and the body of an identified type
+/// (`design/ir.md` § "식별 타입").
+pub fn visit_type_children(ctx: &IrContext, ty: TypeRef, f: &mut dyn FnMut(TypeRef)) {
+    let data = ctx.get_type(ty);
+    for &param in &data.params {
+        f(param);
+    }
+    for attr in data.attrs.values() {
+        attr.visit_types(&mut |nested| f(nested));
+    }
+    if let Some(body) = ctx.type_body(ty) {
+        f(body);
+    }
+}
+
+/// The types `roots` reach through [`visit_type_children`], `roots`
+/// included, each once and in the order first reached.
+pub fn reachable_types_from(
+    ctx: &IrContext,
+    roots: impl IntoIterator<Item = TypeRef>,
+) -> Vec<TypeRef> {
+    let mut seen = HashSet::default();
+    let mut reached = Vec::new();
+    let mut pending: Vec<TypeRef> = roots.into_iter().collect();
+    pending.reverse();
+    while let Some(ty) = pending.pop() {
+        if !seen.insert(ty) {
+            continue;
+        }
+        reached.push(ty);
+        let start = pending.len();
+        visit_type_children(ctx, ty, &mut |child| {
+            if !seen.contains(&child) {
+                pending.push(child);
+            }
+        });
+        pending[start..].reverse();
+    }
+    reached
+}
+
+/// The types `op` and the operations nested in it reach: the types of their
+/// results and block arguments and the types in their and their block
+/// arguments' attributes, with
+/// every type those reach through [`visit_type_children`]. Each appears
+/// once, in the order first reached.
+pub fn reachable_types(ctx: &IrContext, op: OpRef) -> Vec<TypeRef> {
+    let mut roots = Vec::new();
+    let _ = walk_op::<std::convert::Infallible>(ctx, op, &mut |op| {
+        roots.extend_from_slice(ctx.op_result_types(op));
+        for attr in ctx.op(op).attributes.values() {
+            attr.visit_types(&mut |ty| roots.push(ty));
+        }
+        for region in ctx.op_regions(op) {
+            for &block in &ctx.region(region).blocks {
+                for arg in &ctx.block(block).args {
+                    roots.push(arg.ty);
+                    for attr in arg.attrs.values() {
+                        attr.visit_types(&mut |ty| roots.push(ty));
+                    }
+                }
+            }
+        }
+        ControlFlow::Continue(WalkAction::Advance)
+    });
+    reachable_types_from(ctx, roots)
 }
 
 #[cfg(test)]
@@ -237,5 +308,20 @@ mod tests {
         });
 
         assert!(!found_const);
+    }
+
+    #[test]
+    fn reachable_types_include_block_argument_attributes() {
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @f(%x: core.i32 {k = core.tuple<core.i64>}) -> core.nil {
+    func.return
+  }
+}"#,
+        );
+        let i64_ty = TypeDataBuilder::new("core.i64").intern(&mut ctx);
+        assert!(reachable_types(&ctx, module.op()).contains(&i64_ty));
     }
 }

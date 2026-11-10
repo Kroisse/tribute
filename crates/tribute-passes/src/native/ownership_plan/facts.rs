@@ -184,7 +184,7 @@ fn compute_module_facts(
         .first_block(ctx)
         .ok_or_else(|| OwnershipPlanError::new("module has no body block"))?;
     let mut function_ops = Vec::new();
-    let mut layouts = ManagedLayoutCollector::new(ctx);
+    let mut layouts = ManagedLayoutCollector::new();
     let mut closure_allocations = Vec::new();
     let mut descriptors = Vec::new();
     let mut written_layouts = HashSet::default();
@@ -222,7 +222,7 @@ fn compute_module_facts(
         }
         functions.push((symbol.clone(), op));
     }
-    let managed_layouts = layouts.finish(ctx)?;
+    let managed_layouts = layouts.finish();
     let closure_layouts = managed_closure_layouts(closure_allocations, &managed_layouts);
     let rtti_types = build_rtti_plan(ctx, descriptors, &managed_layouts)?;
     Ok(NativeOwnershipModuleFacts {
@@ -501,7 +501,7 @@ fn validate_projection_contract(
     } else if let Ok(get) = adt::StructGet::from_op(ctx, op) {
         let fields = get_struct_fields(ctx, get.r#type(ctx))
             .ok_or_else(|| OwnershipPlanError::new("struct_get has invalid layout"))?;
-        let (_, field_ty) = fields
+        let field_ty = fields
             .get(get.field(ctx) as usize)
             .ok_or_else(|| OwnershipPlanError::new("struct_get field is stale"))?;
         (get.r#type(ctx), *field_ty)
@@ -510,7 +510,7 @@ fn validate_projection_contract(
             .map_err(|_| OwnershipPlanError::new("unsupported ADT projection"))?;
         let fields = adt::Enum::from_type_ref(ctx, get.r#type(ctx))
             .ok_or_else(|| OwnershipPlanError::new("variant_get has invalid layout"))?
-            .variant_fields(ctx, get.tag(ctx))
+            .variant_fields(ctx, get.variant(ctx))
             .ok_or_else(|| OwnershipPlanError::new("variant_get tag is stale"))?;
         let field_ty = fields
             .get(get.field(ctx) as usize)

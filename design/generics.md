@@ -128,6 +128,14 @@ apply + [fn(Int) -> Bool]     → apply$6$0$Int$1$Bool
 swap + [(Int, Bool)]          → swap$7$0$Int$Bool$1
 ```
 
+Mangle은 row variable의 일관된 이름 바꾸기를 제외하면 type argument의 identity에
+대해 단사(injective)다. Row variable의 번호만 다른 경우가 아니면 서로 다른 type
+argument 목록은 서로 다른 이름을 얻는다. 함수 타입은 parameter와 result 외에
+ability row를 함께 인코딩한다. Ability row는 각 ability의 origin과 qualified
+identity, ability argument를 row에 저장된 순서대로 쓰고, 열린 row의 row variable은
+한 mangle 안에서 처음 나타난 순서로 번호를 매겨 추론 번호에 의존하지 않는다.
+Closed 빈 row를 가진 함수 타입의 mangle은 parameter와 result만으로 이루어진다.
+
 CPS 전략이 row 변수의 class마다 만드는 인스턴스는, class가 모두 `Cps`이면 이
 이름을 그대로 쓰고 아니면 뒤에 접미사를 붙인다
 ([class 특수화 pass](cps-effects.md#class-특수화-pass)).
@@ -261,7 +269,7 @@ Monomorphization은 `tribute-front`의 typed AST와 명시적인 함수 인스�
 사용자 패키지를 편집해도 다시 계산하지 않는다. `prepare_frontend_for_lowering()`은
 사용자 패키지를 같은 방식으로 특수화하고, 그 결과를 의존 패키지들의 특수화 결과와
 함께 하나의 특수화 결과로 병합한다
-([Implementation — 프론트엔드 단계 경계와 정보 소유권](implementation.md#프론트엔드-단계-경계와-정보-소유권)).
+([Frontend — 프론트엔드 단계 경계와 정보 소유권](frontend.md#프론트엔드-단계-경계와-정보-소유권)).
 IR lowering은 이 준비 단계가 성공한 결과만 소비하며, 타입 검사 결과로부터 lowering
 입력을 만드는 경로는 없다.
 

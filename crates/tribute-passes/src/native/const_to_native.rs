@@ -459,9 +459,9 @@ impl OpRewritePattern for StringConstNativePattern {
         // Get the result type of the original string_const
         let result_ty = ctx.op_result_types(op)[0];
 
-        // Create adt.variant_new(type=String, tag=Leaf, bytes_payload)
-        // Use the actual String enum type for the type attribute so that
-        // adt_rc_header can compute the correct enum layout.
+        // Create adt.variant_new(tag=Leaf, bytes_payload) of the String enum,
+        // so that adt_rc_header computes the enum layout from its result,
+        // and cast it to the original result type.
         // The allocation is a `core.ptr`; the `Leaf` field takes the `Bytes`
         // object it points to as an owned managed value.
         let bytes_ty = core::Bytes::params().intern(ctx).as_type_ref();
@@ -469,16 +469,23 @@ impl OpRewritePattern for StringConstNativePattern {
             .results(bytes_ty)
             .build(ctx, loc);
         let variant_new = adt::VariantNew::operands([bytes.result(ctx)])
-            .r#type(string_enum_ty)
-            .tag(leaf)
-            .results(result_ty)
+            .tag(u64::from(leaf))
+            .results(string_enum_ty)
             .build(ctx, loc);
 
         for o in insert_ops {
             rewriter.insert_op(o);
         }
         rewriter.insert_op(bytes.op_ref());
-        rewriter.replace_op(variant_new.op_ref());
+        if result_ty == string_enum_ty {
+            rewriter.replace_op(variant_new.op_ref());
+        } else {
+            rewriter.insert_op(variant_new.op_ref());
+            let cast = core::UnrealizedConversionCast::operands(variant_new.result(ctx))
+                .results(result_ty)
+                .build(ctx, loc);
+            rewriter.replace_op(cast.op_ref());
+        }
         Some(())
     }
 
@@ -526,10 +533,10 @@ mod tests {
         parse_test_module(
             ctx,
             r#"core.module @test {
-  !PreludeString = adt.enum<String { Leaf(core.bytes), Branch(tribute_rt.anyref, tribute_rt.anyref, core.i32) }>
-  !UserString = adt.enum<"user::String" { Leaf(core.bytes), Branch(tribute_rt.anyref, tribute_rt.anyref, core.i32) }>
-  adt.enum_decl "String" [Leaf, Branch]
-  adt.enum_decl "user::String" [Leaf, Branch]
+  !PreludeString = adt.enum<"String", [(core.bytes), (tribute_rt.anyref, tribute_rt.anyref, core.i32)]>
+  !UserString = adt.enum<"user::String", [(core.bytes), (tribute_rt.anyref, tribute_rt.anyref, core.i32)]>
+  adt.enum_decl "String" !PreludeString ["Leaf", "Branch"]
+  adt.enum_decl "user::String" !UserString ["Leaf", "Branch"]
   func.func @main() -> core.nil {
     %string = adt.string_const {value = "hello"} : tribute_rt.anyref
     func.return

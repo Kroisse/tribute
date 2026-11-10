@@ -1359,8 +1359,8 @@ fn from_list(callback: fn(Int) ->{e} Int) ->{e} Int {
         logical_function(ir, function)
             .split("adt.struct_new")
             .nth(1)
-            .and_then(|line| line.split("{type = !").nth(1))
-            .and_then(|suffix| suffix.split('}').next())
+            .and_then(|rest| rest.lines().next())
+            .and_then(|line| line.rsplit_once(" -> !").map(|(_, layout)| layout))
             .expect("tuple fixture must construct a logical tuple")
     };
     let tuple_int_layout = tuple_layout("tuple_int");
@@ -1679,7 +1679,7 @@ fn run() ->{Flag} Nat {
 }
 
 /// Logical nominal layouts are collected before fields are converted, so a
-/// recursive or forward field retains its nominal typeref instead of erasing
+/// recursive or forward field holds its layout's key instead of erasing
 /// to `anyref` while the target layout is still incomplete.
 #[salsa_test]
 fn logical_nominal_layouts_preserve_recursive_and_forward_fields(db: &salsa::DatabaseImpl) {
@@ -1703,9 +1703,9 @@ fn keep_first(first: First) -> First { first }
     let ir = run_ast_pipeline_with_ir(db, source);
     assert_logical_boundary(ir);
     for field in [
-        "!\"pkg::Node\" = adt.struct<\"pkg::Node\"(next: adt.typeref<{name = \"pkg::Node\"}>)>",
-        "!\"pkg::First\" = adt.struct<\"pkg::First\"(second: adt.typeref<{name = \"pkg::Second\"}>)>",
-        "!\"pkg::Second\" = adt.struct<\"pkg::Second\"(first: adt.typeref<{name = \"pkg::First\"}>)>",
+        "!\"pkg::Node\" = adt.struct<\"pkg::Node\", (adt.struct<\"pkg::Node\">)>",
+        "!\"pkg::First\" = adt.struct<\"pkg::First\", (adt.struct<\"pkg::Second\">)>",
+        "!\"pkg::Second\" = adt.struct<\"pkg::Second\", (adt.struct<\"pkg::First\">)>",
     ] {
         assert!(
             ir.contains(field),

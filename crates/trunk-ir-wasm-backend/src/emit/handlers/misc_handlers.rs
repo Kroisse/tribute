@@ -10,8 +10,6 @@ use wasm_encoder::{Function, Instruction};
 use crate::gc_types::{BYTES_ARRAY_IDX, BYTES_STRUCT_IDX};
 use crate::{CompilationError, CompilationResult};
 
-use super::super::{FunctionEmitContext, set_result_local};
-
 /// Handle wasm.bytes_from_data operation
 ///
 /// Compound operation: create Bytes struct from passive data segment
@@ -25,7 +23,6 @@ use super::super::{FunctionEmitContext, set_result_local};
 pub(crate) fn handle_bytes_from_data(
     ctx: &IrContext,
     bytes_op: wasm_dialect::BytesFromData,
-    emit_ctx: &FunctionEmitContext,
     function: &mut Function,
 ) -> CompilationResult<()> {
     let data_idx = bytes_op.data_idx(ctx);
@@ -50,7 +47,5 @@ pub(crate) fn handle_bytes_from_data(
     function.instruction(&Instruction::I32Const(0));
     function.instruction(&Instruction::I32Const(len_i32));
     function.instruction(&Instruction::StructNew(BYTES_STRUCT_IDX));
-
-    set_result_local(ctx, bytes_op.op_ref(), emit_ctx, function)?;
     Ok(())
 }

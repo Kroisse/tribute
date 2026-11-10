@@ -272,10 +272,10 @@ fn ordinary_result_contract_requires_one_value_and_preserves_zero_width_results(
 #[test]
 fn typed_plan_options_preserve_or_elide_only_proven_parameter_and_field_borrows() {
     let ir = r#"core.module @test {
-  !Child = adt.struct<Child(value: core.i32)>
-  !ChildRef = adt.typeref<{name = "Child"}>
-  !Box = adt.struct<Box(child: !ChildRef)>
-  !BoxRef = adt.typeref<{name = "Box"}>
+  !Child = adt.struct<"Child",(core.i32)>
+  !ChildRef = adt.struct<"Child">
+  !Box = adt.struct<"Box",(!ChildRef)>
+  !BoxRef = adt.struct<"Box">
   func.func @observe(%child: !ChildRef) -> core.i32 {
     %value = adt.struct_get %child {field = 0, type = !Child} : core.i32
     func.return %value
@@ -354,11 +354,11 @@ fn typed_plan_options_preserve_or_elide_only_proven_parameter_and_field_borrows(
 fn continuation_frame_capture_has_entry_store_and_deep_release_plan() {
     let (_ctx, _module, plan) = build(
         r#"core.module @test {
-  !Frame = adt.struct<ContinuationFrame(value: core.i32)>
-  !FrameRef = adt.typeref<{name = "ContinuationFrame"}>
-  !Env = adt.struct<continuation_env(frame: !FrameRef, code: func.func_sig<() -> core.nil>)>
+  !Frame = adt.struct<"ContinuationFrame",(core.i32)>
+  !FrameRef = adt.struct<"ContinuationFrame">
+  !Env = adt.struct<"continuation_env",(!FrameRef, func.func_sig<() -> core.nil>)>
   func.func @capture(%frame: !FrameRef, %code: func.func_sig<() -> core.nil>) -> core.nil {
-    %env = adt.struct_new %frame, %code {type = !Env} : !Env
+    %env = adt.struct_new(%frame, %code) : (!FrameRef, func.func_sig<() -> core.nil>) -> !Env
     func.return
   }
 }"#,
@@ -383,11 +383,11 @@ fn continuation_frame_capture_has_entry_store_and_deep_release_plan() {
 #[test]
 fn continuation_frame_capture_materializes_the_typed_entry_and_store_actions() {
     let ir = r#"core.module @test {
-  !Frame = adt.struct<ContinuationFrame(value: core.i32)>
-  !FrameRef = adt.typeref<{name = "ContinuationFrame"}>
-  !Env = adt.struct<continuation_env(frame: !FrameRef, code: func.func_sig<() -> core.nil>)>
+  !Frame = adt.struct<"ContinuationFrame",(core.i32)>
+  !FrameRef = adt.struct<"ContinuationFrame">
+  !Env = adt.struct<"continuation_env",(!FrameRef, func.func_sig<() -> core.nil>)>
   func.func @capture(%frame: !FrameRef, %code: func.func_sig<() -> core.nil>) -> core.nil {
-    %env = adt.struct_new %frame, %code {type = !Env} : !Env
+    %env = adt.struct_new(%frame, %code) : (!FrameRef, func.func_sig<() -> core.nil>) -> !Env
     func.return
   }
 }"#;
@@ -425,13 +425,13 @@ fn nested_continuation_frame_closure_releases_use_exact_header_inclusive_sizes()
     let module = parse_test_module(
         &mut ctx,
         r#"core.module @test {
-  !Frame = adt.struct<ContinuationFrame(value: core.i32)>
-  !FrameRef = adt.typeref<{name = "ContinuationFrame"}>
-  !Base = adt.struct<_closure(entries: tribute_rt.convention_table_ref), {layout = "closure"}>
-  !_closure = adt.struct<_closure_captures(entries: tribute_rt.convention_table_ref, _0: !FrameRef), {closure_base = !Base, layout = "closure_captures"}>
+  !Frame = adt.struct<"ContinuationFrame",(core.i32)>
+  !FrameRef = adt.struct<"ContinuationFrame">
+  !Base = adt.struct<(tribute_rt.convention_table_ref), {layout = "closure"}>
+  !_closure = adt.struct<(tribute_rt.convention_table_ref, !FrameRef), {closure_base = !Base, layout = "closure_captures"}>
   func.func @capture(%frame: !FrameRef) -> core.nil {
     %code = arith.constant 0 : core.i32
-    %closure = adt.struct_new %code, %frame {type = !_closure} : !_closure
+    %closure = adt.struct_new(%code, %frame) : (core.i32, !FrameRef) -> !_closure
     func.return
   }
 }"#,
@@ -451,18 +451,18 @@ fn native_evidence_hands_the_dispatcher_to_the_runtime_as_a_managed_value() {
     let module = parse_test_module(
         &mut ctx,
         r#"core.module @test {
-  !_closure = adt.struct<_closure(entries: tribute_rt.convention_table_ref), {layout = "closure"}>
-  !"std::runtime::evidence::Marker" = adt.struct<"std::runtime::evidence::Marker"(ability_id: core.i32, prompt_tag: core.i32)>
-  !Evidence = adt.array<adt.typeref<{name = "std::runtime::evidence::Marker"}>>
-  !"std::Option$std::runtime::Dispatch" = adt.enum<"std::Option$std::runtime::Dispatch" { None(), Some(!_closure) }>
-  !OptionRef = adt.typeref<{name = "std::Option$std::runtime::Dispatch"}>
-  adt.enum_decl "std::Option$std::runtime::Dispatch" [None, Some]
+  !_closure = adt.struct<(tribute_rt.convention_table_ref), {layout = "closure"}>
+  !"std::runtime::evidence::Marker" = adt.struct<"std::runtime::evidence::Marker", (core.i32, core.i32)>
+  !Evidence = adt.array<adt.struct<"std::runtime::evidence::Marker">>
+  !"std::Option$std::runtime::Dispatch" = adt.enum<"std::Option$std::runtime::Dispatch", [(), (!_closure)]>
+  !OptionRef = adt.enum<"std::Option$std::runtime::Dispatch">
+  adt.enum_decl "std::Option$std::runtime::Dispatch" !"std::Option$std::runtime::Dispatch" ["None", "Some"]
   func.func @"std::runtime::evidence::extend"(%ev: !Evidence, %id: core.i32, %prompt: core.i32, %tr: !OptionRef, %outer: !Evidence) -> !Evidence {
     func.return %ev
   }
   func.func @install(%evidence: !Evidence, %prompt: core.i32) -> !Evidence {
     %code = arith.constant 0 : core.i32
-    %closure = adt.struct_new %code {type = !_closure} : !_closure
+    %closure = adt.struct_new(%code) : (core.i32) -> !_closure
     %extended = effect.extend @State %evidence, %prompt, %closure, %evidence : !Evidence
     func.return %extended
   }
@@ -493,14 +493,14 @@ fn native_evidence_hands_the_dispatcher_to_the_runtime_as_a_managed_value() {
 fn internal_closure_raw_pointer_handoff_outside_native_evidence_fails_closed() {
     assert_plan_error_unchanged(
         r#"core.module @test {
-  !_closure = adt.struct<_closure(entries: tribute_rt.convention_table_ref), {layout = "closure"}>
+  !_closure = adt.struct<(tribute_rt.convention_table_ref), {layout = "closure"}>
   func.func @escape(%value: core.ptr) -> core.nil attributes {abi = "C"} {
     func.unreachable
   }
   func.func @install() -> core.nil {
     %code = arith.constant 0 : core.i32
     %env = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
-    %closure = adt.struct_new %code {type = !_closure} : !_closure
+    %closure = adt.struct_new(%code) : (core.i32) -> !_closure
     %raw = core.unrealized_conversion_cast %closure : !_closure to core.ptr
     %result = func.call @escape(%raw) : (core.ptr) -> core.nil
     func.return
@@ -514,11 +514,11 @@ fn internal_closure_raw_pointer_handoff_outside_native_evidence_fails_closed() {
 fn into_raw_transfers_one_exact_closure_unit_without_materializing_rc() {
     let (mut ctx, module, plan) = build(
         r#"core.module @test {
-  !_closure = adt.struct<_closure(entries: tribute_rt.convention_table_ref), {layout = "closure"}>
+  !_closure = adt.struct<(tribute_rt.convention_table_ref), {layout = "closure"}>
   func.func @install() -> core.nil {
     %code = arith.constant 0 : core.i32
     %env = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
-    %closure = adt.struct_new %code {type = !_closure} : !_closure
+    %closure = adt.struct_new(%code) : (core.i32) -> !_closure
     %raw = tribute_rt.into_raw %closure : core.ptr
     func.return
   }
@@ -549,11 +549,11 @@ fn into_raw_transfers_one_exact_closure_unit_without_materializing_rc() {
 fn into_raw_fixture(transfers: &str) -> String {
     [
         r#"core.module @test {
-  !_closure = adt.struct<_closure(entries: tribute_rt.convention_table_ref), {layout = "closure"}>
+  !_closure = adt.struct<(tribute_rt.convention_table_ref), {layout = "closure"}>
   func.func @transfers() -> core.nil {
     %code = arith.constant 0 : core.i32
     %env = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
-    %closure = adt.struct_new %code {type = !_closure} : !_closure
+    %closure = adt.struct_new(%code) : (core.i32) -> !_closure
 "#,
         transfers,
         r#"
@@ -568,18 +568,18 @@ fn into_raw_fixture(transfers: &str) -> String {
 fn nested_field_borrow_keeps_the_outer_owner_alive_through_the_last_use() {
     let (ctx, _module, plan) = build(
         r#"core.module @test {
-  !Child = adt.struct<Child(value: core.i32)>
-  !ChildRef = adt.typeref<{name = "Child"}>
-  !Inner = adt.struct<Inner(child: !ChildRef)>
-  !InnerRef = adt.typeref<{name = "Inner"}>
-  !Box = adt.struct<Box(inner: !InnerRef)>
+  !Child = adt.struct<"Child",(core.i32)>
+  !ChildRef = adt.struct<"Child">
+  !Inner = adt.struct<"Inner",(!ChildRef)>
+  !InnerRef = adt.struct<"Inner">
+  !Box = adt.struct<"Box",(!InnerRef)>
   func.func @observe(%child: !ChildRef) -> core.i32 {
     %value = adt.struct_get %child {field = 0, type = !Child} : core.i32
     func.return %value
   }
   func.func @load(%child: !ChildRef) -> core.nil {
-    %inner = adt.struct_new %child {type = !Inner} : !InnerRef
-    %owner = adt.struct_new %inner {type = !Box} : !Box
+    %inner = adt.struct_new(%child) : (!ChildRef) -> !InnerRef
+    %owner = adt.struct_new(%inner) : (!InnerRef) -> !Box
     %loaded = adt.struct_get %owner {field = 0, type = !Box} : !InnerRef
     %erased = adt.ref_cast %loaded {type = tribute_rt.anyref} : tribute_rt.anyref
     %restored = adt.ref_cast %erased {type = !InnerRef} : !InnerRef
@@ -596,7 +596,7 @@ fn nested_field_borrow_keeps_the_outer_owner_alive_through_the_last_use() {
     let mut owner = None;
     let mut call = None;
     for &op in &ctx.block(block).ops {
-        if adt::StructNew::from_op(&ctx, op).is_ok_and(|new| new.r#type(&ctx) == box_layout) {
+        if adt::StructNew::from_op(&ctx, op).is_ok_and(|new| new.layout(&ctx) == box_layout) {
             owner = Some(ctx.op_result(op, 0));
         }
         if func::Call::matches(&ctx, op) {
@@ -667,13 +667,13 @@ fn into_raw_grouped_transfers_acquire_exact_extra_units_before_the_first_transfe
 #[test]
 fn into_raw_group_validation_ignores_preserved_field_borrow_acquire() {
     let ir = r#"core.module @test {
-  !_closure = adt.struct<_closure(entries: tribute_rt.convention_table_ref), {layout = "closure"}>
-  !Owner = adt.struct<Owner(closure: !_closure)>
+  !_closure = adt.struct<(tribute_rt.convention_table_ref), {layout = "closure"}>
+  !Owner = adt.struct<"Owner",(!_closure)>
   func.func @transfers() -> core.nil {
     %code = arith.constant 0 : core.i32
     %env = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
-    %stored = adt.struct_new %code {type = !_closure} : !_closure
-    %owner = adt.struct_new %stored {type = !Owner} : !Owner
+    %stored = adt.struct_new(%code) : (core.i32) -> !_closure
+    %owner = adt.struct_new(%stored) : (!_closure) -> !Owner
     %closure = adt.struct_get %owner {field = 0, type = !Owner} : !_closure
     %first = tribute_rt.into_raw %closure : core.ptr
     %second = tribute_rt.into_raw %closure : core.ptr
@@ -715,11 +715,11 @@ fn into_raw_group_validation_ignores_preserved_field_borrow_acquire() {
 fn into_raw_rejects_non_transfer_and_cross_block_uses_before_mutation() {
     assert_plan_error_unchanged(
         r#"core.module @test {
-  !_closure = adt.struct<_closure(entries: tribute_rt.convention_table_ref), {layout = "closure"}>
+  !_closure = adt.struct<(tribute_rt.convention_table_ref), {layout = "closure"}>
   func.func @later_use() -> !_closure {
     %code = arith.constant 0 : core.i32
     %env = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
-    %closure = adt.struct_new %code {type = !_closure} : !_closure
+    %closure = adt.struct_new(%code) : (core.i32) -> !_closure
     %raw = tribute_rt.into_raw %closure : core.ptr
     func.return %closure
   }
@@ -728,12 +728,12 @@ fn into_raw_rejects_non_transfer_and_cross_block_uses_before_mutation() {
     );
     assert_plan_error_unchanged(
         r#"core.module @test {
-  !_closure = adt.struct<_closure(entries: tribute_rt.convention_table_ref), {layout = "closure"}>
+  !_closure = adt.struct<(tribute_rt.convention_table_ref), {layout = "closure"}>
   func.func @cross_block() -> core.nil {
     ^entry:
       %code = arith.constant 0 : core.i32
       %env = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
-      %closure = adt.struct_new %code {type = !_closure} : !_closure
+      %closure = adt.struct_new(%code) : (core.i32) -> !_closure
       %first = tribute_rt.into_raw %closure : core.ptr
       cf.br [^next]
     ^next:
@@ -783,8 +783,8 @@ fn into_raw_rejects_non_closure_input_before_mutation() {
 fn materialization_releases_the_exact_replaced_field_and_fails_before_mutation() {
     let (mut ctx, module, plan) = build(
         r#"core.module @test {
-  !NodeRef = adt.typeref<{name = "Node"}>
-  !Node = adt.struct<Node(next: !NodeRef)>
+  !NodeRef = adt.struct<"Node">
+  !Node = adt.struct<"Node",(!NodeRef)>
   func.func @replace(%node: !Node, %old: !NodeRef, %new: !NodeRef) -> core.nil {
     adt.struct_set %node, %new {field = 0, type = !Node}
     func.return
@@ -805,8 +805,8 @@ fn materialization_releases_the_exact_replaced_field_and_fails_before_mutation()
 
     let (mut ctx, module, mut stale) = build(
         r#"core.module @test {
-  !NodeRef = adt.typeref<{name = "Node"}>
-  !Node = adt.struct<Node(next: !NodeRef)>
+  !NodeRef = adt.struct<"Node">
+  !Node = adt.struct<"Node",(!NodeRef)>
   func.func @replace(%node: !Node, %new: !NodeRef) -> core.nil {
     adt.struct_set %node, %new {field = 0, type = !Node}
     func.return
@@ -828,10 +828,10 @@ fn materialization_releases_the_exact_replaced_field_and_fails_before_mutation()
 fn duplicate_owning_destinations_and_null_are_explicit() {
     let (_ctx, _module, plan) = build(
         r#"core.module @test {
-  !NodeRef = adt.typeref<{name = "Node"}>
-  !Node = adt.struct<Node(next: !NodeRef, other: !NodeRef)>
+  !NodeRef = adt.struct<"Node">
+  !Node = adt.struct<"Node",(!NodeRef, !NodeRef)>
   func.func @duplicate(%value: !NodeRef) -> !NodeRef {
-    %node = adt.struct_new %value, %value {type = !Node} : !NodeRef
+    %node = adt.struct_new(%value, %value) : (!NodeRef, !NodeRef) -> !NodeRef
     func.return %node
   }
   func.func @null() -> !NodeRef {
@@ -860,14 +860,14 @@ fn duplicate_owning_destinations_and_null_are_explicit() {
 }
 
 const LAST_USE_MOVES: &str = r#"core.module @test {
-  !Child = adt.struct<Child(value: core.i32)>
-  !ChildRef = adt.typeref<{name = "Child"}>
-  !Box = adt.struct<Box(child: !ChildRef)>
-  !BoxRef = adt.typeref<{name = "Box"}>
-  !Outer = adt.struct<Outer(box: !BoxRef)>
-  !OuterRef = adt.typeref<{name = "Outer"}>
-  !NodeRef = adt.typeref<{name = "Node"}>
-  !Node = adt.struct<Node(next: !NodeRef)>
+  !Child = adt.struct<"Child",(core.i32)>
+  !ChildRef = adt.struct<"Child">
+  !Box = adt.struct<"Box",(!ChildRef)>
+  !BoxRef = adt.struct<"Box">
+  !Outer = adt.struct<"Outer",(!BoxRef)>
+  !OuterRef = adt.struct<"Outer">
+  !NodeRef = adt.struct<"Node">
+  !Node = adt.struct<"Node",(!NodeRef)>
   func.func @sink(%value: !ChildRef {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"} {
     func.unreachable
   }
@@ -875,18 +875,18 @@ const LAST_USE_MOVES: &str = r#"core.module @test {
     func.unreachable
   }
   func.func @store_last(%child: !ChildRef) -> !BoxRef {
-    %box = adt.struct_new %child {type = !Box} : !BoxRef
+    %box = adt.struct_new(%child) : (!ChildRef) -> !BoxRef
     func.return %box
   }
   func.func @store_then_call(%child: !ChildRef) -> !BoxRef {
-    %box = adt.struct_new %child {type = !Box} : !BoxRef
+    %box = adt.struct_new(%child) : (!ChildRef) -> !BoxRef
     func.call @sink(%child) : (!ChildRef) -> ()
     func.return %box
   }
   func.func @store_owner_then_read(%child: !ChildRef) -> core.i32 {
-    %owner = adt.struct_new %child {type = !Box} : !BoxRef
+    %owner = adt.struct_new(%child) : (!ChildRef) -> !BoxRef
     %loaded = adt.struct_get %owner {field = 0, type = !Box} : !ChildRef
-    %outer = adt.struct_new %owner {type = !Outer} : !OuterRef
+    %outer = adt.struct_new(%owner) : (!BoxRef) -> !OuterRef
     %value = adt.struct_get %loaded {field = 0, type = !Child} : core.i32
     func.return %value
   }
@@ -900,7 +900,7 @@ const LAST_USE_MOVES: &str = r#"core.module @test {
   }
   func.func @live_across(%condition: core.i1, %child: !ChildRef) -> !BoxRef {
     ^entry:
-      %box = adt.struct_new %child {type = !Box} : !BoxRef
+      %box = adt.struct_new(%child) : (!ChildRef) -> !BoxRef
       cf.cond_br %condition [^use, ^skip]
     ^use:
       func.call @sink(%child) : (!ChildRef) -> ()
@@ -1079,16 +1079,16 @@ fn acquiring_policy_keeps_every_owning_destination_acquiring() {
 }
 
 const FIELD_MOVES: &str = r#"core.module @test {
-  !Env = adt.struct<Env(value: core.i32)>
-  !EnvRef = adt.typeref<{name = "Env"}>
-  !Inner = adt.struct<Inner(env: !EnvRef)>
-  !InnerRef = adt.typeref<{name = "Inner"}>
-  !Outer = adt.struct<Outer(inner: !InnerRef, count: core.i32)>
-  !OuterRef = adt.typeref<{name = "Outer"}>
-  !Pair = adt.struct<Pair(left: !EnvRef, right: !EnvRef)>
-  !PairRef = adt.typeref<{name = "Pair"}>
-  !Wrapper = adt.struct<Wrapper(env: !EnvRef)>
-  !WrapperRef = adt.typeref<{name = "Wrapper"}>
+  !Env = adt.struct<"Env",(core.i32)>
+  !EnvRef = adt.struct<"Env">
+  !Inner = adt.struct<"Inner",(!EnvRef)>
+  !InnerRef = adt.struct<"Inner">
+  !Outer = adt.struct<"Outer",(!InnerRef, core.i32)>
+  !OuterRef = adt.struct<"Outer">
+  !Pair = adt.struct<"Pair",(!EnvRef, !EnvRef)>
+  !PairRef = adt.struct<"Pair">
+  !Wrapper = adt.struct<"Wrapper",(!EnvRef)>
+  !WrapperRef = adt.struct<"Wrapper">
   func.func @sink(%env: !EnvRef {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"} {
     func.unreachable
   }
@@ -1099,13 +1099,13 @@ const FIELD_MOVES: &str = r#"core.module @test {
   }
   func.func @store_one(%pair: !PairRef {tribute.ownership = "consumed"}) -> !WrapperRef {
     %left = adt.struct_get %pair {field = 0, type = !Pair} : !EnvRef
-    %wrapper = adt.struct_new %left {type = !Wrapper} : !WrapperRef
+    %wrapper = adt.struct_new(%left) : (!EnvRef) -> !WrapperRef
     func.return %wrapper
   }
   func.func @owner_used_after(%outer: !OuterRef {tribute.ownership = "consumed"}) -> core.i32 {
     %inner = adt.struct_get %outer {field = 0, type = !Outer} : !InnerRef
     %env = adt.struct_get %inner {field = 0, type = !Inner} : !EnvRef
-    %wrapper = adt.struct_new %env {type = !Wrapper} : !WrapperRef
+    %wrapper = adt.struct_new(%env) : (!EnvRef) -> !WrapperRef
     %count = adt.struct_get %outer {field = 1, type = !Outer} : core.i32
     func.return %count
   }
@@ -1113,13 +1113,13 @@ const FIELD_MOVES: &str = r#"core.module @test {
     %left = adt.struct_get %pair {field = 0, type = !Pair} : !EnvRef
     %again = adt.struct_get %pair {field = 0, type = !Pair} : !EnvRef
     %value = adt.struct_get %again {field = 0, type = !Env} : core.i32
-    %wrapper = adt.struct_new %left {type = !Wrapper} : !WrapperRef
+    %wrapper = adt.struct_new(%left) : (!EnvRef) -> !WrapperRef
     func.return %wrapper
   }
   func.func @owner_live_across(%condition: core.i1, %pair: !PairRef {tribute.ownership = "consumed"}) -> !WrapperRef {
     ^entry:
       %left = adt.struct_get %pair {field = 0, type = !Pair} : !EnvRef
-      %wrapper = adt.struct_new %left {type = !Wrapper} : !WrapperRef
+      %wrapper = adt.struct_new(%left) : (!EnvRef) -> !WrapperRef
       cf.cond_br %condition [^read, ^skip]
     ^read:
       %right = adt.struct_get %pair {field = 1, type = !Pair} : !EnvRef
@@ -1187,16 +1187,16 @@ fn a_dying_owner_moves_its_field_units_through_nested_projections() {
 fn a_moved_field_used_twice_acquires_once_and_moves_at_its_last_use() {
     let (ctx, _module, plan) = build(
         r#"core.module @test {
-  !Env = adt.struct<Env(value: core.i32)>
-  !EnvRef = adt.typeref<{name = "Env"}>
-  !Pair = adt.struct<Pair(left: !EnvRef, right: !EnvRef)>
-  !PairRef = adt.typeref<{name = "Pair"}>
-  !Wrapper = adt.struct<Wrapper(env: !EnvRef)>
-  !WrapperRef = adt.typeref<{name = "Wrapper"}>
+  !Env = adt.struct<"Env",(core.i32)>
+  !EnvRef = adt.struct<"Env">
+  !Pair = adt.struct<"Pair",(!EnvRef, !EnvRef)>
+  !PairRef = adt.struct<"Pair">
+  !Wrapper = adt.struct<"Wrapper",(!EnvRef)>
+  !WrapperRef = adt.struct<"Wrapper">
   func.func @twice(%pair: !PairRef {tribute.ownership = "consumed"}) -> !PairRef {
     %left = adt.struct_get %pair {field = 0, type = !Pair} : !EnvRef
-    %first = adt.struct_new %left {type = !Wrapper} : !WrapperRef
-    %second = adt.struct_new %left, %left {type = !Pair} : !PairRef
+    %first = adt.struct_new(%left) : (!EnvRef) -> !WrapperRef
+    %second = adt.struct_new(%left, %left) : (!EnvRef, !EnvRef) -> !PairRef
     func.return %second
   }
 }"#,
@@ -1225,10 +1225,10 @@ fn a_moved_field_used_twice_acquires_once_and_moves_at_its_last_use() {
 fn owners_released_after_the_same_operation_move_their_own_fields() {
     let (mut ctx, module, plan) = build(
         r#"core.module @test {
-  !Env = adt.struct<Env(value: core.i32)>
-  !EnvRef = adt.typeref<{name = "Env"}>
-  !Pair = adt.struct<Pair(left: !EnvRef, right: !EnvRef)>
-  !PairRef = adt.typeref<{name = "Pair"}>
+  !Env = adt.struct<"Env",(core.i32)>
+  !EnvRef = adt.struct<"Env">
+  !Pair = adt.struct<"Pair",(!EnvRef, !EnvRef)>
+  !PairRef = adt.struct<"Pair">
   func.func @peek(%first: !PairRef, %second: !PairRef) -> core.nil {
     func.return
   }
@@ -1236,7 +1236,7 @@ fn owners_released_after_the_same_operation_move_their_own_fields() {
     %left = adt.struct_get %first {field = 0, type = !Pair} : !EnvRef
     %right = adt.struct_get %second {field = 1, type = !Pair} : !EnvRef
     func.call @peek(%first, %second) : (!PairRef, !PairRef) -> ()
-    %pair = adt.struct_new %left, %right {type = !Pair} : !PairRef
+    %pair = adt.struct_new(%left, %right) : (!EnvRef, !EnvRef) -> !PairRef
     func.return %pair
   }
 }"#,
@@ -1279,19 +1279,19 @@ fn owners_released_after_the_same_operation_move_their_own_fields() {
 fn a_replaceable_layout_keeps_its_projection_unit_instead_of_moving() {
     let (ctx, _module, plan) = build(
         r#"core.module @test {
-  !Env = adt.struct<Env(value: core.i32)>
-  !EnvRef = adt.typeref<{name = "Env"}>
-  !Pair = adt.struct<Pair(left: !EnvRef, right: !EnvRef)>
-  !PairRef = adt.typeref<{name = "Pair"}>
-  !Wrapper = adt.struct<Wrapper(env: !EnvRef)>
-  !WrapperRef = adt.typeref<{name = "Wrapper"}>
+  !Env = adt.struct<"Env",(core.i32)>
+  !EnvRef = adt.struct<"Env">
+  !Pair = adt.struct<"Pair",(!EnvRef, !EnvRef)>
+  !PairRef = adt.struct<"Pair">
+  !Wrapper = adt.struct<"Wrapper",(!EnvRef)>
+  !WrapperRef = adt.struct<"Wrapper">
   func.func @replace(%pair: !PairRef, %env: !EnvRef) -> core.nil {
     adt.struct_set %pair, %env {field = 0, type = !Pair}
     func.return
   }
   func.func @store_one(%pair: !PairRef {tribute.ownership = "consumed"}) -> !WrapperRef {
     %left = adt.struct_get %pair {field = 0, type = !Pair} : !EnvRef
-    %wrapper = adt.struct_new %left {type = !Wrapper} : !WrapperRef
+    %wrapper = adt.struct_new(%left) : (!EnvRef) -> !WrapperRef
     func.return %wrapper
   }
 }"#,
@@ -1330,10 +1330,10 @@ fn a_field_move_needs_the_owner_to_end_before_the_moved_uses() {
 fn borrowed_load_return_acquires_a_transfer_unit() {
     let (_ctx, _module, plan) = build(
         r#"core.module @test {
-  !Child = adt.struct<Child(value: core.i32)>
-  !ChildRef = adt.typeref<{name = "Child"}>
-  !Box = adt.struct<Box(child: !ChildRef)>
-  !BoxRef = adt.typeref<{name = "Box"}>
+  !Child = adt.struct<"Child",(core.i32)>
+  !ChildRef = adt.struct<"Child">
+  !Box = adt.struct<"Box",(!ChildRef)>
+  !BoxRef = adt.struct<"Box">
   func.func @load(%owner: !BoxRef) -> !ChildRef {
     %child = adt.struct_get %owner {field = 0, type = !Box} : !ChildRef
     func.return %child
@@ -1366,12 +1366,12 @@ fn box_child_projection(
 fn projection_of_a_written_layout_keeps_its_own_unit() {
     let (mut ctx, module, plan) = build(
         r#"core.module @test {
-  !Child = adt.struct<Child(value: core.i32)>
-  !ChildRef = adt.typeref<{name = "Child"}>
-  !Box = adt.struct<Box(child: !ChildRef)>
-  !BoxRef = adt.typeref<{name = "Box"}>
-  !Pair = adt.struct<Pair(child: !ChildRef)>
-  !PairRef = adt.typeref<{name = "Pair"}>
+  !Child = adt.struct<"Child",(core.i32)>
+  !ChildRef = adt.struct<"Child">
+  !Box = adt.struct<"Box",(!ChildRef)>
+  !BoxRef = adt.struct<"Box">
+  !Pair = adt.struct<"Pair",(!ChildRef)>
+  !PairRef = adt.struct<"Pair">
   func.func @read_then_replace(%owner: !BoxRef, %new: !ChildRef) -> !ChildRef {
     %old = adt.struct_get %owner {field = 0, type = !Box} : !ChildRef
     adt.struct_set %owner, %new {field = 0, type = !Box}
@@ -1483,10 +1483,10 @@ fn op_position(ctx: &IrContext, op: OpRef) -> (BlockRef, usize) {
 fn borrowed_projection_proper_tail_transfer_acquires_before_the_owner_dies() {
     let (mut ctx, module, plan) = build_without_field_moves(
         r#"core.module @test {
-  !Child = adt.struct<Child(value: core.i32)>
-  !ChildRef = adt.typeref<{name = "Child"}>
-  !Box = adt.struct<Box(child: !ChildRef)>
-  !BoxRef = adt.typeref<{name = "Box"}>
+  !Child = adt.struct<"Child",(core.i32)>
+  !ChildRef = adt.struct<"Child">
+  !Box = adt.struct<"Box",(!ChildRef)>
+  !BoxRef = adt.struct<"Box">
   func.func @sink(%value: !ChildRef {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"} {
     func.unreachable
   }
@@ -1564,15 +1564,15 @@ fn borrowed_projection_proper_tail_transfer_acquires_before_the_owner_dies() {
 fn borrowed_projection_ordinary_call_to_a_consumed_parameter_acquires_its_unit() {
     let (mut ctx, module, plan) = build_without_field_moves(
         r#"core.module @test {
-  !Child = adt.struct<Child(value: core.i32)>
-  !ChildRef = adt.typeref<{name = "Child"}>
-  !Box = adt.struct<Box(child: !ChildRef)>
-  !BoxRef = adt.typeref<{name = "Box"}>
+  !Child = adt.struct<"Child",(core.i32)>
+  !ChildRef = adt.struct<"Child">
+  !Box = adt.struct<"Box",(!ChildRef)>
+  !BoxRef = adt.struct<"Box">
   func.func @sink(%value: !ChildRef {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"} {
     func.unreachable
   }
   func.func @load(%child: !ChildRef) -> core.nil {
-    %owner = adt.struct_new %child {type = !Box} : !BoxRef
+    %owner = adt.struct_new(%child) : (!ChildRef) -> !BoxRef
     %loaded = adt.struct_get %owner {field = 0, type = !Box} : !ChildRef
     func.call @sink(%loaded) : (!ChildRef) -> ()
     func.return
@@ -1614,16 +1614,16 @@ fn borrowed_projection_ordinary_call_to_a_consumed_parameter_acquires_its_unit()
 fn borrowed_projection_stored_in_an_aggregate_acquires_the_field_unit() {
     let (mut ctx, module, plan) = build_without_field_moves(
         r#"core.module @test {
-  !Child = adt.struct<Child(value: core.i32)>
-  !ChildRef = adt.typeref<{name = "Child"}>
-  !Box = adt.struct<Box(child: !ChildRef)>
-  !BoxRef = adt.typeref<{name = "Box"}>
-  !Capture = adt.struct<Capture(child: !ChildRef)>
-  !CaptureRef = adt.typeref<{name = "Capture"}>
+  !Child = adt.struct<"Child",(core.i32)>
+  !ChildRef = adt.struct<"Child">
+  !Box = adt.struct<"Box",(!ChildRef)>
+  !BoxRef = adt.struct<"Box">
+  !Capture = adt.struct<"Capture",(!ChildRef)>
+  !CaptureRef = adt.struct<"Capture">
   func.func @capture(%child: !ChildRef) -> !CaptureRef {
-    %owner = adt.struct_new %child {type = !Box} : !BoxRef
+    %owner = adt.struct_new(%child) : (!ChildRef) -> !BoxRef
     %loaded = adt.struct_get %owner {field = 0, type = !Box} : !ChildRef
-    %captured = adt.struct_new %loaded {type = !Capture} : !CaptureRef
+    %captured = adt.struct_new(%loaded) : (!ChildRef) -> !CaptureRef
     func.return %captured
   }
 }"#,
@@ -1657,11 +1657,11 @@ fn borrowed_projection_stored_in_an_aggregate_acquires_the_field_unit() {
 fn loop_carried_borrowed_projection_acquires_before_the_previous_owner_dies() {
     let (mut ctx, module, plan) = build(
         r#"core.module @test {
-  !NodeRef = adt.typeref<{name = "Node"}>
-  !Node = adt.struct<Node(next: !NodeRef)>
+  !NodeRef = adt.struct<"Node">
+  !Node = adt.struct<"Node",(!NodeRef)>
   func.func @walk(%condition: core.i1, %tail: !NodeRef) -> core.nil {
     ^entry:
-      %head = adt.struct_new %tail {type = !Node} : !NodeRef
+      %head = adt.struct_new(%tail) : (!NodeRef) -> !NodeRef
       cf.br %head [^loop]
     ^loop(%current: !NodeRef):
       %next = adt.struct_get %current {field = 0, type = !Node} : !NodeRef
@@ -1708,10 +1708,10 @@ fn loop_carried_borrowed_projection_acquires_before_the_previous_owner_dies() {
 fn enum_release_leaves_the_size_to_the_descriptor() {
     let (mut ctx, module, plan) = build(
         r#"core.module @test {
-  !Choice = adt.enum<Choice { None(), Some(core.i64, core.i64) }>
-  !ChoiceRef = adt.typeref<{name = "Choice"}>
+  !Choice = adt.enum<"Choice",[(), (core.i64, core.i64)]>
+  !ChoiceRef = adt.enum<"Choice">
   func.func @drop() -> core.nil {
-    %choice = adt.variant_new {tag = 0, type = !Choice} : !ChoiceRef
+    %choice = adt.variant_new 0() : () -> !ChoiceRef
     func.return
   }
 }"#,
@@ -1731,10 +1731,10 @@ fn enum_release_leaves_the_size_to_the_descriptor() {
 fn compatible_cast_and_enum_projection_preserve_borrowed_ownership() {
     let (mut ctx, module, plan) = build(
         r#"core.module @test {
-  !Child = adt.struct<Child(value: core.i32)>
-  !ChildRef = adt.typeref<{name = "Child"}>
-  !Choice = adt.enum<Choice { Some(!ChildRef) }>
-  !ChoiceRef = adt.typeref<{name = "Choice"}>
+  !Child = adt.struct<"Child",(core.i32)>
+  !ChildRef = adt.struct<"Child">
+  !Choice = adt.enum<"Choice",[(!ChildRef)]>
+  !ChoiceRef = adt.enum<"Choice">
   func.func @load(%choice: !ChoiceRef) -> !ChildRef {
     %erased = adt.ref_cast %choice {type = tribute_rt.anyref} : tribute_rt.anyref
     %restored = adt.ref_cast %erased {type = !ChoiceRef} : !ChoiceRef
@@ -1778,10 +1778,10 @@ fn mismatched_projection_managed_types_fail_before_mutation() {
         assert_plan_error_unchanged(
             &format!(
                 r#"core.module @test {{
-  !Child = adt.struct<Child(value: core.i32)>
-  !ChildRef = adt.typeref<{{name = "Child"}}>
-  !Box = adt.struct<Box(child: !ChildRef)>
-  !BoxRef = adt.typeref<{{name = "Box"}}>
+  !Child = adt.struct<"Child",(core.i32)>
+  !ChildRef = adt.struct<"Child">
+  !Box = adt.struct<"Box",(!ChildRef)>
+  !BoxRef = adt.struct<"Box">
   func.func @load(%owner: {source_ty}) -> {result_ty} {{
     %child = adt.struct_get %owner {{field = 0, type = !Box}} : {result_ty}
     func.return %child
@@ -1870,8 +1870,8 @@ fn branch_interfaces_fail_closed_before_mutation() {
         ),
         (
             r#"core.module @test {
-  !R = adt.typeref<{name = "R"}>
-  !Layout = adt.struct<R(x: core.i32)>
+  !R = adt.struct<"R">
+  !Layout = adt.struct<"R",(core.i32)>
   func.func @f(%value: !R) -> core.nil {
     ^entry:
       "test.multi_forwarding_branch"(%value)[^left, ^right]
@@ -1910,17 +1910,17 @@ fn physical_empty_results_reject_values_before_mutation() {
 fn cross_block_borrowed_load_keeps_owner_alive_without_releasing_the_load() {
     let (ctx, _module, plan) = build(
         r#"core.module @test {
-  !Child = adt.struct<Child(value: core.i32)>
-  !ChildRef = adt.typeref<{name = "Child"}>
-  !Box = adt.struct<Box(child: !ChildRef)>
-  !BoxRef = adt.typeref<{name = "Box"}>
+  !Child = adt.struct<"Child",(core.i32)>
+  !ChildRef = adt.struct<"Child">
+  !Box = adt.struct<"Box",(!ChildRef)>
+  !BoxRef = adt.struct<"Box">
   func.func @observe(%child: !ChildRef) -> core.i32 {
     %value = adt.struct_get %child {field = 0, type = !Child} : core.i32
     func.return %value
   }
   func.func @load(%child: !ChildRef) -> core.nil {
     ^entry:
-      %owner = adt.struct_new %child {type = !Box} : !BoxRef
+      %owner = adt.struct_new(%child) : (!ChildRef) -> !BoxRef
       %loaded = adt.struct_get %owner {field = 0, type = !Box} : !ChildRef
       cf.br [^next]
     ^next:
@@ -1960,8 +1960,8 @@ fn cross_block_borrowed_load_keeps_owner_alive_without_releasing_the_load() {
 fn cfg_copy_and_tail_dying_value_actions_are_complete() {
     let (mut ctx, module, plan) = build(
         r#"core.module @test {
-  !R = adt.typeref<{name = "R"}>
-  !Layout = adt.struct<R(x: core.i32)>
+  !R = adt.struct<"R">
+  !Layout = adt.struct<"R",(core.i32)>
   func.func @branch(%value: !R {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"} {
     ^entry:
       cf.br %value, %value [^merge]
@@ -2017,10 +2017,10 @@ fn cfg_copy_and_tail_dying_value_actions_are_complete() {
 fn branch_transfer_of_a_value_live_afterwards_acquires_the_destination_unit() {
     let (mut ctx, module, plan) = build(
         r#"core.module @test {
-  !Child = adt.struct<Child(value: core.i32)>
-  !ChildRef = adt.typeref<{name = "Child"}>
-  !Box = adt.struct<Box(child: !ChildRef)>
-  !BoxRef = adt.typeref<{name = "Box"}>
+  !Child = adt.struct<"Child",(core.i32)>
+  !ChildRef = adt.struct<"Child">
+  !Box = adt.struct<"Box",(!ChildRef)>
+  !BoxRef = adt.struct<"Box">
   func.func @sink(%value: !BoxRef {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"} {
     func.unreachable
   }
@@ -2030,7 +2030,7 @@ fn branch_transfer_of_a_value_live_afterwards_acquires_the_destination_unit() {
   }
   func.func @used_after(%child: !ChildRef) -> core.nil {
     ^entry:
-      %value = adt.struct_new %child {type = !Box} : !BoxRef
+      %value = adt.struct_new(%child) : (!ChildRef) -> !BoxRef
       cf.br %value [^next]
     ^next(%moved: !BoxRef):
       func.call @sink(%value) : (!BoxRef) -> ()
@@ -2038,7 +2038,7 @@ fn branch_transfer_of_a_value_live_afterwards_acquires_the_destination_unit() {
   }
   func.func @projection_used_after(%child: !ChildRef) -> core.nil {
     ^entry:
-      %owner = adt.struct_new %child {type = !Box} : !BoxRef
+      %owner = adt.struct_new(%child) : (!ChildRef) -> !BoxRef
       %loaded = adt.struct_get %owner {field = 0, type = !Box} : !ChildRef
       cf.br %owner [^next]
     ^next(%moved: !BoxRef):
@@ -2047,7 +2047,7 @@ fn branch_transfer_of_a_value_live_afterwards_acquires_the_destination_unit() {
   }
   func.func @moved(%child: !ChildRef) -> core.nil {
     ^entry:
-      %value = adt.struct_new %child {type = !Box} : !BoxRef
+      %value = adt.struct_new(%child) : (!ChildRef) -> !BoxRef
       cf.br %value [^next]
     ^next(%moved: !BoxRef):
       func.return
@@ -2124,10 +2124,10 @@ fn final_releases(function: &FunctionOwnershipPlan, value: ValueRef) -> Vec<Acti
 }
 
 const EDGE_DEATHS: &str = r#"core.module @test {
-  !Child = adt.struct<Child(value: core.i32)>
-  !ChildRef = adt.typeref<{name = "Child"}>
-  !Box = adt.struct<Box(child: !ChildRef)>
-  !BoxRef = adt.typeref<{name = "Box"}>
+  !Child = adt.struct<"Child",(core.i32)>
+  !ChildRef = adt.struct<"Child">
+  !Box = adt.struct<"Box",(!ChildRef)>
+  !BoxRef = adt.struct<"Box">
   func.func @sink(%value: !BoxRef {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"} {
     func.unreachable
   }
@@ -2137,7 +2137,7 @@ const EDGE_DEATHS: &str = r#"core.module @test {
   }
   func.func @one_arm(%condition: core.i1, %child: !ChildRef) -> core.nil {
     ^entry:
-      %value = adt.struct_new %child {type = !Box} : !BoxRef
+      %value = adt.struct_new(%child) : (!ChildRef) -> !BoxRef
       cf.cond_br %condition [^use, ^skip]
     ^use:
       func.call @sink(%value) : (!BoxRef) -> ()
@@ -2149,7 +2149,7 @@ const EDGE_DEATHS: &str = r#"core.module @test {
   }
   func.func @nested(%outer: core.i1, %inner: core.i1, %child: !ChildRef) -> core.nil {
     ^entry:
-      %value = adt.struct_new %child {type = !Box} : !BoxRef
+      %value = adt.struct_new(%child) : (!ChildRef) -> !BoxRef
       cf.cond_br %outer [^inside, ^outer_skip]
     ^inside:
       cf.cond_br %inner [^use, ^inner_skip]
@@ -2165,7 +2165,7 @@ const EDGE_DEATHS: &str = r#"core.module @test {
   }
   func.func @loop_exit(%condition: core.i1, %child: !ChildRef) -> core.nil {
     ^entry:
-      %value = adt.struct_new %child {type = !Box} : !BoxRef
+      %value = adt.struct_new(%child) : (!ChildRef) -> !BoxRef
       cf.br [^loop]
     ^loop:
       func.call @sink(%value) : (!BoxRef) -> ()
@@ -2175,7 +2175,7 @@ const EDGE_DEATHS: &str = r#"core.module @test {
   }
   func.func @projection_one_arm(%condition: core.i1, %child: !ChildRef) -> core.nil {
     ^entry:
-      %owner = adt.struct_new %child {type = !Box} : !BoxRef
+      %owner = adt.struct_new(%child) : (!ChildRef) -> !BoxRef
       %loaded = adt.struct_get %owner {field = 0, type = !Box} : !ChildRef
       cf.cond_br %condition [^use, ^skip]
     ^use:
@@ -2318,16 +2318,16 @@ fn borrowed_projection_owner_dying_on_an_edge_follows_the_selected_liveness_view
 fn value_dying_on_an_edge_into_a_shared_successor_is_rejected() {
     assert_plan_error_unchanged(
         r#"core.module @test {
-  !Child = adt.struct<Child(value: core.i32)>
-  !ChildRef = adt.typeref<{name = "Child"}>
-  !Box = adt.struct<Box(child: !ChildRef)>
-  !BoxRef = adt.typeref<{name = "Box"}>
+  !Child = adt.struct<"Child",(core.i32)>
+  !ChildRef = adt.struct<"Child">
+  !Box = adt.struct<"Box",(!ChildRef)>
+  !BoxRef = adt.struct<"Box">
   func.func @sink(%value: !BoxRef {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"} {
     func.unreachable
   }
   func.func @shared(%outer: core.i1, %inner: core.i1, %child: !ChildRef) -> core.nil {
     ^entry:
-      %value = adt.struct_new %child {type = !Box} : !BoxRef
+      %value = adt.struct_new(%child) : (!ChildRef) -> !BoxRef
       cf.cond_br %outer [^inside, ^other]
     ^inside:
       cf.cond_br %inner [^join, ^use]
@@ -2350,17 +2350,17 @@ fn value_dying_on_a_back_edge_to_the_entry_block_is_rejected() {
     // its start would run before the first definition.
     assert_plan_error_unchanged(
         r#"core.module @test {
-  !Child = adt.struct<Child(value: core.i32)>
-  !ChildRef = adt.typeref<{name = "Child"}>
-  !Box = adt.struct<Box(child: !ChildRef)>
-  !BoxRef = adt.typeref<{name = "Box"}>
+  !Child = adt.struct<"Child",(core.i32)>
+  !ChildRef = adt.struct<"Child">
+  !Box = adt.struct<"Box",(!ChildRef)>
+  !BoxRef = adt.struct<"Box">
   func.func @sink(%value: !BoxRef {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"} {
     func.unreachable
   }
   func.func @restart() -> core.nil {
     ^entry:
       %child = adt.ref_null {type = !ChildRef} : !ChildRef
-      %value = adt.struct_new %child {type = !Box} : !BoxRef
+      %value = adt.struct_new(%child) : (!ChildRef) -> !BoxRef
       %again = adt.ref_is_null %child : core.i1
       cf.cond_br %again [^back, ^use]
     ^back:
@@ -2378,8 +2378,8 @@ fn value_dying_on_a_back_edge_to_the_entry_block_is_rejected() {
 fn cfg_accepts_conditional_branch_with_duplicate_successors() {
     let (mut ctx, module, plan) = build(
         r#"core.module @test {
-  !R = adt.typeref<{name = "R"}>
-  !Layout = adt.struct<R(x: core.i32)>
+  !R = adt.struct<"R">
+  !Layout = adt.struct<"R",(core.i32)>
   func.func @duplicate_successor(%condition: core.i1 {tribute.ownership = "consumed"}, %value: !R {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"} {
     ^entry:
       cf.cond_br %condition [^exit, ^exit]
@@ -2410,11 +2410,11 @@ fn cfg_accepts_conditional_branch_with_duplicate_successors() {
 fn enum_rtti_uses_the_same_nested_managed_predicate() {
     let (ctx, _module, plan) = build(
         r#"core.module @test {
-  !Child = adt.struct<Child(value: core.i32)>
-  !ChildRef = adt.typeref<{name = "Child"}>
-  !Choice = adt.enum<Choice { None(), Some(!ChildRef, core.ptr), Bytes(core.bytes) }>
+  !Child = adt.struct<"Child",(core.i32)>
+  !ChildRef = adt.struct<"Child">
+  !Choice = adt.enum<"Choice",[(), (!ChildRef, core.ptr), (core.bytes)]>
   func.func @some(%child: !ChildRef, %raw: core.ptr) -> !Choice {
-    %choice = adt.variant_new %child, %raw {tag = 1, type = !Choice} : !Choice
+    %choice = adt.variant_new 1(%child, %raw) : (!ChildRef, core.ptr) -> !Choice
     func.return %choice
   }
 }"#,
@@ -2454,11 +2454,11 @@ fn unmanaged_physical_and_buffer_types_never_receive_actions() {
 fn bytes_is_a_managed_reference_with_its_own_units() {
     let (ctx, _module, plan) = build(
         r#"core.module @test {
-  !Leaf = adt.struct<Leaf(bytes: core.bytes)>
-  !LeafRef = adt.typeref<{name = "Leaf"}>
+  !Leaf = adt.struct<"Leaf",(core.bytes)>
+  !LeafRef = adt.struct<"Leaf">
   func.func @wrap(%raw: core.ptr) -> !LeafRef {
     %bytes = tribute_rt.from_raw %raw : core.bytes
-    %leaf = adt.struct_new %bytes {type = !Leaf} : !LeafRef
+    %leaf = adt.struct_new(%bytes) : (core.bytes) -> !LeafRef
     func.return %leaf
   }
 }"#,
@@ -2571,8 +2571,8 @@ fn closure_release_uses_its_compiler_generated_allocation_layout() {
 fn direct_indirect_return_and_tail_contracts_are_typed() {
     let (_ctx, _module, plan) = build(
         r#"core.module @test {
-  !R = adt.typeref<{name = "R"}>
-  !Layout = adt.struct<R(x: core.i32)>
+  !R = adt.struct<"R">
+  !Layout = adt.struct<"R",(core.i32)>
   func.func @ordinary(%value: !R) -> !R {
     func.return %value
   }
@@ -2614,8 +2614,8 @@ fn retained_parameter_calls_balance_retains_and_releases() {
     // neither a direct nor an indirect caller retains for the call.
     let (mut ctx, module, plan) = build(
         r#"core.module @test {
-  !R = adt.typeref<{name = "R"}>
-  !Layout = adt.struct<R(x: core.i32)>
+  !R = adt.struct<"R">
+  !Layout = adt.struct<"R",(core.i32)>
   func.func @keep(%value: !R) -> !R {
     func.return %value
   }
@@ -2664,8 +2664,8 @@ fn retained_parameter_calls_balance_retains_and_releases() {
 fn signature_consumed_contracts_drive_entries_and_call_sites() {
     let (mut ctx, module, plan) = build(
         r#"core.module @test {
-  !R = adt.typeref<{name = "R"}>
-  !Layout = adt.struct<R(x: core.i32)>
+  !R = adt.struct<"R">
+  !Layout = adt.struct<"R",(core.i32)>
   !Consuming = func.func_sig<(!R {tribute.ownership = "consumed"}, core.i32 {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}>
   func.func @sink(%value: !R {tribute.ownership = "consumed"}, %count: core.i32 {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"} {
     func.unreachable
@@ -2735,8 +2735,8 @@ fn signature_consumed_contracts_drive_entries_and_call_sites() {
 fn proper_tail_edges_without_a_consumed_contract_are_rejected() {
     assert_plan_error_unchanged(
         r#"core.module @test {
-  !R = adt.typeref<{name = "R"}>
-  !Layout = adt.struct<R(x: core.i32)>
+  !R = adt.struct<"R">
+  !Layout = adt.struct<"R",(core.i32)>
   func.func @tail(%value: !R {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"} {
     func.tail_call @sink(%value) : (!R) -> ()
   }
@@ -2748,8 +2748,8 @@ fn proper_tail_edges_without_a_consumed_contract_are_rejected() {
     );
     assert_plan_error_unchanged(
         r#"core.module @test {
-  !R = adt.typeref<{name = "R"}>
-  !Layout = adt.struct<R(x: core.i32)>
+  !R = adt.struct<"R">
+  !Layout = adt.struct<"R",(core.i32)>
   !Unmarked = func.func_sig<(!R) -> (), {call_conv = "tail"}>
   func.func @tail(%value: !R {tribute.ownership = "consumed"}, %callee: !Unmarked {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"} {
     func.tail_call_indirect %callee(%value) : (!R) -> (), {call_conv = "tail"}
@@ -2763,8 +2763,8 @@ fn proper_tail_edges_without_a_consumed_contract_are_rejected() {
 fn unknown_parameter_ownership_contracts_are_rejected() {
     assert_plan_error_unchanged(
         r#"core.module @test {
-  !R = adt.typeref<{name = "R"}>
-  !Layout = adt.struct<R(x: core.i32)>
+  !R = adt.struct<"R">
+  !Layout = adt.struct<"R",(core.i32)>
   func.func @run(%value: !R {tribute.ownership = "borrowed"}) {
     func.return
   }
@@ -2777,8 +2777,8 @@ fn unknown_parameter_ownership_contracts_are_rejected() {
 fn bodyless_c_ffi_borrows_managed_arguments_and_transfers_managed_results() {
     let (_ctx, _module, plan) = build(
         r#"core.module @test {
-  !R = adt.typeref<{name = "R"}>
-  !Layout = adt.struct<R(value: core.i32)>
+  !R = adt.struct<"R">
+  !Layout = adt.struct<"R",(core.i32)>
   func.func @foreign(%value: !R) -> !R attributes {abi = "C"}
   func.func @caller(%value: !R) -> !R {
     %result = func.call @foreign(%value) : (!R) -> !R
@@ -2796,12 +2796,8 @@ fn bodyless_c_ffi_borrows_managed_arguments_and_transfers_managed_results() {
 fn stale_identity_unsupported_regions_and_malformed_calls_fail_unchanged() {
     for ir in [
         r#"core.module @test {
-  !R = adt.typeref<{name = "Missing"}>
-  func.func @f(%value: !R) -> !R { func.return %value }
-}"#,
-        r#"core.module @test {
-  !R = adt.typeref<{name = "R"}>
-  !Layout = adt.struct<R(x: core.i32)>
+  !R = adt.struct<"R">
+  !Layout = adt.struct<"R",(core.i32)>
   func.func @f(%value: !R, %cond: core.i1) -> !R {
     %x = scf.if %cond -> (!R) {
       scf.yield %value
@@ -2812,64 +2808,58 @@ fn stale_identity_unsupported_regions_and_malformed_calls_fail_unchanged() {
   }
 }"#,
         r#"core.module @test {
-  !R = adt.typeref<{name = "R"}>
-  !Layout = adt.struct<R(x: core.i32)>
+  !R = adt.struct<"R">
+  !Layout = adt.struct<"R",(core.i32)>
   func.func @f(%value: !R, %callee: func.func_sig<(!R) -> !R>) -> !R {
     %x = func.call_indirect %callee() : (!R) -> !R
     func.return %x
   }
 }"#,
         r#"core.module @test {
-  !R = adt.typeref<{name = "R"}>
-  !First = adt.struct<R(x: core.i32)>
-  !Second = adt.struct<R(x: core.i64)>
-  func.func @f(%value: !R) -> !R { func.return %value }
-}"#,
-        r#"core.module @test {
-  !R = adt.typeref<{name = "R"}>
-  !Layout = adt.struct<R(x: core.i32)>
+  !R = adt.struct<"R">
+  !Layout = adt.struct<"R",(core.i32)>
   func.func @foreign(%value: !R) -> !R
 }"#,
         r#"core.module @test {
-  !R = adt.typeref<{name = "R"}>
-  !Layout = adt.struct<R(x: core.i32)>
+  !R = adt.struct<"R">
+  !Layout = adt.struct<"R",(core.i32)>
   func.func @f(%raw: core.ptr) -> !R {
     %value = adt.ref_cast %raw {type = !R} : !R
     func.return %value
   }
 }"#,
         r#"core.module @test {
-  !A = adt.typeref<{name = "A"}>
-  !ALayout = adt.struct<A(x: core.i32)>
-  !B = adt.typeref<{name = "B"}>
-  !BLayout = adt.struct<B(x: core.i32)>
+  !A = adt.struct<"A">
+  !ALayout = adt.struct<"A",(core.i32)>
+  !B = adt.struct<"B">
+  !BLayout = adt.struct<"B",(core.i32)>
   func.func @f(%value: !A) -> !B {
     %wrong = adt.ref_cast %value {type = !B} : !B
     func.return %wrong
   }
 }"#,
         r#"core.module @test {
-  !R = adt.typeref<{name = "R"}>
-  !Layout = adt.struct<R(x: core.i32)>
+  !R = adt.struct<"R">
+  !Layout = adt.struct<"R",(core.i32)>
   func.func @f(%value: !R) -> !R {
     %result = func.call @missing(%value) : (!R) -> !R
     func.return %result
   }
 }"#,
         r#"core.module @test {
-  !ARef = adt.typeref<{name = "A"}>
-  !A = adt.struct<A(x: core.i32)>
-  !BRef = adt.typeref<{name = "B"}>
-  !B = adt.struct<B(x: core.i32)>
-  !Env = adt.struct<Env(value: !ARef)>
+  !ARef = adt.struct<"A">
+  !A = adt.struct<"A",(core.i32)>
+  !BRef = adt.struct<"B">
+  !B = adt.struct<"B",(core.i32)>
+  !Env = adt.struct<"Env",(!ARef)>
   func.func @f(%value: !BRef) -> core.nil {
-    %env = adt.struct_new %value {type = !Env} : !Env
+    %env = adt.struct_new(%value) : (!BRef) -> !Env
     func.return
   }
 }"#,
         r#"core.module @test {
-  !R = adt.typeref<{name = "R"}>
-  !Layout = adt.struct<R(x: core.i32)>
+  !R = adt.struct<"R">
+  !Layout = adt.struct<"R",(core.i32)>
   func.func @f(%value: !R) -> !R {
     ^entry:
       cf.br [^next]
@@ -2878,8 +2868,8 @@ fn stale_identity_unsupported_regions_and_malformed_calls_fail_unchanged() {
   }
 }"#,
         r#"core.module @test {
-  !R = adt.typeref<{name = "R"}>
-  !Layout = adt.struct<R(x: core.i32)>
+  !R = adt.struct<"R">
+  !Layout = adt.struct<"R",(core.i32)>
   func.func @f(%value: !R) -> !R {
     func.return
   }
@@ -2897,8 +2887,7 @@ fn unused_frame_alias_with_missing_nominal_result_is_not_a_live_ownership_root()
     let module = parse_test_module(
         &mut ctx,
         r#"core.module @test {
-  !Missing = adt.typeref<{name = "Missing"}>
-  !DeadFrame = adt.struct<ContinuationFrame(result: !Missing)>
+  !DeadFrame = adt.struct<"ContinuationFrame",(core.i32)>
   func.func @live() -> core.nil { func.return }
 }"#,
     );
@@ -2913,30 +2902,13 @@ fn unused_frame_alias_with_missing_nominal_result_is_not_a_live_ownership_root()
 }
 
 #[test]
-fn reachable_missing_nominal_typeref_still_fails_before_planning() {
-    assert_plan_error_unchanged(
-        r#"core.module @test {
-  !Missing = adt.typeref<{name = "Missing"}>
-  !DeadFrame = adt.struct<ContinuationFrame(result: !Missing)>
-  func.func @live() -> core.nil {
-    ^entry:
-      func.return
-    ^unreachable(%value: !Missing):
-      func.unreachable
-  }
-}"#,
-        "adt.typeref \"Missing\" has no unique native layout",
-    );
-}
-
-#[test]
 fn reachable_recursive_nominal_layout_is_validated_once() {
     let (_ctx, _module, plan) = build(
         r#"core.module @test {
-  !CursorRef = adt.typeref<{name = "Cursor"}>
-  !Cursor = adt.struct<Cursor(next: !CursorRef)>
+  !CursorRef = adt.struct<"Cursor">
+  !Cursor = adt.struct<"Cursor",(!CursorRef)>
   func.func @make(%next: !CursorRef) -> !CursorRef {
-    %cursor = adt.struct_new %next {type = !Cursor} : !CursorRef
+    %cursor = adt.struct_new(%next) : (!CursorRef) -> !CursorRef
     func.return %cursor
   }
 }"#,
@@ -2950,7 +2922,7 @@ fn reachable_recursive_nominal_layout_is_validated_once() {
 fn direct_layout_in_live_null_metadata_is_managed() {
     let (ctx, _module, plan) = build(
         r#"core.module @test {
-  !Node = adt.struct<__native_node(value: core.i32)>
+  !Node = adt.struct<"__native_node",(core.i32)>
   func.func @empty() -> tribute_rt.anyref {
     %null = adt.ref_null {type = !Node} : tribute_rt.anyref
     func.return %null
@@ -2971,44 +2943,44 @@ fn nominal_layout_lookup_ignores_unreachable_interner_entries() {
     let module = parse_test_module(
         &mut ctx,
         r#"core.module @test {
-  !R = adt.typeref<{name = "R"}>
-  !Layout = adt.struct<R(x: core.i32)>
+  !R = adt.struct<"R">
+  !Layout = adt.struct<"R",(core.i32)>
   func.func @f(%value: !R) -> !R { func.return %value }
 }"#,
     );
+    // A layout of the same name under another key, such as one a layout
+    // conversion left behind, does not shadow the one the key spells.
     let i64_ty = TypeDataBuilder::new("core.i64").intern(&mut ctx);
-    let stale = tribute_ir::dialect::adt::Struct::from_fields(
-        &mut ctx,
-        "R",
-        [("x", i64_ty)],
-        trunk_ir::types::AttributeMap::new(),
-    )
-    .as_type_ref();
+    let mut attrs = trunk_ir::types::AttributeMap::new();
+    attrs
+        .view_mut(&mut ctx)
+        .insert("test.stale", trunk_ir::Attribute::Bool(true));
+    let stale =
+        tribute_ir::dialect::adt::Struct::from_fields(&mut ctx, "R", [i64_ty], attrs).as_type_ref();
     assert!(ctx.type_alias_by_type(stale).is_none());
-    production_plan(&ctx, module)
+    let plan = production_plan(&ctx, module)
         .expect("an unreachable stale layout must not shadow the module declaration");
+    assert!(!plan.is_managed_type(&ctx, stale));
 
+    // One key has one body: a second body for it is no layout at all.
     let mut ambiguous_ctx = IrContext::new();
-    let ambiguous = parse_test_module(
+    let error = trunk_ir::parser::parse_module(
         &mut ambiguous_ctx,
         r#"core.module @test {
-  !R = adt.typeref<{name = "R"}>
-  !First = adt.struct<R(x: core.i32)>
-  !Second = adt.struct<R(x: core.i64)>
-  func.func @f(%value: !R, %first: !First, %second: !Second) -> !R {
-    func.return %value
-  }
+  !First = adt.struct<"R",(core.i32)>
+  !Second = adt.struct<"R",(core.i64)>
 }"#,
-    );
-    assert!(production_plan(&ambiguous_ctx, ambiguous).is_err());
+    )
+    .expect_err("a second body for one layout");
+    assert!(error.message.contains("differs"), "{}", error.message);
 }
 
 #[test]
 fn plan_order_is_deterministic_and_duplicate_actions_fail_validation() {
     let (ctx, module, plan) = build(
         r#"core.module @test {
-  !R = adt.typeref<{name = "R"}>
-  !Layout = adt.struct<R(x: core.i32)>
+  !R = adt.struct<"R">
+  !Layout = adt.struct<"R",(core.i32)>
   func.func @f(%value: !R) -> !R { func.return %value }
 }"#,
     );
@@ -3039,12 +3011,12 @@ fn plan_order_is_deterministic_and_duplicate_actions_fail_validation() {
 fn stale_plan_and_ambiguous_rtti_rewrites_fail_without_mutation() {
     let (mut ctx, module, plan) = build(
         r#"core.module @test {
-  !A = adt.struct<A(x: core.i32)>
-  !B = adt.struct<B(x: core.i32)>
-  !R = adt.typeref<{name = "A"}>
+  !A = adt.struct<"A",(core.i32)>
+  !B = adt.struct<"B",(core.i32)>
+  !R = adt.struct<"A">
   func.func @make(%x: core.i32, %value: !R, %raw: core.ptr) -> !R {
-    %a = adt.struct_new %x {type = !A} : !R
-    %b = adt.struct_new %x {type = !B} : !B
+    %a = adt.struct_new(%x) : (core.i32) -> !R
+    %b = adt.struct_new(%x) : (core.i32) -> !B
     func.return %a
   }
   func.func @other(%value: !R) -> !R { func.return %value }
@@ -3134,10 +3106,10 @@ fn closure_rtti_declaration_follows_the_native_closure_layout() {
     let module = parse_test_module(
         &mut ctx,
         r#"core.module @test {
-  !Base = adt.struct<_closure(entries: tribute_rt.convention_table_ref), {layout = "closure"}>
-  !Closure = adt.struct<_closure_captures(entries: tribute_rt.convention_table_ref, _0: tribute_rt.anyref), {closure_base = !Base, layout = "closure_captures"}>
+  !Base = adt.struct<(tribute_rt.convention_table_ref), {layout = "closure"}>
+  !Closure = adt.struct<(tribute_rt.convention_table_ref, tribute_rt.anyref), {closure_base = !Base, layout = "closure_captures"}>
   func.func @make(%code: core.i32, %env: tribute_rt.anyref) -> !Closure {
-    %closure = adt.struct_new %code, %env {type = !Closure} : !Closure
+    %closure = adt.struct_new(%code, %env) : (core.i32, tribute_rt.anyref) -> !Closure
     func.return %closure
   }
 }"#,
@@ -3172,11 +3144,11 @@ fn rtti_identity_never_falls_back_to_same_name_or_shape() {
     let module = parse_test_module(
         &mut ctx,
         r#"core.module @test {
-  !Exact = adt.struct<R(x: core.i32)>
-  !SameNameShape = adt.struct<R(x: core.i32), {test.identity = 1}>
-  !Stale = adt.struct<Stale(x: core.i32)>
+  !Exact = adt.struct<"R",(core.i32)>
+  !SameNameShape = adt.struct<"R",(core.i32), {test.identity = 1}>
+  !Stale = adt.struct<"Stale",(core.i32)>
   func.func @make(%x: core.i32) -> !Exact {
-    %value = adt.struct_new %x {type = !Exact} : !Exact
+    %value = adt.struct_new(%x) : (core.i32) -> !Exact
     func.return %value
   }
 }"#,
@@ -3194,15 +3166,17 @@ fn rtti_identity_never_falls_back_to_same_name_or_shape() {
         .types()
         .iter()
         .filter_map(|(ty, data)| {
-            (data.name.is(&ctx, "adt.struct") && ty != plan.rtti_types()[0].ty).then_some(ty)
+            (data.name.is(&ctx, "adt.struct")
+                && trunk_ir::type_def::is_identified(&ctx, ty)
+                && ty != plan.rtti_types()[0].ty)
+                .then_some(ty)
         })
         .collect::<Vec<_>>();
     assert_eq!(candidates.len(), 2);
 
     let (type_converter, _) = native_type_converter(&mut ctx);
     for &candidate in &candidates {
-        ctx.op_attrs_mut(allocation)
-            .insert("type", trunk_ir::Attribute::Type(candidate));
+        ctx.set_op_result_type(allocation, 0, candidate);
         assert!(plan.validate_against(&ctx, module).is_err());
         assert!(
             crate::native::rtti::generate_rtti(&mut ctx, module, &type_converter).is_err(),
@@ -3239,16 +3213,16 @@ fn nested_same_named_functions_are_distinct_qualified_definitions() {
 fn nested_callers_use_the_contract_of_the_callee_their_module_names() {
     let (_, _, plan) = build(
         r#"core.module @test {
-  func.func @observe(%value: adt.typeref<{name = "R"}>) -> core.i32 {
-    %seen = adt.struct_get %value {field = 0, type = adt.struct<R(x: core.i32)>} : core.i32
+  func.func @observe(%value: adt.struct<"R">) -> core.i32 {
+    %seen = adt.struct_get %value {field = 0, type = adt.struct<"R",(core.i32)>} : core.i32
     func.return %seen
   }
   core.module @inner {
-    func.func @observe(%value: adt.typeref<{name = "R"}>) -> adt.typeref<{name = "R"}> {
+    func.func @observe(%value: adt.struct<"R">) -> adt.struct<"R"> {
       func.return %value
     }
-    func.func @caller(%value: adt.typeref<{name = "R"}>) -> adt.typeref<{name = "R"}> {
-      %kept = func.call @observe(%value) : (adt.typeref<{name = "R"}>) -> adt.typeref<{name ="R"}>
+    func.func @caller(%value: adt.struct<"R">) -> adt.struct<"R"> {
+      %kept = func.call @observe(%value) : (adt.struct<"R">) -> adt.struct<"R">
       func.return %kept
     }
   }
@@ -3268,8 +3242,8 @@ fn nested_callers_use_the_contract_of_the_callee_their_module_names() {
 }
 
 const ARRAYS: &str = r#"core.module @test {
-  !Node = adt.struct<Node(value: core.i32)>
-  !NodeRef = adt.typeref<{name = "Node"}>
+  !Node = adt.struct<"Node",(core.i32)>
+  !NodeRef = adt.struct<"Node">
   !Nodes = adt.array<!NodeRef>
   !Ints = adt.array<core.i32>
   func.func @pair(%a: !NodeRef, %b: !NodeRef) -> !Nodes {
@@ -3352,8 +3326,8 @@ fn each_array_type_is_one_descriptor() {
 #[test]
 fn a_written_array_type_is_replaceable() {
     let ir = r#"core.module @test {
-  !Node = adt.struct<Node(value: core.i32)>
-  !NodeRef = adt.typeref<{name = "Node"}>
+  !Node = adt.struct<"Node",(core.i32)>
+  !NodeRef = adt.struct<"Node">
   !Nodes = adt.array<!NodeRef>
   func.func @first(%nodes: !Nodes) -> core.i32 {
     %at = arith.constant 0 : core.index
@@ -3398,10 +3372,10 @@ fn malformed_array_operations_are_rejected() {
     let module = |body: &str| {
         format!(
             r#"core.module @test {{
-  !Node = adt.struct<Node(value: core.i32)>
-  !NodeRef = adt.typeref<{{name = "Node"}}>
-  !Other = adt.struct<Other(value: core.i32)>
-  !OtherRef = adt.typeref<{{name = "Other"}}>
+  !Node = adt.struct<"Node",(core.i32)>
+  !NodeRef = adt.struct<"Node">
+  !Other = adt.struct<"Other",(core.i32)>
+  !OtherRef = adt.struct<"Other">
   !Nodes = adt.array<!NodeRef>
   !Others = adt.array<!OtherRef>
   func.func @f(%nodes: !Nodes, %others: !Others, %other: !OtherRef, %at: core.index) -> core.nil {{
@@ -3433,8 +3407,8 @@ fn malformed_array_operations_are_rejected() {
 fn a_stale_replaced_element_release_is_rejected_before_materializing() {
     let (mut ctx, module, mut stale) = build(
         r#"core.module @test {
-  !Node = adt.struct<Node(value: core.i32)>
-  !NodeRef = adt.typeref<{name = "Node"}>
+  !Node = adt.struct<"Node",(core.i32)>
+  !NodeRef = adt.struct<"Node">
   !Nodes = adt.array<!NodeRef>
   func.func @replace(%nodes: !Nodes, %at: core.index, %node: !NodeRef) -> core.nil {
     adt.array_set %nodes, %at, %node

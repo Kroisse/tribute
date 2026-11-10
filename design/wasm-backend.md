@@ -109,9 +109,10 @@ dialect lowering은 `effect.*`를 보지 않는다.
 [IR 호출 계약](ir.md#wasmfunc_sig-wasm-호출-계약)을 따른다.
 
 바이너리 코드 생성은 결과 위치의 `core.nil`만 생략하고 나머지 결과의 선언 순서를
-보존한다. 생략되지 않는 각 결과에는 SSA 값과 지역 변수를 할당한다. 다중 결과
-호출 후에는 마지막 결과가 스택 맨 위에 있으므로 지역 변수에 역순으로 저장한다.
-입력이나 값 위치의 `core.nil`은 생략하지 않고 널을 허용하는 참조로 표현한다.
+보존한다. 생략된 slot은 stack에 값을 남기지 않으며, 생략되지 않은 결과는
+[stack 계약](#명시적-지역-변수와-stack-계약)에 따라 소비된다. 다중 결과 호출 후에는
+마지막 결과가 stack 맨 위에 있으므로 결과를 역순으로 소비한다. 입력이나 값 위치의
+`core.nil`은 생략하지 않고 널을 허용하는 참조로 표현한다.
 모든 `wasm.call_indirect`와 `wasm.return_call_indirect`는 exact `wasm.func_sig`를
 필수 attribute로 명시한다. Signature가 없으면 lowering과 emission이 실패하며
 operand/result 타입이나 상위 함수의 return으로 대체 시그니처를 추론하지 않는다.
@@ -121,10 +122,23 @@ operand/result 타입이나 상위 함수의 return으로 대체 시그니처를
 담지 않고 emitter가 signature를 등록한 결과에서 얻는다.
 Wasm 코드 생성기는 함수 본문이나 테이블 인덱스에서 CPS 여부를 추론하지 않는다.
 
+### Loop 탈출 분기
+
+`scf_to_wasm`은 `scf.loop`를 탈출 label이 되는 `wasm.block` 안의 `wasm.loop`로
+낮춘다. Wasm 분기는 대상 label을 그 사이에 있는 `block`, `loop`, `if` label의
+수로 가리키므로, loop의 `scf.continue`와 `scf.break`는 그 loop를 낮출 때 함께
+낮춘다. 이때 loop 본문 안의 `scf.if`, `scf.index_switch`, `scf.loop`는 이미
+Wasm 구조이고, 안쪽 loop의 탈출은 그 loop가 맡는다.
+`scf.continue`는 가장 가까운 `wasm.loop`까지의 label 수를, `scf.break`는
+그보다 하나 바깥인 탈출 `wasm.block`까지의 label 수를 `wasm.br`의 target으로
+쓴다. 따라서 탈출 분기는 loop 본문 바로 아래뿐 아니라 중첩된 if나 switch arm
+안에 있어도 된다.
+
 ### Switch 지원 조건
 
-`scf_to_wasm`은 `scf.index_switch`를 case 순서대로 중첩된 비교와
-`wasm.if`로 낮춘다. Wasm이 정수를 직접 비교하는 폭은 `i32`와 `i64`뿐이므로
+`scf_to_wasm`은 dense switch를 `wasm.br_table` 하나로, 나머지 switch를 case
+순서대로 중첩된 비교와 `wasm.if`로 낮춘다. Wasm이 정수를 직접 비교하는 폭은
+`i32`와 `i64`뿐이므로
 discriminant는 `core.i32`, `core.i64`, `core.index` 중 하나여야 한다.
 `core.i64`는 `wasm.i64_eq`로 비교하고, 나머지는 `wasm.i32_eq`로 비교한다.
 `core.index`는 Wasm에서 `core.i32`이다. 두 비교 모두 `core.i32` 조건을
@@ -134,6 +148,29 @@ discriminant 타입과
 conversion 오류로 거부한다. 결과가 있는 switch는 각 `wasm.if`가 그 결과 타입을
 선언하고, 안쪽 `wasm.if`의 결과를 바깥 region이 `wasm.yield`로 넘긴다.
 `scf.yield` 변환과 같이 결과는 하나까지만 낮춘다.
+
+### Dense switch의 `br_table` 분기
+
+Discriminant가 Wasm `i32`(`core.i32` 또는 `core.index`)이고 case가 3개 이상이며,
+가장 작은 값부터 가장 큰 값까지의 범위가 1024 이하이면서 case 수의 3배 이하인
+switch를 dense switch로 본다. 이 기준은 Binaryen이 비교 연쇄를 `br_table`로
+바꾸는 기준과 같다. `i64` switch는 `br_table`의 index가 `i32`이므로 항상 비교
+연쇄로 낮춘다.
+
+Dense switch는 case마다 하나, default에 하나, 결과를 받는 탈출에 하나씩
+`wasm.block`을 중첩한다. 가장 안쪽 block에서 discriminant에서 가장 작은 case
+값을 뺀 index로 `wasm.br_table` 하나를 실행한다. 표의 각 칸은 그 값을 가진 첫
+case의 label을 가리키고, 어떤 case도 갖지 않는 값은 default label을 가리킨다.
+뺄셈은 `i32`에서 wrap되므로 가장 작은 case 값보다 작거나 가장 큰 값보다 큰
+discriminant는 부호 없는 index로 표 크기 이상이 되어 `br_table`의 default로
+간다. 따라서 별도의 범위 검사를 두지 않는다.
+
+각 case는 자기 label block의 `end` 바로 뒤에 놓이고, 결과를 `wasm.yield`로 표시한
+뒤 `wasm.br`로 탈출 block에 분기한다. Default는 탈출 block의 마지막에 놓여 그
+block의 결과를 그대로 넘긴다. 결과가 없거나 Wasm 값이 없는 `core.nil` 결과의
+switch는 분기에 값을 싣지 않는다. Loop의 `scf.continue`나 `scf.break`로 끝나는
+case는 탈출 block으로 분기하지 않는다. 이 탈출들은 loop를 낮출 때 case label을
+포함한 모든 사이 label을 세어 target을 정한다([Loop 탈출 분기](#loop-탈출-분기)).
 
 ### Terminal structured-control 결과
 
@@ -147,7 +184,7 @@ conversion 오류로 거부한다. 결과가 있는 switch는 각 `wasm.if`가 �
 
 Terminal if는 결과 없는 `wasm.if`, terminal loop는 결과 없는 `wasm.block`과
 `wasm.loop`가 된다. Resultless switch도 블록 마지막에 있고 explicit default를
-포함한 모든 arm이 terminal이면 결과 없는 Wasm 비교 분기들을 만든다. Source
+포함한 모든 arm이 terminal이면 결과 없는 Wasm 분기 구조를 만든다. Source
 switch에 결과를 추가하지 않으며 일반 fallthrough switch의 계약은 유지한다.
 Wasm 검증기는 각 structured block의 `end` 뒤에 branch 내부의 도달 불가능성을
 전파하지 않는다. 따라서 terminal로 증명된 zero-result if/loop/switch 뒤에는
@@ -173,7 +210,7 @@ Wasm 검증기는 각 structured block의 `end` 뒤에 branch 내부의 도달 �
 
 Wasm 경계를 넘어 새로 생성되는 모든 `wasm.*` operation의 result type과 block
 argument type은 Wasm target `TypeConverter`가 만든 값이어야 한다. Shared IR
-spelling을 그대로 복사하면 `adt.typeref`나 logical `adt.array`가 backend-ready
+spelling을 그대로 복사하면 nominal 값 타입이나 logical `adt.array`가 backend-ready
 경계까지 남아, physical assignability와 GC layout 검증이 정상 producer를
 거부한다. 이것은 구현 편의가 아니라 [ir.md](ir.md)의 backend-ready 소거
 요구를 Wasm 쪽에서 만족시키는 조건이다.
@@ -238,9 +275,9 @@ operand로 ABI를 재추론하지 않고 이 고정 시그니처를 `wasm.call_i
 ### Nil 값과 callable result의 구분
 
 `Nil`을 값으로 생성하는 Wasm 연산은 `ref.null none`을 포함한 실제 stack 값을
-만들며, emitter는 그 값을 해당 SSA local에 저장한다. 사용되지 않은 Nil 값도
-stack에 남겨 두지 않는다. 반면 callable의 Nil result slot은 기존 ABI에서
-생략하므로 call 결과를 저장할 때만 그 slot을 건너뛴다. 이 구분은 Nil을 인자나
+만들며, 그 값은 다른 결과처럼 [stack 계약](#명시적-지역-변수와-stack-계약)에
+따라 소비된다. 사용되지 않은 Nil 값도 stack에 남겨 두지 않는다. 반면 callable의
+Nil result slot은 기존 ABI에서 생략하므로 stack에 값을 남기지 않는다. 이 구분은 Nil을 인자나
 필드로 전달하는 것과 zero-result call을 모두 보존한다.
 
 ### 올바른 꼬리 호출 계약
@@ -331,7 +368,78 @@ Emitter는 malformed를 먼저 거부한 뒤 IR을 수정하지 않는 read-only
   `wasm.import_func` 바인딩을 대신하지 않으며, 본문 구조 판정에도 참여하지 않는다.
 
 이 처분은 공통 DCE reachability나 인증된 intrinsic 삭제와 별개다. IR을 변경하지
-않고 emission 목록만 좁히며, 대상 심볼 삭제를 다른 pass에 위임하지 않는다.
+않고 emission 목록만 좁히며, 대상 심볼 삭제를 다른 pass에 위임하지 않는다. 본문의
+local 배정은 처분이 아니라 그 앞의
+[`ExplicitLocals`](#명시적-지역-변수와-stack-계약) pass가 맡는다.
+
+### 명시적 지역 변수와 stack 계약
+
+Wasm local은 IR이 소유한다. Emission 경계는 `validate_wasm_ir` 뒤에 본문이 있는
+각 `wasm.func`에 `ExplicitLocals` pass를 실행한다. 이 pass는
+[stack에 남는 값](#stack에-남는-값)을 뺀 SSA 값에 local을 배정하고, local을 거치는
+경로를 `wasm.local_get`과 `wasm.local_set` operation으로 IR에 드러낸다. 다만 사용자
+바로 앞에서 읽는 함수 parameter는 아래 계약대로 operand로 그대로 둔다.
+Parameter는 local `0..n`이고, 나머지 local의 IR 타입은 순서대로 `wasm.func`의
+`locals` attribute에 둔다. Local의 타입은 그 local에 담기는 값의 IR 타입과 같다.
+Emitter는 local을 배정하지 않고 `locals`를 Wasm 값 타입으로 바꿔 선언할 뿐이다.
+
+Pass를 거친 IR은 다음 stack 계약을 만족한다.
+
+- 각 operation은 stack operand를 stack 맨 위에서 순서대로 소비한다. 이 순서는
+  `wasm` dialect의 `StackOperandOrder` interface가 정하며, 기본값은 operand
+  순서이다.
+- 함수 parameter, 즉 `wasm.func` 입구 block의 argument는 stack operand의 마지막
+  연속 구간에 그대로 쓸 수 있다. Emitter는 그 operation 바로 앞에서 이 operand를
+  차례로 parameter의 local에서 읽는다. 그보다 앞에서 읽어야 하는 parameter는
+  `wasm.local_get`으로 쓴다.
+- Operation이 stack에 남기는 결과는 같은 block의 뒤쪽 operation이 정확히 한 번
+  소비한다. Stack에 값을 남기지 않는 결과에는 사용이 없다. 그 밖의 block argument에도
+  사용이 없으며, 그 값은 block argument의 local에서 읽는다.
+- `wasm.yield`는 바로 앞에서 stack 맨 위에 놓인 값을 region의 결과나 뒤따르는
+  `wasm.br`의 값으로 넘긴다. 값을 넘기지 않는 yield는 남기지 않는다.
+- Loop-carried 값은 loop body block argument의 local에 `wasm.local_set`으로
+  쓴다. 그래서 `wasm.loop`에는 init operand가 없고, loop로 가는 분기 앞에는 yield가
+  없다.
+- 무조건 분기, return, tail call, `wasm.unreachable` 뒤에서는 block 끝에 값이
+  남아도 된다. 그 밖의 block 끝에서 stack은 비어 있다.
+
+Stack에 값을 남기는지는 backend 표현 규칙이 정한다. Call과 indirect call의
+`core.nil` 결과 slot, 결과가 `core.nil`인 structured control, 그리고 then region이
+값을 넘기지 않는 `wasm.if`의 결과는 stack에 값을 남기지 않는다. `wasm.nop`은 결과
+타입이 `wasm.func_sig`, `wasm.funcref`, `wasm.anyref`, `wasm.structref`,
+`core.nil`일 때만 그 `ref.null`을 남기고, 다른 타입이면 값을 남기지 않는다. 이런
+결과를 읽는 곳은 대입되지 않은 그 결과의 local, 즉 local의 기본값을 읽는다.
+
+Emission 경계는 emitter 직전에 이 계약을 한 곳에서 검사하고, 어긋나면 그
+operation을 진단과 함께 거부한다. Emitter는 각 operation의 명령어와 그 바로 앞의
+parameter 읽기만 직렬화하며, 그 밖의 값의 위치를 추론하지 않는다.
+
+### Stack에 남는 값
+
+`ExplicitLocals`는 local을 배정하기 전에 `Stackify` 분석을 읽는다. 이 분석은
+LLVM WebAssembly backend의 RegStackify처럼 어떤 값이 local을 거치지 않고 stack에
+남을지 정하며, IR을 바꾸지 않는다. Operation을 옮기지 않으므로 side effect의 순서는
+그대로이다.
+
+- Operation이 stack에 남기는 결과 하나가 사용이 정확히 하나이고, 그 사용자가 같은
+  block의 뒤쪽 operation이며, 그 사용자가 operand를 꺼낼 때 그 값이 stack에서 제자리에
+  있으면 그 값은 stack에 남는다. 이런 값에는 local이 없고 `wasm.local_set`도
+  `wasm.local_get`도 없다.
+- 사용자의 stack operand는 앞부분이 stack에 남은 값과 local에서 읽는 값이고, 뒷부분이
+  사용자 바로 앞에서 local에서 읽는 값이다. 앞부분은 stack 위쪽부터 차례로 맞춘다.
+  Stack에 남은 값은 stack 맨 위에 순서대로 있어야 하고, 그 사이에 오는 local operand는
+  바로 위 값의 계산이 시작되기 직전으로 `wasm.local_get`을 앞당긴다. 이렇게 맞출 수
+  없으면 그 사용자가 쓰는 값은 모두 local에 둔다.
+- `wasm.local_get`을 앞당겨도 읽는 값은 같다. Local은 그 값의 정의에서 한 번만
+  대입되고, loop body block argument의 local은 loop로 가는 분기에서만 다시 대입되며,
+  그 분기 뒤로는 사용자에게 이르지 않는다. 그래서 앞당긴 local은 같은 block에서 그 앞에
+  정의된 값, block argument, 또는 바깥 region에서 정의된 값의 local뿐이다.
+- `wasm.yield`는 값을 넘길 때 그 값의 사용자이다. Loop로 가는 분기 앞의 yield는 loop의
+  block argument가 하나일 때만 stack의 값을 그 local에 바로 쓴다.
+- Stack에 값을 남기지만 사용이 없는 결과는 local에 쓰지 않고 `wasm.drop`으로 버린다.
+  Yield 없이 마지막 operation의 결과를 region 결과로 넘기는 경우는 예외로, 그 결과는
+  local에 둔다.
+- `wasm.loop`의 init 값은 stack에 남기지 않고 local에서 읽는다.
 
 ---
 
@@ -361,7 +469,7 @@ user-defined type은 그 뒤에 배치된다:
 | 0 | `BoxedF64` |
 | 1 | `BytesArray` |
 | 2 | `BytesStruct` |
-| 3 | `_closure { entries: i32 }`, 모든 closure 값의 base |
+| 3 | `Closure { entries: i32 }`, 모든 closure 값의 base |
 | 4 | `Described { descriptor: i32 }`, 사용자 struct와 variant의 공통 supertype |
 | 5+ | user-defined structs, arrays, variants, closure capture layouts |
 
@@ -381,8 +489,9 @@ backend에는 `core.bytes`가 나타나지 않는다.
 `tribute_rt.anyref`는 `wasm.anyref`, `tribute_rt.intref`는 `wasm.i31ref`가 된다.
 선언된 field 타입과 그 field의 값이 같은 타입 표기를 쓰므로, 이후 단계는 두 표기를
 use site에서 맞추지 않으며 그 뒤의 Wasm IR에는 `tribute_rt` 타입이 나타나지 않는다.
-`adt.typeref`는 이 첫 단계의 대상이 아니다. `adt` 연산이 nominal layout을 읽는
-동안에는 값과 signature에 남고, Wasm dialect lowering의 마지막 단계가 없앤다.
+Layout 필드 안의 [nominal 값 타입](tribute-dialects.md#nominal-값-타입)은 이 첫
+단계의 대상이 아니다. `adt` 연산이 nominal layout을 읽는 동안에는 layout에 남고,
+Wasm dialect lowering의 마지막 단계가 없앤다.
 
 [`core.index`](ir.md#coreindex-주소-폭-정수)는 module memory의 index type이 된다.
 32비트 memory에서는 `core.i32`, memory64에서는 `core.i64`다. `arith` lowering은
@@ -420,19 +529,19 @@ descriptor](runtime-types.md#wasm-배치) index를 두어 runtime identity를 �
 - 사용자 struct와 variant의 타입은 `wasm_gc.struct<T...>`이다. 매개변수는
   descriptor 필드의 `core.i32`와 각 소스 필드의 Wasm 저장 표현이며, 같은 매개변수
   목록은 interning으로 같은 타입이 된다.
-- 소스 필드의 저장 표현은 다음과 같다. `core.i1`은 `core.i32`, `adt.typeref`는
-  `wasm.structref`, `adt.enum` 값은 emission이 쓰는 erased `wasm.anyref`, 중첩된
-  사용자 struct는 그 struct의 `wasm_gc.struct`이다. Builtin layout을 포함한 나머지
-  타입은 그대로 둔다.
+- 소스 필드의 저장 표현은 다음과 같다. `core.i1`은 `core.i32`, nominal 값 타입은
+  자기를 담을 수 있으므로 `wasm.structref`, literal `adt.enum` 값은 emission이
+  쓰는 erased `wasm.anyref`, 중첩된 사용자 struct는 그 struct의
+  `wasm_gc.struct`이다. Builtin layout을 포함한 나머지 타입은 그대로 둔다.
 - Variant의 타입은 그 variant 자신의 필드로 만든다. Enum의 다른 variant 필드를
   복사하지 않는다.
 - Nominal layout을 마지막으로 읽는 단계는 `adt_to_wasm`이다. 그 뒤
   `convert_struct_layouts`가 모듈 전체(alias, 연산 속성, 결과, block 인자, 함수
   signature)의 사용자 `adt.struct`를 `wasm_gc.struct`로 바꾼다. Variant 연산은
-  `adt_to_wasm`이 처음부터 `wasm_gc.struct`로 낮춘다. 같은 단계가 `adt.typeref`도
-  없앤다. Struct를 가리키는 `adt.typeref`는 그 struct의 `wasm_gc.struct`가 되고,
-  enum을 가리키거나 이름을 해석할 수 없는 `adt.typeref`는 variant마다 타입이 다르므로
-  `wasm.structref`가 된다.
+  `adt_to_wasm`이 처음부터 `wasm_gc.struct`로 낮춘다. 같은 단계가 남은 row
+  인스턴스와 enum layout도 없앤다. Struct를 가리키는 row 인스턴스는 그 struct의
+  `wasm_gc.struct`가 되고, enum은 variant마다 타입이 다르므로 `wasm.structref`가
+  된다.
 - 배열 연산의 GC 타입은 `wasm_gc.array<E>`다. `adt_to_wasm`은 `adt.array<E>`를
   같은 매개변수와 속성의 `wasm_gc.array`로 바꿔 `wasm_gc` 배열 연산에 쓰고, 원소
   타입이 같은 배열은 같은 GC 타입이다. `layout`을 가진 builtin 배열(Bytes backing
@@ -456,10 +565,10 @@ descriptor](runtime-types.md#wasm-배치) index를 두어 runtime identity를 �
   subtype이다. 이 관계는 [`supertype`](#wasm-gc-subtype)으로 명시한다. 사용자
   `adt.struct`를 `wasm_gc.struct`로 바꾸는 단계와 variant lowering이 그
   `wasm_gc.struct`에 `supertype = Described`를 붙이며, backend는 descriptor 필드
-  모양에서 subtype 관계를 추론하지 않는다. Descriptor 필드의 mutability는
-  `Described`와 subtype에서 같다. Builtin layout, 배열, boxing된 scalar는
-  `Described`의 subtype이 아니므로 `anyref`에서 `Described`로의 cast는 실패할 수
-  있다.
+  모양에서 subtype 관계를 추론하지 않는다. Descriptor는 할당할 때 정해지고 바뀌지
+  않으므로 descriptor 필드는 immutable이며, subtype도 이를 따른다. Builtin
+  layout, 배열, boxing된 scalar는 `Described`의 subtype이 아니므로 `anyref`에서
+  `Described`로의 cast는 실패할 수 있다.
 - Variant 판별은 descriptor 필드를 비교한다. Enum 참조를 `Described`로 cast해
   descriptor를 읽고 그 variant의 descriptor 번호와 비교한다. Variant마다 별개의 GC
   타입 index를 두고 `ref.test`로 구별하지 않는다. 프로그램이 할당하지 않는 variant는
@@ -487,8 +596,8 @@ WasmGC subtype 관계는 `wasm_gc.struct`의 type 속성 `supertype`으로만 �
 
 ### Closure layout과 subtype
 
-[Closure 저장 layout](ir.md#closure-저장-layout)은 closure base 하나와 capture
-layout들로 이루어진다.
+[Closure 저장 layout](tribute-dialects.md#closure-저장-layout)은 closure base
+하나와 capture layout들로 이루어진다.
 
 - Closure base(`layout = "closure"`)는 예약 index 3의 `{ entries: i32 }`이며 final이
   아니다. Entries 필드는 immutable이며 function table 안의

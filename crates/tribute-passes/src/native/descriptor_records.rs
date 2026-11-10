@@ -52,15 +52,27 @@ pub enum RecordKind {
 pub struct DescriptorRecord {
     pub kind: RecordKind,
     pub name: String,
-    /// The enum layout a variant belongs to, and the variant's position in it.
-    pub owner: Option<(TypeRef, u32)>,
+    /// The enum a variant belongs to.
+    pub owner: Option<VariantOwner>,
     pub fields: Vec<(String, FieldKind)>,
+}
+
+/// The enum a variant record belongs to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VariantOwner {
+    /// The enum layout.
+    pub layout: TypeRef,
+    /// The variant's position among the enum's variants.
+    pub position: u32,
+    /// The enum's name: its declared source name, or the layout's name
+    /// without a declaration.
+    pub name: String,
 }
 
 impl DescriptorRecord {
     /// The record of the descriptor `(ty, tag)`, read from its nominal layout
-    /// and the layout's declaration in `decls` (`design/ir.md` § "Nominal
-    /// 선언").
+    /// and the layout's declaration in `decls`
+    /// (`design/tribute-dialects.md` § "Nominal 선언").
     ///
     /// # Panics
     ///
@@ -86,21 +98,23 @@ impl DescriptorRecord {
             None => {
                 let layout = adt::Struct::from_type_ref(ctx, ty)
                     .expect("a struct descriptor has an adt.struct layout");
-                // A compiler-built layout has no declaration and records the
-                // names it carries itself.
-                let (name, names): (&str, Vec<String>) = match decls.of_struct(ctx, layout) {
-                    Some(decl) => (
-                        decl.name(ctx),
-                        decl.fields(ctx).map(str::to_owned).collect(),
-                    ),
-                    None => (
-                        layout.name(ctx),
-                        layout
-                            .fields(ctx)
-                            .map(|(name, _)| name.to_owned())
-                            .collect(),
-                    ),
+                // A compiler-built layout has no declaration and records
+                // positional field names under its name or, for a literal
+                // layout, its `layout` attribute.
+                let Some(decl) = decls.of_struct(layout) else {
+                    let name = layout.name(ctx).or_else(|| {
+                        ctx.type_attrs(ty)
+                            .get_str(tribute_ir::runtime_layout::LAYOUT_ATTR)
+                    });
+                    return Self {
+                        kind: RecordKind::Struct,
+                        name: name.unwrap_or("struct").to_owned(),
+                        owner: None,
+                        fields: positional(fields),
+                    };
                 };
+                let name = decl.name(ctx);
+                let names: Vec<_> = decl.fields(ctx).map(str::to_owned).collect();
                 assert_eq!(
                     names.len(),
                     fields.len(),
@@ -116,30 +130,34 @@ impl DescriptorRecord {
             Some(position) => {
                 let layout = adt::Enum::from_type_ref(ctx, ty)
                     .expect("a variant descriptor has an adt.enum layout");
-                let position = usize::try_from(position).expect("a variant position fits usize");
-                let name = match decls.of_enum(ctx, layout) {
+                let index = usize::try_from(position).expect("a variant position fits usize");
+                let (owner_name, name) = match decls.of_enum(layout) {
                     Some(decl) => {
                         assert_eq!(
                             decl.variants(ctx).len(),
                             layout.variant_count(ctx),
                             "the declaration of {} names each of its variants",
-                            layout.name(ctx),
+                            decl.name(ctx),
                         );
-                        decl.variants(ctx)
-                            .nth(position)
-                            .expect("the declaration names each variant")
-                            .to_owned()
+                        let name = decl
+                            .variants(ctx)
+                            .nth(index)
+                            .expect("the declaration names each variant");
+                        (decl.name(ctx), name.to_owned())
                     }
-                    None => layout
-                        .variants(ctx)
-                        .nth(position)
-                        .map(|(name, _)| ctx.str(name).to_owned())
-                        .expect("a variant descriptor names a variant of its adt.enum layout"),
+                    None => (
+                        layout.name(ctx).expect("a variant's enum is named"),
+                        index.to_string(),
+                    ),
                 };
                 Self {
                     kind: RecordKind::Variant,
                     name,
-                    owner: Some((ty, position as u32)),
+                    owner: Some(VariantOwner {
+                        layout: ty,
+                        position,
+                        name: owner_name.to_owned(),
+                    }),
                     fields: positional(fields),
                 }
             }
@@ -204,7 +222,6 @@ fn reserved_records() -> [(u32, DescriptorRecord); 5] {
 /// followed by the enum records, field arrays, and names they refer to.
 pub fn generate(
     ctx: &mut IrContext,
-    decls: &NominalDecls,
     module_block: BlockRef,
     records: Vec<(u32, DescriptorRecord)>,
     release_fns: &HashMap<u32, SymbolPath>,
@@ -220,21 +237,14 @@ pub fn generate(
     // names, so every reference is an offset known before writing.
     let mut enums = Vec::<(TypeRef, DescriptorRecord)>::new();
     for (_, record) in &records {
-        if let Some((owner, _)) = record.owner
-            && !enums.iter().any(|(ty, _)| *ty == owner)
+        if let Some(owner) = &record.owner
+            && !enums.iter().any(|(ty, _)| *ty == owner.layout)
         {
-            let layout =
-                adt::Enum::from_type_ref(ctx, owner).expect("a variant's owner is an adt.enum");
-            let name = match decls.of_enum(ctx, layout) {
-                Some(decl) => decl.name(ctx),
-                None => layout.name(ctx),
-            }
-            .to_owned();
             enums.push((
-                owner,
+                owner.layout,
                 DescriptorRecord {
                     kind: RecordKind::Enum,
-                    name,
+                    name: owner.name.clone(),
                     owner: None,
                     fields: vec![],
                 },
@@ -308,9 +318,9 @@ impl Layout {
         put_u32(&mut self.bytes, base + 8, record.kind as u32);
         put_u32(&mut self.bytes, base + 12, record.fields.len() as u32);
         self.put_name(base + 16, &record.name);
-        if let Some((owner, position)) = record.owner {
-            put_u32(&mut self.bytes, base + TAG_INDEX_OFFSET, position);
-            put_offset(&mut self.bytes, base + 28, enum_offsets[&owner]);
+        if let Some(owner) = &record.owner {
+            put_u32(&mut self.bytes, base + TAG_INDEX_OFFSET, owner.position);
+            put_offset(&mut self.bytes, base + 28, enum_offsets[&owner.layout]);
         }
         if !record.fields.is_empty() {
             let fields = self.next_fields;
@@ -414,10 +424,10 @@ mod tests {
     }
 
     const DECLARED: &str = r#"core.module @test {
-  !Pair = adt.struct<Pair(a: core.i32, b: core.i32)>
-  !Choice = adt.enum<Choice { None(), Some(tribute_rt.anyref) }>
-  adt.struct_decl "Pair" (left, right)
-  adt.enum_decl "Choice" [Nothing, Just]
+  !Pair = adt.struct<"Pair", (core.i32, core.i32)>
+  !Choice = adt.enum<"Choice", [(), (tribute_rt.anyref)]>
+  adt.struct_decl "Pair" !Pair ["left", "right"]
+  adt.enum_decl "Choice" !Choice ["Nothing", "Just"]
 }"#;
 
     #[test]
@@ -441,7 +451,14 @@ mod tests {
         let record =
             DescriptorRecord::of_layout(&ctx, &decls, choice, Some(1), vec![FieldKind::Dynamic]);
         assert_eq!(record.name, "Just");
-        assert_eq!(record.owner, Some((choice, 1)));
+        assert_eq!(
+            record.owner,
+            Some(VariantOwner {
+                layout: choice,
+                position: 1,
+                name: "Choice".to_owned(),
+            })
+        );
     }
 
     #[test]
@@ -451,8 +468,8 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !Pair = adt.struct<Pair(a: core.i32, b: core.i32)>
-  adt.struct_decl "Pair" (left)
+  !Pair = adt.struct<"Pair", (core.i32, core.i32)>
+  adt.struct_decl "Pair" !Pair ["left"]
 }"#,
         );
         let decls = NominalDecls::collect(&ctx, module);
@@ -470,7 +487,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !Choice = adt.enum<Choice { None(), Some(tribute_rt.anyref) }>
+  !Choice = adt.enum<"Choice", [(), (tribute_rt.anyref)]>
   func.func @f() -> core.nil {
     func.return
   }
@@ -485,8 +502,16 @@ mod tests {
             vec![FieldKind::Dynamic],
         );
         assert_eq!(record.kind, RecordKind::Variant);
-        assert_eq!(record.name, "Some");
-        assert_eq!(record.owner, Some((choice, 1)));
+        // Without a declaration, the record names the variant by its position.
+        assert_eq!(record.name, "1");
+        assert_eq!(
+            record.owner,
+            Some(VariantOwner {
+                layout: choice,
+                position: 1,
+                name: "Choice".to_owned(),
+            })
+        );
         assert_eq!(record.fields, [("0".to_owned(), FieldKind::Dynamic)]);
 
         let block = module.first_block(&ctx).unwrap();
@@ -494,7 +519,6 @@ mod tests {
         let release = SymbolPath::new(["__tribute_release_5"]);
         generate(
             &mut ctx,
-            &NominalDecls::default(),
             block,
             vec![(5, record)],
             &[(5, release.clone())]
@@ -524,7 +548,7 @@ mod tests {
         let variant = 5 * RECORD_SIZE;
         assert_eq!(word(variant + 8), RecordKind::Variant as u32);
         assert_eq!(word(variant + 12), 1);
-        assert_eq!(text(variant + 16), "Some");
+        assert_eq!(text(variant + 16), "1");
         assert_eq!(word(variant + 24), 1);
         let owner = word(variant + 28) as usize;
         assert_eq!(

@@ -10,20 +10,16 @@ use wasm_encoder::{Function, Instruction};
 
 use crate::CompilationResult;
 
+use super::super::ModuleInfo;
 use super::super::helpers;
-use super::super::value_emission::emit_operands;
-use super::super::{FunctionEmitContext, ModuleInfo, set_result_local};
 
 /// Handle wasm.local_get operation
 pub(crate) fn handle_local_get(
     ctx: &IrContext,
     local_op: wasm_dialect::LocalGet,
-    emit_ctx: &FunctionEmitContext,
     function: &mut Function,
 ) -> CompilationResult<()> {
-    let index = local_op.index(ctx);
-    function.instruction(&Instruction::LocalGet(index));
-    set_result_local(ctx, local_op.op_ref(), emit_ctx, function)?;
+    function.instruction(&Instruction::LocalGet(local_op.index(ctx)));
     Ok(())
 }
 
@@ -31,13 +27,9 @@ pub(crate) fn handle_local_get(
 pub(crate) fn handle_local_set(
     ctx: &IrContext,
     local_op: wasm_dialect::LocalSet,
-    emit_ctx: &FunctionEmitContext,
     function: &mut Function,
 ) -> CompilationResult<()> {
-    let operands = ctx.op_operands(local_op.op_ref());
-    let index = local_op.index(ctx);
-    emit_operands(ctx, operands, emit_ctx, function)?;
-    function.instruction(&Instruction::LocalSet(index));
+    function.instruction(&Instruction::LocalSet(local_op.index(ctx)));
     Ok(())
 }
 
@@ -45,14 +37,9 @@ pub(crate) fn handle_local_set(
 pub(crate) fn handle_local_tee(
     ctx: &IrContext,
     local_op: wasm_dialect::LocalTee,
-    emit_ctx: &FunctionEmitContext,
     function: &mut Function,
 ) -> CompilationResult<()> {
-    let operands = ctx.op_operands(local_op.op_ref());
-    let index = local_op.index(ctx);
-    emit_operands(ctx, operands, emit_ctx, function)?;
-    function.instruction(&Instruction::LocalTee(index));
-    set_result_local(ctx, local_op.op_ref(), emit_ctx, function)?;
+    function.instruction(&Instruction::LocalTee(local_op.index(ctx)));
     Ok(())
 }
 
@@ -64,7 +51,6 @@ pub(crate) fn handle_local_tee(
 pub(crate) fn handle_global_get(
     ctx: &IrContext,
     global_op: wasm_dialect::GlobalGet,
-    emit_ctx: &FunctionEmitContext,
     module_info: &ModuleInfo,
     function: &mut Function,
 ) -> CompilationResult<()> {
@@ -86,8 +72,6 @@ pub(crate) fn handle_global_get(
             function.instruction(&Instruction::RefCastNullable(heap_type));
         }
     }
-
-    set_result_local(ctx, op, emit_ctx, function)?;
     Ok(())
 }
 
@@ -120,12 +104,8 @@ fn concrete_heap_type(vt: &wasm_encoder::ValType) -> Option<wasm_encoder::HeapTy
 pub(crate) fn handle_global_set(
     ctx: &IrContext,
     global_op: wasm_dialect::GlobalSet,
-    emit_ctx: &FunctionEmitContext,
     function: &mut Function,
 ) -> CompilationResult<()> {
-    let operands = ctx.op_operands(global_op.op_ref());
-    let index = global_op.index(ctx);
-    emit_operands(ctx, operands, emit_ctx, function)?;
-    function.instruction(&Instruction::GlobalSet(index));
+    function.instruction(&Instruction::GlobalSet(global_op.index(ctx)));
     Ok(())
 }

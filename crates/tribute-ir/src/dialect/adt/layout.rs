@@ -34,7 +34,6 @@ use trunk_ir::dialect::mem;
 use trunk_ir::ops::DialectType;
 use trunk_ir::refs::TypeRef;
 use trunk_ir::rewrite::type_converter::TypeConverter;
-use trunk_ir::types::StringRef;
 
 /// Memory layout of a struct type.
 #[derive(Debug, Clone)]
@@ -67,37 +66,19 @@ pub fn type_size_align(ctx: &IrContext, ty: TypeRef) -> (u32, u32) {
     }
 }
 
-/// Extract struct fields from an arena TypeRef.
+/// The field types of an `adt.struct`, in declaration order.
 ///
 /// Returns `None` if the type is not a valid `adt.struct`.
-pub fn get_struct_fields(ctx: &IrContext, ty: TypeRef) -> Option<Vec<(StringRef, TypeRef)>> {
-    let adt_struct = super::Struct::from_type_ref(ctx, ty)?;
-    Some(
-        (0..adt_struct.field_count(ctx))
-            .map(|index| {
-                let name = adt_struct
-                    .field_name_ref(ctx, index)
-                    .expect("field index is in range");
-                let ty = adt_struct
-                    .field_type(ctx, index)
-                    .expect("field index is in range");
-                (name, ty)
-            })
-            .collect(),
-    )
+pub fn get_struct_fields(ctx: &IrContext, ty: TypeRef) -> Option<Vec<TypeRef>> {
+    Some(super::Struct::from_type_ref(ctx, ty)?.fields(ctx).to_vec())
 }
 
-/// Extract enum variants from an arena TypeRef.
+/// The field types of each variant of an `adt.enum`, in declaration order.
 ///
 /// Returns `None` if the type is not a valid `adt.enum`.
-pub fn get_enum_variants(ctx: &IrContext, ty: TypeRef) -> Option<Vec<(StringRef, Vec<TypeRef>)>> {
+pub fn get_enum_variants(ctx: &IrContext, ty: TypeRef) -> Option<Vec<Vec<TypeRef>>> {
     let adt_enum = super::Enum::from_type_ref(ctx, ty)?;
-    Some(
-        adt_enum
-            .variants(ctx)
-            .map(|(name, fields)| (name, fields.to_vec()))
-            .collect(),
-    )
+    Some(adt_enum.variants(ctx).map(<[TypeRef]>::to_vec).collect())
 }
 
 /// Lay out fields of the given native types in order, each at its natural
@@ -139,7 +120,7 @@ pub fn compute_struct_layout(
         ctx,
         fields
             .into_iter()
-            .map(|(_name, field_ty)| type_converter.convert_type_or_identity(ctx, field_ty)),
+            .map(|field_ty| type_converter.convert_type_or_identity(ctx, field_ty)),
     ))
 }
 

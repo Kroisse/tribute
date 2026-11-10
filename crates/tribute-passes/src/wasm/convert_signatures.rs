@@ -26,7 +26,7 @@ use trunk_ir_wasm_backend::passes::signature_conversion::WasmFuncSignatureConver
 ///
 /// This pass should run early in the WASM pipeline, before target operation lowering.
 pub(crate) fn lower(ctx: &mut IrContext, module: Module) {
-    let type_converter = crate::wasm::type_converter::wasm_type_converter(ctx);
+    let type_converter = crate::wasm::type_converter::wasm_type_converter(ctx, module);
 
     // The operations whose signatures this pass converts follow their
     // converted operands. A retyped parameter that an operation not yet

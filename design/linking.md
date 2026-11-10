@@ -10,12 +10,12 @@
 본문을 함께 가진 frontend 결과로 같은 빌드 안에서 전달하며, 이 계약은 그 결과를
 직렬화한 package artifact를 요구하지 않는다. 패키지의 이름 범위, 가시성과 선언
 식별자는 [modules.md](modules.md)를, 실제 지원 범위는
-[capabilities.md](capabilities.md)를 따른다.
+[capabilities.md](../docs/capabilities.md)를 따른다.
 
 **하나의 module.** 특수화, logical lowering, shared·target lowering과 emission은
 빌드 전체에 대해 하나의 `core.module`에서 실행한다. 특수화는 패키지마다 하고,
 빌드는 그 결과들을 하나로 병합한다. 특수화가 읽는 결과와 병합 순서는
-[Implementation — 프론트엔드 단계 경계와 정보 소유권](implementation.md#프론트엔드-단계-경계와-정보-소유권)을
+[Frontend — 프론트엔드 단계 경계와 정보 소유권](frontend.md#프론트엔드-단계-경계와-정보-소유권)을
 따른다. 의존 패키지 generic의 인스턴스도 그것을 사용하는 패키지와 관계없이 이
 module에 두며, 여러 패키지의 특수화가 만든 같은 인스턴스는 하나만 남는다.
 Source-logical callable/control IR과 CPS legalization은 같은 module 안에서

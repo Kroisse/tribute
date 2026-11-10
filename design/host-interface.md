@@ -3,7 +3,7 @@
 > 이 문서는 Tribute 프로그램이 바깥 세계와 만나는 경계를 정한다. 외부 함수
 > 호출(FFI)은 따로 두지 않고, host가 handler를 공급하는 ability로 표현한다.
 
-현재 구현과 target 지원 범위는 [capabilities.md](capabilities.md)가 기록한다. 이
+현재 구현과 target 지원 범위는 [capabilities.md](../docs/capabilities.md)가 기록한다. 이
 문서의 내용은 설계 의도이며 지원을 주장하지 않는다.
 
 ## 목표

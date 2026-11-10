@@ -1,5 +1,8 @@
 //! Row parameters of struct and enum declarations and the row arguments of
 //! their types (`design/types.md`, "Row 매개변수").
+mod common;
+
+use self::common::run_ast_pipeline_with_ir;
 use salsa_test_macros::salsa_test;
 use tribute_core::diagnostic::{CompilationPhase, Diagnostic};
 use tribute_front::analysis;
@@ -238,6 +241,65 @@ struct Unbound({e}) { run: fn() ->{f} Nil }
             ),
         ]
     );
+}
+
+/// A layout binds its row parameters, a type passes its row arguments, and
+/// a struct's accessors quantify the struct's row parameters
+/// (`design/tribute-dialects.md`, "Nominal row 인자").
+#[salsa_test]
+fn row_parameters_lower_to_layout_binders_and_row_arguments(db: &salsa::DatabaseImpl) {
+    let text = format!(
+        "{CALLBACK}{}",
+        r#"
+fn run_twice(cb: Callback({e}, Nil), x: Nil) ->{e} Nil {
+    let f = cb.run
+    f(f(x))
+}
+fn step(s: Step({e})) ->{e} Nil {
+    case s {
+        .Next(next) -> step(next())
+        .Done -> Nil
+    }
+}
+fn quiet(x: Nil) ->{} Nil { run_twice(Callback { run: fn(y) { y } }, x) }
+"#
+    );
+    let source = SourceCst::from_source_str(db, "rows.trb", &text);
+    let ir = run_ast_pipeline_with_ir(db, source);
+    for expected in [
+        "adt.struct<\"pkg::Callback$Nil\"['a0], (tribute_control.func_sig<(core.nil) -> core.nil row(| 'a0)>)>",
+        "adt.enum<\"pkg::Step\"['a0], [(tribute_control.func_sig<() -> adt.enum<\"pkg::Step\"[row(| 'a0)]> row(| 'a0)>), ()]>",
+        "adt.struct<\"pkg::Logged\"['a0], (tribute_control.func_sig<() -> core.nil row(@\"ability_1_8_pkg::Log\" | 'a0)>, tribute_control.func_sig<() -> core.nil>)>",
+        "adt.struct<\"pkg::Callback$Nil\"[row(| 'a0)]>",
+        "adt.struct<\"pkg::Callback$Nil\"[row()]>",
+        "ability.decl @\"ability_1_8_pkg::Log\"",
+    ] {
+        assert!(ir.contains(expected), "missing `{expected}`:\n{ir}");
+    }
+}
+
+/// A field read out of a value or written into one takes the value's row
+/// arguments in place of the layout's binders, also in a definition that has
+/// no binders, where a leaked binder fails validation.
+#[salsa_test]
+fn extracted_fields_take_the_values_row_arguments(db: &salsa::DatabaseImpl) {
+    let text = format!(
+        "{CALLBACK}{}",
+        r#"
+fn copy(cb: Callback({}, Nil)) ->{} Callback({}, Nil) { Callback { ..cb } }
+fn advance(s: Step({Log})) ->{Log} Nil {
+    case s {
+        .Next(next) -> advance(next())
+        .Done -> Nil
+    }
+}
+fn start() ->{} Step({Log}) { .Next(fn() { .Done }) }
+"#
+    );
+    let source = SourceCst::from_source_str(db, "rows.trb", &text);
+    let ir = run_ast_pipeline_with_ir(db, source);
+    let expected = "adt.struct_get %0 {field = 0, type = !\"pkg::Callback$Nil\"} : tribute_control.func_sig<(core.nil) -> core.nil>";
+    assert!(ir.contains(expected), "missing `{expected}`:\n{ir}");
 }
 
 #[salsa_test]

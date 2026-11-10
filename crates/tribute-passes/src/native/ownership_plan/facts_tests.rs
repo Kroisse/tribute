@@ -11,10 +11,10 @@ use trunk_ir::parser::parse_test_module;
 use super::*;
 
 const BORROW_FIXTURE: &str = r#"core.module @test {
-  !Child = adt.struct<Child(value: core.i32)>
-  !ChildRef = adt.typeref<{name = "Child"}>
-  !Box = adt.struct<Box(child: !ChildRef)>
-  !BoxRef = adt.typeref<{name = "Box"}>
+  !Child = adt.struct<"Child",(core.i32)>
+  !ChildRef = adt.struct<"Child">
+  !Box = adt.struct<"Box",(!ChildRef)>
+  !BoxRef = adt.struct<"Box">
   func.func @observe(%child: !ChildRef) -> core.i32 {
     %value = adt.struct_get %child {field = 0, type = !Child} : core.i32
     func.return %value
@@ -27,10 +27,10 @@ const BORROW_FIXTURE: &str = r#"core.module @test {
 }"#;
 
 const CAST_FIXTURE: &str = r#"core.module @test {
-  !Child = adt.struct<Child(value: core.i32)>
-  !ChildRef = adt.typeref<{name = "Child"}>
-  !Choice = adt.enum<Choice { Some(!ChildRef) }>
-  !ChoiceRef = adt.typeref<{name = "Choice"}>
+  !Child = adt.struct<"Child",(core.i32)>
+  !ChildRef = adt.struct<"Child">
+  !Choice = adt.enum<"Choice",[(!ChildRef)]>
+  !ChoiceRef = adt.enum<"Choice">
   func.func @load(%choice: !ChoiceRef) -> !ChildRef {
     %erased = adt.ref_cast %choice {type = tribute_rt.anyref} : tribute_rt.anyref
     %restored = adt.ref_cast %erased {type = !ChoiceRef} : !ChoiceRef
@@ -110,8 +110,8 @@ fn entry_contract_views_share_one_proof_and_keep_declared_borrows() {
     let module = parse_test_module(
         &mut ctx,
         r#"core.module @test {
-  !R = adt.typeref<{name = "R"}>
-  !Layout = adt.struct<R(value: core.i32)>
+  !R = adt.struct<"R">
+  !Layout = adt.struct<"R",(core.i32)>
   func.func @foreign(%value: !R) -> core.i32 attributes {abi = "C"}
   func.func @observe(%value: !R) -> core.i32 {
     %result = func.call @foreign(%value) : (!R) -> core.i32
@@ -253,8 +253,8 @@ fn malformed_projection_fails_closed_without_publishing_facts() {
     let module = parse_test_module(
         &mut ctx,
         r#"core.module @test {
-  !Child = adt.struct<Child(value: core.i32)>
-  !ChildRef = adt.typeref<{name = "Child"}>
+  !Child = adt.struct<"Child",(core.i32)>
+  !ChildRef = adt.struct<"Child">
   func.func @load(%child: !ChildRef) -> core.i32 {
     %value = adt.struct_get %child {field = 1, type = !Child} : core.i32
     func.return %value

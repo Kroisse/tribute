@@ -271,10 +271,13 @@ impl<'db> TypeSolver<'db> {
                     ..
                 },
             ) => {
-                // Like a function's row, a row argument does not decide.
                 i1 == i2
                     && r1.len() == r2.len()
                     && a1.len() == a2.len()
+                    && r1
+                        .iter()
+                        .zip(r2.iter())
+                        .all(|(x, y)| self.rows_unifiable(*x, *y))
                     && a1
                         .iter()
                         .zip(a2.iter())
@@ -291,12 +294,12 @@ impl<'db> TypeSolver<'db> {
                 TypeKind::Func {
                     params: p1,
                     result: r1,
-                    ..
+                    effect: e1,
                 },
                 TypeKind::Func {
                     params: p2,
                     result: r2,
-                    ..
+                    effect: e2,
                 },
             ) => {
                 p1.len() == p2.len()
@@ -305,20 +308,63 @@ impl<'db> TypeSolver<'db> {
                         .zip(p2.iter())
                         .all(|(x, y)| self.types_unifiable(*x, *y))
                     && self.types_unifiable(*r1, *r2)
+                    && self.rows_unifiable(*e1, *e2)
             }
             (
                 TypeKind::Continuation {
                     arg: a1,
                     result: r1,
-                    ..
+                    effect: e1,
                 },
                 TypeKind::Continuation {
                     arg: a2,
                     result: r2,
-                    ..
+                    effect: e2,
                 },
-            ) => self.types_unifiable(*a1, *a2) && self.types_unifiable(*r1, *r2),
+            ) => {
+                self.types_unifiable(*a1, *a2)
+                    && self.types_unifiable(*r1, *r2)
+                    && self.rows_unifiable(*e1, *e2)
+            }
             _ => false,
+        }
+    }
+
+    /// Check whether two rows may unify, without modifying substitution.
+    ///
+    /// Like [`Self::types_unifiable`], this never rejects a pair that
+    /// unifies. Its only rejection is a label of one side with no candidate
+    /// instance on the other when that other side is closed; two open rows,
+    /// whether their tails are shared or distinct, rigid or not, are never
+    /// rejected. So two
+    /// instances of one ability whose function arguments have rows that can
+    /// never be equal, such as `{Ask}` and `{Tell}`, stay distinct.
+    pub(super) fn rows_unifiable(&self, r1: AbilityRow<'db>, r2: AbilityRow<'db>) -> bool {
+        let r1 = self.normalize_row(r1);
+        let r2 = self.normalize_row(r2);
+        if r1 == r2 {
+            return true;
+        }
+        let covered = |labels: AbilityRow<'db>, by: AbilityRow<'db>| {
+            labels.instances(self.db).iter().all(|effect| {
+                by.instances(self.db).iter().any(|candidate| {
+                    candidate.ability_id == effect.ability_id
+                        && candidate.args.len() == effect.args.len()
+                        && candidate
+                            .args
+                            .iter()
+                            .zip(&effect.args)
+                            .all(|(a, b)| self.types_unifiable(*a, *b))
+                })
+            })
+        };
+        match (r1.rest(self.db), r2.rest(self.db)) {
+            (None, None) => covered(r1, r2) && covered(r2, r1),
+            (Some(_), None) => covered(r1, r2),
+            (None, Some(_)) => covered(r2, r1),
+            // Another position may bind an open tail to the labels the other
+            // side names, so two open rows are never rejected.
+            (Some(_), Some(_)) => true,
         }
     }
 }

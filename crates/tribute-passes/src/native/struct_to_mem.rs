@@ -86,7 +86,7 @@ pub(crate) fn lower(
             accesses.push((op, layout));
         }
         if let Ok(get) = adt::VariantGet::from_op(ctx, op) {
-            variants.push((get.r#type(ctx), get.tag(ctx)));
+            variants.push((get.r#type(ctx), get.variant(ctx)));
         }
         ControlFlow::Continue(WalkAction::Advance)
     });
@@ -101,7 +101,7 @@ pub(crate) fn lower(
                 };
                 let structural = structural_layout(
                     ctx,
-                    fields.into_iter().map(|(_name, field_ty)| field_ty),
+                    fields,
                     released.get(&(layout, None)).map(Vec::as_slice),
                     plan,
                     type_converter,
@@ -161,7 +161,7 @@ impl OpRewritePattern for VariantGetPattern {
         rewriter: &mut PatternRewriter<'_>,
     ) -> Option<()> {
         let op = variant_get.op_ref();
-        let variant = (variant_get.r#type(ctx), variant_get.tag(ctx));
+        let variant = (variant_get.r#type(ctx), variant_get.variant(ctx));
         let &structural = self.layouts.get(&variant)?;
         let loc = ctx.op(op).location;
         let field_get = adt::StructGet::operands(variant_get.r#ref(ctx))
@@ -193,7 +193,7 @@ impl OpRewritePattern for VariantIsPattern {
         let op = variant_is.op_ref();
         let loc = ctx.op(op).location;
         let result_ty = variant_is.result_ty(ctx);
-        let descriptor = (variant_is.r#type(ctx), Some(variant_is.tag(ctx)));
+        let descriptor = (variant_is.r#type(ctx), Some(variant_is.variant(ctx)));
         let Some(&number) = self.numbers.get(&descriptor) else {
             let never = arith::Constant::operands()
                 .value(Attribute::Bool(false))
@@ -327,8 +327,8 @@ mod tests {
     fn structural_layout_keeps_the_offsets_and_size_of_the_nominal_layout() {
         let (mut ctx, _module, layouts) = lower_module(
             r#"core.module @test {
-  !Mixed = adt.struct<Mixed(flag: core.i8, count: tribute_rt.int, any: tribute_rt.anyref, byte: core.i8, raw: core.ptr, ratio: tribute_rt.float, small: core.i16)>
-  func.func @read(%mixed: adt.typeref<{name = "Mixed"}>) -> core.i8 {
+  !Mixed = adt.struct<"Mixed", (core.i8, tribute_rt.int, tribute_rt.anyref, core.i8, core.ptr, tribute_rt.float, core.i16)>
+  func.func @read(%mixed: adt.struct<"Mixed">) -> core.i8 {
     %flag = adt.struct_get %mixed {field = 0, type = !Mixed} : core.i8
     func.return %flag
   }
@@ -365,8 +365,8 @@ mod tests {
     fn layouts_of_equal_shape_share_one_structural_layout() {
         let (ctx, module, layouts) = lower_module(
             r#"core.module @test {
-  !Point = adt.struct<Point(x: core.i32, y: core.i32)>
-  !Size = adt.struct<Size(width: core.i32, height: core.i32)>
+  !Point = adt.struct<"Point", (core.i32, core.i32)>
+  !Size = adt.struct<"Size", (core.i32, core.i32)>
   func.func @read(%point: !Point, %size: !Size) -> core.i32 {
     %x = adt.struct_get %point {field = 0, type = !Point} : core.i32
     adt.struct_set %size, %x {field = 1, type = !Size}
@@ -390,7 +390,7 @@ mod tests {
     fn declared_release_decides_a_field() {
         let (ctx, module, layouts) = lower_module(
             r#"core.module @test {
-  !Pair = adt.struct<Pair(code: core.i64, env: core.ptr)>
+  !Pair = adt.struct<"Pair", (core.i64, core.ptr)>
   tribute_rtti.layout {fields = ["raw", "dynamic"], index = 5, type = !Pair}
   func.func @read(%pair: core.ptr) -> core.ptr {
     %env = adt.struct_get %pair {field = 1, type = !Pair} : core.ptr
@@ -414,8 +414,8 @@ mod tests {
     fn variant_tests_compare_the_declared_descriptor_number() {
         let (ctx, module, _layouts) = lower_module(
             r#"core.module @test {
-  !ChoiceRef = adt.typeref<{name = "Choice"}>
-  !Choice = adt.enum<Choice { None(), Some(core.i32), Other() }>
+  !ChoiceRef = adt.enum<"Choice">
+  !Choice = adt.enum<"Choice", [(), (core.i32), ()]>
   tribute_rtti.layout {fields = [], index = 5, type = !Choice, tag = 0}
   tribute_rtti.layout {fields = ["u32"], index = 6, type = !Choice, tag = 1}
   func.func @test(%choice: !ChoiceRef) -> core.i1 {
@@ -445,8 +445,8 @@ mod tests {
     fn variant_tag_reads_the_position_of_the_descriptor() {
         let (ctx, module, _layouts) = lower_module(
             r#"core.module @test {
-  !ChoiceRef = adt.typeref<{name = "Choice"}>
-  !Choice = adt.enum<Choice { None(), Some(core.i32), Other() }>
+  !ChoiceRef = adt.enum<"Choice">
+  !Choice = adt.enum<"Choice", [(), (core.i32), ()]>
   tribute_rtti.layout {fields = ["u32"], index = 5, type = !Choice, tag = 1}
   func.func @test(%choice: !ChoiceRef) -> core.index {
     %tag = adt.variant_tag %choice {type = !Choice}
@@ -475,10 +475,10 @@ mod tests {
     fn variant_field_accesses_use_the_variants_own_structural_layout() {
         let (ctx, module, layouts) = lower_module(
             r#"core.module @test {
-  !Child = adt.struct<Child(value: core.i32)>
-  !ChildRef = adt.typeref<{name = "Child"}>
-  !ChoiceRef = adt.typeref<{name = "Choice"}>
-  !Choice = adt.enum<Choice { None(), Pair(core.i8, !ChildRef), Raw(core.ptr, core.i64) }>
+  !Child = adt.struct<"Child", (core.i32)>
+  !ChildRef = adt.struct<"Child">
+  !ChoiceRef = adt.enum<"Choice">
+  !Choice = adt.enum<"Choice", [(), (core.i8, !ChildRef), (core.ptr, core.i64)]>
   tribute_rtti.layout {fields = ["u8", "managed"], index = 6, type = !Choice, tag = 1}
   func.func @test(%choice: !ChoiceRef) -> !ChildRef {
     %child = adt.variant_get %choice {tag = 1, field = 1, type = !Choice} : !ChildRef
@@ -517,10 +517,10 @@ mod tests {
     fn undeclared_layout_reads_managed_fields_from_the_ownership_plan() {
         let (ctx, module, _layouts) = lower_module(
             r#"core.module @test {
-  !Child = adt.struct<Child(value: core.i32)>
-  !ChildRef = adt.typeref<{name = "Child"}>
-  !Parent = adt.struct<Parent(child: !ChildRef, raw: core.ptr, bytes: core.bytes)>
-  func.func @read(%parent: adt.typeref<{name = "Parent"}>) -> !ChildRef {
+  !Child = adt.struct<"Child", (core.i32)>
+  !ChildRef = adt.struct<"Child">
+  !Parent = adt.struct<"Parent", (!ChildRef, core.ptr, core.bytes)>
+  func.func @read(%parent: adt.struct<"Parent">) -> !ChildRef {
     %child = adt.struct_get %parent {field = 0, type = !Parent} : !ChildRef
     func.return %child
   }

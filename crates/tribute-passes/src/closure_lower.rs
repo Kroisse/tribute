@@ -76,27 +76,20 @@ pub(crate) fn closure_captures_layout(
     let mut fields = adt::Struct::from_type_ref(ctx, base)
         .expect("closure base is an adt.struct")
         .fields(ctx)
-        .map(|(name, ty)| (name.to_owned(), ty))
-        .collect::<Vec<_>>();
-    fields.extend(
-        captures
-            .iter()
-            .enumerate()
-            .map(|(index, &ty)| (format!("_{index}"), ty)),
-    );
+        .to_vec();
+    fields.extend_from_slice(captures);
     let mut attrs = AttributeMap::new();
     let layout = ctx.string_attr(runtime_layout::CLOSURE_CAPTURES);
     let mut view = attrs.view_mut(ctx);
     view.insert(runtime_layout::LAYOUT_ATTR, layout);
     view.insert(runtime_layout::CLOSURE_BASE_ATTR, Attribute::Type(base));
-    adt::Struct::from_fields(ctx, "_closure_captures", fields, attrs).as_type_ref()
+    adt::Struct::literal(ctx, fields, attrs).as_type_ref()
 }
 
 /// Whether `ty` is the closure base storage layout, identified by its
 /// runtime layout attribute.
 pub(crate) fn is_closure_struct_type_ref(ctx: &IrContext, ty: TypeRef) -> bool {
-    let data = ctx.get_type(ty);
-    data.name.is(ctx, "adt.struct")
+    adt::Struct::matches(ctx, ty)
         && runtime_layout::has_runtime_layout(ctx, ty, runtime_layout::CLOSURE)
 }
 
@@ -104,7 +97,7 @@ pub(crate) fn is_closure_struct_type_ref(ctx: &IrContext, ty: TypeRef) -> bool {
 /// identified by its runtime layout attribute.
 pub(crate) fn is_closure_layout(ctx: &IrContext, ty: TypeRef) -> bool {
     is_closure_struct_type_ref(ctx, ty)
-        || (ctx.get_type(ty).name.is(ctx, "adt.struct")
+        || (adt::Struct::matches(ctx, ty)
             && runtime_layout::has_runtime_layout(ctx, ty, runtime_layout::CLOSURE_CAPTURES))
 }
 
@@ -162,7 +155,6 @@ impl OpRewritePattern for LowerClosureNewArena<'_> {
             closure_captures_type_ref(ctx, &capture_types)
         };
         let struct_new_op = adt::StructNew::operands(std::iter::once(table).chain(captures))
-            .r#type(struct_ty)
             .results(struct_ty)
             .build(ctx, loc);
         // %closure = core.unrealized_conversion_cast %pack : adt.struct<..> to closure.closure<..>
@@ -719,7 +711,7 @@ fn rewrite_validated_closures_in_func(
 /// identities and are removed.
 pub(crate) fn finalize_closure_storage_layout(ctx: &mut IrContext, module: Module) {
     let closure_struct = closure_struct_type_ref(ctx);
-    substitute_module_types(ctx, module, move |ctx, ty| {
+    substitute_module_types(ctx, module, "closure", move |ctx, ty| {
         closure::Closure::matches(ctx, ty).then_some(closure_struct)
     });
 }
@@ -752,16 +744,20 @@ impl Pass for FinalizeClosureStorageLayout {
 }
 
 /// Replace every type `substitute` maps, wherever it occurs in `module`:
-/// aliases, nested type parameters and attributes, type-bearing operation
-/// attributes, results, and block arguments. The plan is complete before any
-/// update applies. Casts that the replacement turns into identities are
-/// removed.
+/// aliases, nested type parameters and attributes, the fields of nominal
+/// layouts, type-bearing operation attributes, results, and block arguments.
+/// A nominal layout whose fields change gets a new key, tagged with `tag`
+/// when its key attributes stay (`design/tribute-dialects.md` § "Nominal
+/// layout 변환").
+/// The plan is complete before any update applies. Casts that the
+/// replacement turns into identities are removed.
 pub(crate) fn substitute_module_types(
     ctx: &mut IrContext,
     module: Module,
+    tag: &str,
     substitute: impl FnMut(&mut IrContext, TypeRef) -> Option<TypeRef>,
 ) {
-    substitute_module_types_keeping_casts(ctx, module, substitute);
+    substitute_module_types_keeping_casts(ctx, module, tag, substitute);
     erase_identity_casts(ctx, module);
 }
 
@@ -770,11 +766,18 @@ pub(crate) fn substitute_module_types(
 pub(crate) fn substitute_module_types_keeping_casts(
     ctx: &mut IrContext,
     module: Module,
+    tag: &str,
     substitute: impl FnMut(&mut IrContext, TypeRef) -> Option<TypeRef>,
 ) {
     let ops = collect_ops(ctx, module.op());
     let aliases = ctx.type_aliases().to_vec();
+    let layout_roots: Vec<_> = trunk_ir::walk::reachable_types(ctx, module.op())
+        .into_iter()
+        .chain(aliases.iter().map(|&(_, ty)| ty))
+        .collect();
     let mut physicalizer = TypeSubstitution::new(ctx, substitute);
+    let Ok(_) =
+        tribute_ir::dialect::adt::convert::convert_layouts(&mut physicalizer, layout_roots, tag);
     let mut alias_updates = Vec::new();
     let mut attribute_updates = Vec::new();
     let mut result_updates = Vec::new();
@@ -920,6 +923,32 @@ impl<'a, F: FnMut(&mut IrContext, TypeRef) -> Option<TypeRef>> TypeSubstitution<
     }
 }
 
+impl<F: FnMut(&mut IrContext, TypeRef) -> Option<TypeRef>>
+    tribute_ir::dialect::adt::convert::LayoutBlindConversion for TypeSubstitution<'_, F>
+{
+    type Error = std::convert::Infallible;
+
+    fn ctx(&self) -> &IrContext {
+        self.ctx
+    }
+
+    fn ctx_mut(&mut self) -> &mut IrContext {
+        self.ctx
+    }
+
+    fn convert(&mut self, ty: TypeRef) -> Result<TypeRef, Self::Error> {
+        Ok(self.convert_type(ty))
+    }
+
+    fn fix(&mut self, from: TypeRef, to: TypeRef) {
+        self.cache.insert(from, to);
+    }
+
+    fn reset(&mut self) {
+        self.cache.clear();
+    }
+}
+
 fn collect_ops(ctx: &IrContext, root: OpRef) -> Vec<OpRef> {
     let mut ops = Vec::new();
     let _ = walk_op::<()>(ctx, root, &mut |op| {
@@ -962,8 +991,8 @@ mod tests {
         parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !Named = adt.struct<_closure(func_ptr: core.i32, env: tribute_rt.anyref)>
-  !Layout = adt.struct<Other(code: core.i32), {layout = "closure"}>
+  !Named = adt.struct<"_closure", (core.i32, tribute_rt.anyref)>
+  !Layout = adt.struct<"Other", (core.i32), {layout = "closure"}>
 }"#,
         );
         let alias = |ctx: &IrContext, name: &str| {
@@ -1003,7 +1032,7 @@ mod tests {
     }
 
     fn evidence_type_str() -> &'static str {
-        "adt.array<adt.typeref<{name = \"std::runtime::evidence::Marker\"}>>"
+        "adt.array<adt.struct<\"std::runtime::evidence::Marker\">>"
     }
 
     fn closure_test_module(ctx: &mut IrContext) -> Module {
@@ -1548,11 +1577,11 @@ mod tests {
                 .get_type(runtime_layout::CLOSURE_BASE_ATTR),
             Some(base)
         );
-        itertools::assert_equal(
+        assert_eq!(
             adt::Struct::from_type_ref(&ctx, layout)
                 .unwrap()
                 .fields(&ctx),
-            [("entries", table_ty), ("_0", i64_ty), ("_1", i32_ty)],
+            [table_ty, i64_ty, i32_ty],
         );
 
         let make = func_by_name(&ctx, module, "make");
@@ -1563,7 +1592,7 @@ mod tests {
         let [allocation] = allocations[..] else {
             panic!("one allocation per closure");
         };
-        assert_eq!(allocation.r#type(&ctx), layout);
+        assert_eq!(allocation.layout(&ctx), layout);
         assert_eq!(allocation.fields(&ctx).len(), 3);
 
         // The entry function downcasts its base environment once, then reads
@@ -1671,7 +1700,7 @@ mod tests {
             &mut ctx,
             &format!(
                 r#"core.module @test {{
-  !_closure = adt.struct<_closure(func_ptr: core.i32, env: tribute_rt.anyref)>
+  !_closure = adt.struct<"_closure", (core.i32, tribute_rt.anyref)>
   !expected = closure.closure<func.func_sig<({evidence}, core.i32, core.i32) -> core.never>>
   !actual = closure.closure<func.func_sig<({evidence}, core.i32, core.i1) -> core.never>>
   !outer = closure.closure<func.func_sig<({evidence}, core.i32, !expected) -> core.never>>
@@ -1682,7 +1711,7 @@ mod tests {
   func.func @run(%callee: !outer, %evidence: {evidence}, %done: core.i32) -> core.never attributes {{tribute.calling_convention = "cps"}} {{
     %function = func.constant @actual_fn : ({evidence}, core.i32, core.i1) -> core.never
     %environment = adt.ref_null {{type = tribute_rt.anyref}} : tribute_rt.anyref
-    %pack = adt.struct_new %function, %environment {{type = !_closure}} : !_closure
+    %pack = adt.struct_new(%function, %environment) : (func.func_sig<({evidence}, core.i32, core.i1) -> core.never>, tribute_rt.anyref) -> !_closure
     %argument = core.unrealized_conversion_cast %pack : !_closure to !actual
     func.tail_call_indirect %callee(%evidence, %done, %argument) attributes {{tribute.calling_convention = "cps"}} : ({evidence}, core.i32, !expected) -> core.never
   }}

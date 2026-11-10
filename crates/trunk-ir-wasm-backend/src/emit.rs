@@ -9,7 +9,6 @@ mod gc_types_collection;
 mod handlers;
 pub(crate) mod helpers;
 mod references;
-mod value_emission;
 
 use call_indirect_collection::*;
 use definitions::*;
@@ -17,20 +16,19 @@ use gc_types_collection::*;
 use handlers::{
     handle_array_copy, handle_array_get, handle_array_get_s, handle_array_get_u, handle_array_new,
     handle_array_new_default, handle_array_new_fixed, handle_array_set, handle_block, handle_br,
-    handle_br_if, handle_bytes_from_data, handle_call, handle_call_indirect, handle_f32_const,
-    handle_f32_load, handle_f32_store, handle_f64_const, handle_f64_load, handle_f64_store,
-    handle_global_get, handle_global_set, handle_i32_const, handle_i32_load, handle_i32_load8_s,
-    handle_i32_load8_u, handle_i32_load16_s, handle_i32_load16_u, handle_i32_store,
-    handle_i32_store8, handle_i32_store16, handle_i64_const, handle_i64_load, handle_i64_load8_s,
-    handle_i64_load8_u, handle_i64_load16_s, handle_i64_load16_u, handle_i64_load32_s,
-    handle_i64_load32_u, handle_i64_store, handle_i64_store8, handle_i64_store16,
-    handle_i64_store32, handle_if, handle_local_get, handle_local_set, handle_local_tee,
-    handle_loop, handle_memory_grow, handle_memory_size, handle_ref_cast, handle_ref_func,
-    handle_ref_null, handle_ref_test, handle_return_call, handle_return_call_indirect,
-    handle_struct_get, handle_struct_new, handle_struct_set,
+    handle_br_if, handle_br_table, handle_bytes_from_data, handle_call, handle_call_indirect,
+    handle_f32_const, handle_f32_load, handle_f32_store, handle_f64_const, handle_f64_load,
+    handle_f64_store, handle_global_get, handle_global_set, handle_i32_const, handle_i32_load,
+    handle_i32_load8_s, handle_i32_load8_u, handle_i32_load16_s, handle_i32_load16_u,
+    handle_i32_store, handle_i32_store8, handle_i32_store16, handle_i64_const, handle_i64_load,
+    handle_i64_load8_s, handle_i64_load8_u, handle_i64_load16_s, handle_i64_load16_u,
+    handle_i64_load32_s, handle_i64_load32_u, handle_i64_store, handle_i64_store8,
+    handle_i64_store16, handle_i64_store32, handle_if, handle_local_get, handle_local_set,
+    handle_local_tee, handle_loop, handle_memory_grow, handle_memory_size, handle_ref_cast,
+    handle_ref_func, handle_ref_null, handle_ref_test, handle_return_call,
+    handle_return_call_indirect, handle_struct_get, handle_struct_new, handle_struct_set,
 };
 use helpers::*;
-use value_emission::*;
 
 use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
@@ -45,15 +43,14 @@ use trunk_ir::callable::CallableBody;
 use trunk_ir::dialect::core;
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::ops::DialectOp;
-use trunk_ir::ops::DialectType;
-use trunk_ir::refs::{OpRef, RegionRef, TypeRef, ValueRef};
+use trunk_ir::refs::{OpRef, RegionRef, TypeRef};
 use trunk_ir::{OpName, SymbolPath};
 use wasm_encoder::{
-    AbstractHeapType, ArrayType, CodeSection, CompositeInnerType, CompositeType, ConstExpr,
-    DataCountSection, DataSection, ElementSection, Elements, EntityType, ExportKind, ExportSection,
-    FieldType, Function, FunctionSection, GlobalSection, GlobalType, HeapType, ImportSection,
-    Instruction, MemorySection, MemoryType, Module, RefType, StructType, SubType, TableSection,
-    TableType, TypeSection, ValType,
+    ArrayType, CodeSection, CompositeInnerType, CompositeType, ConstExpr, DataCountSection,
+    DataSection, ElementSection, Elements, EntityType, ExportKind, ExportSection, FieldType,
+    Function, FunctionSection, GlobalSection, GlobalType, HeapType, ImportSection, Instruction,
+    MemorySection, MemoryType, Module, RefType, StructType, SubType, TableSection, TableType,
+    TypeSection, ValType,
 };
 
 use crate::gc_types::GcTypeDef;
@@ -284,36 +281,28 @@ struct ModuleInfo {
     call_indirect_types: Vec<(u32, TypeRef)>,
 }
 
-/// Pre-interned common types to avoid needing `&mut IrContext` during emission.
-/// Context for emitting a single function's code.
-struct FunctionEmitContext {
-    /// Maps values to their local indices.
-    value_locals: HashMap<ValueRef, u32>,
-    /// Effective types for values (after unification).
-    effective_types: HashMap<ValueRef, TypeRef>,
-}
-
-/// `fields` with each field its supertype also declares taking the
-/// supertype's mutability.
+/// `fields` of the struct at `index` with each field an ancestor also declares
+/// taking the mutability of the outermost ancestor that declares it, so every
+/// level of a supertype chain agrees.
 fn inherit_field_mutability(
     fields: &[FieldType],
-    supertype: Option<u32>,
+    index: usize,
     gc_types: &[GcTypeDef],
+    supertypes: &[Option<u32>],
 ) -> Vec<FieldType> {
-    let inherited = match supertype.and_then(|index| gc_types.get(index as usize)) {
-        Some(GcTypeDef::Struct(inherited)) => inherited.as_slice(),
-        _ => &[],
-    };
+    let mut fields = fields.to_vec();
+    let mut ancestor = supertypes.get(index).copied().flatten();
+    // A supertype chain is at most as long as the type list.
+    for _ in 0..gc_types.len() {
+        let Some(current) = ancestor else { break };
+        if let Some(GcTypeDef::Struct(inherited)) = gc_types.get(current as usize) {
+            for (field, inherited) in fields.iter_mut().zip(inherited) {
+                field.mutable = inherited.mutable;
+            }
+        }
+        ancestor = supertypes.get(current as usize).copied().flatten();
+    }
     fields
-        .iter()
-        .enumerate()
-        .map(|(index, field)| FieldType {
-            mutable: inherited
-                .get(index)
-                .map_or(field.mutable, |inherited| inherited.mutable),
-            ..*field
-        })
-        .collect()
 }
 
 pub(crate) fn emit_wasm(ctx: &mut IrContext, module: IrModule) -> CompilationResult<Vec<u8>> {
@@ -362,8 +351,9 @@ pub(crate) fn emit_wasm(ctx: &mut IrContext, module: IrModule) -> CompilationRes
                     inner: CompositeInnerType::Struct(StructType {
                         fields: inherit_field_mutability(
                             fields,
-                            supertypes.get(index).copied().flatten(),
+                            index,
                             &module_info.gc_types,
+                            supertypes,
                         )
                         .into_boxed_slice(),
                     }),
@@ -776,197 +766,60 @@ fn emit_function(
     };
     let (params_refs, _) = func_type_parts(ctx, func_def.func_type)
         .ok_or_else(|| CompilationError::type_error("func type is not wasm.func_sig"))?;
-    let block_args = ctx.block_args(block);
-    if params_refs.len() != block_args.len() {
+    if params_refs.len() != ctx.block_args(block).len() {
         return Err(CompilationError::invalid_module(
             "function parameter count does not match entry block args",
         ));
     }
 
-    let mut emit_ctx = FunctionEmitContext {
-        value_locals: HashMap::default(),
-        effective_types: HashMap::default(),
-    };
-    let mut locals: Vec<ValType> = Vec::new();
-
-    for (index, &arg) in block_args.iter().enumerate() {
-        emit_ctx.value_locals.insert(arg, index as u32);
-        let arg_ty = ctx.value_ty(arg);
-        emit_ctx.effective_types.insert(arg, arg_ty);
-    }
-
-    let param_count = params_refs.len() as u32;
-
-    assign_locals_in_region(
-        ctx,
-        region,
-        param_count,
-        &mut locals,
-        &mut emit_ctx,
-        module_info,
-    )?;
+    let func = wasm_dialect::Func::from_op(ctx, func_def.op)
+        .map_err(|_| CompilationError::invalid_module("function definition is not wasm.func"))?;
+    let locals = func
+        .locals(ctx)
+        .into_iter()
+        .flatten()
+        .map(|ty| type_to_valtype(ctx, ty, &module_info.type_idx_by_type))
+        .collect::<CompilationResult<Vec<ValType>>>()?;
 
     let mut function = Function::new(compress_locals(&locals));
 
-    emit_region_ops(ctx, region, &emit_ctx, module_info, &mut function)?;
+    emit_region_ops(ctx, region, module_info, &mut function)?;
 
     function.instruction(&Instruction::End);
 
     Ok(function)
 }
 
-fn assign_locals_in_region(
-    ctx: &IrContext,
-    region: RegionRef,
-    param_count: u32,
-    locals: &mut Vec<ValType>,
-    emit_ctx: &mut FunctionEmitContext,
-    module_info: &ModuleInfo,
-) -> CompilationResult<()> {
-    for &block_ref in &ctx.region(region).blocks {
-        let block_args = ctx.block_args(block_ref);
-        for &block_arg in block_args.iter() {
-            if emit_ctx.value_locals.contains_key(&block_arg) {
-                continue;
-            }
-            let arg_ty = ctx.value_ty(block_arg);
-            let val_type = type_to_valtype(ctx, arg_ty, &module_info.type_idx_by_type)?;
-            let local_index = param_count + locals.len() as u32;
-            emit_ctx.value_locals.insert(block_arg, local_index);
-            emit_ctx.effective_types.insert(block_arg, arg_ty);
-            locals.push(val_type);
-            let ty_data = ctx.get_type(arg_ty);
-            tracing::debug!(
-                "Allocated local {} for block arg type {}",
-                local_index,
-                ty_data.name.display(ctx)
-            );
-        }
-
-        for &op in &ctx.block(block_ref).ops {
-            // Process nested regions FIRST
-            let nested_regions = ctx.op_regions(op).collect::<trunk_ir::RegionList>();
-            for &nested in &nested_regions {
-                assign_locals_in_region(ctx, nested, param_count, locals, emit_ctx, module_info)?;
-            }
-
-            let result_types = ctx.op_result_types(op);
-            for (index, &result_ty) in result_types.iter().enumerate() {
-                let effective_ty = result_ty;
-                let val_type =
-                    match type_to_valtype(ctx, effective_ty, &module_info.type_idx_by_type) {
-                        Ok(vt) => vt,
-                        Err(e) => {
-                            let op_data = ctx.op(op);
-                            debug!(
-                                "type_to_valtype failed for op {}: {:?}",
-                                op_data.name.display(ctx),
-                                e
-                            );
-                            return Err(e);
-                        }
-                    };
-                let local_index = param_count + locals.len() as u32;
-                let result_value = ctx.op_result(op, index as u32);
-                emit_ctx.value_locals.insert(result_value, local_index);
-                emit_ctx.effective_types.insert(result_value, effective_ty);
-                locals.push(val_type);
-            }
-        }
-    }
-    Ok(())
-}
-
-/// Describes what kind of construct a nesting level represents.
-#[derive(Clone, Debug)]
-enum NestingKind {
-    Block,
-    Loop { arg_locals: Vec<u32> },
-    If,
-}
-
+/// Write the instructions of a region's operations. Values pass on the Wasm
+/// stack as the stack contract lays them out: each operation's trailing
+/// function-parameter operands are read from their locals right before it,
+/// and a `wasm.yield` writes no instruction of its own.
 fn emit_region_ops(
     ctx: &IrContext,
     region: RegionRef,
-    emit_ctx: &FunctionEmitContext,
     module_info: &ModuleInfo,
     function: &mut Function,
-) -> CompilationResult<()> {
-    emit_region_ops_nested(ctx, region, emit_ctx, module_info, function, &[])
-}
-
-fn emit_region_ops_nested(
-    ctx: &IrContext,
-    region: RegionRef,
-    emit_ctx: &FunctionEmitContext,
-    module_info: &ModuleInfo,
-    function: &mut Function,
-    nesting: &[NestingKind],
 ) -> CompilationResult<()> {
     let blocks = &ctx.region(region).blocks;
     if blocks.len() != 1 {
         return Err(CompilationError::unsupported_feature("multi-block regions"));
     }
-    let block_ref = blocks[0];
-    let ops = ctx.block(block_ref).ops.clone();
-    let mut iter = ops.iter().peekable();
-    while let Some(&op) = iter.next() {
-        if let Ok(yield_op) = wasm_dialect::Yield::from_op(ctx, op) {
-            let followed_by_br = iter
-                .peek()
-                .is_some_and(|&&next| wasm_dialect::Br::from_op(ctx, next).is_ok());
-            if followed_by_br {
-                let br_op = wasm_dialect::Br::from_op(ctx, **iter.peek().unwrap()).unwrap();
-                let depth = br_op.target(ctx) as usize;
-                let value = yield_op.value(ctx);
-                let index = *emit_ctx.value_locals.get(&value).ok_or_else(|| {
-                    CompilationError::invalid_module("wasm.yield value missing local")
-                })?;
-
-                if depth < nesting.len()
-                    && let NestingKind::Loop { ref arg_locals } = nesting[nesting.len() - 1 - depth]
-                {
-                    for &local in arg_locals.iter() {
-                        function.instruction(&Instruction::LocalGet(index));
-                        function.instruction(&Instruction::LocalSet(local));
-                    }
-                    continue;
-                }
-
-                function.instruction(&Instruction::LocalGet(index));
-            }
-            continue;
+    for &op in &ctx.block(blocks[0]).ops {
+        for local in crate::stack_effect::trailing_parameters(ctx, op) {
+            function.instruction(&Instruction::LocalGet(local));
         }
-        emit_op_nested(ctx, op, emit_ctx, module_info, function, nesting)?;
+        if !wasm_dialect::Yield::matches(ctx, op) {
+            emit_op_nested(ctx, op, module_info, function)?;
+        }
     }
     Ok(())
-}
-
-fn region_result_value(ctx: &IrContext, region: RegionRef) -> Option<ValueRef> {
-    let blocks = &ctx.region(region).blocks;
-    let &block_ref = blocks.last()?;
-    let ops = &ctx.block(block_ref).ops;
-    let &op = ops.last()?;
-
-    if let Ok(yield_op) = wasm_dialect::Yield::from_op(ctx, op) {
-        return Some(yield_op.value(ctx));
-    }
-
-    let result_types = ctx.op_result_types(op);
-    if result_types.is_empty() {
-        None
-    } else {
-        Some(ctx.op_result(op, 0))
-    }
 }
 
 fn emit_op_nested(
     ctx: &IrContext,
     op: OpRef,
-    emit_ctx: &FunctionEmitContext,
     module_info: &ModuleInfo,
     function: &mut Function,
-    nesting: &[NestingKind],
 ) -> CompilationResult<()> {
     let op_data = ctx.op(op);
     if op_data.name.dialect(ctx) != wasm_dialect::DIALECT_NAME {
@@ -976,179 +829,152 @@ fn emit_op_nested(
     }
 
     let name = op_data.name;
-    let operands = ctx.op_operands(op);
 
     debug!("emit_op: {}", name.display(ctx));
 
-    // Handle wasm.nop
     if wasm_dialect::Nop::matches(ctx, op) {
-        if let Some(&result_ty) = ctx.op_result_types(op).first() {
-            let ty_data = ctx.get_type(result_ty);
-            debug!("wasm.nop: result_ty={}", ty_data.name.display(ctx));
-            if trunk_ir::dialect::wasm::FuncSig::matches(ctx, result_ty)
-                || trunk_ir::dialect::wasm::Funcref::matches(ctx, result_ty)
-            {
-                debug!("wasm.nop: emitting ref.null func");
-                function.instruction(&Instruction::RefNull(HeapType::Abstract {
-                    shared: false,
-                    ty: AbstractHeapType::Func,
-                }));
-                set_result_local(ctx, op, emit_ctx, function)?;
-            } else if trunk_ir::dialect::wasm::Anyref::matches(ctx, result_ty)
-                || trunk_ir::dialect::wasm::Structref::matches(ctx, result_ty)
-            {
-                debug!("wasm.nop: emitting ref.null any");
-                function.instruction(&Instruction::RefNull(HeapType::Abstract {
-                    shared: false,
-                    ty: AbstractHeapType::Any,
-                }));
-                set_result_local(ctx, op, emit_ctx, function)?;
-            } else if is_nil_type(ctx, result_ty) {
-                debug!("wasm.nop: emitting ref.null none for nil type");
-                function.instruction(&Instruction::RefNull(HeapType::Abstract {
-                    shared: false,
-                    ty: AbstractHeapType::None,
-                }));
-                set_result_local(ctx, op, emit_ctx, function)?;
-            } else {
-                debug!("wasm.nop: skipping (unknown primitive type)");
-            }
+        if let Some(&result_ty) = ctx.op_result_types(op).first()
+            && let Some(ty) = crate::stack_effect::nop_null_heap_type(ctx, result_ty)
+        {
+            function.instruction(&Instruction::RefNull(HeapType::Abstract {
+                shared: false,
+                ty,
+            }));
         }
         return Ok(());
     }
 
     // Fast path: simple operations
     if let Some(instr) = SIMPLE_OPS.get(&name) {
-        emit_operands(ctx, operands, emit_ctx, function)?;
         function.instruction(instr);
-        set_result_local(ctx, op, emit_ctx, function)?;
         return Ok(());
     }
 
     // Special cases
     if let Ok(const_op) = wasm_dialect::I32Const::from_op(ctx, op) {
-        handle_i32_const(ctx, const_op, emit_ctx, function)
+        handle_i32_const(ctx, const_op, function)
     } else if let Ok(const_op) = wasm_dialect::I64Const::from_op(ctx, op) {
-        handle_i64_const(ctx, const_op, emit_ctx, function)
+        handle_i64_const(ctx, const_op, function)
     } else if let Ok(const_op) = wasm_dialect::F32Const::from_op(ctx, op) {
-        handle_f32_const(ctx, const_op, emit_ctx, function)
+        handle_f32_const(ctx, const_op, function)
     } else if let Ok(const_op) = wasm_dialect::F64Const::from_op(ctx, op) {
-        handle_f64_const(ctx, const_op, emit_ctx, function)
+        handle_f64_const(ctx, const_op, function)
     } else if wasm_dialect::If::matches(ctx, op) {
-        handle_if(ctx, op, emit_ctx, module_info, function, nesting)
+        handle_if(ctx, op, module_info, function)
     } else if wasm_dialect::Block::matches(ctx, op) {
-        handle_block(ctx, op, emit_ctx, module_info, function, nesting)
+        handle_block(ctx, op, module_info, function)
     } else if wasm_dialect::Loop::matches(ctx, op) {
-        handle_loop(ctx, op, emit_ctx, module_info, function, nesting)
+        handle_loop(ctx, op, module_info, function)
     } else if let Ok(br_op) = wasm_dialect::Br::from_op(ctx, op) {
         handle_br(ctx, br_op, function)
     } else if let Ok(br_if_op) = wasm_dialect::BrIf::from_op(ctx, op) {
-        handle_br_if(ctx, br_if_op, emit_ctx, module_info, function)
+        handle_br_if(ctx, br_if_op, module_info, function)
+    } else if let Ok(br_table_op) = wasm_dialect::BrTable::from_op(ctx, op) {
+        handle_br_table(ctx, br_table_op, function)
     } else if let Ok(call_op) = wasm_dialect::Call::from_op(ctx, op) {
-        handle_call(ctx, call_op, emit_ctx, module_info, function)
+        handle_call(ctx, call_op, module_info, function)
     } else if wasm_dialect::CallIndirect::matches(ctx, op) {
-        handle_call_indirect(ctx, op, emit_ctx, module_info, function)
+        handle_call_indirect(ctx, op, module_info, function)
     } else if let Ok(return_call_op) = wasm_dialect::ReturnCall::from_op(ctx, op) {
-        handle_return_call(ctx, return_call_op, emit_ctx, module_info, function)
+        handle_return_call(ctx, return_call_op, module_info, function)
     } else if wasm_dialect::ReturnCallIndirect::matches(ctx, op) {
-        handle_return_call_indirect(ctx, op, emit_ctx, module_info, function)
+        handle_return_call_indirect(ctx, op, module_info, function)
     } else if let Ok(local_op) = wasm_dialect::LocalGet::from_op(ctx, op) {
-        handle_local_get(ctx, local_op, emit_ctx, function)
+        handle_local_get(ctx, local_op, function)
     } else if let Ok(local_op) = wasm_dialect::LocalSet::from_op(ctx, op) {
-        handle_local_set(ctx, local_op, emit_ctx, function)
+        handle_local_set(ctx, local_op, function)
     } else if let Ok(local_op) = wasm_dialect::LocalTee::from_op(ctx, op) {
-        handle_local_tee(ctx, local_op, emit_ctx, function)
+        handle_local_tee(ctx, local_op, function)
     } else if let Ok(global_op) = wasm_dialect::GlobalGet::from_op(ctx, op) {
-        handle_global_get(ctx, global_op, emit_ctx, module_info, function)
+        handle_global_get(ctx, global_op, module_info, function)
     } else if let Ok(global_op) = wasm_dialect::GlobalSet::from_op(ctx, op) {
-        handle_global_set(ctx, global_op, emit_ctx, function)
+        handle_global_set(ctx, global_op, function)
     } else if wasm_dialect::StructNew::matches(ctx, op) {
-        handle_struct_new(ctx, op, emit_ctx, module_info, function)
+        handle_struct_new(ctx, op, module_info, function)
     } else if wasm_dialect::StructGet::matches(ctx, op) {
-        handle_struct_get(ctx, op, emit_ctx, module_info, function)
+        handle_struct_get(ctx, op, module_info, function)
     } else if let Ok(struct_set_op) = wasm_dialect::StructSet::from_op(ctx, op) {
-        handle_struct_set(ctx, struct_set_op, emit_ctx, module_info, function)
+        handle_struct_set(ctx, struct_set_op, module_info, function)
     } else if let Ok(array_new_op) = wasm_dialect::ArrayNew::from_op(ctx, op) {
-        handle_array_new(ctx, array_new_op, emit_ctx, module_info, function)
+        handle_array_new(ctx, array_new_op, module_info, function)
     } else if wasm_dialect::ArrayNewDefault::matches(ctx, op) {
-        handle_array_new_default(ctx, op, emit_ctx, module_info, function)
+        handle_array_new_default(ctx, op, module_info, function)
     } else if let Ok(array_new_fixed) = wasm_dialect::ArrayNewFixed::from_op(ctx, op) {
-        handle_array_new_fixed(ctx, array_new_fixed, emit_ctx, function)
+        handle_array_new_fixed(ctx, array_new_fixed, function)
     } else if let Ok(array_get_op) = wasm_dialect::ArrayGet::from_op(ctx, op) {
-        handle_array_get(ctx, array_get_op, emit_ctx, module_info, function)
+        handle_array_get(ctx, array_get_op, module_info, function)
     } else if let Ok(array_get_s_op) = wasm_dialect::ArrayGetS::from_op(ctx, op) {
-        handle_array_get_s(ctx, array_get_s_op, emit_ctx, module_info, function)
+        handle_array_get_s(ctx, array_get_s_op, module_info, function)
     } else if let Ok(array_get_u_op) = wasm_dialect::ArrayGetU::from_op(ctx, op) {
-        handle_array_get_u(ctx, array_get_u_op, emit_ctx, module_info, function)
+        handle_array_get_u(ctx, array_get_u_op, module_info, function)
     } else if let Ok(array_set_op) = wasm_dialect::ArraySet::from_op(ctx, op) {
-        handle_array_set(ctx, array_set_op, emit_ctx, module_info, function)
+        handle_array_set(ctx, array_set_op, module_info, function)
     } else if let Ok(array_copy_op) = wasm_dialect::ArrayCopy::from_op(ctx, op) {
-        handle_array_copy(ctx, array_copy_op, emit_ctx, module_info, function)
+        handle_array_copy(ctx, array_copy_op, module_info, function)
     } else if wasm_dialect::RefNull::matches(ctx, op) {
-        handle_ref_null(ctx, op, emit_ctx, module_info, function)
+        handle_ref_null(ctx, op, module_info, function)
     } else if let Ok(ref_func_op) = wasm_dialect::RefFunc::from_op(ctx, op) {
-        handle_ref_func(ctx, ref_func_op, emit_ctx, module_info, function)
+        handle_ref_func(ctx, ref_func_op, module_info, function)
     } else if wasm_dialect::RefCast::matches(ctx, op) {
-        handle_ref_cast(ctx, op, emit_ctx, module_info, function)
+        handle_ref_cast(ctx, op, module_info, function)
     } else if wasm_dialect::RefTest::matches(ctx, op) {
-        handle_ref_test(ctx, op, emit_ctx, module_info, function)
+        handle_ref_test(ctx, op, module_info, function)
     } else if wasm_dialect::RefUpcast::matches(ctx, op) {
         // WasmGC has no upcast instruction: the operand's reference is the
         // result at the wider type.
-        emit_operands(ctx, operands, emit_ctx, function)?;
-        set_result_local(ctx, op, emit_ctx, function)
+        Ok(())
     } else if let Ok(bytes_op) = wasm_dialect::BytesFromData::from_op(ctx, op) {
-        handle_bytes_from_data(ctx, bytes_op, emit_ctx, function)
+        handle_bytes_from_data(ctx, bytes_op, function)
     } else if let Ok(mem_size_op) = wasm_dialect::MemorySize::from_op(ctx, op) {
-        handle_memory_size(ctx, mem_size_op, emit_ctx, function)
+        handle_memory_size(ctx, mem_size_op, function)
     } else if let Ok(mem_grow_op) = wasm_dialect::MemoryGrow::from_op(ctx, op) {
-        handle_memory_grow(ctx, mem_grow_op, emit_ctx, module_info, function)
+        handle_memory_grow(ctx, mem_grow_op, module_info, function)
     } else if let Ok(load_op) = wasm_dialect::I32Load::from_op(ctx, op) {
-        handle_i32_load(ctx, load_op, emit_ctx, module_info, function)
+        handle_i32_load(ctx, load_op, module_info, function)
     } else if let Ok(load_op) = wasm_dialect::I64Load::from_op(ctx, op) {
-        handle_i64_load(ctx, load_op, emit_ctx, module_info, function)
+        handle_i64_load(ctx, load_op, module_info, function)
     } else if let Ok(load_op) = wasm_dialect::F32Load::from_op(ctx, op) {
-        handle_f32_load(ctx, load_op, emit_ctx, module_info, function)
+        handle_f32_load(ctx, load_op, module_info, function)
     } else if let Ok(load_op) = wasm_dialect::F64Load::from_op(ctx, op) {
-        handle_f64_load(ctx, load_op, emit_ctx, module_info, function)
+        handle_f64_load(ctx, load_op, module_info, function)
     } else if let Ok(load_op) = wasm_dialect::I32Load8S::from_op(ctx, op) {
-        handle_i32_load8_s(ctx, load_op, emit_ctx, module_info, function)
+        handle_i32_load8_s(ctx, load_op, module_info, function)
     } else if let Ok(load_op) = wasm_dialect::I32Load8U::from_op(ctx, op) {
-        handle_i32_load8_u(ctx, load_op, emit_ctx, module_info, function)
+        handle_i32_load8_u(ctx, load_op, module_info, function)
     } else if let Ok(load_op) = wasm_dialect::I32Load16S::from_op(ctx, op) {
-        handle_i32_load16_s(ctx, load_op, emit_ctx, module_info, function)
+        handle_i32_load16_s(ctx, load_op, module_info, function)
     } else if let Ok(load_op) = wasm_dialect::I32Load16U::from_op(ctx, op) {
-        handle_i32_load16_u(ctx, load_op, emit_ctx, module_info, function)
+        handle_i32_load16_u(ctx, load_op, module_info, function)
     } else if let Ok(load_op) = wasm_dialect::I64Load8S::from_op(ctx, op) {
-        handle_i64_load8_s(ctx, load_op, emit_ctx, module_info, function)
+        handle_i64_load8_s(ctx, load_op, module_info, function)
     } else if let Ok(load_op) = wasm_dialect::I64Load8U::from_op(ctx, op) {
-        handle_i64_load8_u(ctx, load_op, emit_ctx, module_info, function)
+        handle_i64_load8_u(ctx, load_op, module_info, function)
     } else if let Ok(load_op) = wasm_dialect::I64Load16S::from_op(ctx, op) {
-        handle_i64_load16_s(ctx, load_op, emit_ctx, module_info, function)
+        handle_i64_load16_s(ctx, load_op, module_info, function)
     } else if let Ok(load_op) = wasm_dialect::I64Load16U::from_op(ctx, op) {
-        handle_i64_load16_u(ctx, load_op, emit_ctx, module_info, function)
+        handle_i64_load16_u(ctx, load_op, module_info, function)
     } else if let Ok(load_op) = wasm_dialect::I64Load32S::from_op(ctx, op) {
-        handle_i64_load32_s(ctx, load_op, emit_ctx, module_info, function)
+        handle_i64_load32_s(ctx, load_op, module_info, function)
     } else if let Ok(load_op) = wasm_dialect::I64Load32U::from_op(ctx, op) {
-        handle_i64_load32_u(ctx, load_op, emit_ctx, module_info, function)
+        handle_i64_load32_u(ctx, load_op, module_info, function)
     } else if let Ok(store_op) = wasm_dialect::I32Store::from_op(ctx, op) {
-        handle_i32_store(ctx, store_op, emit_ctx, module_info, function)
+        handle_i32_store(ctx, store_op, module_info, function)
     } else if let Ok(store_op) = wasm_dialect::I64Store::from_op(ctx, op) {
-        handle_i64_store(ctx, store_op, emit_ctx, module_info, function)
+        handle_i64_store(ctx, store_op, module_info, function)
     } else if let Ok(store_op) = wasm_dialect::F32Store::from_op(ctx, op) {
-        handle_f32_store(ctx, store_op, emit_ctx, module_info, function)
+        handle_f32_store(ctx, store_op, module_info, function)
     } else if let Ok(store_op) = wasm_dialect::F64Store::from_op(ctx, op) {
-        handle_f64_store(ctx, store_op, emit_ctx, module_info, function)
+        handle_f64_store(ctx, store_op, module_info, function)
     } else if let Ok(store_op) = wasm_dialect::I32Store8::from_op(ctx, op) {
-        handle_i32_store8(ctx, store_op, emit_ctx, module_info, function)
+        handle_i32_store8(ctx, store_op, module_info, function)
     } else if let Ok(store_op) = wasm_dialect::I32Store16::from_op(ctx, op) {
-        handle_i32_store16(ctx, store_op, emit_ctx, module_info, function)
+        handle_i32_store16(ctx, store_op, module_info, function)
     } else if let Ok(store_op) = wasm_dialect::I64Store8::from_op(ctx, op) {
-        handle_i64_store8(ctx, store_op, emit_ctx, module_info, function)
+        handle_i64_store8(ctx, store_op, module_info, function)
     } else if let Ok(store_op) = wasm_dialect::I64Store16::from_op(ctx, op) {
-        handle_i64_store16(ctx, store_op, emit_ctx, module_info, function)
+        handle_i64_store16(ctx, store_op, module_info, function)
     } else if let Ok(store_op) = wasm_dialect::I64Store32::from_op(ctx, op) {
-        handle_i64_store32(ctx, store_op, emit_ctx, module_info, function)
+        handle_i64_store32(ctx, store_op, module_info, function)
     } else {
         let op_data = ctx.op(op);
         tracing::error!(
@@ -1167,34 +993,6 @@ fn emit_op_nested(
             name.display(ctx)
         )))
     }
-}
-
-fn set_result_local(
-    ctx: &IrContext,
-    op: OpRef,
-    emit_ctx: &FunctionEmitContext,
-    function: &mut Function,
-) -> CompilationResult<()> {
-    let results = ctx.op_result_types(op);
-    // Wasm leaves the final declared result at the top of the stack.
-    // Consume every result in reverse order so SSA result i keeps its slot.
-    for index in (0..results.len()).rev() {
-        // Calls omit Nil result slots in their physical signature. Value
-        // producers (including nop/ref.null) do leave a nullref on the stack
-        // and must store it even when the SSA result has type core.nil.
-        if is_nil_type(ctx, results[index])
-            && (wasm_dialect::Call::matches(ctx, op)
-                || wasm_dialect::CallIndirect::matches(ctx, op))
-        {
-            continue;
-        }
-        let local = emit_ctx
-            .value_locals
-            .get(&ctx.op_result(op, index as u32))
-            .ok_or_else(|| CompilationError::invalid_module("result missing local mapping"))?;
-        function.instruction(&Instruction::LocalSet(*local));
-    }
-    Ok(())
 }
 
 fn resolve_callee(path: &SymbolPath, module_info: &ModuleInfo) -> CompilationResult<u32> {
@@ -1231,6 +1029,7 @@ mod tests {
     use std::process::Command;
 
     use super::*;
+    use trunk_ir::ops::DialectType;
     use trunk_ir::parser::parse_test_module;
     use wasmparser::{Operator, Parser, Payload, Validator, WasmFeatures};
 
@@ -1353,6 +1152,117 @@ mod tests {
                 .iter()
                 .all(|ty| ty.is_final),
             "no builtin is a supertype here"
+        );
+    }
+
+    #[test]
+    fn described_subtypes_keep_the_descriptor_immutable() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  !Described = wasm_gc.struct<core.i32, {layout = "described"}>
+  !User = wasm_gc.struct<core.i32, core.i64, {supertype = !Described}>
+  !Leaf = wasm_gc.struct<core.i32, core.i64, core.f64, {supertype = !User}>
+
+  wasm.func @main() -> core.nil {
+    %descriptor = wasm.i32_const 5 : core.i32
+    %wide = wasm.i64_const 0 : core.i64
+    %float = wasm.f64_const 0.0 : core.f64
+    %user = wasm_gc.struct_new %descriptor, %wide {type = !User} : !User
+    %leaf = wasm_gc.struct_new %descriptor, %wide, %float {type = !Leaf} : !Leaf
+    wasm.return
+  }
+}"#,
+        );
+        crate::passes::wasm_gc_to_wasm::lower(&mut ctx, module);
+        let bytes = crate::emit_module_to_wasm(&mut ctx, module)
+            .expect("valid described subtype module")
+            .bytes;
+        Validator::new()
+            .validate_all(&bytes)
+            .expect("a described subtype must match its supertype");
+
+        let structs: Vec<Option<Vec<bool>>> = Parser::new(0)
+            .parse_all(&bytes)
+            .filter_map(|payload| match payload.unwrap() {
+                Payload::TypeSection(types) => Some(types),
+                _ => None,
+            })
+            .flat_map(|types| types.into_iter().map(Result::unwrap))
+            .flat_map(|group| group.into_types().collect::<Vec<_>>())
+            .map(|ty| match ty.composite_type.inner {
+                wasmparser::CompositeInnerType::Struct(fields) => {
+                    Some(fields.fields.iter().map(|field| field.mutable).collect())
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            structs[crate::gc_types::DESCRIBED_IDX as usize],
+            Some(vec![false])
+        );
+        assert!(
+            structs.contains(&Some(vec![false, true])),
+            "the user struct inherits an immutable descriptor: {structs:?}"
+        );
+        assert!(
+            structs.contains(&Some(vec![false, true, true])),
+            "a subtype of a subtype inherits it too: {structs:?}"
+        );
+    }
+
+    #[test]
+    fn single_use_values_pass_on_the_stack_without_locals() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  wasm.func @inc(%x: core.i32) -> core.i32 {
+    %one = wasm.i32_const 1 : core.i32
+    %sum = wasm.i32_add %x, %one : core.i32
+    wasm.return %sum
+  }
+}"#,
+        );
+        let bytes = crate::emit_module_to_wasm(&mut ctx, module)
+            .expect("the function emits")
+            .bytes;
+        Validator::new_with_features(WasmFeatures::default())
+            .validate_all(&bytes)
+            .expect("the emitted module must validate");
+
+        let body = Parser::new(0)
+            .parse_all(&bytes)
+            .filter_map(Result::ok)
+            .find_map(|payload| match payload {
+                Payload::CodeSectionEntry(body) => Some(body),
+                _ => None,
+            })
+            .expect("one function body");
+        assert_eq!(
+            body.get_locals_reader().expect("locals").get_count(),
+            0,
+            "no local beyond the parameter"
+        );
+        let instructions = body
+            .get_operators_reader()
+            .expect("operators")
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()
+            .expect("decode instructions");
+        assert!(
+            matches!(
+                instructions[..],
+                [
+                    Operator::LocalGet { local_index: 0 },
+                    Operator::I32Const { value: 1 },
+                    Operator::I32Add,
+                    Operator::Return,
+                    Operator::End,
+                ]
+            ),
+            "{instructions:?}"
         );
     }
 

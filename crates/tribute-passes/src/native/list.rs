@@ -5,7 +5,7 @@ use std::ops::ControlFlow;
 use tribute_ir::dialect::adt;
 use tribute_ir::dialect::list;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext};
-use trunk_ir::dialect::{cf, func};
+use trunk_ir::dialect::{cf, core, func};
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{OpRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::helpers::split_block;
@@ -32,13 +32,7 @@ fn node_type(ctx: &mut IrContext, element_ty: TypeRef) -> TypeRef {
     let list_ty = tribute_ir::dialect::tribute_rt::Anyref::params()
         .intern(ctx)
         .as_type_ref();
-    adt::Struct::from_fields(
-        ctx,
-        "__native_list_node",
-        [("element", element_ty), ("tail", list_ty)],
-        AttributeMap::new(),
-    )
-    .as_type_ref()
+    adt::Struct::literal(ctx, [element_ty, list_ty], AttributeMap::new()).as_type_ref()
 }
 
 fn lower_observations(ctx: &mut IrContext, module: Module) {
@@ -178,11 +172,15 @@ impl OpRewritePattern for PrependPattern {
         let op = prepend.op_ref();
         let result_ty = ctx.op_result_types(op)[0];
         let node_ty = node_type(ctx, prepend.element_type(ctx));
+        let location = ctx.op(op).location;
         let node = adt::StructNew::operands([prepend.element(ctx), prepend.tail(ctx)])
-            .r#type(node_ty)
+            .results(node_ty)
+            .build(ctx, location);
+        rewriter.insert_op(node.op_ref());
+        let list = core::UnrealizedConversionCast::operands(node.result(ctx))
             .results(result_ty)
-            .build(ctx, ctx.op(op).location);
-        rewriter.replace_op(node.op_ref());
+            .build(ctx, location);
+        rewriter.replace_op(list.op_ref());
         Some(())
     }
 }
@@ -269,8 +267,11 @@ mod tests {
         assert!(output.contains("adt.struct_new"), "{output}");
         assert!(output.contains("adt.ref_is_null"), "{output}");
         assert!(output.contains("adt.struct_get"), "{output}");
-        assert!(output.contains("element: core.i32"), "{output}");
-        assert!(output.contains("element: tribute_rt.anyref"), "{output}");
+        assert!(output.contains("(core.i32, tribute_rt.anyref)"), "{output}");
+        assert!(
+            output.contains("(tribute_rt.anyref, tribute_rt.anyref)"),
+            "{output}"
+        );
         assert_eq!(output.matches("{field = 0,").count(), 2, "{output}");
         assert_eq!(output.matches("{field = 1,").count(), 2, "{output}");
         assert_eq!(output.matches("func.unreachable").count(), 4, "{output}");
@@ -326,8 +327,11 @@ mod tests {
         assert_eq!(output.matches("{field = 1,").count(), 2, "{output}");
         assert_eq!(output.matches("adt.ref_null").count(), 4, "{output}");
         assert!(!output.contains("arith.constant"), "{output}");
-        assert!(output.contains("element: core.i32"), "{output}");
-        assert!(output.contains("element: tribute_rt.anyref"), "{output}");
+        assert!(output.contains("(core.i32, tribute_rt.anyref)"), "{output}");
+        assert!(
+            output.contains("(tribute_rt.anyref, tribute_rt.anyref)"),
+            "{output}"
+        );
 
         let validation = trunk_ir::validation::validate_all(&ctx, module, &mut Default::default());
         assert!(validation.is_ok(), "{:?}", validation.errors);

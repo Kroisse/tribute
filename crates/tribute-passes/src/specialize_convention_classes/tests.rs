@@ -152,9 +152,8 @@ fn a_layout_keeps_its_callable_field() {
     let printed = specialized(
         r#"core.module @m {
   !cb = tribute_control.func_sig<(core.i32) -> core.i32>
-  !Holder = adt.struct<Holder(callback: !cb)>
-  !HolderRef = adt.typeref<{name = "Holder"}>
-  tribute_control.func @"Holder::callback"(%h: !HolderRef) -> !cb {
+  !Holder = adt.struct<"Holder", (!cb)>
+  tribute_control.func @"Holder::callback"(%h: !Holder) -> !cb {
     %f = adt.struct_get %h {field = 0, type = !Holder} : !cb
     tribute_control.return %f
   }
@@ -162,8 +161,8 @@ fn a_layout_keeps_its_callable_field() {
     %l = tribute_control.lambda(%y: core.i32) -> core.i32 captures [] {
       tribute_control.return %y
     }
-    %h = adt.struct_new %l {type = !Holder} : !HolderRef
-    %f = tribute_control.call @"Holder::callback"(%h) : (!HolderRef) -> !cb
+    %h = adt.struct_new(%l) : (!cb) -> !Holder
+    %f = tribute_control.call @"Holder::callback"(%h) : (!Holder) -> !cb
     %r = tribute_control.call_indirect %f(%x) : (core.i32) -> core.i32
     tribute_control.return %r
   }
@@ -172,9 +171,9 @@ fn a_layout_keeps_its_callable_field() {
     assert_contains(
         &printed,
         &[
-            "!Holder = adt.struct<Holder(callback: !cb)>",
+            "!Holder = adt.struct<\"Holder\", (!cb)>",
             "%1 = adt.struct_get %0 {field = 0, type = !Holder} : !cb",
-            "%3 = adt.struct_new %1 {type = !Holder} : !HolderRef",
+            "%3 = adt.struct_new(%1) : (!cb) -> !Holder",
             "%5 = tribute_cps.call_indirect %4(%0) attributes {convention = \"direct\"} : (core.i32) -> core.i32",
         ],
     );
@@ -825,7 +824,7 @@ fn a_published_layout_keeps_its_callable_fields() {
         &mut ctx,
         r#"core.module @m {
   !cb = tribute_control.func_sig<(core.i32) -> core.i32>
-  !Holder = adt.struct<Holder(callback: !cb)>
+  !Holder = adt.struct<"Holder", (!cb)>
   tribute_control.func @main(%x: core.i32) -> core.i32 {
     tribute_control.return %x
   }
@@ -944,4 +943,41 @@ fn a_body_tail_in_a_parameter_type_reads_cps() {
         ],
     );
     assert!(!printed.contains("make$9"), "{printed}");
+}
+
+/// A `body` tail that a parameter type passes as a nominal row argument
+/// occurs in that parameter type (`design/tribute-dialects.md` § "Row binder").
+#[test]
+fn a_body_tail_in_a_parameter_types_row_argument_reads_cps() {
+    let printed = specialized(
+        r#"core.module @m {
+  !Callback = adt.struct<"Callback"['a0], (tribute_control.func_sig<() -> core.i32 row(| 'a0)>)>
+  tribute_control.func @make['a0]() -> tribute_control.func_sig<() -> core.i32 row(| 'a0)> {
+    %f = tribute_control.lambda() -> core.i32 row(| 'a0) captures [] {
+      %c = arith.constant 7 : core.i32
+      tribute_control.return %c
+    }
+    tribute_control.return %f
+  }
+  tribute_control.func @ignore['a0]() -> tribute_control.func_sig<(adt.struct<"Callback"[row(| 'a0)]>) -> core.i32> {
+    %f = tribute_control.lambda(%k: adt.struct<"Callback"[row(| 'a0)]>) -> core.i32 captures [] {
+      %c = arith.constant 7 : core.i32
+      tribute_control.return %c
+    }
+    tribute_control.return %f
+  }
+  tribute_control.func @main[body 'a0]() -> core.i32 {
+    %h = tribute_control.call @make() attributes {row_args = [{tail = 0}]} : () -> tribute_control.func_sig<() -> core.i32 row(| 'a0)>
+    %i = tribute_control.call @ignore() attributes {row_args = [{tail = 0}]} : () -> tribute_control.func_sig<(adt.struct<"Callback"[row(| 'a0)]>) -> core.i32>
+    %r = tribute_control.call_indirect %h() : () -> core.i32 row(| 'a0)
+    tribute_control.return %r
+  }
+}"#,
+    );
+    assert_contains(
+        &printed,
+        &[
+            "tribute_cps.call_indirect %0() attributes {convention = \"cps\"} : () -> core.i32 row(| 'a0)",
+        ],
+    );
 }

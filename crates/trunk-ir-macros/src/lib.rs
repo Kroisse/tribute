@@ -54,8 +54,9 @@ mod parse;
 ///
 /// For each type `struct`, a `static` `TypeDef` holding the wrapper's
 /// `trunk_ir::type_verifier::VerifyType` impl for `#[verify]`, its
-/// `trunk_ir::asm_format::TypeAsmFormat` impl for `#[asm_format]`, and its
-/// `trunk_ir::asm_format::TypeAliasHint` impl for `#[alias_hint]`, plus a
+/// `trunk_ir::asm_format::TypeAsmFormat` impl for `#[asm_format]`, its
+/// `trunk_ir::asm_format::TypeAliasHint` impl for `#[alias_hint]`, and its
+/// `trunk_ir::type_def::IdentifiedType` impl for `#[identified]`, plus a
 /// registration of each type interface listed in `#[implements(..)]`.
 #[proc_macro_attribute]
 pub fn dialect(attr: ProcTokenStream, item: ProcTokenStream) -> ProcTokenStream {
@@ -126,8 +127,9 @@ pub fn op_interface(attr: ProcTokenStream, item: ProcTokenStream) -> ProcTokenSt
 /// The trait and its generated code follow [`op_interface`], with types in
 /// place of operations: the registry is keyed by type name, and
 /// `DynName::get(ctx, ty)` finds a type's implementation. A method is called
-/// on the type's wrapper, so it may be queried only on a type that passes its
-/// definition's shape and verifier.
+/// on the type's wrapper, so `get` returns a handle only for a type that
+/// passes its definition's shape and verifier, and `None` for a malformed
+/// one; `DynName::is_implemented` answers by name alone.
 #[proc_macro_attribute]
 pub fn type_interface(attr: ProcTokenStream, item: ProcTokenStream) -> ProcTokenStream {
     match interface::gen_interface(interface::Kind::Type, attr.into(), item.into()) {

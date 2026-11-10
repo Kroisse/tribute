@@ -6,7 +6,10 @@ use crate::dialect::core::I32;
 use crate::op_flag::IsolatedFromAbove;
 use crate::op_interface::{CallLike, IndirectCallLike};
 use crate::ops::{DialectOp, DialectType};
+use crate::refs::{OpRef, ValueRef};
 use crate::{Attribute, AttributeMap, IrContext, SymbolPath, TypeDataBuilder, TypeRef};
+use smallvec::SmallVec;
+use trunk_ir_macros::op_interface;
 
 #[trunk_ir::dialect]
 mod wasm {
@@ -37,7 +40,17 @@ mod wasm {
     ///     wasm.br {target = 0}
     /// }
     /// ```
+    ///
+    /// Each `init` value initializes the body block argument at its
+    /// position, and a `wasm.yield` before a `wasm.br` to the loop's label
+    /// sets every body block argument to the yielded value. Emission's
+    /// `ExplicitLocals` pass writes both as `wasm.local_set`s to the
+    /// arguments' locals, removes `init`, and reads the arguments from
+    /// their locals, so the body block arguments have no uses and the Wasm
+    /// `loop` takes no parameters (`design/wasm-backend.md`, "명시적 지역
+    /// 변수와 stack 계약").
     #[asm_format("(" init ")" ("->" "(" types(results)^ ")")? attr_dict region(body))]
+    #[implements(StackOperandOrder)]
     fn r#loop(init: Variadic<_>) -> Variadic<_> {
         #[region(body)]
         {}
@@ -64,8 +77,39 @@ mod wasm {
     #[asm_format(cond attr_dict_bare)]
     fn br_if(target: Attr<u32>, cond: Value<_>) {}
 
+    /// Branch to the label that `index` selects, as Wasm's `br_table`.
+    ///
+    /// `targets[i]` is the relative label depth taken when `index` is `i`;
+    /// `default` is taken when `index`, read as unsigned, is at least the
+    /// number of targets. Depths count enclosing `wasm.block`, `wasm.loop`,
+    /// and `wasm.if` labels as `wasm.br` does. Like `wasm.br`, it ends its
+    /// block: nothing after it runs. The branch carries no values, so every
+    /// label it names takes no branch operands.
+    ///
+    /// ```text
+    /// wasm.br_table %index, default 3 [0, 2, 1]
+    /// ```
+    #[asm_format(index "," "default" default targets attr_dict_bare)]
+    fn br_table(index: Value<I32>, targets: Attr<[u32]>, default: Attr<u32>) {}
+
     #[asm_format(values attr_dict_bare)]
     fn r#return(values: Variadic<_>) {}
+    /// Pass `value` to the enclosing structured operation.
+    ///
+    /// ```text
+    /// wasm.yield %v
+    /// ```
+    ///
+    /// - **Meaning:** as the last operation of a region whose parent has a
+    ///   result, `value` is that region's result. Followed by a `wasm.br`,
+    ///   `value` is the branch's value, or, for a branch to a `wasm.loop`,
+    ///   the loop's next block arguments.
+    /// - **Value flow:** after `ExplicitLocals`, `value` is either the value
+    ///   the operations before it left on top of the stack, or a function
+    ///   parameter, which emission reads from its local right before the
+    ///   yield. Emission writes no instruction for the yield itself. A yield
+    ///   that passes no value, or that precedes a branch to a loop, does not
+    ///   remain (`design/wasm-backend.md`, "명시적 지역 변수와 stack 계약").
     #[asm_format(value attr_dict_bare)]
     fn r#yield(value: Value<_>) {}
     #[asm_format(value attr_dict_bare)]
@@ -86,8 +130,8 @@ mod wasm {
     ///   `table`, table 0 when absent; `args` are the call's arguments, and
     ///   `signature` is the callee's `wasm.func_sig`.
     /// - **Meaning:** Wasm `call_indirect` with the type `signature`, which
-    ///   traps when the table entry has another type. Emission pushes the
-    ///   arguments, then the index.
+    ///   traps when the table entry has another type. The instruction takes
+    ///   the arguments, then the index, which is its `StackOperandOrder`.
     /// - **Verification:** emission checks that each argument is physically
     ///   assignable to its parameter and that the results are the
     ///   signature's, or none for a signature whose one result is
@@ -95,7 +139,7 @@ mod wasm {
     /// - **Ownership and value flow:** the index and arguments are ordinary
     ///   SSA uses.
     #[asm_format(callee "(" args ")" ("table" table^)? attr_dict ":" signature(signature))]
-    #[implements(IndirectCallLike)]
+    #[implements(IndirectCallLike, StackOperandOrder)]
     fn call_indirect<S: FuncSig>(
         #[default(0)] table: Attr<u32>,
         signature: Attr<TypeOf<S>>,
@@ -116,12 +160,13 @@ mod wasm {
     /// ```
     ///
     /// - **Shape:** as `wasm.call_indirect`, without results.
-    /// - **Meaning:** Wasm `return_call_indirect`.
+    /// - **Meaning:** Wasm `return_call_indirect`, which takes the arguments,
+    ///   then the index, as `wasm.call_indirect` does.
     /// - **Verification:** as for `wasm.call_indirect`'s arguments; the
     ///   signature's results are the enclosing function's.
     /// - **Ownership and value flow:** as `wasm.call_indirect`.
     #[asm_format(callee "(" args ")" ("table" table^)? attr_dict ":" signature(signature))]
-    #[implements(IndirectCallLike)]
+    #[implements(IndirectCallLike, StackOperandOrder)]
     fn return_call_indirect<S: FuncSig>(
         #[default(0)] table: Attr<u32>,
         signature: Attr<TypeOf<S>>,
@@ -136,9 +181,29 @@ mod wasm {
     fn nop() -> Value<_> {}
 
     // Module
+    /// A Wasm function, or a declaration when it has no body.
+    ///
+    /// ```text
+    /// wasm.func @f(%x: core.i32) -> core.i32 attributes {locals = [core.i64]} {
+    ///   ...
+    /// }
+    /// ```
+    ///
+    /// - **Shape:** `type` is the function's `wasm.func_sig`; the body's
+    ///   entry block arguments are its parameters.
+    /// - **Locals:** the parameters are locals `0..n`. `locals` lists the IR
+    ///   types of the further locals, local `n + i` having `locals[i]`;
+    ///   absent, the function has no further locals. Emission's
+    ///   `ExplicitLocals` pass sets it when it assigns the locals, and the
+    ///   emitter declares each listed type as its Wasm value type
+    ///   (`design/wasm-backend.md`, "명시적 지역 변수와 stack 계약").
     #[asm_format(symbol(sym_name) signature(r#type, body) attr_dict region(body))]
     #[flags(IsolatedFromAbove)]
-    fn func<S: FuncSig>(sym_name: Attr<String>, r#type: Attr<TypeOf<S>>) {
+    fn func<S: FuncSig>(
+        sym_name: Attr<String>,
+        r#type: Attr<TypeOf<S>>,
+        locals: Option<Attr<[Type]>>,
+    ) {
         #[region(body?)]
         {}
     }
@@ -363,12 +428,33 @@ mod wasm {
     fn f64_ge(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
 
     // Local variables
+    /// Read local `index` of the enclosing `wasm.func`.
+    ///
+    /// ```text
+    /// %v = wasm.local_get {index = 2} : core.i32
+    /// ```
+    ///
+    /// `index` names a parameter or an entry of the function's `locals`,
+    /// whose type is the result's type. A local nothing set reads as its
+    /// type's default value.
     #[asm_format(attr_dict_bare ":" type(result))]
     fn local_get(index: Attr<u32>) -> Value<_> {}
 
+    /// Write `value` to local `index` of the enclosing `wasm.func`.
+    ///
+    /// ```text
+    /// wasm.local_set %v {index = 2}
+    /// ```
+    ///
+    /// `value`'s type is the local's type.
     #[asm_format(value attr_dict_bare)]
     fn local_set(index: Attr<u32>, value: Value<_>) {}
 
+    /// Write `value` to local `index` and pass it on as the result.
+    ///
+    /// ```text
+    /// %r = wasm.local_tee %v {index = 2} : core.i32
+    /// ```
     #[asm_format(value attr_dict_bare ":" type(result))]
     fn local_tee(index: Attr<u32>, value: Value<_>) -> Value<_> {}
 
@@ -383,7 +469,14 @@ mod wasm {
     fn struct_set(type_idx: Attr<u32>, field_idx: Attr<u32>, r#ref: Value<_>, value: Value<_>) {}
 
     // GC arrays
+    /// Wasm `array.new`, which takes `init`, then `size`, as its
+    /// `StackOperandOrder` states.
+    ///
+    /// ```text
+    /// %a = wasm.array_new %size, %init {type_idx = 3} : core.ref
+    /// ```
     #[asm_format(size "," init attr_dict_bare ":" type(result))]
+    #[implements(StackOperandOrder)]
     fn array_new(type_idx: Attr<u32>, size: Value<I32>, init: Value<_>) -> Value<_> {}
 
     #[asm_format(size attr_dict_bare ":" type(result))]
@@ -1045,6 +1138,62 @@ impl IndirectCallLike for ReturnCallIndirect {
     }
 }
 
+/// The operands a Wasm instruction takes from the stack, in the order they
+/// were pushed.
+pub type StackOperands = SmallVec<[ValueRef; 4]>;
+
+/// The order in which an operation's instruction takes its operands from the
+/// stack.
+///
+/// The last operand is on top of the stack when the instruction runs. An
+/// operation whose instruction takes its operands in operand order does not
+/// implement it; [`DynStackOperandOrder::of`] answers operand order for it.
+#[op_interface]
+pub trait StackOperandOrder: DialectOp {
+    fn stack_operands(&self, ctx: &IrContext) -> StackOperands;
+}
+
+impl DynStackOperandOrder {
+    /// The stack operands of `op`: its `StackOperandOrder`, or its operands
+    /// in order when it does not implement the interface.
+    pub fn of(ctx: &IrContext, op: OpRef) -> StackOperands {
+        match Self::get(ctx, op) {
+            Some(order) => order.stack_operands(ctx),
+            None => ctx.op_operands(op).iter().copied().collect(),
+        }
+    }
+}
+
+impl StackOperandOrder for CallIndirect {
+    fn stack_operands(&self, ctx: &IrContext) -> StackOperands {
+        let mut operands: StackOperands = self.args(ctx).iter().copied().collect();
+        operands.push(self.callee(ctx));
+        operands
+    }
+}
+
+impl StackOperandOrder for ReturnCallIndirect {
+    fn stack_operands(&self, ctx: &IrContext) -> StackOperands {
+        let mut operands: StackOperands = self.args(ctx).iter().copied().collect();
+        operands.push(self.callee(ctx));
+        operands
+    }
+}
+
+impl StackOperandOrder for ArrayNew {
+    fn stack_operands(&self, ctx: &IrContext) -> StackOperands {
+        smallvec::smallvec![self.init(ctx), self.size(ctx)]
+    }
+}
+
+/// The Wasm `loop` takes no parameters: `init` sets the body block
+/// arguments' locals before it.
+impl StackOperandOrder for Loop {
+    fn stack_operands(&self, _ctx: &IrContext) -> StackOperands {
+        StackOperands::new()
+    }
+}
+
 impl CallLike for Call {
     fn direct_callee<'a>(&self, ctx: &'a IrContext) -> &'a SymbolPath {
         self.callee(ctx)
@@ -1127,6 +1276,37 @@ mod tests {
         let mut ctx = crate::IrContext::new();
         let module = parse_test_module(&mut ctx, text);
         assert_eq!(module.op().display(&ctx).to_string(), text);
+    }
+
+    #[test]
+    fn br_table_writes_its_default_before_the_table() {
+        let text = r#"core.module @test {
+  wasm.func @f(%0: core.i32) {
+      wasm.block {
+          wasm.block {
+              wasm.br_table %0, default 1 [0, 1, 0]
+          }
+          wasm.br {target = 0}
+      }
+      wasm.return
+  }
+}
+"#;
+        let mut ctx = crate::IrContext::new();
+        let module = parse_test_module(&mut ctx, text);
+        assert_eq!(module.op().display(&ctx).to_string(), text);
+        let std::ops::ControlFlow::Break(table) = crate::walk::walk_op(
+            &ctx,
+            module.op(),
+            &mut |op| match BrTable::from_op(&ctx, op) {
+                Ok(table) => std::ops::ControlFlow::Break(table),
+                Err(_) => std::ops::ControlFlow::Continue(crate::walk::WalkAction::Advance),
+            },
+        ) else {
+            panic!("the module has a br_table");
+        };
+        assert_eq!(table.default(&ctx), 1);
+        assert_eq!(table.targets(&ctx).collect::<Vec<_>>(), [0, 1, 0]);
     }
 
     #[test]

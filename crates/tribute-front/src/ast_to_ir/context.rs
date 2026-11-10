@@ -17,7 +17,7 @@ use trunk_ir::types::Location;
 use super::nominal::NominalTypes;
 use super::row_binders::RowBinders;
 use crate::SortedMap;
-use crate::ast::{CtorId, LocalId, NodeId, SpanMaps, TypeScheme};
+use crate::ast::{CtorId, LocalId, NodeId, RowVar, SpanMaps, TypeScheme};
 
 /// A source-visible callable synthesized by the logical frontend, such as a
 /// struct-field accessor. These signatures are semantic lowering metadata,
@@ -387,6 +387,17 @@ impl<'db> IrLoweringCtx<'db> {
         self.nominal.variant_field_names(layout, tag)
     }
 
+    /// Register the declaration position of an enum variant.
+    pub fn register_variant_position(&mut self, layout: TypeRef, tag: Symbol, position: u32) {
+        self.nominal
+            .register_variant_position(layout, tag, position)
+    }
+
+    /// The declaration position of the variant `tag` of the enum `layout`.
+    pub fn variant_position(&self, layout: TypeRef, tag: &Symbol) -> Option<u32> {
+        self.nominal.variant_position(layout, tag)
+    }
+
     /// Field names of a struct in declaration order.
     pub fn struct_field_names(&self, ctor_id: CtorId<'db>) -> Option<&[Symbol]> {
         self.nominal.struct_field_names(ctor_id)
@@ -402,9 +413,10 @@ impl<'db> IrLoweringCtx<'db> {
         self.nominal.get_type(name)
     }
 
-    /// Mark a nominal source type as known before its layout is complete.
-    pub fn declare_logical_nominal(&mut self, name: Symbol) {
-        self.nominal.declare_logical_nominal(name)
+    /// Record `key`, the layout key of the nominal source type `name`, before
+    /// its layout's body is built.
+    pub fn declare_logical_nominal(&mut self, name: Symbol, key: TypeRef) {
+        self.nominal.declare_logical_nominal(name, key)
     }
 
     /// Get the type of an AST node by NodeId.
@@ -498,41 +510,53 @@ impl<'db> IrLoweringCtx<'db> {
         self.nominal.ability_symbol(ability_name, arguments)
     }
 
-    /// Create an `adt.struct` type with name and fields.
+    /// Create an `adt.struct` type with name, field types, and `row_params`
+    /// row binders.
     pub fn adt_struct_type(
         &self,
         ir: &mut IrContext,
         name: &Symbol,
-        fields: &[(Symbol, TypeRef)],
+        fields: &[TypeRef],
+        row_params: u32,
     ) -> TypeRef {
-        self.nominal.adt_struct_type(ir, name, fields)
+        self.nominal.adt_struct_type(ir, name, fields, row_params)
     }
 
-    /// Create an `adt.enum` type with name and variants.
+    /// Create an `adt.enum` type with name, each variant's field types, and
+    /// `row_params` row binders.
     pub fn adt_enum_type(
         &self,
         ir: &mut IrContext,
         name: &Symbol,
-        variants: &[(Symbol, Vec<TypeRef>)],
+        variants: &[Vec<TypeRef>],
+        row_params: u32,
     ) -> TypeRef {
-        self.nominal.adt_enum_type(ir, name, variants)
+        self.nominal.adt_enum_type(ir, name, variants, row_params)
     }
 
-    /// Create an `adt.enum` type that records where it was declared.
-    pub fn adt_enum_type_with_definition(
-        &self,
-        ir: &mut IrContext,
-        name: &Symbol,
-        variants: &[(Symbol, Vec<TypeRef>)],
-        definition: Location,
-    ) -> TypeRef {
-        self.nominal
-            .adt_enum_type_with_definition(ir, name, variants, definition)
+    /// The key of the `adt.struct` layout named `name` with `row_params` row
+    /// binders, before its body is bound.
+    pub fn adt_struct_key(&self, ir: &mut IrContext, name: &Symbol, row_params: u32) -> TypeRef {
+        self.nominal.adt_struct_key(ir, name, row_params)
     }
 
-    /// Create an `adt.typeref` type — a reference to a named type.
-    pub fn adt_typeref(&self, ir: &mut IrContext, name: &Symbol) -> TypeRef {
-        self.nominal.adt_typeref(ir, name)
+    /// The key of the `adt.enum` layout named `name` with `row_params` row
+    /// binders, before its body is bound.
+    pub fn adt_enum_key(&self, ir: &mut IrContext, name: &Symbol, row_params: u32) -> TypeRef {
+        self.nominal.adt_enum_key(ir, name, row_params)
+    }
+
+    /// Read types with `binders` as the row binders in scope, as the fields
+    /// of a nominal layout see its row parameters, and return the scope to
+    /// restore with [`Self::leave_definition`].
+    pub(crate) fn enter_layout(&mut self, binders: &[RowVar]) -> DefinitionScope {
+        let binders = binders
+            .iter()
+            .map(|&variable| (variable, RowBinder::Param))
+            .collect();
+        DefinitionScope {
+            binders: self.nominal.replace_current_row_binders(binders),
+        }
     }
 }
 
@@ -654,7 +678,8 @@ mod tests {
         );
 
         let nominal_name = Symbol::new("Nested::Forward");
-        ctx.declare_logical_nominal(nominal_name.clone());
+        let forward_key = ctx.adt_struct_key(&mut ir, &nominal_name, 0);
+        ctx.declare_logical_nominal(nominal_name.clone(), forward_key);
         let forward = AstType::new(
             &db,
             TypeKind::Named {
@@ -667,15 +692,14 @@ mod tests {
                 args: vec![],
             },
         );
-        assert_eq!(
-            ctx.convert_logical_type(&mut ir, forward),
-            ctx.adt_typeref(&mut ir, &nominal_name)
-        );
+        // A forward reference is the key, before its body is bound.
+        assert_eq!(ctx.convert_logical_type(&mut ir, forward), forward_key);
 
         // A source declaration named List must not capture the builtin type,
         // including when it occurs recursively inside a callable or tuple.
         let list_name = Symbol::new("List");
-        ctx.declare_logical_nominal(list_name.clone());
+        let nominal_list = ctx.adt_enum_key(&mut ir, &list_name, 0);
+        ctx.declare_logical_nominal(list_name.clone(), nominal_list);
         let source_list = AstType::new(
             &db,
             TypeKind::Named {
@@ -709,7 +733,6 @@ mod tests {
         let list_signature =
             tribute_ir::dialect::tribute_control::FuncSig::from_type_ref(&ir, callable_ir).unwrap();
         let anyref = ctx.anyref_type(&mut ir);
-        let nominal_list = ctx.adt_typeref(&mut ir, &list_name);
         assert_eq!(list_signature.inputs(&ir), &[anyref, nominal_list]);
         assert_eq!(list_signature.result(&ir), anyref);
         let tuple = AstType::new(&db, TypeKind::Tuple(vec![builtin_list, source_list]));

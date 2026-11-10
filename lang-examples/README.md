@@ -3,8 +3,8 @@
 The canonical examples in this directory are checked against the current
 single-source-file CLI. They use public APIs and are the best starting point for
 running Tribute today. The
-[compiler capability matrix](../design/capabilities.md) is authoritative for
-the wider frontend and target status.
+[compiler capabilities document](../docs/capabilities.md) is authoritative
+for the wider frontend and target status.
 
 ## Canonical runnable examples
 
@@ -130,10 +130,11 @@ Current boundaries relevant to these files:
 
 - List literals, `List::prepend`, and list patterns run natively but have no
   Wasm lowering; general collection APIs are unsupported on all targets.
-- Inline modules have native execution evidence, but file-module loading,
-  package compilation, and separate Tribute-module linking are unsupported.
+- Inline modules, file modules, and packages with path dependencies have
+  native execution evidence; separate compilation and linking of Tribute
+  packages is unsupported.
 - Language-level Wasm execution is limited to the forms the
-  [capability matrix](../design/capabilities.md) lists as **wasm-run**:
+  [capabilities document](../docs/capabilities.md) lists as **wasm-run**:
   String/Bytes output, String equality, `Nat` comparisons, Bytes slicing, and
   the `fn`, one-shot `op`, and Abort handler forms.
 
@@ -177,9 +178,8 @@ and the frontend check expects their failure:
 - `string_interpolation.trb` and `strings/string_interpolation.trb`: string
   interpolation.
 
-### Design-only examples
+### File-module package
 
-- `modules_file/` illustrates the planned file-module/package layout. The
-  current CLI accepts one source file and does not load sibling modules, and
-  `pkg`, `self`, and `super` paths are not supported yet, so these files are
-  not compilable as a package.
+- `modules_file/` is a multi-file package. `tests/integration/file_modules.rs`
+  compiles and runs it natively through the CLI
+  (`the_cli_compiles_and_runs_a_file_module_package`).

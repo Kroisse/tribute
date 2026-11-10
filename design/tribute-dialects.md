@@ -29,6 +29,14 @@ verifier가 검사하는 것은
 [`FuncSig` 선언](../crates/tribute-ir/src/dialect/tribute_control/func_sig.rs)이
 정한다.
 
+Type은 한 번 intern되어 모든 phase가 공유하므로 type verifier는 component
+type을 검사하지 않는다. 이 경계의 `tribute_control` validator가 검사한다.
+Component는 어느 깊이에도 미해결 type, resume token, physical callable type을
+담지 않는다. Physical callable type은 calling convention의 ABI로 들어가는
+callable의 type이며 `PhysicalCallableType` type interface를 구현한다.
+`func.func_sig`, `clif.func_sig`, `wasm.func_sig`, `closure.closure`가 여기에
+속한다. `tribute_rt.anyref`와 `core.ptr`는 source-logical type이다.
+
 Convention 값은 keyword 문자열 `"direct"`, `"evidence_direct"`, `"cps"` 가운데
 하나다. 이 문자열이 convention의 유일한 저장 형식이다. 정수나 다른 값은 잘못된
 convention이다. Convention은 [CPS 전략](cps-effects.md#row와-호출-규약)이
@@ -97,31 +105,24 @@ Legalization은 알려진 target에 `func.tail_call`, closure, continuation과
 `done_k` target에 새 `func.tail_call_indirect`를 만들 수 있다.
 
 이 dialect는 opaque type `tribute_control.resume_token<input, answer>`도
-소유한다. `input`은 중단된 operation continuation이 받는 값이고, `answer`는
-그 continuation을 enclosing handle까지 실행한 logical result다. 이 type은 source
-type, callable ABI, backend carrier가 아니며 continuation representation을
-검사할 권한도 아니다.
-
-Logical result가 `Never`인 source general operation은 canonical `core.never`
-TypeRef를 사용한다. 이 operation은 resumption을 만들지 않으며 `resume_token`도
-노출하지 않는다. `Never`용 `anyref` placeholder는 이 경계에서 valid하지 않다.
+소유한다. 그 계약과, logical result가 `Never`인 general operation이 resumption을
+만들지 않는다는 규칙은
+[`resume_token`과 `perform`의 선언](../crates/tribute-ir/src/dialect/tribute_control.rs)이
+정한다.
 
 ## Ability row
 
 `tribute_control.func_sig`는 callable의 ability row를 `ability_row` type 속성으로
-가진다. 함수 형태에서는 결과 뒤의 `row(..)` 절로 쓴다. `|` 앞은 `instances`이고,
-뒤의 `'aN`은 `tail = N`이다. 아래 타입의 저장 표현은
-`{ability_row = {instances = [@"<instance A>", @"<instance B>"], tail = 1}}`이다.
+가진다. 속성의 저장 형식과 함수 형태의 `row(..)` 절은
+[`FuncSig` 선언](../crates/tribute-ir/src/dialect/tribute_control/func_sig.rs)이
+정한다. Row의 `instances`는
+[`ability.decl`](../crates/tribute-ir/src/dialect/ability.rs)에 대한 symbol
+참조이고, `tail`은 둘러싼 정의의 [row binder](#row-binder) index다.
 
 ```text
 tribute_control.func_sig<(T) -> R row(@"<instance A>", @"<instance B>" | 'a1)>
 ```
 
-- **값:** `instances`는
-  [`ability.decl`](../crates/tribute-ir/src/dialect/ability.rs)에 대한 symbol
-  참조 목록이고, `tail`은 둘러싼 정의의 [row binder](#row-binder) index다.
-  둘 다 없으면 닫힌 빈 row이며 속성을 생략해 쓴다. `instances`는 symbol 경로
-  순서로 정렬하며 같은 instance를 한 번만 둔다.
 - **의미:** Row는 [instance의 집합](type-inference.md#기본-규칙)이다. 명시
   label과 tail이 같은 instance를 담는 호출에서 어느 위치가 어느 handler를
   받는지는 type이 담지 않는다. Typechecking이 인스턴스화에서 계산한
@@ -137,24 +138,13 @@ tribute_control.func_sig<(T) -> R row(@"<instance A>", @"<instance B>" | 'a1)>
 
 ### Row binder
 
-두 dialect의 `func`는 자기 row binder를 `row_binders` 속성으로 선언한다. 원소는
-binder의 종류를 나타내는 문자열이다. 속성이 없으면 binder가 없다.
-
-| 종류 | 뜻 |
-| ---- | ---- |
-| `param` | 정의의 scheme이 양화한(∀로 묶은) row 변수 |
-| `ability_arg` | scheme이 양화했고 signature나 본문의 ability 인자 안에 나타나는 row 변수 |
-| `local` | 값이 람다인 `let`의 지역 scheme이 양화한 row 변수. 그 람다의 type이 적는 변수이며 람다가 [소유](#지역-람다의-양화와-인스턴스화)한다 |
-| `body` | 어느 scheme도 양화하지 않은 row 변수, 또는 지역 scheme이 양화했지만 [양화하는 람다가 없는](#지역-람다의-양화와-인스턴스화) row 변수 |
-
-값이 람다가 아닌 binding은 그 지역 scheme의 변수를 인스턴스화하는 사용이 없고,
-그 변수는 `body`다.
-
-양화된 binder(`param`, `ability_arg`)가 scheme의 binder 순서로 먼저 오며, 그
-위치가 row 인자의 위치다. 나머지는 정의 안에 처음 나타난 순서로 뒤에 온다.
-Class 특수화가 람다의 entry 본문을 만들 때, 그 본문 안에서 row를 양화하는
-람다는 새 `local` binder를 목록 끝에 받는다. 한 정의의 인스턴스들은 양화된
-binder만 공유하고, 나머지 binder 목록은 서로 다를 수 있다.
+두 dialect의 `func`는 자기 row binder를 `row_binders` 속성으로 선언한다. 네
+종류 `param`, `ability_arg`, `local`, `body`의 뜻과 목록의 순서는
+[`tribute_control.func` 선언](../crates/tribute-ir/src/dialect/tribute_control.rs)이
+정한다. 양화한(∀로 묶은) binder는 `param`과 `ability_arg`이고, `local`은 값이
+람다인 `let`의 지역 scheme이 양화한 변수로 그 람다가
+[소유](#지역-람다의-양화와-인스턴스화)한다. 값이 람다가 아닌 binding은 그 지역
+scheme의 변수를 인스턴스화하는 사용이 없고, 그 변수는 `body`다.
 
 Binder 종류는 row의 구조만 기록하며 실행 전략을 담지 않는다. CPS 전략의 class
 특수화는 tail의 class를 binder 종류에 따라 읽는다.
@@ -163,7 +153,7 @@ Binder 종류는 row의 구조만 기록하며 실행 전략을 담지 않는다
 - `ability_arg`: `Cps`다.
 - `body`: 정의 안의 어느 callable type의 매개변수 타입에도 나타나지 않으면 요구
   없음이고, 나타나면 `Cps`다([tail 규칙](cps-effects.md#row와-호출-규약)).
-  매개변수 타입 안의 `adt.typeref` row 인자에 나타난 것도 매개변수 타입에
+  매개변수 타입 안의 [row 인스턴스](#nominal-값-타입) row 인자에 나타난 것도 매개변수 타입에
   나타난 것이다. 이 판정은 binder마다 정의 전체에서 한 번 하므로, 그 binder를
   읽는 모든 자리가 같은 class를 읽는다.
 - `local`: 그것을 소유한 람다의 본문마다 다르며,
@@ -171,7 +161,7 @@ Binder 종류는 row의 구조만 기록하며 실행 전략을 담지 않는다
 
 정의 안의 모든 tail은 이 목록의 index다. Signature, 중첩된 callable type, block
 인자, operation 결과, tuple layout의 원소,
-[`adt.typeref`의 row 인자](#nominal-row-인자)가 모두 같다. Type은 binder를
+[row 인스턴스의 row 인자](#nominal-row-인자)가 모두 같다. Type은 binder를
 도입하지 않는다. 예외는 row 매개변수를 가진 nominal layout 하나이며, 그 binder는
 layout 안의 type에만 미친다.
 [`ability.operation`](../crates/tribute-ir/src/dialect/ability.rs)의 type은
@@ -180,54 +170,42 @@ tail을 가질 수 없다.
 ### Nominal row 인자
 
 [Row 매개변수](types.md#row-매개변수)를 가진 struct·enum의 layout
-(`adt.struct`, `adt.enum`)은 자기 row binder를 type 속성 `row_params`(개수)로
-선언한다. `func`의 `row_binders`와 달리 종류 없이 개수만 둔다. Layout 안의 필드
-type, 곧 필드의 callable type과 중첩된 `adt.typeref`의 row 인자가 쓰는 tail은 이
-binder의 index다. 이 binder는 layout 밖으로 나가지 않는다.
+(`adt.struct`, `adt.enum`)은 자기 row binder를 type 속성 `row_params`로
+선언하고, 그 선언의 값 type인 [row 인스턴스](#nominal-값-타입)는 row
+매개변수마다 row 하나를 type 속성 `row_args`로 가진다. 속성의
+저장 형식, textual form, 정체성 규칙은
+[`adt` dialect 선언](../crates/tribute-ir/src/dialect/adt.rs)이 정한다. Layout의
+binder는 layout 안의 type에만 미치고, `row_args`의 tail은 그 type을 쓴 정의의
+[binder](#row-binder) index다.
 
 Nominal layout은 row 인자와 상관없이 하나다.
 [Tuple layout](#compiler-generated-tuple-layout)은 row를 layout 이름에 담고
 둘러싼 정의의 binder를 쓴다.
 
 ```text
-adt.struct<Callback['a0](run: tribute_control.func_sig<(core.i64) -> core.i64 row(| 'a0)>)>
-adt.typeref<Callback[row(@"<State(Int)>")]>
-adt.typeref<Callback[row(| 'a2)]>
-adt.typeref<Callback[row()]>
+adt.struct<"Callback"['a0], (tribute_control.func_sig<(core.i64) -> core.i64 row(| 'a0)>)>
+adt.struct<"Callback"[row(@"<State(Int)>")]>
+adt.struct<"Callback"[row(| 'a2)]>
+adt.struct<"Callback"[row()]>
 ```
 
-Textual form은 layout의 binder를 이름 바로 뒤에
-[정의 header의 binder 목록](#row-binder)과 같은 `['a0, 'a1, ...]`로 쓴다. Binder
-목록은 필드보다 먼저 온다. Binder는 종류 keyword와 합집합(`=`)을 쓰지 않으며
-`'a0`부터 차례로 번호를 붙인다.
-
-Typeref의 row 인자는 이름 바로 뒤에 `[row(...), ...]`로 쓴다. Row 인자 하나는
-`func_sig`의 row와 같은 `row(...)`이지만, 빈 row도 생략하지 않고 `row()`로 쓴다.
-Row 매개변수가 없으면 `[...]`를 쓰지 않는다. 이 문법으로 쓸 수 없는 속성 값은
-일반 형태로 출력한다.
-
-- 그 선언의 값 type인 `adt.typeref`는 row 매개변수마다 row 하나를 type 속성
-  `row_args`에 선언 순서대로 가진다. 각 row는 `ability_row`와 같은 형식이며,
-  tail은 그 type을 쓴 정의의 binder index다. Layout 안에서는 layout의 binder
-  index다. Row 매개변수가 없는 선언의 typeref는 속성을 생략한다.
-- `row_args`는 typeref의 정체성에 들어간다. 같은 layout을 가리키며 row 인자만
-  다른 두 typeref는 다른 type이다. Layout의 이름과 게시된 alias는 row 인자를
-  담지 않으므로 그런 typeref들은 layout 하나를 공유한다.
 - `adt` 생성·접근 operation이 보는 필드 type은 layout의 필드 type에서 layout
-  binder를 그 operation이 다루는 값의 typeref `row_args`로
+  binder를 그 operation이 다루는 값의 `row_args`로
   [치환](#row-인자와-치환)한 것이다. Frontend는 `struct_get`, `variant_get`
   결과와 `struct_new`, `variant_new` 피연산자의 type을 이 치환으로 쓴다.
 - Row 인자는 다른 row와 같이 source-logical 경계 안에만 있다. CPS
-  legalization은 `row_args`와 `row_params`를 버리고 tuple layout을
+  legalization은 `row_args`와 `row_params`를 버리고, 바뀐 layout을
+  [nominal layout 변환](#nominal-layout-변환) 규칙으로 새 키로 만든다. Row
+  인스턴스는 그 `def`의 새 키가 된다. Tuple layout은
   [새 이름](#compiler-generated-tuple-layout)으로 다시 만든다.
   Representation/ABI 경계의 출구는 `row_args`와 `row_params`를 거부한다.
 
 ### Tail의 합집합
 
 Row tail이 여러 tail의 합집합으로 선언된 정의는 `row_unions` 속성으로 그
-합집합을 적는다. 원소는 `{result = i, sources = [j, k, ...]}`이며 `sources`는
-열린 source의 tail을 선언 순서로 담는다. `result`와 같은 tail은 `sources`에
-넣지 않는다.
+합집합을 적는다. 원소의 형식은
+[`tribute_control.func` 선언](../crates/tribute-ir/src/dialect/tribute_control.rs)이
+정하며, 각 합집합은 열린 source의 tail을 선언 순서로 담는다.
 
 이 순서가 evidence tail 칸의 번호다. 정의 안의
 [`{select = i}`](#evidence-선택-속성)는 자기 row tail을 결과로 하는 합집합의
@@ -289,7 +267,7 @@ class와 맞는지는 [convention class](cps-effects.md#row-변수의-convention
 규칙이 정한다.
 
 참조가 보는 callee signature는 callee의 type에 row 인자를 치환한 것이다. 치환은
-type 안의 모든 `func_sig`(자기 자신 포함)와 `adt.typeref`의 row 인자에서, tail이
+type 안의 모든 `func_sig`(자기 자신 포함)와 row 인스턴스의 row 인자에서, tail이
 양화된 binder `t`인 row `(I, t)`를 `(I ∪ args[t].instances, args[t].tail)`로
 바꾸고 정렬한다. 다른 속성은 바꾸지 않는다. Layout 안의 type은 치환하지 않는다.
 Tuple layout은 원소를 치환한 뒤 같은 이름 규칙으로 다시
@@ -447,7 +425,7 @@ adapter를 두지 않는다. Adapter는 source 람다와 `func_ref`에만 있으
 legalization이 만들어 `closure.lambda`와 `closure.new`에 명시한다.
 
 **Convention table.** Closure 값은 convention table 참조 하나와 capture로
-이루어진다([closure 저장 layout](ir.md#closure-저장-layout)). Convention table은
+이루어진다([closure 저장 layout](#closure-저장-layout)). Convention table은
 closure를 만드는 code 대상(람다, `func_table`)마다 정적으로 하나이고, `Direct`,
 `EvidenceDirect`, `Cps` 순서로 convention entry 셋을 담는다. Convention이 곧
 table 안의 위치이므로 위치를 따로 정하지 않는다. Table은 생성 뒤 바뀌지 않으며
@@ -455,92 +433,29 @@ managed 참조를 담지 않는다.
 
 ## 사용자 정의 어셈블리 형식
 
-두 dialect의 `func`와 `lambda`만 custom parse/print를 요구한다. 두 dialect는 같은
-형식을 쓴다. `func_ref`, `instantiate`, `call`, `call_indirect`, `return`은 custom
-format을 만들지 않는다.
-
-`tribute_control`의 두 operation은 convention을 쓰지 않는다. `tribute_cps.func`는
-`convention(direct)`, `convention(evidence_direct)`, `convention(cps)` 가운데
-하나를 반드시 쓴다. 이 표기는 그 operation의 convention으로 round trip한다.
-Callable type에는 convention을 쓰지 않는다. 출력기는 body에서 convention을
-추론하지 않는다.
-
-`func` 형식은 `func.func`처럼 symbol, 분해된 logical parameter/result, 선택적
-추가 attribute와 선택적 body를 출력한다. Body가 있으면 entry block label을
-생략하고 signature parameter를 entry argument로 복원한다. Declaration은 body가
-없다.
-
-`lambda` 형식은 `closure.lambda`처럼 SSA result, 분해된 source
-parameter/result, 명시적 `captures [...]`, 선택적 추가 attribute와 body 또는
-entry 목록을 출력한다. `lambda` 형식도 entry label을 생략한다.
-`captures [...]`는 capture가 없어도 `captures []`로 항상 출력한다. Canonical
-순서는 captures, 선택적 attributes, body 또는 `entries`다.
-
-`tribute_control.lambda`는 본문 하나를 가진다. `tribute_cps.lambda`는
-`captures [...]` 뒤에 `entries`와 본문 목록을 쓴다. 본문마다 convention keyword
-뒤에 본문을 쓴다. 본문은 convention 순서이고, convention마다 많아야 하나다.
-Adapter와 trap entry는 쓰지 않는다. 본문이 없는 convention entry는
-legalization이 [채우기](#convention-entry) 규칙으로 정한다.
+두 dialect의 `func`와 `lambda`만 손으로 쓴 parse/print를 가지며, 두 dialect는
+같은 형식을 쓴다. 나머지 operation은 선언적 형식을 쓴다. 각 형식은 해당
+선언이 정한다: row binder header와 `row(..)` 절, `inferred`, `attributes {..}`,
+body를 쓰는 `func` 형식은
+[`tribute_control.func`](../crates/tribute-ir/src/dialect/tribute_control.rs)가,
+양화 binder 목록과 `captures [..]`를 쓰는 `lambda` 형식은
+`tribute_control.lambda`가, `convention(..)`과 `entries`는
+[`tribute_cps.func`와 `tribute_cps.lambda`](../crates/tribute-ir/src/dialect/tribute_cps.rs)가,
+row 절 자체는
+[`FuncSig`](../crates/tribute-ir/src/dialect/tribute_control/func_sig.rs)가 정한다.
 
 ```text
-tribute_cps.func @f(%x: T) -> R convention(cps)
-    attributes {visibility = "private"} {
-  ...
-}
-
-tribute_cps.func @decl(%x: T) -> R convention(direct)
-
-%f = tribute_control.lambda(%x: T) -> R
-    captures [%captured] attributes {debug_name = "apply"} {
-  ...
-}
-
-%g = tribute_cps.lambda(%k: !K) -> R row(| 'a1) captures [] entries {
-  direct {
-    ...
-  }
-  evidence_direct {
-    ...
-  }
-}
-```
-
-Row binder는 위치로 이름을 붙여 `'a0`, `'a1`, …로 쓴다. `func`는 symbol 바로
-뒤의 `[...]`에 binder를 순서대로 선언한다. 종류가 `param`이 아니면 이름 앞에
-`ability_arg`, `local`, `body` 중 하나를 쓴다. 합집합의 결과인 binder는
-`'a0 = 'a1 | 'a2`처럼 source를 선언 순서로 적는다. Binder가 없으면 `[...]`를
-생략한다. Parser는 `i`번째 binder의 이름이 `'ai`가 아니면 거부한다. 이 표기가
-`row_binders`와 `row_unions` 속성을 대신한다.
-
-Row는 convention 앞에 `row(@A, @B | 'a1)` 형식으로 쓴다. Instance 목록 뒤에
-`|`와 tail binder를 쓴다. Instance가 없으면 `row(| 'a1)`, tail이 없으면
-`row(@A)`다. 닫힌 빈 row는 쓰지 않는다. Type alias 안의 tail도 같은 뜻이다.
-
-```text
-tribute_cps.func @map['a0](%xs: !List, %f: !F) -> !List row(| 'a0) convention(cps) {
-  ...
-}
-
 tribute_cps.func @join['a0 = 'a1 | 'a2, 'a1, 'a2](%x: T) -> T row(| 'a0) convention(cps)
 
-tribute_cps.func @main['a0]() -> core.nil row(| 'a0) convention(direct) {
-  ...
-}
-```
-
-`lambda`는 operation 이름 바로 뒤, 매개변수 앞의 `[...]`에 자기가 양화하는
-binder를 인스턴스화 순서로 적는다. 이 목록은 둘러싼 `func`의 `local` binder
-이름을 나열할 뿐이다. `func`의 header와 달리 종류나 합집합을 쓰지 않으며 위치
-이름 검사도 하지 않는다. 이 표기가 `quantified_rows` 속성을 대신한다.
-`lambda`의 row tail은 둘러싼 `func`의 binder 이름을 쓴다.
-
-```text
 %step = tribute_control.lambda['a1](%m: core.i32) -> core.i32 row(| 'a1)
     captures [] {
   ...
 }
 %s = tribute_control.instantiate %step {row_args = [{tail = 0}]} : !Step0
 ```
+
+Convention은 operation의 표기이며 callable type에는 쓰지 않는다. Type alias
+안의 row tail은 inline으로 쓴 것과 같은 뜻이다.
 
 간결한 형식은 `ability_row` 외의 non-reserved type attribute가 없는 source
 signature에만 쓴다. 그런 attribute가 있으면 `func`/`lambda`는 generic assembly를
@@ -571,7 +486,7 @@ Textual attribute, symbol spelling, 위치 또는 printed IR만으로 generic
 specialization identity를 복구하거나 승격하지 않는다.
 
 Private runtime helper는 target stage에서만 physical signature로 만든다.
-Private runtime helper는 source-logical `adt.typeref`를 받을 수 없다.
+Private runtime helper는 source-logical [nominal 값 타입](#nominal-값-타입)을 받을 수 없다.
 
 Ordinary bodyless `extern "C"`는 명시적 trusted/unsafe FFI boundary다. 완전한
 signature에 managed semantic parameter나 result가 있어도 허용하며, Tribute의
@@ -730,14 +645,13 @@ operation이며, 각각의 형상은
 [`ability` dialect 선언](../crates/tribute-ir/src/dialect/ability.rs)이 정한다.
 
 - **`effect.delimit`:** Frame 펼치기가 `ability.delimit`을 같은 operand와 결과를
-  가진 `effect.delimit`으로 낮추고, target ABI 경계가 그것을 소비한다.
-  `effect.delimit`도 같은 관계를 선언하되 body의 frame은 답 타입을 가진 layout
-  참조다. 물리화가 그 답 타입과 `core.never` 결과를 지우므로, target ABI 경계는
-  물리화 직후 다른 검증 지점 없이 `effect.delimit`을 소비한다.
+  가진 `effect.delimit`으로 낮추고, target ABI 경계가 물리화 직후 다른 검증
+  지점 없이 그것을 소비한다. 두 operation의 계약은 각 선언이 정한다.
 - **검증:** Operation verifier는 선언의 타입 관계, frame과 closure의 `R` 일치,
-  arm 표와 arm closure의 일치, closure의 calling convention을 검사한다.
-  Terminator 위치와 enclosing callable이 `Cps`인지는 whole-IR 검증이 확인한다.
-  `ability.delimit`을 제외한 operation은 `Cps` flow에만 온다.
+  arm 표와 arm closure의 일치, arm closure의 형상을 검사한다. Closure type은
+  convention을 적지 않으므로 convention은 검사하지 않는다. Terminator 위치와
+  enclosing callable이 `Cps`인지는 whole-IR 검증이 확인한다. `ability.delimit`을
+  제외한 operation은 `Cps` flow에만 온다.
 - **소유권과 값 흐름:** 모든 operand는 일반 SSA use다. Frame 값은 불변이며 여러
   번 쓸 수 있다. Resumption의 affine 사용은 펼치기가 runtime 상태로 강제한다.
 - **위치:** suffix와 frame operation은 그것을 만든 source operation의 span을,
@@ -771,7 +685,7 @@ Closure type과 entry는 shared effect lowering과 target-ABI validation을 거�
 동안 exact type을 유지한다. Target lowering은 그 validation 뒤에만 closure
 storage layout을 선택할 수 있으며, 이때 모든 type-bearing surface를 일관되게
 재작성한다. Operation, layout, cast는
-[closure 저장 layout](ir.md#closure-저장-layout) 절이 정의한다.
+[closure 저장 layout](#closure-저장-layout) 절이 정의한다.
 
 그 전까지 lowered storage pack은 unrealized cast로 exact closure type을 유지한다.
 이 cast는 storage layout을 선택할 때 closure base layout으로의 upcast가 된다.
@@ -787,35 +701,372 @@ concrete `ref.cast`를 생성하고 native는 pointer 표현으로 변환한다.
 struct나 nominal reference의 일반 변환 정책을 바꾸지 않으며, semantic callable
 검증을 대체하지 않는다.
 
+### Closure 저장 layout
+
+Closure 값은 [convention table](#convention-entry) 참조와 capture한 값을 함께
+담은 객체 하나다. 별도의 environment 객체를 두지 않으며, closure를 만드는 일은
+할당 하나이고 capture를 읽는 일은 closure의 필드 접근 하나다. Closure의 의미적
+타입은 capture와 무관하게 `closure.closure<S>` 하나이고, capture마다 다른
+layout은 저장 표현에만 있다.
+
+#### Shared IR 표현
+
+- `closure.new`는 entry 함수 목록과 capture 값을 순서대로 받아 closure를 만든다.
+  Entry 함수 목록은 [convention table](#convention-entry)의 순서를 따르는 셋이다.
+  같은 목록을 가진 `closure.new`들은 convention table 하나를 공유한다.
+  Capture 목록은 비어 있을 수 있다. Environment를 따로 받지 않는다.
+- Entry 함수의 environment 입력은 그 closure 자신이다. 입력의 타입은
+  `closure.new` 결과의 closure 타입이고, 위치는 그 entry의 바깥 convention이 정한
+  environment index다. 이 입력의 ownership 계약은 다른 물리 입력과 같다
+  ([출구에서 확정되는 물리 계약](abi-boundary.md#출구에서-확정되는-물리-계약)).
+- Entry 함수는 environment 입력에서 capture를 `closure.unpack`으로만 읽는다.
+  `closure.unpack %self`의 결과 타입 목록은 capture 타입 목록이며, entry 함수를
+  참조하는 모든 `closure.new`의 operand 타입 목록과 정확히 같아야 한다. Whole-IR
+  검증은 이 일치를 entry 함수와 그 참조에서 확인하며 struct 이름이나 필드 모양으로
+  대신하지 않는다. Capture가 없는 entry 함수는 `closure.unpack`을 갖지 않는다.
+- `closure.entry`는 closure의 convention table에서 convention 하나의 entry 함수
+  참조를 읽는다. Closure 호출은 자기 convention의 entry를 읽어 호출하고
+  closure 값 자체를 environment 입력으로 넘긴다. Environment를 따로 꺼내는
+  projection은 없다.
+- Lambda lifting, CPS continuation(`Done`, `Dispatch`, resume), `func_ref` entry,
+  target 진입 bridge가 만드는 frame closure를 포함한 모든 closure 생성은
+  `closure.new` 하나로 표현한다. Compiler가 만드는 closure도 같은 convention entry 규칙을
+  따르며, 한 convention으로만 불리는 closure는 그 convention과 더 강한 convention의
+  entry만 의미가 있다. 여러
+  closure가 공유하는 가변 상태는 managed cell 참조를 capture해서 표현하며,
+  closure의 필드는 생성 뒤 바뀌지 않는다.
+
+#### Layout
+
+Closure 저장 layout은 두 종류다.
+
+- **Closure base**(`layout = "closure"`)는 convention table 필드 하나를 가진다. 모든 closure
+  값의 저장 타입이며, closure를 저장하거나 전달하는 위치(signature, block 인자,
+  `ContinuationFrame<R>`의 필드, evidence runtime의 `Dispatch`)는 이 타입을 쓴다. Capture가
+  없는 closure는 이 layout으로 할당한다.
+- **Closure capture layout**(`layout = "closure_captures"`)은 base의 필드 뒤에
+  capture를 `closure.new`의 순서대로 두고, type 속성 `closure_base`로 그 base를
+  가리킨다. Capture가 하나 이상인 closure는 이 layout으로 할당한다.
+- `closure_base`는 closure 저장 계약이 소유하는 속성이다. `layout`처럼 canonical
+  생성자만 붙이고 interning identity에 참여하며, 필드 타입을 바꾸는 타입 변환은
+  이 속성 안의 base도 같은 변환으로 바꾼다. Capture layout의 앞부분 필드는 base의
+  필드와 타입과 속성이 같다. Type verifier가 이 규칙을 `"closure_captures"` layout에
+  적용한다. 이 속성은 저장 표현만 설명하며, Tribute 소스와 의미적 타입 검사에는
+  subtyping이 없다.
+- Capture layout 값은 변환 없이 base 자리에 놓인다(upcast). Base 값을 capture
+  layout으로 보려면 정확한 결과 타입을 가진 명시적 cast가 필요하며, target이 그
+  cast를 검증하고 물리화한다. Target은 base와 capture layout의 관계를
+  `closure_base`로만 정하고, 필드 모양이 prefix처럼 보인다는 사실에서 추론하지
+  않는다.
+- Capture layout의 identity는 base와 capture 필드 타입 목록이다. Base와 capture
+  타입 목록이 같은 두 closure는 같은 layout을 쓴다. Base와 capture layout은 이름
+  없는 [literal layout](#adtstruct-nominal-layout-type)이다.
+- Convention table 필드의 타입은 경계 안에서 `tribute_rt.convention_table_ref`이고,
+  target이 자기 정적 table 참조 표현으로 바꾼다. 이 필드는 managed 참조가 아니며
+  해제하지 않는다. Target은 closure의 callable type `S`마다 base를
+  정한다. 모든 `S`에 base 하나를 쓸 수도 있고 `S`마다 다른 base를 둘 수도 있다.
+  `S`마다 base를 두고 entry를 typed 함수 참조로 표현하면, entry 함수의 environment
+  입력이 다시 그 base이므로 base와 entry 함수 타입은 서로를 가리킨다. 이 재귀는
+  base를 [식별 타입](ir.md#식별-타입)인 nominal layout으로 두고 그 키로 끊는다.
+- Capture layout의 `closure_base`는 `closure.new` 결과 타입의 `S`에서 고른 base다.
+
+#### Storage 확정
+
+[Representation/ABI 경계](abi-boundary.md#representationabi-경계)의
+closure operation lowering과
+storage 확정은 다음 변환을 함께 적용한다.
+
+- `closure.new`는 convention table 참조와 capture를 필드로 가진 할당 하나가 된다.
+  Capture가 있으면 결과는 capture layout에서 base로의 upcast이고, 없으면 base
+  할당 그대로다. Table 참조는 entry 함수 목록을 담은
+  `tribute_rt.convention_table`이 만든다.
+- `closure.entry`는 base의 convention table 필드를 읽고 그 table에서
+  `tribute_rt.convention_entry`로 convention의 entry를 읽는 일이 된다. 간접 호출은
+  closure 필드 하나와 table 원소 하나를 읽는다.
+- 두 `tribute_rt` operation은 경계 출구를 지나며, target 단계가 convention table을 entry
+  함수 목록마다 정적 data 하나로 한 번 만든다.
+- `closure.unpack`은 environment 입력을 base에서 정확한 capture layout으로 바꾸는
+  cast 하나와 capture 필드 읽기가 된다. 이 cast는 위의 복원 규칙을 따르며,
+  Wasm에서는 `ref.cast`, native에서는 pointer 그대로다.
+- `closure.closure<S>`는 모든 type-bearing surface에서 `S`의 base가 된다.
+- Closure 값이 일반 reference erasure 자리(boxed source value, effect payload 등)를
+  지날 수 있지만, 거기서 closure로 돌아오는 cast는 exact base를 결과 타입으로
+  명시한다.
+  Closure를 저장하는 compiler 소유 layout의 필드는 erased reference가 아니라 base를
+  쓴다.
+
 ## `adt`
 
 `adt.*`는 target에 독립적인 product, sum, array, reference, literal
 operation을 나타낸다.
 
-`adt.typeref`는 nominal managed reference type이다. 유효한 값은 이 type
-자체로 managed이며 pointer provenance로 managed 여부를 다시 판정하지 않는다.
-`adt.ref_null`은 정확히 지정한 `adt.typeref`의 null inhabitant이고, null에
-대한 retain/release는 no-op이다. `adt.ref_cast`는 확인된 같은 nominal
-identity의 managed reference 사이에서만 허용한다.
+[Nominal 값 타입](#nominal-값-타입)은 managed reference type이며, `adt.ref_null`,
+`adt.ref_cast`의 계약은 [`adt` dialect 선언](../crates/tribute-ir/src/dialect/adt.rs)이
+정한다. `core.ptr`는 항상 unmanaged다. Raw pointer, allocator result, code
+address, Evidence, borrowed buffer와 이를 통과하는 cast chain은 nominal 값 타입이
+될 수 없다. Managed 여부에 관한 이 규칙은 typed frontend 경계에서 reachable
+IR을 바꾸기 전에 검사한다.
 
-`core.ptr`는 항상 unmanaged다. Raw pointer, allocator result, code address,
-Evidence, borrowed buffer와 이를 통과하는 cast chain은 `adt.typeref`가 될 수
-없다. 위 두 문단의 규칙은 typed frontend 경계에서 reachable IR을 바꾸기 전에
-검사한다.
-
-Dynamic `tribute_rt.anyref`에서 `adt.typeref`로 복원하는 명시적인
+Dynamic `tribute_rt.anyref`에서 nominal 값 타입으로 복원하는 명시적인
 `core.unrealized_conversion_cast`는 generic cleanup에서 no-op으로 소거하지
 않는다. Nominal reference의 정확한 결과 타입은 target 변환까지 보존한다.
 Native는 이를 pointer 표현으로 물리화하고 Wasm은 concrete `ref.cast`를
 생성한다. 이 규칙은 일반 `adt.struct` 복원이나 nominal provenance 검증을
 바꾸지 않는다.
 
+### `adt.struct` nominal layout type
+
+`adt.struct`는 struct layout이다. 필드 타입의 위치 목록을 가지며 전용 textual
+문법을 쓴다. 필드 이름은 layout이 아니라 source 선언의
+[nominal 선언](#nominal-선언)이 소유하며, 필드는 위치로만 가리킨다.
+
+이름이 있는 layout은 nominal이고, 이름이 없는 layout은 literal이다(LLVM의
+identified struct와 literal struct). Nominal layout은
+[식별 타입](ir.md#식별-타입)이며 식별자는 이름이다. 이름은 식별자 여부와 상관없이
+항상 따옴표 문자열로 쓴다. Struct 이름은 타입 이름공간의 이름이며 symbol table의
+정의가 아니므로 `@`를 붙이지 않는다.
+
+```text
+adt.struct<"Point", (core.i32, core.i32)>
+adt.struct<"Node", (core.i32 {k = "v"}, adt.struct<"Node">)>
+adt.struct<"Empty", ()>
+adt.struct<"geo::Point", (core.f64, core.f64)>
+adt.struct<"Point">
+adt.struct<"Callback"[row(@"<State(Int)>")]>
+adt.struct<(core.ptr), {layout = "closure"}>
+adt.struct<(core.ptr, core.i32),
+  {layout = "closure_captures",
+   closure_base = adt.struct<(core.ptr), {layout = "closure"}>}>
+```
+
+- Literal layout의 저장 표현은 다음과 같다. 필드 타입은 `params`에 선언 순서대로
+  둔다. 필드 하나의 속성은 그 필드의
+  [매개변수 속성](ir.md#타입-매개변수-속성)이며, textual form은 필드 타입 뒤에
+  쓴다.
+- Nominal layout의 키는 매개변수 없이 type 속성만 가진다. Struct 이름인 `name`
+  (문자열), row binder 수인 `row_params`, continuation frame의 결과 타입 같은 그
+  밖의 키 속성이다. [몸체](ir.md#식별-타입)는 같은 필드와 필드 속성을 가진 속성
+  없는 literal `adt.struct`다. 필드 접근과 layout 계산은 몸체의 필드를 읽는다.
+- Nominal layout은 source가 선언한 struct, compiler가 만든
+  [tuple layout](#compiler-generated-tuple-layout), continuation frame처럼 값이
+  nominal 타입으로 가리키는 layout이다. 그 값의 타입은
+  [nominal 값 타입](#nominal-값-타입)이다.
+- Literal layout은 nominal 타입으로 가리킬 일이 없는 compiler 저장 layout이다. Closure
+  저장, list node, ability payload, completion cell 같은 layout이며, 정체는 필드
+  타입과 type 속성뿐이다. 필드가 같은 두 literal layout은 같은 타입이다. Compiler
+  소유 layout은 이름이 아니라 [`layout`](ir.md#runtime-layout-식별자) 속성으로
+  식별한다.
+- 필드가 없는 struct는 매개변수가 없는 literal이거나 그런 literal을 몸체로 가진
+  nominal layout이다. 필드 목록을 담는 별도 type 속성은 없다. Type verifier는
+  이름 있는 `adt.struct`의 매개변수와 이름 없는 `adt.struct`의 `row_params`를
+  거부한다.
+- Textual form은 키를 `"이름"`과 binder, `<…>` 안 마지막 원소인 나머지 키
+  속성으로 쓰고, 몸체를 쓰는 자리에서는 이름 뒤에 몸체의 필드 목록을 쓴다.
+  `adt.struct<"Point">`는 키만 쓴 것이다. Type 속성의 `name`, `row_params`,
+  `param_attrs`는 전용 문법이 소유하며 type 속성 dictionary에는 쓰지 않는다.
+  Literal layout은 필드 목록과 `layout` 같은 type 속성을 쓴다.
+- Literal layout의 필드 타입은 매개변수이므로 일반 타입 순회와 변환이 그대로
+  도달한다. Nominal layout의 필드는 몸체에 있으므로, 필드 타입을 바꾸는 변환은
+  아래 규칙으로 새 키를 만든다. 필드 수를 유지하는 변환은 필드 속성을 위치 그대로
+  둔다.
+- 재귀 참조는 몸체가 자기 키를 담아 표현한다. 몸체는 정체에 들어가지 않으므로
+  재귀는 [식별 타입](ir.md#식별-타입)의 키에서 끝난다.
+- Row 매개변수를 가진 선언의 layout은 type 속성 `row_params`를 가지며, 필드 type의
+  tail은 그 binder의 index다([Nominal row 인자](#nominal-row-인자)). Textual
+  form은 binder를 이름 바로 뒤에 쓴다: `adt.struct<"Callback"['a0], (...)>`.
+- 이름도 매개변수도 없이 `def`와 `row_args`만 가진 `adt.struct`는 row 인스턴스다.
+  [Nominal 값 타입](#nominal-값-타입)에서 정한다.
+
+#### Nominal layout 변환
+
+몸체는 키마다 한 번만 묶이므로, 필드 타입을 바꾸는 변환은 바뀌는 layout마다 새
+키를 만든다. `adt.struct`와 [`adt.enum`](#adtenum-nominal-layout-type)에 같은
+규칙을 적용하며, `adt` dialect가 이 규칙을 하나의 helper로 소유하고 layout을
+변환하는 pass가 함께 쓴다.
+
+- 변환은 module과 게시된 alias가 닿는 nominal layout을 모두 본다. 키 속성이
+  바뀌거나 몸체의 필드 타입이 바뀌는 layout, 그리고 키나 몸체가 그런 layout의 키나
+  row 인스턴스를 담는 layout이 바뀐다. 나머지 layout은 키와 몸체를 그대로 둔다.
+- 바뀌는 layout의 새 키는 변환한 키 속성이다. 키 속성이 그대로이면 새 키의 이름은
+  옛 이름 뒤에 `$`와 변환의 tag를 붙인 것이다(`"Point$abi"`).
+- 새 키를 모두 정한 뒤에 몸체를 변환해 묶고, 옛 layout을 가리키던 alias를 새 키로
+  다시 게시한다.
+- 이름에서 tag를 떼어 원래 이름을 되찾지 않는다. Source 이름이 필요한 단계는
+  [nominal 선언](#nominal-선언)에서 읽는다.
+- [Compiler-generated tuple layout](#compiler-generated-tuple-layout)의 이름은
+  원소에서 정해지므로 tuple은 위 두 규칙의 예외다. 원소가 바뀐 tuple layout의 새
+  키는 변환한 원소로 이름 함수가 다시 계산한 이름이며 tag를 붙이지 않는다.
+  그래서 원소가 담은 바뀌는 layout의 새 키를 먼저 정한 뒤에 tuple의 새 키를
+  정한다.
+
+#### Nominal 수준과 structural 수준
+
+Struct 이름은 IR에서 nominal layout을 해석하는 단계까지만 의미를 가진다.
+Ownership 계획, ABI 검증, frontend의 record pattern 해석이 여기에 속한다. 그 아래의 target lowering은
+필드의 물리 표현과 순서만 사용한다. 이름이 필요한 runtime 동작(해제, 값 출력,
+variant 판별)은 [runtime 타입 descriptor](runtime-types.md)가 맡는다. Nominal
+layout을 마지막으로 해석하는 target 경계가 할당에 descriptor 번호를 새긴다.
+
+저수준 struct 타입이 갖는 identity는 runtime 동작이 달라지는 경우로 한정한다.
+Layout과 runtime 동작이 같은 두 소스 타입은 같은 저수준 struct를 쓰고
+descriptor로만 구별된다.
+
+- Native는 nominal layout을 마지막으로 해석하는 경계에서 struct field 접근의
+  `adt.struct`를 이름 없는 `mem.struct<T...>`로 내린다. `mem.struct`는 필드 타입만
+  갖고 자연 정렬 memory layout을 뜻한다. 필드 타입은 target 표현이며, 해제 동작이
+  다른 managed 참조(`tribute_rt.anyref`)와 unmanaged 포인터(`core.ptr`)는 크기가
+  같아도 구분한다. 할당이 해제하는 필드가 managed 참조이며, 이 판정은 ownership
+  계획의 것이고 물리 타입에서 다시 유도하지 않는다. `mem.struct`의 field offset과
+  크기는 같은 nominal layout에서 계산한 할당 크기와 일치한다.
+- 할당은 descriptor를 nominal layout 타입으로 찾으므로 RC header를 새기는 단계가
+  nominal `adt.struct`의 마지막 사용처다. Field offset 계산은 타입 변환 없이
+  `mem.struct`만 읽고, field 접근이 `clif.load`와 `clif.store`의 offset이 될 때
+  `mem.struct`도 사라진다. Cranelift에는 aggregate 타입이 없다.
+- Wasm은 nominal layout을 마지막으로 읽는 `adt_to_wasm` 뒤에 `adt.struct`를 이름
+  없는 `wasm_gc.struct<T...>`로 바꾼다. 이 치환은 함수 signature와 block 인자를
+  포함한 모듈 전체에 적용되므로 모든 위치가 같은 타입을 가진다. Variant는 처음부터
+  자기 필드의 `wasm_gc.struct`로 낮춘다. 필드 표현이 같은 struct와 variant는 같은
+  GC 타입이며, 첫 필드의 descriptor가 runtime identity를 맡는다. Compiler 소유 layout은
+  [`layout`](ir.md#runtime-layout-식별자)으로 식별한다.
+- 저수준 struct는 재귀하지 않는다. 재귀 참조는 이미 native pointer나 Wasm 추상
+  reference로 끊겨 있다.
+- 두 target 모두 [`adt.enum`](#adtenum-nominal-layout-type)의 variant 객체를 자기
+  필드만 가진 저수준 struct로 두고, 어느 variant인지는 값의
+  [descriptor](runtime-types.md#variant-판별)로 판별한다. Native에서 필드는 payload의
+  offset 0부터 자연 정렬로 놓이고, variant field 접근은 struct field 접근과 같이 그
+  variant의 `mem.struct`를 읽는다. Variant 객체는 자기 필드의 크기로 할당하므로
+  enum 타입의 값은 하나의 정적 할당 크기를 갖지 않는다. 그 값의 해제 크기는 값의
+  descriptor가 정한다.
+
+### `adt.enum` nominal layout type
+
+`adt.enum`은 nominal enum layout이다. 이름과 variant의 위치 목록을 가지며 전용
+textual 문법을 쓴다. Variant 이름과 필드 이름은 source 선언의
+[nominal 선언](#nominal-선언)이 소유한다. 이름 표기 규칙은
+`adt.struct`와 같다. 이름 있는 `adt.enum`은 `adt.struct`의 nominal layout처럼
+이름을 식별자로 하는 [식별 타입](ir.md#식별-타입)이고, 이름 없는 `adt.enum`은 그
+몸체로만 쓰는 literal이다.
+
+```text
+adt.enum<"Option", [(), (T)]>
+adt.enum<"List", [(), (core.i32, adt.enum<"List">)]>
+adt.enum<"geo::Shape", [(), (core.f64, core.f64 {k = 1})], {k = "x"}>
+adt.enum<"Never", []>
+adt.enum<"Option">
+adt.enum<[(), (core.i32)]>
+```
+
+- Variant는 괄호로 감싼 필드 타입 목록이다. 필드가 없어도 괄호를 쓴다. 필드 타입
+  뒤에 그 필드의 속성 dictionary가 뒤따를 수 있다.
+- Literal `adt.enum`의 저장 표현은 다음과 같다. Variant 하나가 타입 매개변수
+  하나이며 선언 순서대로 놓인다. Variant는 `adt.variant` 타입이고, 그 `params`가
+  필드 타입이다. 필드의 속성은 그 필드의
+  [매개변수 속성](ir.md#타입-매개변수-속성)이다. 필드가 같은 두 variant는 같은
+  `adt.variant` 타입이며, variant는 위치로만 구별한다. 매개변수가 없으면
+  variant가 없는 enum이다. Variant 목록을 담는 별도 type 속성은 없다.
+- 이름 있는 `adt.enum`의 키와 몸체는 `adt.struct`의 nominal layout과 같다. 키는
+  매개변수 없이 `name`, `row_params`와 그 밖의 키 속성을 가지며, 몸체는 속성 없는
+  literal `adt.enum`이다. 이름 없는 `adt.enum`은 type 속성을 갖지 않는다. Type
+  verifier가 이 규칙을 모든 interned `adt.enum`에 적용한다.
+- Textual form은 `adt.struct`와 같이 키를 쓰고, 몸체를 쓰는 자리에서는 이름 뒤에
+  variant 목록을 쓴다. Type 속성의 `name`과 `row_params`는 전용 문법이 소유하며
+  속성 dictionary에는 쓰지 않는다. 나머지 키 속성은 `<…>` 안 마지막 원소로 둔다.
+- 필드 타입을 바꾸는 변환은
+  [nominal layout 변환](#nominal-layout-변환) 규칙을 따른다.
+- Variant 매개변수는 [매개변수 속성](ir.md#타입-매개변수-속성)을 갖지 않는다. 전용
+  문법에 그것을 쓸 자리가 없으므로 `adt.enum`의 `param_attrs`는 type verifier가
+  거부한다. 필드의 속성은 그 variant(`adt.variant`)의 매개변수 속성이다.
+- `adt.variant`는 literal `adt.enum`의 매개변수로만 쓴다. 값의 타입이나 연산의
+  타입 속성이 되지 않으며, 연산은 이름 있는 enum 타입과 선언 순서의 variant
+  위치(`tag`)로 variant를 가리킨다. 위치는 `adt.variant_tag`가 내는 값과 같다.
+- 재귀 참조는 `adt.struct`처럼 몸체가 자기 키를 담아 표현한다.
+- Row 매개변수를 가진 선언의 layout은 `adt.struct`와 같이 `row_params`를 가지며,
+  binder를 이름 바로 뒤에 쓴다: `adt.enum<"Step"['a0], [...]>`.
+
+### Nominal 값 타입
+
+Nominal layout의 값은 managed 참조이며, 그 타입은 layout을 가리키는 nominal 값
+타입이다. 값이 있는 위치(operation 결과와 피연산자, block 인자, 함수 signature,
+다른 layout의 필드)는 이 타입을 쓴다.
+
+```text
+adt.struct<"Point">
+adt.enum<"Shape">
+adt.struct<"Callback"[row(@"<State(Int)>")]>
+adt.enum<"Step"[row(| 'a0)]>
+```
+
+- Row 매개변수가 없는 layout의 값 타입은 layout의 키 자체다.
+- Row 매개변수를 가진 layout의 값 타입은 그 layout의 row 인스턴스다. Row
+  인스턴스는 이름과 매개변수 없이 type 속성 `def`(layout의 키)와 `row_args`(row
+  매개변수마다 row 하나)를 가진, 같은 종류의 `adt.struct` 또는 `adt.enum`이다. 식별
+  타입이 아니며 내용으로 정체가 정해진다. `row_args`의 수는 `def`의 `row_params`와
+  같다. Row 매개변수를 가진 키를 그대로 값 타입으로 쓰지 않는다.
+- `row_args`의 원소는 선언 순서의 row 매개변수마다 callable의 `ability_row`와 같은
+  형식의 row 하나다. Tail은 그 타입을 쓴 정의의 binder를 가리키고, layout 안에서는
+  그 layout의 binder를 가리킨다. Row 인자는 타입의 정체에 들어가므로, row 인자만 다른
+  두 row 인스턴스는 한 layout의 다른 타입이다.
+- Textual form은 키의 이름 뒤에 row 인자를 쓴다: `adt.struct<"Callback"[row(..)]>`.
+  Binder 목록(`['a0]`)과 달리 원소가 `row(`로 시작하며, 빈 row도 `row()`로 생략하지
+  않고 쓴다. 이 문법으로 쓸 수 없는 속성 값은 일반 형식으로 출력한다. Parser는
+  이름과 row 인자의 수로 키를 만들어 `def`로 삼는다. Row 인스턴스는 이름을 alias로
+  제안하지 않으며, alias 안의 tail은
+  [다른 type alias](#사용자-정의-어셈블리-형식)에서처럼 그 alias를 쓴 정의의
+  binder를 가리킨다.
+- 값 타입이 가리키는 layout은 키 자체이거나 row 인스턴스의 `def`다. 필드와 variant의
+  타입은 그 layout에서 읽고, row 인스턴스이면 layout binder를 `row_args`로
+  치환한다([Nominal row 인자](#nominal-row-인자)).
+- Nominal 값 타입은 이름으로 다른 layout을 찾지 않는다. Compiler가 아는 layout의
+  값 타입(evidence marker 등)은 [`tribute.types`](#tributetypes)에서 키를 읽는다.
+
+### Nominal 선언
+
+Source가 선언한 struct와 enum은 각각 module 최상위의 선언 operation 하나를 가진다.
+선언은 source 이름을 소유하며, 이름이 필요한 단계는 layout 타입이 아니라 선언에서
+이름을 읽는다. LLVM의 debug metadata가 source 이름을 타입과 따로 두는 것과 같다.
+
+```text
+adt.struct_decl "Point" !Point ["x", "y"]
+adt.enum_decl "Shape" !Shape ["Dot", "Rect"]
+```
+
+- `adt.struct_decl`은 struct의 source 이름과 필드 이름을, `adt.enum_decl`은
+  enum의 source 이름과 variant 이름을 선언 순서대로 담는다. 이름 목록의 수는
+  layout의 필드 수, variant 수와 같다. Variant의 필드 이름은 담지 않는다.
+- Source 이름은 출력을 위한 표기다. 특수화되지 않은 선언은 식별 경로 그대로
+  쓰고(`"std::io::ReadLineResult"`), 특수화된 선언은 layout 이름의 mangling 대신
+  식별 경로에 타입 인자를 source 문법으로 붙여 쓴다(`"pkg::Option(Nat)"`).
+- 선언은 이름 붙이는 layout을 type 속성 `type`으로 가리킨다. 선언과 layout의
+  대응은 이 타입의 정체이며, layout의 `name` 문자열을 비교해 찾지 않는다. 필드와
+  variant의 타입은 layout이 소유한다. 텍스트 형식은 source 이름, layout 타입,
+  이름 목록 순서로 쓰며, 이름 목록은 문자열 list 속성의 일반 문법이다. 이름은
+  layout 이름처럼 식별자 여부와 상관없이 항상 따옴표 문자열이다.
+- Layout을 변환하는 pass는 operation 속성 안의 타입을 변환하듯 선언의 `type`도
+  변환한다. 그래서 선언은 변환된 layout을 가리키며, 같은 layout을 `type`으로 쓰는
+  operation과 일치한다. 변환이 layout 이름에 tag를 붙여도
+  ([nominal layout 변환](#nominal-layout-변환)) 선언의 source 이름은 그대로다.
+- 선언이 생긴 source 위치가 필요한 단계는 선언의 `tribute.definition` 속성을
+  읽는다.
+- Frontend는 nominal layout을 게시할 때 그 선언을 함께 내보낸다. 특수화된 enum은
+  인스턴스마다 layout과 선언을 가진다. Compiler가 만든 layout(closure 저장,
+  continuation frame, tuple layout 등)은 선언이 없다.
+- Variant 연산은 이름이 아니라 위치로 variant를 가리킨다. Compiler가 이름으로 아는
+  compiler 소유 variant(문자열 literal이 만드는 `String`의 `Leaf`, evidence의
+  `Option`의 `Some`, `std::io::ReadLineResult`의 각 variant)를 만드는 pass는 그
+  위치를 선언에서 이름으로 찾는다.
+- Native RTTI 생성은 struct·enum의 이름, struct의 필드 이름, variant 이름을 선언에서
+  읽는다([RTTI Table](rc.md#rtti-table)). 선언이 없는 layout의 레코드는 위치
+  번호(`"0"`, `"1"`, ...)를 필드와 variant의 이름으로 쓰고, 레코드 이름은 layout의
+  이름이다. 이름이 없는 literal layout이면 `layout` 속성 값, 그것도 없으면
+  `"struct"`다. 선언은
+  값의 의미를 바꾸지 않으며, `adt` operation을 내리는 target
+  pass가 지운다.
+
 ### `adt` 배열
 
 `adt.array<E>`는 원소 타입 `E`의 값을 순서대로 담는 배열 object에 대한 managed
-참조다. `E`는 scalar, pointer, managed 참조 중 하나이며 원소 하나는 machine 값
-하나다. Struct, variant, closure 같은 aggregate는 그 object에 대한 managed
-참조로 담고 inline으로 펼치지 않는다.
+참조이며, 원소가 될 수 있는 타입은
+[`adt` dialect 선언](../crates/tribute-ir/src/dialect/adt.rs)이 정한다.
 
 `core.array<E>`는 이와 다른 unmanaged linear array다. 연속된 memory에 놓인 `E`
 값의 나열일 뿐 object가 아니며, 소유권이나 회수 방식을 갖지 않는다. `adt` 배열
@@ -825,9 +1076,7 @@ operation은 `core.array`를 받지 않으며, 어느 target도 `core.array`를 
 배열을 만드는 operation은 `adt.array_new`, `adt.array_of`, `adt.array_splice`
 셋이며, 각각 결과 배열의 원소를 정하는 방법이 하나로 고정되어 있다. Operand
 개수나 모양으로 operation의 뜻을 고르지 않는다. 각 operation의 결과와 전제는
-[`adt` dialect 선언](../crates/tribute-ir/src/dialect/adt.rs)이 정한다. 세
-operation의 결과 타입은 `type` 속성의 `adt.array<E>`이고, `initial`과
-`elements`는 `E` 타입이다. `adt.array_splice`의 `source`는 결과와 같은 타입이다.
+그 선언이 정한다.
 
 `adt`의 배열 operation은 target이 객체를 회수하는 방식을 가정하지 않는다.
 Native RC가 배열 operation에 두는 ownership 규칙과 제자리 쓰기의 순환 제약은
@@ -851,14 +1100,9 @@ trap이다.
 쓴다. 이 operation은 element/result type을 갖지만 variant tag, node field
 index, allocation size, target layout metadata는 갖지 않는다.
 
-`list.prepend`는 의미상 persistent다. 새 sequence를 반환하며 tail을 변경하지
-않는다. Shared lowering은 literal을 만들 때 모든 원소를 왼쪽에서 오른쪽으로
+각 operation의 계약은 [`list` dialect 선언](../crates/tribute-ir/src/dialect/list.rs)이
+정한다. Shared lowering은 literal을 만들 때 모든 원소를 왼쪽에서 오른쪽으로
 먼저 평가한 뒤 값의 역순으로 `list.prepend`를 적용할 수 있다.
-
-`list.head`와 `list.tail`은 입력이 비어 있지 않다는 전제를 갖는 내부 관찰
-operation이다. Compiler가 생성한 사용은 둘 중 하나를 실행하기 전에 non-empty를
-확립해야 한다. 전제를 어기면 backend는 trap해야 하며, type 기본값 head, null
-tail을 비롯한 어떤 fallback 값도 반환하지 않는다.
 
 Package `std`의 public `List::prepend(value, tail)` wrapper는 registry로
 검증된 private compiler intrinsic에 위임하고, 그 호출은 같은 `list.prepend`로
@@ -879,18 +1123,20 @@ Source-logical List 패턴의 `list.head` 결과 타입은 `element_type`과 같
 List의 logical representation은 compiler-owned nominal identity로 선택한다.
 동명 source ADT의 등록은 이 선택을 바꾸지 않는다. 현재 lowering이 사용하는
 `tribute_rt.anyref`는 표현상의 선택이며 List의 semantic identity를 대신하지
-않는다. Source nominal의 `adt.typeref`와 layout은 동일한 해석된 선언 및
+않는다. Source nominal의 값 타입과 layout은 동일한 해석된 선언 및
 specialization에 대응해야 한다.
 
 ## Nominal layout의 게시
 
-Source-logical frontend는 nominal layout을 생성할 때 실제 `adt.struct` 또는
-`adt.enum` 타입을 normalized nominal symbol의 IR type alias로 게시한다.
-`adt.typeref`의 `name`, layout의 `name`(둘 다 문자열), 게시된 alias의 이름은
-텍스트가 일치해야 한다.
+Source-logical frontend는 nominal layout마다 몸체 없는 키를 먼저 만들고, 필드
+타입을 다 만든 뒤 그 키에 몸체를 묶는다. 그래서 필드는 재귀나 전방 참조인
+layout도 그 키나 [row 인스턴스](#nominal-값-타입)로 가리킨다. 키는
+normalized nominal symbol의 IR type alias로 게시하며, layout의 `name`(문자열)과
+게시된 alias의 이름은 텍스트가 일치해야 한다. Layout이
+[변환](#nominal-layout-변환)으로 tag 붙은 새 키를 가지면 alias가 새 키를 가리킨다.
 생성 연산 없이 signature에만 등장하는 특수화도 같은 계약을 따르며, 필드에서
-참조하는 compiler-generated nominal tuple layout도 게시한다. Frontend 내부
-type map이나 type interner에만 존재하는 layout은 게시된 정의가 아니다.
+참조하는 compiler-generated nominal tuple layout도 게시한다. 몸체가 묶이지 않은
+키는 정의가 아니다.
 
 <!-- markdownlint-disable-next-line MD033 -->
 <a id="compiler-generated-tuple-layout"></a>
@@ -901,11 +1147,12 @@ Compiler-generated tuple layout의 이름은 원소의 logical type에서 정해
 layout을 같은 함수로 다시 만든다. 이 함수는 IR 계층이 소유하며 frontend와
 pass가 함께 쓴다.
 
-Row를 버리는 CPS legalization도 원소를 변환한 tuple layout을 같은 함수로 다시
-만들고, 그 이름을 가리키는 typeref와 게시된 alias를 새 이름으로 바꾼다. Row만
-다른 tuple layout은 legalization 뒤에 하나가 된다. Nominal layout의 필드
-type과, row 인자로 치환한 그 필드 type을 쓰는 `adt` 생성·접근 operation도 같은
-tuple layout을 가리키게 된다.
+Row를 버리는 CPS legalization은 tuple layout을 변환한 원소로 같은 함수로 다시
+만든다([nominal layout 변환](#nominal-layout-변환)의 tuple 예외). Tuple의 값
+타입과 게시된 alias도 새 이름으로 바꾼다. Row만 다른 tuple layout은
+legalization 뒤에 하나가 된다. Nominal layout의 필드 type과, row 인자로 치환한
+그 필드 type을 쓰는 `adt` 생성·접근 operation도 같은 tuple layout을 가리키게
+된다.
 
 특수화된 enum의 variant 필드 타입은 해당 인스턴스에 함께 치환된 constructor
 스킴에서 가져온다. 원본 generic 스킴이나 생성·패턴 표현식으로 필드 표현을
@@ -915,11 +1162,11 @@ generic layout의 erased 필드는 기존 boxing과 payload recovery를 유지�
 Signature나 필드에서만 참조하는 nominal 인스턴스도 의존 layout을 준비하고
 게시해야 한다. 재귀 참조는 같은 선언 및 타입 인자의 인스턴스를 공유한다.
 
-CPS와 closure 변환은 게시된 alias와 layout 내부 타입을 함께 변환한다.
-Native ownership 검사는 게시된 정의와 IR에서 도달하는 layout만 사용하며,
-각 reachable typeref가 같은 이름의 유일한 layout으로 해석되어야 한다.
-누락되거나 모호한 layout은 거부하고, interner 전체 검색이나 이름의 일부를
-맞추는 방식으로 layout을 추정하지 않는다.
+CPS, closure, target ABI 변환은 layout의 필드 타입을
+[nominal layout 변환](#nominal-layout-변환) 규칙으로 변환하고, 게시된
+alias도 변환한 키로 바꾼다. Native ownership 검사는 IR에서 도달하는 layout만
+사용하며, interner 전체 검색이나 이름의 일부를 맞추는 방식으로 layout을 추정하지
+않는다.
 
 ## `tribute.types`
 

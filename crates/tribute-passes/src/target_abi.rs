@@ -34,9 +34,6 @@ use crate::convention_table::{ConventionTables, EntryLayout};
 const ROOT_MAIN_SYMBOL: &str = "__tribute_main";
 const ROOT_DONE_K_SYMBOL: &str = "__tribute_done_k";
 const ROOT_UNHANDLED_SYMBOL: &str = "__tribute_unhandled";
-const ROOT_COMPLETION_CELL_NAME: &str = "__tribute_completion_cell";
-const ERASED_COMPLETION_CELL_NAME: &str = "__tribute_erased_completion_cell";
-const ROOT_COMPLETION_CELL_VALUE_FIELD: &str = "value";
 const DELIMIT_DONE_PREFIX: &str = "__tribute_delimit_done";
 const DELIMIT_UNHANDLED_PREFIX: &str = "__tribute_delimit_unhandled";
 
@@ -98,7 +95,6 @@ enum ContractPhase {
 #[derive(Clone, Copy)]
 struct RootFrameContract {
     reference: TypeRef,
-    layout: TypeRef,
     done: TypeRef,
     dispatch: TypeRef,
 }
@@ -128,7 +124,12 @@ pub(crate) fn lower_cps_signatures_to_physical(
     validate_root_entry(ctx, module, ContractPhase::Logical)?;
 
     let aliases = ctx.type_aliases().to_vec();
+    let layout_roots: Vec<_> = trunk_ir::walk::reachable_types(ctx, module.op())
+        .into_iter()
+        .chain(aliases.iter().map(|&(_, ty)| ty))
+        .collect();
     let mut converter = PhysicalTypeConverter::new(ctx, never);
+    tribute_ir::dialect::adt::convert::convert_layouts(&mut converter, layout_roots, "abi")?;
     let mut alias_updates = Vec::new();
     let mut function_types = Vec::new();
     let mut result_types = Vec::new();
@@ -340,7 +341,7 @@ fn validate_root_entry(
         .map_err(|_| TargetAbiError::new("target root bridge: main is not func.func"))?;
     let worker_callable = func::FuncSig::from_type_ref(ctx, worker.r#type(ctx))
         .ok_or_else(|| TargetAbiError::new("target root bridge: main is not func.func_sig"))?;
-    let evidence_ty = ability::evidence_adt_type_ref(ctx);
+    let evidence_ty = module_evidence_type(ctx, module)?;
     let worker_params = worker_callable.inputs(ctx);
     if worker_callable.results(ctx) != expected_results
         || worker_params.len() != 2
@@ -457,7 +458,7 @@ fn compose_root_entry_bridge(ctx: &mut IrContext, module: Module) -> Result<(), 
     let inputs = signature.inputs(ctx).to_vec();
     let results = signature.results(ctx).to_vec();
     let nil_ty = core::Nil::params().intern(ctx).as_type_ref();
-    let evidence_ty = ability::evidence_adt_type_ref(ctx);
+    let evidence_ty = module_evidence_type(ctx, module)?;
     let convention = DynConventionBearing::of(ctx, worker_op);
     match (convention, &cps_root) {
         (Some(CallingConvention::Cps), Some(_)) => {}
@@ -589,11 +590,17 @@ fn compose_value_delimiters(ctx: &mut IrContext, module: Module) -> Result<(), T
         return Ok(());
     };
     let operations = collect_ops(ctx, module.op());
-    let evidence_ty = ability::evidence_adt_type_ref(ctx);
     let initials: Vec<_> = operations
         .iter()
         .filter_map(|&op| effect::InitialEvidence::from_op(ctx, op).ok())
         .collect();
+    let has_delimiters = operations
+        .iter()
+        .any(|&op| effect::Delimit::matches(ctx, op));
+    if initials.is_empty() && !has_delimiters {
+        return Ok(());
+    }
+    let evidence_ty = module_evidence_type(ctx, module)?;
     for initial in initials {
         let op = initial.op_ref();
         let location = ctx.op(op).location;
@@ -899,7 +906,6 @@ impl TerminalFunctions {
         };
         ops.push(initial);
         let cell_new = adt::StructNew::operands([ctx.op_result(initial, 0)])
-            .r#type(self.cell_ty)
             .results(self.cell_ty)
             .build(ctx, location);
         ops.push(cell_new.op_ref());
@@ -926,7 +932,6 @@ impl TerminalFunctions {
         let done = member(ctx, done_entries, &[cell_new.result(ctx)], self.frame.done);
         let dispatch = member(ctx, dispatch_entries, &[], self.frame.dispatch);
         let frame = adt::StructNew::operands([done, dispatch])
-            .r#type(self.frame.layout)
             .results(self.frame.reference)
             .build(ctx, location);
         ops.push(frame.op_ref());
@@ -973,30 +978,30 @@ fn build_initial_evidence(
     empty.result(ctx)
 }
 
-fn completion_cell_type(ctx: &mut IrContext, value_ty: TypeRef) -> TypeRef {
-    let name = if value_ty == core::Nil::params().intern(ctx).as_type_ref() {
-        ROOT_COMPLETION_CELL_NAME
-    } else {
-        ERASED_COMPLETION_CELL_NAME
-    };
-    adt::Struct::from_fields(
+/// The evidence type of `module`, an array of the marker it publishes.
+fn module_evidence_type(ctx: &mut IrContext, module: Module) -> Result<TypeRef, TargetAbiError> {
+    let marker = tribute_ir::runtime_items::runtime_type(
         ctx,
-        name,
-        [(ROOT_COMPLETION_CELL_VALUE_FIELD, value_ty)],
-        AttributeMap::new(),
+        module,
+        tribute_ir::runtime_items::evidence::MARKER,
     )
-    .as_type_ref()
+    .ok_or_else(|| TargetAbiError::new("target ABI: the module publishes no evidence marker"))?;
+    Ok(adt::Array::params(marker).intern(ctx).as_type_ref())
+}
+
+fn completion_cell_type(ctx: &mut IrContext, value_ty: TypeRef) -> TypeRef {
+    adt::Struct::literal(ctx, [value_ty], AttributeMap::new()).as_type_ref()
 }
 
 /// Recover semantic R only from authenticated callable and nominal frame metadata.
 pub(crate) fn dispatch_answer_type(
     ctx: &mut IrContext,
+    module: Module,
     evidence: ValueRef,
     dispatch: ValueRef,
     resume: ValueRef,
 ) -> Result<TypeRef, TargetAbiError> {
-    let evidence_type = ability::evidence_adt_type_ref(ctx);
-    if ctx.value_ty(evidence) != evidence_type {
+    if !ability::is_evidence_type(ctx, module, ctx.value_ty(evidence)) {
         return Err(TargetAbiError::new(
             "CPS dispatch evidence differs from canonical Evidence type",
         ));
@@ -1072,7 +1077,7 @@ pub(crate) fn validate_dispatch_contracts(
             .get_type("answer_type")
             .ok_or_else(|| TargetAbiError::new("CPS dispatch requires answer_type: Type"))?;
         if !ctx.op_result_types(op).is_empty()
-            || dispatch_answer_type(ctx, *evidence, *dispatch, *resume)? != answer
+            || dispatch_answer_type(ctx, module, *evidence, *dispatch, *resume)? != answer
         {
             return Err(TargetAbiError::new(
                 "CPS dispatch answer_type differs from resume frame R",
@@ -1090,12 +1095,14 @@ fn validate_root_continuation_frame(
     physical_results: &[TypeRef],
     phase: ContractPhase,
 ) -> Result<RootFrameContract, TargetAbiError> {
-    let reference_data = ctx.get_type(frame);
-    if reference_data.name != tribute_ir::dialect::adt::Typeref::NAME {
+    // A frame reference is its layout's key.
+    let Some(layout_struct) =
+        adt::Struct::from_type_ref(ctx, frame).filter(|key| key.is_nominal(ctx))
+    else {
         return Err(TargetAbiError::new(
-            "target root bridge: worker frame must be an exact nominal adt.typeref",
+            "target root bridge: worker frame must be an exact nominal frame reference",
         ));
-    }
+    };
     // Physicalization consumes the frame answer provenance after checking it
     // here; the physical frame's Done input then carries the source result.
     let expected_provenance = (phase == ContractPhase::Logical).then_some(source_result);
@@ -1104,21 +1111,13 @@ fn validate_root_continuation_frame(
             "target root bridge: worker frame result provenance differs from root source result",
         ));
     }
-    let name = ctx.type_attrs(frame).get_str("name").ok_or_else(|| {
-        TargetAbiError::new("target root bridge: worker frame lacks nominal layout identity")
-    })?;
-    let layout = adt::layout_of(ctx, frame).ok_or_else(|| {
-        TargetAbiError::new("target root bridge: worker frame must have an exact nominal layout")
-    })?;
-    let layout_struct = adt::Struct::from_type_ref(ctx, layout)
-        .filter(|layout_struct| layout_struct.name(ctx) == name)
-        .filter(|_| continuation_frame::result_type(ctx, layout) == expected_provenance)
-        .ok_or_else(|| {
-            TargetAbiError::new("target root bridge: worker frame layout provenance is malformed")
-        })?;
+    if ctx.type_body(frame).is_none() {
+        return Err(TargetAbiError::new(
+            "target root bridge: worker frame must have an exact nominal layout",
+        ));
+    }
     // `continuation_frame::layout_type` places Done then Dispatch.
-    let fields: Vec<_> = layout_struct.fields(ctx).collect();
-    let [(_, done), (_, dispatch)] = fields.as_slice() else {
+    let [done, dispatch] = layout_struct.fields(ctx) else {
         return Err(TargetAbiError::new(
             "target root bridge: worker frame layout must contain done then dispatch",
         ));
@@ -1127,7 +1126,6 @@ fn validate_root_continuation_frame(
     validate_root_dispatch_type(ctx, *dispatch, frame, evidence, physical_results)?;
     Ok(RootFrameContract {
         reference: frame,
-        layout,
         done: *done,
         dispatch: *dispatch,
     })
@@ -1940,6 +1938,31 @@ impl<'a> PhysicalTypeConverter<'a> {
     }
 }
 
+impl tribute_ir::dialect::adt::convert::LayoutBlindConversion for PhysicalTypeConverter<'_> {
+    type Error = TargetAbiError;
+
+    fn ctx(&self) -> &IrContext {
+        self.ctx
+    }
+
+    fn ctx_mut(&mut self) -> &mut IrContext {
+        self.ctx
+    }
+
+    fn convert(&mut self, ty: TypeRef) -> Result<TypeRef, Self::Error> {
+        self.convert_embedded(ty)
+    }
+
+    fn fix(&mut self, from: TypeRef, to: TypeRef) {
+        self.embedded.insert(from, to);
+    }
+
+    fn reset(&mut self) {
+        self.embedded.clear();
+        self.callable.clear();
+    }
+}
+
 fn collect_ops(ctx: &IrContext, root: OpRef) -> Vec<OpRef> {
     let mut operations = Vec::new();
     let _ = walk_op::<()>(ctx, root, &mut |op| {
@@ -1953,8 +1976,8 @@ fn collect_ops(ctx: &IrContext, root: OpRef) -> Vec<OpRef> {
 mod tests {
     use super::*;
     use crate::test_support::assert_unchanged_on_error;
+    use crate::test_support::parse_with_evidence_marker;
     use tribute_ir::calling_convention::CALLING_CONVENTION_ATTR;
-    use trunk_ir::parser::parse_test_module;
     use trunk_ir::types::TypeDataBuilder;
 
     fn function(ctx: &IrContext, module: Module, name: &str) -> func::Func {
@@ -1975,17 +1998,17 @@ mod tests {
 
     fn dispatch_fixture(answer_name: &str, frame_name: &str) -> (IrContext, Module, OpRef) {
         let mut ctx = IrContext::new();
-        let module = parse_test_module(
+        let module = parse_with_evidence_marker(
             &mut ctx,
             &format!(
                 r#"core.module @test {{
             !Answer = core.{answer_name}
-            !Evidence = adt.array<adt.typeref<{{name = "std::runtime::evidence::Marker"}}>>
-            !Frame = adt.typeref<{{name = "{frame_name}", tribute.cps_continuation_frame_result = !Answer}}>
+            !Evidence = adt.array<adt.struct<"std::runtime::evidence::Marker">>
+            !Frame = adt.struct<"{frame_name}", {{tribute.cps_continuation_frame_result = !Answer}}>
             !Done = closure.closure<func.func_sig<(!Answer) -> core.never>>
             !Resume = closure.closure<func.func_sig<(!Evidence, !Frame, tribute_rt.anyref) -> core.never>>
             !Dispatch = closure.closure<func.func_sig<(!Evidence, !Resume, core.i32, core.i32, core.i32, tribute_rt.anyref) -> core.never>>
-            !{frame_name} = adt.struct<{frame_name}(done: !Done, dispatch: !Dispatch), {{tribute.cps_continuation_frame_result = !Answer}}>
+            !{frame_name} = adt.struct<"{frame_name}", (!Done, !Dispatch), {{tribute.cps_continuation_frame_result = !Answer}}>
             func.func @run(%ev: !Evidence, %dispatch: !Dispatch, %resume: !Resume, %payload: tribute_rt.anyref) -> core.never attributes {{tribute.calling_convention = "cps"}} {{
                 effect.dispatch_cps @State @get(%payload) [%ev, %dispatch, %resume] -> !Answer
             }}
@@ -2126,11 +2149,10 @@ mod tests {
     #[test]
     fn empty_direct_results_survive_mixed_cps_physicalization() {
         let mut ctx = IrContext::new();
-        let evidence = ability::evidence_adt_type_ref(&mut ctx);
-        let module = parse_test_module(
+        let module = parse_with_evidence_marker(
             &mut ctx,
             r#"core.module @test {
-            !Evidence = adt.array<adt.typeref<{name = "std::runtime::evidence::Marker"}>>
+            !Evidence = adt.array<adt.struct<"std::runtime::evidence::Marker">>
             !direct_closure = closure.closure<func.func_sig<() -> ()>>
             !evidence_closure = closure.closure<func.func_sig<(!Evidence) -> ()>>
             func.func @direct() attributes {tribute.calling_convention = "direct"} { func.return }
@@ -2152,6 +2174,7 @@ mod tests {
             func.func @cps() -> core.never attributes {tribute.calling_convention = "cps"} { func.unreachable }
         }"#,
         );
+        let evidence = crate::test_support::publish_evidence_marker(&mut ctx, module);
         assert_eq!(ctx.type_alias_by_text("Evidence"), Some(evidence));
         let cps = function(&ctx, module, "cps");
         let unchanged: Vec<_> = collect_ops(&ctx, module.op())
@@ -2211,7 +2234,7 @@ mod tests {
     #[test]
     fn physicalizes_dispatch_aware_exact_cps_contracts_only() {
         let mut ctx = IrContext::new();
-        let module = parse_test_module(
+        let module = parse_with_evidence_marker(
             &mut ctx,
             r#"core.module @test {
   !cps = closure.closure<func.func_sig<(core.i32, core.i32, core.i32, core.i32) -> core.never>>
@@ -2262,7 +2285,7 @@ mod tests {
     #[test]
     fn unrelated_type_metadata_never_becomes_an_indirect_signature() {
         let mut ctx = IrContext::new();
-        let module = parse_test_module(
+        let module = parse_with_evidence_marker(
             &mut ctx,
             r#"core.module @test {
   func.func @run(%callee: core.i32, %value: core.i32) -> core.never attributes {tribute.calling_convention = "cps"} {
@@ -2290,7 +2313,7 @@ mod tests {
 
     fn compose_promoted_root() -> (IrContext, Module) {
         let mut ctx = IrContext::new();
-        let module = parse_test_module(
+        let module = parse_with_evidence_marker(
             &mut ctx,
             r#"core.module @test {tribute.entry = @main} {
   func.func @main(%evidence: core.i32, %frame: core.i32) -> core.never attributes {tribute.calling_convention = "cps"} {
@@ -2301,7 +2324,7 @@ mod tests {
         let main = function(&ctx, module, "main");
         let nil = core::Nil::params().intern(&mut ctx).as_type_ref();
         let never = core::Never::params().intern(&mut ctx).as_type_ref();
-        let evidence = ability::evidence_adt_type_ref(&mut ctx);
+        let evidence = crate::test_support::publish_evidence_marker(&mut ctx, module);
         let done_callable = func::func_sig(&mut ctx, [nil], [never]).as_type_ref();
         let done = tribute_ir::calling_convention::physical_closure_type(&mut ctx, done_callable);
         let frame_name = "__tribute_continuation_frame_root_nil";
@@ -2328,7 +2351,7 @@ mod tests {
 
     #[test]
     fn promoted_root_uses_typed_completion_and_ordinary_call() {
-        let (ctx, module) = compose_promoted_root();
+        let (mut ctx, module) = compose_promoted_root();
         let wrapper = function(&ctx, module, "main");
         let worker = function(&ctx, module, ROOT_MAIN_SYMBOL);
         let done_k = function(&ctx, module, ROOT_DONE_K_SYMBOL);
@@ -2368,20 +2391,14 @@ mod tests {
         };
         assert_eq!(ctx.value_ty(ctx.op_operands(call)[0]), *worker_evidence);
         assert_eq!(ctx.value_ty(ctx.op_operands(call)[1]), *worker_frame);
-        assert!(ctx.get_type(*worker_frame).name == tribute_ir::dialect::adt::Typeref::NAME);
-        let frame_name = ctx.type_attrs(*worker_frame).get_str("name").unwrap();
-        let frame_layout = ctx
-            .type_alias_by_text(frame_name)
-            .expect("worker frame must retain its exact nominal layout");
-        let fields: Vec<_> = adt::Struct::from_type_ref(&ctx, frame_layout)
-            .expect("frame layout must be a valid adt.struct")
-            .fields(&ctx)
-            .collect();
-        let [(done_name, done_ty), (dispatch_name, dispatch_ty)] = fields.as_slice() else {
+        // The worker frame is its nominal layout's key.
+        let fields = adt::Struct::from_type_ref(&ctx, *worker_frame)
+            .filter(|layout| layout.is_nominal(&ctx))
+            .expect("worker frame must be its exact nominal layout")
+            .fields(&ctx);
+        let [done_ty, dispatch_ty] = fields else {
             panic!("frame must have distinct Done and Dispatch fields");
         };
-        assert_eq!(*done_name, Symbol::new("done"));
-        assert_eq!(*dispatch_name, Symbol::new("dispatch"));
         assert_ne!(*worker_frame, *done_ty);
         assert_ne!(*done_ty, *dispatch_ty);
         assert!(wrapper_ops.iter().any(|op| {
@@ -2399,11 +2416,11 @@ mod tests {
                 .iter()
                 .all(|op| func::TailCall::from_op(&ctx, *op).is_err())
         );
+        let nil_ty = core::Nil::params().intern(&mut ctx).as_type_ref();
+        let root_cell = completion_cell_type(&mut ctx, nil_ty);
         assert!(wrapper_ops.iter().any(|op| {
             adt::StructNew::from_op(&ctx, *op).is_ok()
-                && ctx.op_result_types(*op).first().is_some_and(|ty| {
-                    ctx.type_attrs(*ty).get_str("name") == Some(ROOT_COMPLETION_CELL_NAME)
-                })
+                && ctx.op_result_types(*op).first() == Some(&root_cell)
         }));
         assert!(
             wrapper_ops
@@ -2497,7 +2514,7 @@ mod tests {
     }
 
     const EVIDENCE_DIRECT_MAIN: &str = r#"core.module @test {tribute.entry = @main} {
-  !Evidence = adt.array<adt.typeref<{name = "std::runtime::evidence::Marker"}>>
+  !Evidence = adt.array<adt.struct<"std::runtime::evidence::Marker">>
   func.func @main(%evidence: !Evidence) -> core.nil attributes {tribute.calling_convention = "evidence_direct"} {
     %nil = core.nil_value : core.nil
     func.return %nil
@@ -2511,7 +2528,7 @@ mod tests {
     #[test]
     fn evidence_direct_main_is_bridged_to_parameterless_entry() {
         let mut ctx = IrContext::new();
-        let module = parse_test_module(&mut ctx, EVIDENCE_DIRECT_MAIN);
+        let module = parse_with_evidence_marker(&mut ctx, EVIDENCE_DIRECT_MAIN);
         compose_root_entry_bridge(&mut ctx, module).unwrap();
 
         assert_parameterless_evidence_entry(&ctx, module);
@@ -2526,7 +2543,7 @@ mod tests {
     #[test]
     fn direct_main_is_wrapped_without_inputs() {
         let mut ctx = IrContext::new();
-        let module = parse_test_module(
+        let module = parse_with_evidence_marker(
             &mut ctx,
             r#"core.module @test {tribute.entry = @main} {
   func.func @main() -> core.nil attributes {tribute.calling_convention = "direct"} {
@@ -2571,7 +2588,7 @@ mod tests {
     #[test]
     fn root_bridge_rejects_non_nil_main() {
         let mut ctx = IrContext::new();
-        let module = parse_test_module(
+        let module = parse_with_evidence_marker(
             &mut ctx,
             r#"core.module @test {tribute.entry = @main} {
   func.func @main() -> core.i32 attributes {tribute.calling_convention = "direct"} {
@@ -2587,7 +2604,7 @@ mod tests {
     #[test]
     fn root_bridge_rejects_reserved_symbol_collision() {
         let mut ctx = IrContext::new();
-        let module = parse_test_module(
+        let module = parse_with_evidence_marker(
             &mut ctx,
             &EVIDENCE_DIRECT_MAIN.replace("@caller", "@__tribute_main"),
         );
@@ -2598,7 +2615,7 @@ mod tests {
     #[test]
     fn root_bridge_rejects_an_entry_that_names_no_definition() {
         let mut ctx = IrContext::new();
-        let module = parse_test_module(
+        let module = parse_with_evidence_marker(
             &mut ctx,
             &EVIDENCE_DIRECT_MAIN.replace("tribute.entry = @main", "tribute.entry = @missing"),
         );
@@ -2609,7 +2626,7 @@ mod tests {
     #[test]
     fn root_bridge_consumes_the_entry_reference() {
         let mut ctx = IrContext::new();
-        let module = parse_test_module(&mut ctx, EVIDENCE_DIRECT_MAIN);
+        let module = parse_with_evidence_marker(&mut ctx, EVIDENCE_DIRECT_MAIN);
         compose_root_entry_bridge(&mut ctx, module).unwrap();
         assert!(tribute_ir::metadata::root_entry(&ctx, module.op()).is_none());
     }
@@ -2632,10 +2649,10 @@ mod tests {
                 "result provenance differs from root source result",
             ),
             (true, false, "must have an exact nominal layout"),
-            (true, true, "layout provenance is malformed"),
+            (true, true, "must contain done then dispatch"),
         ] {
             let mut ctx = IrContext::new();
-            let module = parse_test_module(
+            let module = parse_with_evidence_marker(
                 &mut ctx,
                 r#"core.module @test {tribute.entry = @main} {
   func.func @main(%evidence: core.i32, %frame: core.i32) -> core.never attributes {tribute.calling_convention = "cps"} {
@@ -2646,7 +2663,7 @@ mod tests {
             let main = function(&ctx, module, "main");
             let nil = core::Nil::params().intern(&mut ctx).as_type_ref();
             let never = core::Never::params().intern(&mut ctx).as_type_ref();
-            let evidence = ability::evidence_adt_type_ref(&mut ctx);
+            let evidence = crate::test_support::publish_evidence_marker(&mut ctx, module);
             let frame_name = "__tribute_malformed_root_frame";
             let i32_ty = TypeDataBuilder::new("core.i32").intern(&mut ctx);
             let frame = tribute_ir::continuation_frame::ref_type(
@@ -2655,14 +2672,8 @@ mod tests {
                 if frame_result { nil } else { i32_ty },
             );
             if malformed_layout {
-                let wrong = adt::Struct::from_fields::<String>(
-                    &mut ctx,
-                    frame_name,
-                    [],
-                    AttributeMap::new(),
-                )
-                .as_type_ref();
-                ctx.register_type_alias(Symbol::new(frame_name), wrong);
+                let wrong = adt::Struct::literal(&mut ctx, [], AttributeMap::new()).as_type_ref();
+                ctx.bind_type_body(frame, wrong).unwrap();
             }
             let worker = func::func_sig(&mut ctx, [evidence, frame], [never]).as_type_ref();
             ctx.op_attrs_mut(main.op_ref())
@@ -2684,7 +2695,7 @@ mod tests {
     #[test]
     fn parameterized_dispatch_tag_fails_before_bridge_mutation() {
         let mut ctx = IrContext::new();
-        let module = parse_test_module(
+        let module = parse_with_evidence_marker(
             &mut ctx,
             r#"core.module @test {tribute.entry = @main} {
   func.func @main(%evidence: core.i32, %frame: core.i32) -> core.never attributes {tribute.calling_convention = "cps"} {
@@ -2695,7 +2706,7 @@ mod tests {
         let main = function(&ctx, module, "main");
         let nil = core::Nil::params().intern(&mut ctx).as_type_ref();
         let never = core::Never::params().intern(&mut ctx).as_type_ref();
-        let evidence = ability::evidence_adt_type_ref(&mut ctx);
+        let evidence = crate::test_support::publish_evidence_marker(&mut ctx, module);
         let frame_name = "__tribute_parameterized_dispatch_tag";
         let frame = tribute_ir::continuation_frame::ref_type(&mut ctx, frame_name, nil);
         let done = tribute_ir::calling_convention::cps_done_type(&mut ctx, nil);
@@ -2750,7 +2761,7 @@ mod tests {
             ),
         ] {
             let mut ctx = IrContext::new();
-            let module = parse_test_module(&mut ctx, input);
+            let module = parse_with_evidence_marker(&mut ctx, input);
             let error =
                 assert_unchanged_on_error(&mut ctx, module, lower_cps_signatures_to_physical);
 
@@ -2761,7 +2772,7 @@ mod tests {
     #[test]
     fn closure_transfer_convention_is_left_for_closure_lowering() {
         let mut ctx = IrContext::new();
-        let module = parse_test_module(
+        let module = parse_with_evidence_marker(
             &mut ctx,
             r#"core.module @test {
   !callback = closure.closure<func.func_sig<() -> core.i32>>
@@ -2792,11 +2803,11 @@ mod tests {
     #[test]
     fn raw_closure_storage_never_satisfies_a_semantic_direct_transfer() {
         let mut ctx = IrContext::new();
-        let module = parse_test_module(
+        let module = parse_with_evidence_marker(
             &mut ctx,
             r#"core.module @test {
   !semantic = closure.closure<func.func_sig<() -> core.i32>>
-  !_closure = adt.struct<_closure(func_ptr: core.i32, env: tribute_rt.anyref)>
+  !_closure = adt.struct<"_closure", (core.i32, tribute_rt.anyref)>
   func.func @factory(%callback: !semantic) -> core.i32 attributes {tribute.calling_convention = "direct"} {
     func.unreachable
   }
@@ -2814,7 +2825,7 @@ mod tests {
     #[test]
     fn an_entry_function_takes_its_environment_at_its_env_marker() {
         let mut ctx = IrContext::new();
-        let module = parse_test_module(
+        let module = parse_with_evidence_marker(
             &mut ctx,
             r#"core.module @test {
   !Env = closure.closure<func.func_sig<(core.i32, core.i32) -> core.never>>
@@ -2841,7 +2852,7 @@ mod tests {
     #[test]
     fn physicalizes_a_generated_cps_environment_at_its_convention_slot() {
         let mut ctx = IrContext::new();
-        let module = parse_test_module(
+        let module = parse_with_evidence_marker(
             &mut ctx,
             r#"core.module @test {
   !One = closure.closure<func.func_sig<(core.i32) -> core.never>>
@@ -2878,11 +2889,11 @@ mod tests {
     #[test]
     fn a_delimited_body_parameter_is_physicalized_as_cps() {
         let mut ctx = IrContext::new();
-        let module = parse_test_module(
+        let module = parse_with_evidence_marker(
             &mut ctx,
             r#"core.module @test {
-  !Evidence = adt.array<adt.typeref<{name = "std::runtime::evidence::Marker"}>>
-  !Frame = adt.typeref<{name = "frame", tribute.cps_continuation_frame_result = core.i32}>
+  !Evidence = adt.array<adt.struct<"std::runtime::evidence::Marker">>
+  !Frame = adt.struct<"frame", {tribute.cps_continuation_frame_result = core.i32}>
   !Body = closure.closure<func.func_sig<(!Evidence, !Frame) -> core.never>>
   func.func @run(%ev: !Evidence, %body: !Body) -> core.i32 attributes {tribute.calling_convention = "direct"} {
     %answer = effect.delimit %body, %ev : core.i32
@@ -2910,7 +2921,7 @@ mod tests {
     #[test]
     fn an_environment_outside_its_convention_slot_fails_before_mutation() {
         let mut ctx = IrContext::new();
-        let module = parse_test_module(
+        let module = parse_with_evidence_marker(
             &mut ctx,
             r#"core.module @test {
   !One = closure.closure<func.func_sig<(core.i32) -> core.never>>
@@ -2942,7 +2953,7 @@ mod tests {
             ),
         ] {
             let mut ctx = IrContext::new();
-            let module = parse_test_module(
+            let module = parse_with_evidence_marker(
                 &mut ctx,
                 &format!(
                     r#"core.module @test {{
@@ -2965,7 +2976,7 @@ mod tests {
     #[test]
     fn duplicate_environment_provenance_fails_before_mutation() {
         let mut ctx = IrContext::new();
-        let module = parse_test_module(
+        let module = parse_with_evidence_marker(
             &mut ctx,
             r#"core.module @test {
   !Env2 = closure.closure<func.func_sig<() -> core.never>>
@@ -2995,7 +3006,7 @@ mod tests {
     #[test]
     fn malformed_zero_parameter_func_sig_fails_without_panicking() {
         let mut ctx = IrContext::new();
-        let module = parse_test_module(&mut ctx, "core.module @test {}");
+        let module = parse_with_evidence_marker(&mut ctx, "core.module @test {}");
         let malformed = trunk_ir::types::TypeDataBuilder::new("func.func_sig").intern(&mut ctx);
         ctx.op_attrs_mut(module.op())
             .insert("malformed_callable", Attribute::Type(malformed));
@@ -3010,7 +3021,7 @@ mod tests {
     #[test]
     fn already_physical_cps_function_fails_before_target_abi_mutation() {
         let mut ctx = IrContext::new();
-        let module = parse_test_module(
+        let module = parse_with_evidence_marker(
             &mut ctx,
             r#"core.module @test {
   func.func @broken() -> core.never attributes {tribute.calling_convention = "cps"} { func.unreachable }
@@ -3033,7 +3044,7 @@ mod tests {
     #[test]
     fn raw_constant_is_unchanged_and_malformed_tagged_constant_fails_closed() {
         let mut ctx = IrContext::new();
-        let raw = parse_test_module(
+        let raw = parse_with_evidence_marker(
             &mut ctx,
             r#"core.module @test {
   func.func @external(%value: core.i32) -> core.i32
@@ -3050,7 +3061,7 @@ mod tests {
         assert_eq!(raw.op().display(&ctx).to_string(), before);
 
         let mut ctx = IrContext::new();
-        let malformed = parse_test_module(
+        let malformed = parse_with_evidence_marker(
             &mut ctx,
             r#"core.module @test {
   func.func @external(%value: core.i32) -> core.never attributes {tribute.calling_convention = "cps"}
@@ -3069,7 +3080,7 @@ mod tests {
     #[test]
     fn malformed_calling_convention_is_rejected_before_mutation() {
         let mut ctx = IrContext::new();
-        let module = parse_test_module(
+        let module = parse_with_evidence_marker(
             &mut ctx,
             r#"core.module @test {
   func.func @broken() -> core.never attributes {tribute.calling_convention = 9} { func.unreachable }
@@ -3083,7 +3094,7 @@ mod tests {
     #[test]
     fn convention_violations_are_rejected_before_mutation() {
         let mut ctx = IrContext::new();
-        let module = parse_test_module(
+        let module = parse_with_evidence_marker(
             &mut ctx,
             r#"core.module @test {tribute.entry = @main} {
   func.func @main() -> core.nil attributes {tribute.calling_convention = "direct"} {
@@ -3105,7 +3116,7 @@ mod tests {
     #[test]
     fn a_closure_type_made_through_two_conventions_keeps_its_callable() {
         let mut ctx = IrContext::new();
-        let module = parse_test_module(
+        let module = parse_with_evidence_marker(
             &mut ctx,
             r#"core.module @test {tribute.entry = @main} {
   !fn = func.func_sig<(core.i32) -> core.i32>

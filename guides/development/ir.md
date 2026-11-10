@@ -130,8 +130,10 @@ where
   `result`) or `Variadic<C>` / `Values<L>` (accessor `results`).
 - Attribute kinds are Rust types implementing `attr_kind::AttrKind`, resolved
   in the dialect's scope like bounds: primitives (`bool`, `i32`, `i64`, `u32`,
-  `u64`, `f32`, `f64`), `String`, and the markers
-  `attr_kind::{Type, SymbolRef, Bytes}`. A kind defines its schema domain,
+  `u64`, `f32`, `f64`), `String`, the markers
+  `attr_kind::{Type, SymbolRef, Bytes}`, and `core::Index`, a static
+  `core.index` such as a variant's position, read as `u64`. A kind defines
+  its schema domain,
   the values its accessor returns and its builder setter takes, and how a
   declarative format writes and reads its values, so a dialect adds a kind
   by implementing the trait. A kind narrower than its
@@ -248,15 +250,19 @@ where
   the type when it generates aliases; a hand-written `TypeDef` adds it with
   `with_alias_hint`. `#[implements(..)]` on a type registers the wrapper's
   [type interfaces](#type-interfaces).
-- A hand-written `TypeDef` declares an
-  [identified type](../../design/ir.md#식별-타입) with `.identified()`:
-  its data is a key, and `IrContext::bind_type_body` binds its body once,
-  which `IrContext::type_body` reads. Its `TypeAsmFormat` writes the body
-  where `AsmPrinter::identified_body` returns one, and reads a written body
-  with `AsmParser::bind_type_body`; the printer gives every identified type
-  a module reaches an alias, named by its alias hint, so register one that
-  names the key. `validation::validate_type_bodies` rejects an identified
-  type without a body.
+- `#[identified]` on a type requires `trunk_ir::type_def::IdentifiedType`,
+  whose `identifier` reads an instance's identifier; a hand-written
+  `TypeDef` adds it with `with_identifier`. An instance with an identifier
+  is an [identified type](../../design/ir.md#식별-타입), and one without is
+  an ordinary type, so one definition can have both, as LLVM's struct type
+  does. An identified type's data is a key, and
+  `IrContext::bind_type_body` binds its body once, which
+  `IrContext::type_body` reads. Its `TypeAsmFormat` writes the body where
+  `AsmPrinter::identified_body` returns one, and reads a written body with
+  `AsmParser::bind_type_body`. The printer gives every identified type a
+  module reaches an alias named by its identifier, which takes precedence
+  over an alias hint. `validation::validate_type_bodies` rejects an
+  identified type without a body.
 - The function syntax `<(inputs) -> results, {attrs}>` belongs to the
   signature types that register it: their `TypeAsmFormat` calls
   `func::print_signature_type` and `func::parse_signature_type`, which
@@ -368,8 +374,8 @@ fn print(&self, p: &mut OpAsmPrinter<'_>) -> fmt::Result {
 ```
 
 `AsmState` offers `ty`, `attr`, `attr_dict`, `value`, `values`, `block`,
-and `entry_args`; `printer::display_symbol_ref`, `display_symbol_text`, and
-`display_name` need no state. A format names nothing while printing. The
+and `entry_args`; `printer::display_symbol_ref` and `display_symbol_text`
+need no state. A format names nothing while printing. The
 pre-pass, `printer::AsmNamer`, names each operation as its format writes it:
 generic form names the results, then each region; a declarative format
 follows its elements; a hand-written format names by default its results,
@@ -566,13 +572,15 @@ register_interfaces!(core::Bytes: ManagedRefType);
 let managed = DynManagedRefType::is_implemented(ctx, ty);
 ```
 
-The registry is keyed by type name, and `DynX::get(ctx, ty)` returns a
-handle whose `ty()` is the queried type. A method is called on the type's
-wrapper, so query a type interface's methods only on types that pass their
-definition's shape and verifier; a marker interface answers by name alone.
+The registry is keyed by type name. A method is called on the type's
+wrapper, so `DynX::get(ctx, ty)` returns a handle, whose `ty()` is the
+queried type, only for a type that passes its definition's shape and
+verifier, and `None` for a malformed one; every method may then be queried
+on the handle, including on unverified IR. `DynX::is_implemented` answers
+by name alone, as a marker interface does.
 A hook that core infrastructure reaches through the definition, such as a
-verifier, an assembly format, or an alias hint, belongs on `TypeDef`
-instead.
+verifier, an assembly format, an alias hint, or an identifier, belongs on
+`TypeDef` instead.
 
 ## Working with IR
 

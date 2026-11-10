@@ -278,11 +278,10 @@ impl OpRewritePattern for StringConstPattern<'_> {
             .len(len)
             .results(bytes_ty)
             .build(ctx, location);
-        let result_ty = ctx.op_result_types(op)[0];
+        // The string's value is the leaf itself, of the String enum's type.
         let leaf = adt::VariantNew::operands([bytes.result(ctx)])
-            .r#type(string_enum_ty)
-            .tag(leaf_tag)
-            .results(result_ty)
+            .tag(u64::from(leaf_tag))
+            .results(string_enum_ty)
             .build(ctx, location);
 
         rewriter.insert_op(bytes.op_ref());
@@ -429,8 +428,8 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !String = adt.enum<String { Branch(wasm.anyref, wasm.anyref, core.i32), Leaf(core.bytes) }>
-  adt.enum_decl "String" [Branch, Leaf]
+  !String = adt.enum<"String", [(wasm.anyref, wasm.anyref, core.i32), (core.bytes)]>
+  adt.enum_decl "String" !String ["Branch", "Leaf"]
   wasm.func @main() -> core.nil {
     %string = adt.string_const {value = "hello"} : wasm.anyref
     wasm.return
@@ -449,7 +448,7 @@ mod tests {
         assert!(output.contains("wasm.bytes_from_data"), "{output}");
         assert!(output.contains("adt.variant_new"), "{output}");
         // The declaration, not a fixed position, locates `Leaf`.
-        assert!(output.contains("tag = 1"), "{output}");
+        assert!(output.contains("adt.variant_new 1("), "{output}");
     }
 
     #[test]
@@ -478,10 +477,10 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !PreludeString = adt.enum<String { Leaf(core.bytes), Branch(wasm.anyref, wasm.anyref, core.i32) }>
-  !UserString = adt.enum<"user::String" { Leaf(core.bytes), Branch(wasm.anyref, wasm.anyref, core.i32) }>
-  adt.enum_decl "String" [Leaf, Branch]
-  adt.enum_decl "user::String" [Leaf, Branch]
+  !PreludeString = adt.enum<"String", [(core.bytes), (wasm.anyref, wasm.anyref, core.i32)]>
+  !UserString = adt.enum<"user::String", [(core.bytes), (wasm.anyref, wasm.anyref, core.i32)]>
+  adt.enum_decl "String" !PreludeString ["Leaf", "Branch"]
+  adt.enum_decl "user::String" !UserString ["Leaf", "Branch"]
   wasm.func @main() -> core.nil {
     %string = adt.string_const {value = "hello"} : wasm.anyref
     wasm.return
@@ -504,8 +503,8 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !String = adt.enum<String { Leaf(core.bytes), Branch(wasm.anyref, wasm.anyref, core.i32) }>
-  adt.enum_decl "String" [Leaf, Branch]
+  !String = adt.enum<"String", [(core.bytes), (wasm.anyref, wasm.anyref, core.i32)]>
+  adt.enum_decl "String" !String ["Leaf", "Branch"]
   wasm.func @main() -> core.nil {
     %string = adt.string_const {value = "hello"} : wasm.anyref
     wasm.return

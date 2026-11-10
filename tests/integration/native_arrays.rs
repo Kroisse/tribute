@@ -17,8 +17,8 @@ use crate::common::NativeTestBinary;
 fn program(body: &str, expected: i32) -> String {
     format!(
         r#"core.module @arrays {{
-  !Node = adt.struct<Node(value: core.i32)>
-  !NodeRef = adt.typeref<{{name = "Node"}}>
+  !Node = adt.struct<"Node", (core.i32)>
+  !NodeRef = adt.struct<"Node">
   !Nodes = adt.array<!NodeRef>
   !Ints = adt.array<core.i32>
   func.func @main() -> core.nil {{
@@ -53,8 +53,8 @@ fn run(body: &str, expected: i32) -> Output {
 /// Builds, copies, and replaces managed and scalar elements, and sums what it
 /// reads back.
 const ARRAY_OPERATIONS: &str = r#"
-      %a = adt.struct_new %one {type = !Node} : !NodeRef
-      %b = adt.struct_new %two {type = !Node} : !NodeRef
+      %a = adt.struct_new(%one) : (core.i32) -> !NodeRef
+      %b = adt.struct_new(%two) : (core.i32) -> !NodeRef
       %pair = adt.array_of %a, %b {type = !Nodes} : !Nodes
       %filled = adt.array_new %i3, %a {type = !Nodes} : !Nodes
       %inserted = adt.array_splice %pair[%i1, %i1](%b) attributes {type = !Nodes} : !Nodes

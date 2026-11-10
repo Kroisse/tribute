@@ -1489,6 +1489,48 @@ fn resume_token_components_are_checked_recursively() {
 }
 
 #[test]
+fn callable_components_reject_physical_callable_types() {
+    for physical in [
+        "func.func_sig<() -> core.i32>",
+        "clif.func_sig<() -> core.i32>",
+        "wasm.func_sig<() -> core.i32>",
+        "closure.closure<func.func_sig<() -> core.i32>>",
+    ] {
+        let (ctx, module) = parse_fixture(&format!(
+            r#"core.module @test {{
+  !physical = {physical}
+  !wrapper = core.tuple<!physical>
+  !as_input = tribute_control.func_sig<(!wrapper) -> core.i32>
+  !as_result = tribute_control.func_sig<(core.i32) -> !wrapper>
+}}"#
+        ));
+
+        let result = validate_local(&ctx, module);
+        let rejected = result
+            .errors
+            .iter()
+            .filter(|error| error.message.contains("a physical callable type"))
+            .count();
+        assert_eq!(rejected, 2, "{physical}: {result}");
+    }
+}
+
+#[test]
+fn callable_components_accept_source_logical_types() {
+    let (ctx, module) = parse_fixture(
+        r#"core.module @test {
+  !S = adt.struct<"S", ()>
+  !R = adt.struct<"S">
+  !callback = tribute_control.func_sig<(!R) -> tribute_rt.anyref>
+  !sig = tribute_control.func_sig<(!callback, core.ptr, core.tuple<!R, core.i32>) -> !R>
+}"#,
+    );
+
+    let result = validate_local(&ctx, module);
+    assert!(result.is_ok(), "{result}");
+}
+
+#[test]
 fn validator_reports_malformed_resume_token_uses_without_panicking() {
     let (ctx, module) = parse_fixture(
         r#"core.module @test {
@@ -1797,22 +1839,9 @@ fn intrinsic_registry_order_duplicates_and_defined_claims_fail_closed() {
 }
 
 #[test]
-fn managed_reference_metadata_and_return_contracts_fail_closed() {
+fn managed_return_contracts_fail_closed() {
     let (ctx, module) = parse_fixture(
         r#"core.module @test {
-  !S = adt.struct<S()>
-  !Unnamed = adt.typeref
-  !Parameterized = adt.typeref<core.i32, {name = "S"}>
-  !Missing = adt.typeref<{name = "Missing"}>
-  tribute_control.func @unnamed(%value: !Unnamed) -> !Unnamed {
-    tribute_control.return %value
-  }
-  tribute_control.func @parameterized(%value: !Parameterized) -> !Parameterized {
-    tribute_control.return %value
-  }
-  tribute_control.func @missing(%value: !Missing) -> !Missing {
-    tribute_control.return %value
-  }
   tribute_control.func @wrong_return(%integer: core.i32, %flag: core.i1) -> core.i32 {
     tribute_control.return %flag
   }
@@ -1822,19 +1851,24 @@ fn managed_reference_metadata_and_return_contracts_fail_closed() {
     let result = validate(&ctx, module, &[], &mut Default::default());
     let diagnostics = messages(&result);
     assert!(
-        diagnostics.contains("requires nominal name metadata"),
-        "{result}"
-    );
-    assert!(
-        diagnostics.contains("cannot have type parameters"),
-        "{result}"
-    );
-    assert!(
-        diagnostics.contains("has no verified nominal declaration"),
-        "{result}"
-    );
-    assert!(
         diagnostics.contains("return operand type does not match containing semantic callable"),
+        "{result}"
+    );
+}
+
+#[test]
+fn a_nominal_value_of_a_layout_without_a_body_fails_closed() {
+    let (ctx, module) = parse_fixture(
+        r#"core.module @test {
+  tribute_control.func @read(%value: adt.struct<"Missing">) -> adt.struct<"Missing"> {
+    tribute_control.return %value
+  }
+}"#,
+    );
+
+    let result = validate(&ctx, module, &[], &mut Default::default());
+    assert!(
+        messages(&result).contains("nominal layout \"Missing\" has no body"),
         "{result}"
     );
 }
@@ -1843,8 +1877,8 @@ fn managed_reference_metadata_and_return_contracts_fail_closed() {
 fn managed_defined_boundaries_null_and_compatible_cast_are_valid() {
     let (ctx, module) = parse_fixture(
         r#"core.module @test {
-  !S = adt.struct<S()>
-  !R = adt.typeref<{name = "S"}>
+  !S = adt.struct<"S", ()>
+  !R = adt.struct<"S">
   tribute_control.func @managed(%value: !R) -> !R {
     %null = adt.ref_null {type = !R} : !R
     %cast = adt.ref_cast %null {type = !R} : !R
@@ -1861,8 +1895,8 @@ fn managed_defined_boundaries_null_and_compatible_cast_are_valid() {
 fn managed_bodyless_external_read_line_shape_and_raw_pointer_cast_chain_fail_closed() {
     let (ctx, module) = parse_fixture(
         r#"core.module @test {
-  !ReadLineResult = adt.enum<ReadLineResult { ReadLine(core.bytes), ReadEndOfFile(), ReadInvalidEncoding(), ReadSystem(core.i32, core.bytes) }>
-  !ReadLineResultRef = adt.typeref<{name = "ReadLineResult"}>
+  !ReadLineResult = adt.enum<"ReadLineResult", [(core.bytes), (), (), (core.i32, core.bytes)]>
+  !ReadLineResultRef = adt.enum<"ReadLineResult">
   tribute_control.func @user_read_line() -> !ReadLineResultRef
     attributes {abi = "intrinsic"}
   tribute_control.func @masquerade(%raw: core.ptr) -> !ReadLineResultRef {
@@ -1883,9 +1917,9 @@ fn managed_bodyless_external_read_line_shape_and_raw_pointer_cast_chain_fail_clo
 fn managed_nested_aggregate_in_bodyless_c_external_is_a_trusted_user_boundary() {
     let (ctx, module) = parse_fixture(
         r#"core.module @test {
-  !S = adt.struct<S()>
-  !R = adt.typeref<{name = "S"}>
-  !Container = adt.struct<Container(managed: !R)>
+  !S = adt.struct<"S", ()>
+  !R = adt.struct<"S">
+  !Container = adt.struct<"Container", (!R)>
   tribute_control.func @private_helper(%value: !Container) -> core.i32
     attributes {abi = "C"}
 }"#,
@@ -1912,10 +1946,10 @@ fn primitive_external_remains_a_conservative_boundary() {
 fn ref_cast_rejects_distinct_nominal_managed_references() {
     let (ctx, module) = parse_fixture(
         r#"core.module @test {
-  !S = adt.struct<S()>
-  !T = adt.struct<T()>
-  !RS = adt.typeref<{name = "S"}>
-  !RT = adt.typeref<{name = "T"}>
+  !S = adt.struct<"S", ()>
+  !T = adt.struct<"T", ()>
+  !RS = adt.struct<"S">
+  !RT = adt.struct<"T">
   tribute_control.func @incompatible(%value: !RS) -> !RT {
     %cast = adt.ref_cast %value {type = !RT} : !RT
     tribute_control.return %cast
@@ -2291,10 +2325,33 @@ fn exact_adt_callable_projections_have_semantic_provenance() {
     let (ctx, module) = parse_fixture(
         r#"core.module @test {
   !F = tribute_control.func_sig<(core.i32) -> core.i32>
-  !Tuple = adt.struct<Tuple(callee: !F)>
-  !TupleRef = adt.typeref<{name = "Tuple"}>
-  !Choice = adt.enum<Choice { Some(!F) }>
-  !ChoiceRef = adt.typeref<{name = "Choice"}>
+  !Tuple = adt.struct<"Tuple", (!F)>
+  !TupleRef = adt.struct<"Tuple">
+  !Choice = adt.enum<"Choice", [(!F)]>
+  !ChoiceRef = adt.enum<"Choice">
+  tribute_control.func @caller(%tuple: !TupleRef, %choice: !ChoiceRef, %value: core.i32) -> core.i32 {
+    %tuple_callee = adt.struct_get %tuple {type = !Tuple, field = 0} : !F
+    %tuple_result = tribute_control.call_indirect %tuple_callee(%value) : (core.i32) -> core.i32
+    %choice_callee = adt.variant_get %choice {type = !Choice, tag = 0, field = 0} : !F
+    %choice_result = tribute_control.call_indirect %choice_callee(%tuple_result) : (core.i32) -> core.i32
+    tribute_control.return %choice_result
+  }
+}"#,
+    );
+
+    let result = validate(&ctx, module, &[], &mut Default::default());
+    assert!(result.is_ok(), "{result}");
+}
+
+#[test]
+fn adt_callable_projections_take_the_sources_row_arguments() {
+    let (ctx, module) = parse_fixture(
+        r#"core.module @test {
+  !F = tribute_control.func_sig<(core.i32) -> core.i32>
+  !Tuple = adt.struct<"Tuple"['a0], (tribute_control.func_sig<(core.i32) -> core.i32 row(| 'a0)>)>
+  !TupleRef = adt.struct<"Tuple"[row()]>
+  !Choice = adt.enum<"Choice"['a0], [(tribute_control.func_sig<(core.i32) -> core.i32 row(| 'a0)>)]>
+  !ChoiceRef = adt.enum<"Choice"[row()]>
   tribute_control.func @caller(%tuple: !TupleRef, %choice: !ChoiceRef, %value: core.i32) -> core.i32 {
     %tuple_callee = adt.struct_get %tuple {type = !Tuple, field = 0} : !F
     %tuple_result = tribute_control.call_indirect %tuple_callee(%value) : (core.i32) -> core.i32
@@ -2314,10 +2371,10 @@ fn adt_callable_projection_requires_matching_declared_field_type() {
     let (ctx, module) = parse_fixture(
         r#"core.module @test {
   !F = tribute_control.func_sig<(core.i32) -> core.i32>
-  !Tuple = adt.struct<Tuple(not_callable: core.i32)>
-  !TupleRef = adt.typeref<{name = "Tuple"}>
-  !Choice = adt.enum<Choice { Some(core.i32) }>
-  !ChoiceRef = adt.typeref<{name = "Choice"}>
+  !Tuple = adt.struct<"Tuple", (core.i32)>
+  !TupleRef = adt.struct<"Tuple">
+  !Choice = adt.enum<"Choice", [(core.i32)]>
+  !ChoiceRef = adt.enum<"Choice">
   tribute_control.func @caller(%tuple: !TupleRef, %choice: !ChoiceRef, %value: core.i32) -> core.i32 {
     %tuple_callee = adt.struct_get %tuple {type = !Tuple, field = 0} : !F
     %tuple_result = tribute_control.call_indirect %tuple_callee(%value) : (core.i32) -> core.i32
@@ -2337,15 +2394,15 @@ fn adt_callable_projection_requires_matching_declared_field_type() {
 }
 
 #[test]
-fn duplicate_nominal_layout_rejects_callable_projection_spoofing() {
+fn another_layout_rejects_callable_projection_spoofing() {
     let (ctx, module) = parse_fixture(
         r#"core.module @test {
   !F = tribute_control.func_sig<(core.i32) -> core.i32>
-  !Canonical = adt.struct<Tuple(value: core.i32)>
-  !Spoofed = adt.struct<Tuple(callee: !F)>
-  !TupleRef = adt.typeref<{name = "Tuple"}>
+  !Canonical = adt.struct<"Tuple", (core.i32)>
+  !Spoofed = adt.struct<"Tuple", (!F), {k = 1}>
+  !TupleRef = adt.struct<"Tuple">
   tribute_control.func @caller(%tuple: !TupleRef, %value: core.i32) -> core.i32 {
-    %canonical = adt.struct_new %value {type = !Canonical} : !TupleRef
+    %canonical = adt.struct_new(%value) : (core.i32) -> !TupleRef
     %callee = adt.struct_get %tuple {type = !Spoofed, field = 0} : !F
     %result = tribute_control.call_indirect %callee(%value) : (core.i32) -> core.i32
     tribute_control.return %result
@@ -2355,7 +2412,6 @@ fn duplicate_nominal_layout_rejects_callable_projection_spoofing() {
 
     let result = validate(&ctx, module, &[], &mut Default::default());
     let diagnostics = messages(&result);
-    assert!(diagnostics.contains("nominal layout \"Tuple\" is declared more than once"));
     assert!(diagnostics.contains("callable provenance"), "{result}");
 }
 
@@ -2363,8 +2419,8 @@ fn duplicate_nominal_layout_rejects_callable_projection_spoofing() {
 fn unreachable_nominal_layout_collision_does_not_affect_validation() {
     let (ctx, module) = parse_fixture(
         r#"core.module @test {
-  !UnusedStruct = adt.struct<Unused(value: core.i32)>
-  !UnusedEnum = adt.enum<Unused { Value(core.i32) }>
+  !UnusedStruct = adt.struct<"Unused", (core.i32)>
+  !UnusedEnum = adt.enum<"Unused", [(core.i32)]>
   tribute_control.func @caller(%value: core.i32) -> core.i32 {
     tribute_control.return %value
   }

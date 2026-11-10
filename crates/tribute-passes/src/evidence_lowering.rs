@@ -45,6 +45,15 @@ pub struct EvidenceRuntime {
     push: Option<RuntimeFunction>,
     /// The position of `Some` in the `Option(Dispatch)` that `extend` takes.
     some: Option<u32>,
+    /// The evidence marker the module publishes, if any.
+    marker: Option<TypeRef>,
+}
+
+impl EvidenceRuntime {
+    /// The module's evidence type, an array of its marker.
+    fn evidence_type(&self, ctx: &mut IrContext) -> Option<TypeRef> {
+        Some(adt::Array::params(self.marker?).intern(ctx).as_type_ref())
+    }
 }
 
 /// Find the evidence runtime functions that the module's `effect.*`
@@ -83,6 +92,7 @@ pub(crate) fn prepare_evidence_runtime(
         with_tail: find(needs.with_tail, evidence::WITH_TAIL)?,
         push: find(needs.push, evidence::PUSH)?,
         some,
+        marker: tribute_ir::runtime_items::runtime_type(ctx, module, evidence::MARKER),
     })
 }
 
@@ -231,11 +241,8 @@ fn some_dispatch(
         cast.result(ctx)
     };
     // The parameter is a reference to the published `Option` instance.
-    let option_layout =
-        adt::layout_of(ctx, option_ty).expect("the Option(Dispatch) layout is published");
     let some = adt::VariantNew::operands([dispatch])
-        .r#type(option_layout)
-        .tag(some)
+        .tag(u64::from(some))
         .results(option_ty)
         .build(ctx, location);
     rewriter.insert_op(some.op_ref());
@@ -402,8 +409,12 @@ impl OpRewritePattern for LowerEffectDispatchTail<'_> {
         rewriter: &mut PatternRewriter<'_>,
     ) -> Option<()> {
         let op = dispatch_op.op_ref();
+        let evidence_ty = rewriter.require(
+            self.runtime.evidence_type(ctx),
+            "the module publishes no evidence marker",
+        )?;
         rewriter.ensure(
-            effect_dispatch::is_valid_tail_dispatch(ctx, op),
+            effect_dispatch::is_valid_tail_dispatch(ctx, evidence_ty, op),
             "invalid tail dispatch",
         )?;
 
@@ -439,8 +450,12 @@ impl OpRewritePattern for LowerEffectDispatchCps<'_> {
         rewriter: &mut PatternRewriter<'_>,
     ) -> Option<()> {
         let op = dispatch_op.op_ref();
+        let evidence_ty = rewriter.require(
+            self.runtime.evidence_type(ctx),
+            "the module publishes no evidence marker",
+        )?;
         rewriter.ensure(
-            effect_dispatch::is_valid_cps_dispatch(ctx, op),
+            effect_dispatch::is_valid_cps_dispatch(ctx, evidence_ty, op),
             "invalid CPS dispatch",
         )?;
 
@@ -463,15 +478,15 @@ impl OpRewritePattern for LowerEffectDispatchCps<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::parse_with_evidence_marker;
     use trunk_ir::SymbolPath;
-    use trunk_ir::parser::parse_test_module;
 
     /// The evidence type and stand-ins for the runtime functions.
-    const RUNTIME: &str = r#"  !Evidence = adt.array<adt.typeref<{name = "std::runtime::evidence::Marker"}>>
-  !Closure = adt.struct<_closure(entries: tribute_rt.convention_table_ref), {layout = "closure"}>
-  !"std::Option$std::runtime::Dispatch" = adt.enum<"std::Option$std::runtime::Dispatch" { None(), Some(!Closure) }>
-  !OptionRef = adt.typeref<{name = "std::Option$std::runtime::Dispatch"}>
-  adt.enum_decl "std::Option$std::runtime::Dispatch" [None, Some]
+    const RUNTIME: &str = r#"  !Evidence = adt.array<adt.struct<"std::runtime::evidence::Marker">>
+  !Closure = adt.struct<(tribute_rt.convention_table_ref), {layout = "closure"}>
+  !"std::Option$std::runtime::Dispatch" = adt.enum<"std::Option$std::runtime::Dispatch", [(), (!Closure)]>
+  !OptionRef = adt.enum<"std::Option$std::runtime::Dispatch">
+  adt.enum_decl "std::Option$std::runtime::Dispatch" !"std::Option$std::runtime::Dispatch" ["None", "Some"]
   func.func @"std::runtime::evidence::lookup"(%ev: !Evidence, %id: core.i32) -> core.i32 {
     func.return %id
   }
@@ -507,7 +522,7 @@ mod tests {
 
     fn lower_text(body: &str) -> String {
         let mut ctx = IrContext::new();
-        let module = parse_test_module(&mut ctx, &module_text(body));
+        let module = parse_with_evidence_marker(&mut ctx, &module_text(body));
         lower(&mut ctx, module).expect("evidence lowering");
         module.op().display(&ctx).to_string()
     }
@@ -555,7 +570,7 @@ mod tests {
     #[test]
     fn mask_and_dup_call_the_runtime_with_the_ability_id() {
         let mut ctx = IrContext::new();
-        let module = parse_test_module(&mut ctx, &module_text(SELECT));
+        let module = parse_with_evidence_marker(&mut ctx, &module_text(SELECT));
         lower(&mut ctx, module).unwrap();
         let printed = module.op().display(&ctx).to_string();
 
@@ -570,7 +585,7 @@ mod tests {
     #[test]
     fn tail_dispatch_calls_the_selected_closure_indirectly() {
         let mut ctx = IrContext::new();
-        let module = parse_test_module(&mut ctx, &module_text(TAIL));
+        let module = parse_with_evidence_marker(&mut ctx, &module_text(TAIL));
         lower(&mut ctx, module).unwrap();
         let printed = module.op().display(&ctx).to_string();
 
@@ -599,7 +614,7 @@ mod tests {
     #[test]
     fn extend_passes_the_dispatch_closure_as_some() {
         let mut ctx = IrContext::new();
-        let module = parse_test_module(&mut ctx, &module_text(EXTEND));
+        let module = parse_with_evidence_marker(&mut ctx, &module_text(EXTEND));
         lower(&mut ctx, module).unwrap();
         let printed = module.op().display(&ctx).to_string();
 
@@ -609,16 +624,13 @@ mod tests {
             [(runtime_callee("extend"), 5)],
             "{printed}"
         );
-        assert!(
-            printed.contains("adt.variant_new %2 {tag = 1, "),
-            "{printed}"
-        );
+        assert!(printed.contains("adt.variant_new 1(%2) :"), "{printed}");
     }
 
     #[test]
     fn a_missing_runtime_function_fails_only_when_needed() {
         let mut ctx = IrContext::new();
-        let module = parse_test_module(
+        let module = parse_with_evidence_marker(
             &mut ctx,
             &module_text(
                 r#"  func.func @tail_slot(%ev: !Evidence) -> !Evidence {
@@ -631,7 +643,7 @@ mod tests {
         assert_eq!(error.path, "std::runtime::evidence::tail");
 
         let mut ctx = IrContext::new();
-        let module = parse_test_module(&mut ctx, &module_text(SELECT));
+        let module = parse_with_evidence_marker(&mut ctx, &module_text(SELECT));
         assert!(prepare_evidence_runtime(&ctx, module).is_ok());
     }
 }

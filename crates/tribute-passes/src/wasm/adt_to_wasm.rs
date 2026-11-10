@@ -32,6 +32,11 @@
 //! - `adt.variant_get` -> `wasm.ref_cast` to the variant's struct type and
 //!   `wasm.struct_get` of the field after the descriptor field
 //!
+//! Each pattern casts its own operand. After the patterns, a cast that an
+//! identical cast of the same value dominates reuses that cast's result
+//! (`merge_dominated_casts`), so the field reads of one value under one
+//! variant test share one cast.
+//!
 //! ## Array Operations
 //! - `adt.array_new` -> `wasm.array_new`
 //! - `adt.array_of` -> `wasm.array_new_fixed`
@@ -58,12 +63,13 @@
 use super::type_converter::gc_array_type;
 use tribute_ir::dialect::adt;
 use tribute_ir::dialect::adt::layout::get_enum_variants;
-use trunk_ir::context::IrContext;
+use trunk_ir::context::{IrContext, OpList, RegionList};
 use trunk_ir::dialect::core::{self, IntegerLike};
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::dialect::wasm_gc as wasm_gc_dialect;
-use trunk_ir::ops::DialectType;
-use trunk_ir::refs::{OpRef, TypeRef, ValueRef};
+use trunk_ir::op_flag::{IsolatedFromAbove, OpFlag};
+use trunk_ir::ops::{DialectOp, DialectType};
+use trunk_ir::refs::{OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{
     Module, OpRewritePattern, PatternApplicator, PatternRewriter, TypeConverter,
 };
@@ -78,18 +84,18 @@ use super::descriptors::has_descriptor_field;
 use super::struct_layouts::variant_type;
 
 /// The logical variant operation's `type` attribute is its exact enum-layout
-/// identity. Operand types may be an equivalent `adt.typeref` or already have
-/// an erased target representation, neither of which may choose a distinct
+/// identity. Operand types may be a row instance of it or already have an
+/// erased target representation, neither of which may choose a distinct
 /// WasmGC nominal variant type.
 fn canonical_enum_type(ctx: &IrContext, attr_ty: TypeRef) -> Option<TypeRef> {
     get_enum_variants(ctx, attr_ty).map(|_| attr_ty)
 }
 
-/// Resolve a logical ADT reference to the enum layout it names. A typeref's
-/// `name` attribute is its nominal declaration link; do not fall back to
+/// Resolve a logical nominal value type to the enum layout it names: the
+/// layout a key or row instance denotes. Do not fall back to
 /// structural or same-name equivalence here.
-fn canonical_typeref_enum_type(ctx: &IrContext, ty: TypeRef) -> Option<TypeRef> {
-    if !adt::Typeref::matches(ctx, ty) {
+fn canonical_reference_enum_type(ctx: &IrContext, ty: TypeRef) -> Option<TypeRef> {
+    if !adt::is_nominal(ctx, ty) {
         return None;
     }
     canonical_enum_type(ctx, adt::layout_of(ctx, ty)?)
@@ -98,8 +104,7 @@ fn canonical_typeref_enum_type(ctx: &IrContext, ty: TypeRef) -> Option<TypeRef> 
 /// Convert a logical ADT reference that remains in enum attributes to its
 /// Wasm physical representation.
 fn physical_variant_field_type(ctx: &mut IrContext, ty: TypeRef) -> TypeRef {
-    let data = ctx.get_type(ty);
-    if data.name == tribute_ir::dialect::adt::Typeref::NAME {
+    if adt::is_nominal_value(ctx, ty) {
         return wasm_dialect::Structref::params().intern(ctx).as_type_ref();
     }
     ty
@@ -167,6 +172,67 @@ pub(crate) fn lower(ctx: &mut IrContext, module: Module, type_converter: TypeCon
     for layout in tribute_rtti::Layout::declared(ctx, module) {
         trunk_ir::rewrite::erase_op(ctx, layout.op_ref());
     }
+    if let Some(body) = module.body(ctx) {
+        merge_dominated_casts(ctx, body, &mut CastScope::default());
+    }
+}
+
+/// The casts visible at a point of a walk, keyed by operand, target type, and
+/// result type, with the keys each enclosing block added.
+#[derive(Default)]
+struct CastScope {
+    casts: HashMap<(ValueRef, TypeRef, TypeRef), ValueRef>,
+    added: Vec<(ValueRef, TypeRef, TypeRef)>,
+}
+
+/// Replace each `wasm_gc.ref_cast` that an identical cast dominates with that
+/// cast's result.
+///
+/// A cast of the same value to the same type that succeeded earlier proves
+/// the later one succeeds with the same reference, so a variant arm that reads
+/// several fields of one value casts it once. A cast is visible to the ops
+/// after it in its block and to their nested regions, but not to the other
+/// blocks of its region, whose order is not dominance, nor to regions isolated
+/// from above. No cast moves, so none runs before the test that guards it.
+///
+/// This is a local step of this lowering; a general CSE of operations whose
+/// only side effect is a trap would replace it (Kroisse/tribute#1887).
+fn merge_dominated_casts(ctx: &mut IrContext, region: RegionRef, scope: &mut CastScope) {
+    let blocks = ctx.region(region).blocks.clone();
+    for block in blocks {
+        let mark = scope.added.len();
+        let ops: OpList = ctx.block(block).ops.clone();
+        for op in ops {
+            if let Ok(cast) = wasm_gc_dialect::RefCast::from_op(ctx, op) {
+                let result = cast.result(ctx);
+                let key = (cast.r#ref(ctx), cast.target_type(ctx), ctx.value_ty(result));
+                if let Some(&earlier) = scope.casts.get(&key) {
+                    ctx.replace_all_uses(result, earlier);
+                    trunk_ir::rewrite::erase_op(ctx, op);
+                } else {
+                    scope.casts.insert(key, result);
+                    scope.added.push(key);
+                }
+                continue;
+            }
+            let regions: RegionList = ctx.op_regions(op).collect();
+            if regions.is_empty() {
+                continue;
+            }
+            if IsolatedFromAbove::is_set(ctx, op) {
+                for region in regions {
+                    merge_dominated_casts(ctx, region, &mut CastScope::default());
+                }
+            } else {
+                for region in regions {
+                    merge_dominated_casts(ctx, region, scope);
+                }
+            }
+        }
+        for key in scope.added.drain(mark..) {
+            scope.casts.remove(&key);
+        }
+    }
 }
 
 /// Pattern for `adt.struct_new` -> `wasm.struct_new`
@@ -185,7 +251,7 @@ impl OpRewritePattern for StructNewPattern {
     ) -> Option<()> {
         let op = struct_new.op_ref();
         let loc = ctx.op(op).location;
-        let struct_ty = struct_new.r#type(ctx);
+        let struct_ty = struct_new.layout(ctx);
         let mut fields: Vec<_> = struct_new.fields(ctx).to_vec();
         if has_descriptor_field(ctx, struct_ty) {
             let descriptor =
@@ -198,7 +264,7 @@ impl OpRewritePattern for StructNewPattern {
         // Note: Result type is preserved as-is; emit phase uses type_to_field_type
         // for wasm type conversion.
         let new_op = wasm_gc_dialect::StructNew::operands(fields)
-            .r#type(struct_new.r#type(ctx))
+            .r#type(struct_ty)
             .results(result_ty)
             .build(ctx, loc);
         rewriter.replace_op(new_op.op_ref());
@@ -288,10 +354,10 @@ impl OpRewritePattern for VariantNewPattern {
     ) -> Option<()> {
         let op = variant_new.op_ref();
         let loc = ctx.op(op).location;
-        let tag = variant_new.tag(ctx);
-        let base_type = canonical_enum_type(ctx, variant_new.r#type(ctx))?;
+        let tag = variant_new.variant(ctx);
+        let base_type = canonical_enum_type(ctx, variant_new.layout(ctx))?;
         let mut fields: Vec<_> = variant_new.fields(ctx).to_vec();
-        let descriptor = (variant_new.r#type(ctx), Some(tag));
+        let descriptor = (variant_new.layout(ctx), Some(tag));
         let descriptor = descriptor_operand(ctx, rewriter, &self.numbers, descriptor, loc)?;
         fields.insert(0, descriptor);
 
@@ -326,7 +392,7 @@ impl OpRewritePattern for VariantIsPattern {
     ) -> Option<()> {
         let op = variant_is.op_ref();
         let loc = ctx.op(op).location;
-        let tag = variant_is.tag(ctx);
+        let tag = variant_is.variant(ctx);
         let ref_val = variant_is.r#ref(ctx);
         let result_ty = variant_is.result_ty(ctx);
 
@@ -456,7 +522,7 @@ impl OpRewritePattern for VariantGetPattern {
         let loc = ctx.op(op).location;
         let ref_val = variant_get.r#ref(ctx);
         let field_idx = variant_get.field(ctx);
-        let tag = variant_get.tag(ctx);
+        let tag = variant_get.variant(ctx);
         let enum_type = canonical_enum_type(ctx, variant_get.r#type(ctx))?;
         let declared_field_ty = *adt::Enum::from_type_ref(ctx, enum_type)?
             .variant_fields(ctx, tag)?
@@ -477,11 +543,10 @@ impl OpRewritePattern for VariantGetPattern {
         let variant_type = variant_type(ctx, enum_type, tag)?;
         // A logical reference must name this enum.
         let operand_ty = ctx.value_ty(ref_val);
-        let operand_data = ctx.get_type(operand_ty);
         rewriter.ensure(
-            !(operand_data.name == tribute_ir::dialect::adt::Typeref::NAME
-                && canonical_typeref_enum_type(ctx, operand_ty) != Some(enum_type)),
-            "operand typeref names another enum",
+            !adt::is_nominal_value(ctx, operand_ty)
+                || canonical_reference_enum_type(ctx, operand_ty) == Some(enum_type),
+            "operand reference names another enum",
         )?;
 
         // `struct.get` reads a reference of the variant's own struct type. A
@@ -1109,15 +1174,12 @@ mod tests {
         let _module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !E = adt.enum<E {}>
-  !ERef = adt.typeref<{name = "E"}>
+  !E = adt.enum<"E", []>
 }"#,
         );
         let enum_ty = ctx.type_alias_by_text("E").expect("enum layout");
-        let typeref_ty = ctx.type_alias_by_text("ERef").expect("enum reference");
 
         assert_eq!(canonical_enum_type(&ctx, enum_ty), Some(enum_ty));
-        assert_eq!(canonical_enum_type(&ctx, typeref_ty), None);
     }
 
     #[test]
@@ -1126,19 +1188,19 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !S = adt.struct<S(value: core.i32)>
-  !E = adt.enum<E { Some(core.i32) }>
-  !ERef = adt.typeref<{name = "E"}>
+  !S = adt.struct<"S", (core.i32)>
+  !E = adt.enum<"E", [(core.i32)]>
+  !ERef = adt.enum<"E">
   !A = adt.array<core.i32>
 
   wasm.func @main() -> core.nil {
     %zero = wasm.i32_const 0 : core.i32
     %one = wasm.i32_const 1 : core.i32
-    %struct = adt.struct_new %zero {type = !S} : !S
+    %struct = adt.struct_new(%zero) : (core.i32) -> !S
     %field = adt.struct_get %struct {type = !S, field = 0} : core.i32
     adt.struct_set %struct, %field {type = !S, field = 0}
 
-    %variant = adt.variant_new %one {type = !E, tag = 0} : !ERef
+    %variant = adt.variant_new 0(%one) : (core.i32) -> !E
     %is_some = adt.variant_is %variant {type = !E, tag = 0} : core.i32
     %payload = adt.variant_get %variant {type = !E, tag = 0, field = 0} : core.i32
 
@@ -1205,20 +1267,20 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !S = adt.struct<S(value: core.i32)>
-  !Closure = adt.struct<_closure(entries: tribute_rt.convention_table_ref), {layout = "closure"}>
-  !E = adt.enum<E { None(), Some(core.i32) }>
+  !S = adt.struct<"S", (core.i32)>
+  !Closure = adt.struct<(tribute_rt.convention_table_ref), {layout = "closure"}>
+  !E = adt.enum<"E", [(), (core.i32)]>
 
   wasm.func @main(%env: wasm.anyref) -> core.nil {
     %one = wasm.i32_const 1 : core.i32
-    %first = adt.struct_new %one {type = !S} : !S
-    %second = adt.struct_new %one {type = !S} : !S
+    %first = adt.struct_new(%one) : (core.i32) -> !S
+    %second = adt.struct_new(%one) : (core.i32) -> !S
     %field = adt.struct_get %first {type = !S, field = 0} : core.i32
     adt.struct_set %first, %field {type = !S, field = 0}
-    %closure = adt.struct_new %one {type = !Closure} : !Closure
+    %closure = adt.struct_new(%one) : (core.i32) -> !Closure
     %table = adt.struct_get %closure {type = !Closure, field = 0} : core.i32
-    %some = adt.variant_new %one {type = !E, tag = 1} : !E
-    %none = adt.variant_new {type = !E, tag = 0} : !E
+    %some = adt.variant_new 1(%one) : (core.i32) -> !E
+    %none = adt.variant_new 0() : () -> !E
     %payload = adt.variant_get %some {type = !E, tag = 1, field = 0} : core.i32
     wasm.return
   }
@@ -1303,13 +1365,13 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !ListRef = adt.typeref<{name = "List"}>
-  !List = adt.enum<List { Empty(), Cons(core.i32, !ListRef) }>
+  !ListRef = adt.enum<"List">
+  !List = adt.enum<"List", [(), (core.i32, !ListRef)]>
 
   wasm.func @main(%input: !ListRef) -> core.nil {
     %zero = wasm.i32_const 0 : core.i32
-    %empty = adt.variant_new {type = !List, tag = 0} : !ListRef
-    %list = adt.variant_new %zero, %empty {type = !List, tag = 1} : !ListRef
+    %empty = adt.variant_new 0() : () -> !ListRef
+    %list = adt.variant_new 1(%zero, %empty) : (core.i32, !ListRef) -> !ListRef
     %is_cons = adt.variant_is %input {type = !List, tag = 1} : core.i1
     %tail = adt.variant_get %input {type = !List, tag = 1, field = 1} : !ListRef
     wasm.return
@@ -1412,13 +1474,13 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !ERef = adt.typeref<{name = "E"}>
-  !E = adt.enum<E { None(), Some(core.i32), Other() }>
+  !ERef = adt.enum<"E">
+  !E = adt.enum<"E", [(), (core.i32), ()]>
 
   wasm.func @main(%input: !ERef) -> core.nil {
     %one = wasm.i32_const 1 : core.i32
-    %none = adt.variant_new {type = !E, tag = 0} : !ERef
-    %some = adt.variant_new %one {type = !E, tag = 1} : !ERef
+    %none = adt.variant_new 0() : () -> !ERef
+    %some = adt.variant_new 1(%one) : (core.i32) -> !ERef
     %is_some = adt.variant_is %input {type = !E, tag = 1} : core.i32
     %is_other = adt.variant_is %input {type = !E, tag = 2} : core.i32
     wasm.return
@@ -1475,15 +1537,15 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !ERef = adt.typeref<{name = "E"}>
-  !E = adt.enum<E { None(), Some(core.i32), Other() }>
-  !FRef = adt.typeref<{name = "F"}>
-  !F = adt.enum<F { A(), B() }>
+  !ERef = adt.enum<"E">
+  !E = adt.enum<"E", [(), (core.i32), ()]>
+  !FRef = adt.enum<"F">
+  !F = adt.enum<"F", [(), ()]>
 
   wasm.func @main(%input: !ERef, %never: !FRef) -> core.nil {
     %one = wasm.i32_const 1 : core.i32
-    %some = adt.variant_new %one {type = !E, tag = 1} : !ERef
-    %tag = adt.variant_tag %input {type = !E}
+    %some = adt.variant_new 1(%one) : (core.i32) -> !ERef
+    %tag =adt.variant_tag %input {type = !E}
     %unallocated = adt.variant_tag %never {type = !F}
     wasm.return
   }
@@ -1527,22 +1589,22 @@ mod tests {
     }
 
     #[test]
-    fn variant_get_casts_its_operand_unless_a_typeref_names_another_enum() {
+    fn variant_get_casts_its_operand_unless_it_names_another_enum() {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !ARef = adt.typeref<{name = "A"}>
-  !BRef = adt.typeref<{name = "B"}>
-  !A = adt.enum<A { Some(core.i32), Other(core.f64) }>
-  !B = adt.enum<B { Some(core.f64) }>
+  !ARef = adt.enum<"A">
+  !BRef = adt.enum<"B">
+  !A = adt.enum<"A", [(core.i32), (core.f64)]>
+  !B = adt.enum<"B", [(core.f64)]>
 
   wasm.func @main(%from_a_ref: !ARef, %from_b_ref: !BRef, %x: core.f64) -> core.nil {
-    %from_matching_typeref = adt.variant_get %from_a_ref {type = !A, tag = 0, field = 0} : core.i32
-    %from_mismatched_typeref = adt.variant_get %from_b_ref {type = !A, tag = 0, field = 0} : core.i32
-    %from_b = adt.variant_new %x {type = !B, tag = 0} : !BRef
+    %from_matching_enum = adt.variant_get %from_a_ref {type = !A, tag = 0, field = 0} : core.i32
+    %from_mismatched_enum = adt.variant_get %from_b_ref {type = !A, tag = 0, field = 0} : core.i32
+    %from_b = adt.variant_new 0(%x) : (core.f64) -> !BRef
     %wrong_enum = adt.variant_get %from_b {type = !A, tag = 0, field = 0} : core.i32
-    %from_a_other = adt.variant_new %x {type = !A, tag = 1} : !ARef
+    %from_a_other = adt.variant_new 1(%x) : (core.f64) -> !ARef
     %wrong_tag = adt.variant_get %from_a_other {type = !A, tag = 0, field = 0} : core.i32
     wasm.return
   }
@@ -1581,16 +1643,16 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !ERef = adt.typeref<{name = "E"}>
-  !BoxRef = adt.typeref<{name = "Box"}>
-  !NodeRef = adt.typeref<{name = "Node"}>
-  !StringRef = adt.typeref<{name = "String"}>
-  !E = adt.enum<E { Some(core.i32) }>
-  !Box = adt.enum<Box { Next(!NodeRef) }>
-  !Node = adt.enum<Node { Node() }>
+  !ERef = adt.enum<"E">
+  !BoxRef = adt.enum<"Box">
+  !NodeRef = adt.enum<"Node">
+  !StringRef = adt.enum<"String">
+  !E = adt.enum<"E", [(core.i32)]>
+  !Box = adt.enum<"Box", [(!NodeRef)]>
+  !Node = adt.enum<"Node", [()]>
   !Data = adt.array<core.i8, {layout = "bytes_data"}>
-  !Bytes = adt.struct<_Bytes(data: !Data, offset: core.i32, len: core.i32), {layout = "bytes"}>
-  !String = adt.enum<String { Leaf(!Bytes) }>
+  !Bytes = adt.struct<(!Data, core.i32, core.i32), {layout = "bytes"}>
+  !String = adt.enum<"String", [(!Bytes)]>
 
   wasm.func @main(%e: !ERef, %box: !BoxRef, %string: !StringRef) -> core.nil {
     %valid = adt.variant_get %e {type = !E, tag = 0, field = 0} : core.i32
@@ -1636,5 +1698,110 @@ mod tests {
                 .count(),
             1,
         );
+    }
+
+    /// Lower `body` as the body of `@main(%e: !ERef, %c: core.i32)`, where
+    /// variant 0 of `!E` has the fields `(core.i32, core.f64)`, and return the
+    /// function's casts and field reads.
+    fn lower_variant_reads(
+        body: &str,
+    ) -> (
+        IrContext,
+        Vec<wasm_gc_dialect::RefCast>,
+        Vec<wasm_gc_dialect::StructGet>,
+    ) {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            &format!(
+                r#"core.module @test {{
+  !ERef = adt.enum<"E">
+  !E = adt.enum<"E", [(core.i32, core.f64), (core.f64)]>
+
+  wasm.func @main(%e: !ERef, %c: core.i32) -> core.nil {{
+{body}
+  }}
+}}"#
+            ),
+        );
+        lower(&mut ctx, module, TypeConverter::new());
+        let func = module.ops(&ctx)[0];
+        let body = ctx.op_region(func, 0).unwrap();
+        let mut casts = Vec::new();
+        let mut gets = Vec::new();
+        let _ = trunk_ir::walk::walk_region::<()>(&ctx, body, &mut |op| {
+            if let Ok(cast) = wasm_gc_dialect::RefCast::from_op(&ctx, op) {
+                casts.push(cast);
+            }
+            if let Ok(get) = wasm_gc_dialect::StructGet::from_op(&ctx, op) {
+                gets.push(get);
+            }
+            std::ops::ControlFlow::Continue(trunk_ir::walk::WalkAction::Advance)
+        });
+        (ctx, casts, gets)
+    }
+
+    #[test]
+    fn variant_field_reads_share_a_dominating_cast() {
+        let (ctx, casts, gets) = lower_variant_reads(
+            r#"    %x = adt.variant_get %e {type = !E, tag = 0, field = 0} : core.i32
+    %y = adt.variant_get %e {type = !E, tag = 0, field = 1} : core.f64
+    %r = wasm.if %c -> (core.f64) {
+      %z = adt.variant_get %e {type = !E, tag = 0, field = 1} : core.f64
+      wasm.yield %z
+    } else {
+      wasm.yield %y
+    }
+    wasm.return"#,
+        );
+
+        assert_eq!(casts.len(), 1, "one cast serves every read it dominates");
+        let cast = casts[0].result(&ctx);
+        assert_eq!(gets.len(), 3);
+        assert!(gets.iter().all(|get| get.r#ref(&ctx) == cast));
+    }
+
+    #[test]
+    fn variant_field_reads_in_sibling_regions_cast_separately() {
+        let (ctx, casts, gets) = lower_variant_reads(
+            r#"    %r = wasm.if %c -> (core.f64) {
+      %x = adt.variant_get %e {type = !E, tag = 0, field = 0} : core.i32
+      %y = adt.variant_get %e {type = !E, tag = 0, field = 1} : core.f64
+      wasm.yield %y
+    } else {
+      %z = adt.variant_get %e {type = !E, tag = 0, field = 1} : core.f64
+      %w = adt.variant_get %e {type = !E, tag = 1, field = 0} : core.f64
+      wasm.yield %w
+    }
+    wasm.return"#,
+        );
+
+        // One cast per arm for tag 0, and one for tag 1, which has another type.
+        assert_eq!(casts.len(), 3);
+        let uses_of = |cast: &wasm_gc_dialect::RefCast| {
+            let result = cast.result(&ctx);
+            gets.iter().filter(|get| get.r#ref(&ctx) == result).count()
+        };
+        assert_eq!(casts.iter().map(uses_of).collect::<Vec<_>>(), [2, 1, 1]);
+    }
+
+    #[test]
+    fn variant_field_reads_in_other_blocks_cast_separately() {
+        let (ctx, casts, gets) = lower_variant_reads(
+            r#"  ^bb0:
+    %x = adt.variant_get %e {type = !E, tag = 0, field = 0} : core.i32
+    %y = adt.variant_get %e {type = !E, tag = 0, field = 1} : core.f64
+    cf.br [^bb1]
+  ^bb1:
+    %z = adt.variant_get %e {type = !E, tag = 0, field = 1} : core.f64
+    wasm.return"#,
+        );
+
+        // Block order is not dominance, so each block casts once.
+        assert_eq!(casts.len(), 2);
+        assert_eq!(gets.len(), 3);
+        assert_eq!(gets[0].r#ref(&ctx), casts[0].result(&ctx));
+        assert_eq!(gets[1].r#ref(&ctx), casts[0].result(&ctx));
+        assert_eq!(gets[2].r#ref(&ctx), casts[1].result(&ctx));
     }
 }

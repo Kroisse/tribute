@@ -578,6 +578,27 @@ impl IrContext {
         self.type_alias_by_type.insert(ty, name);
     }
 
+    /// Replace every registered type alias with `entries`, in their order. A
+    /// later entry with the same name replaces an earlier one, as
+    /// [`register_type_alias`](Self::register_type_alias) does.
+    pub fn replace_type_aliases(&mut self, entries: impl IntoIterator<Item = (Symbol, TypeRef)>) {
+        self.bump_revision();
+        self.type_aliases.clear();
+        self.type_alias_by_name.clear();
+        self.type_alias_by_type.clear();
+        for (name, ty) in entries {
+            if let Some(old_ty) = self.type_alias_by_name.insert(name.clone(), ty) {
+                self.type_alias_by_type.remove(&old_ty);
+                if let Some(entry) = self.type_aliases.iter_mut().find(|(n, _)| *n == name) {
+                    entry.1 = ty;
+                }
+            } else {
+                self.type_aliases.push((name.clone(), ty));
+            }
+            self.type_alias_by_type.insert(ty, name);
+        }
+    }
+
     /// Look up a type alias by name.
     pub fn type_alias_by_name(&self, name: &Symbol) -> Option<TypeRef> {
         self.type_alias_by_name.get(name).copied()
@@ -1136,6 +1157,32 @@ impl IrContext {
         if self.ops[op].parent_block == Some(block) {
             self.ops[op].parent_block = None;
         }
+    }
+
+    /// Replace the operation list of `block` with `ops`, in one step.
+    ///
+    /// Operations of the old list that `ops` leaves out are detached, not
+    /// removed. Rebuilding a list this way costs one pass over both lists,
+    /// where inserting operations one by one searches the list each time.
+    ///
+    /// # Panics
+    ///
+    /// Panics if an operation of `ops` belongs to another block or occurs
+    /// twice.
+    pub fn set_block_ops(&mut self, block: BlockRef, ops: OpList) {
+        self.bump_revision();
+        for op in std::mem::take(&mut self.blocks[block].ops) {
+            self.ops[op].parent_block = None;
+        }
+        for &op in &ops {
+            assert!(
+                self.ops[op].parent_block.is_none(),
+                "set_block_ops: operation {op} already belongs to block {:?}",
+                self.ops[op].parent_block.unwrap(),
+            );
+            self.ops[op].parent_block = Some(block);
+        }
+        self.blocks[block].ops = ops;
     }
 
     /// Detach an operation from its parent block.
@@ -2439,5 +2486,27 @@ mod tests {
         assert_eq!(mapping.lookup_value(r1), Some(cr1));
         assert_ne!(r0, cr0);
         assert_ne!(r1, cr1);
+    }
+
+    #[test]
+    fn replace_type_aliases_drops_unlisted_names() {
+        let mut ctx = IrContext::new();
+        let i32_ty = i32_type(&mut ctx);
+        let i64_ty = TypeDataBuilder::new("core.i64").intern(&mut ctx);
+        let [old, kept, new] = ["old", "kept", "new"].map(Symbol::new);
+        ctx.register_type_alias(old.clone(), i32_ty);
+        ctx.register_type_alias(kept.clone(), i64_ty);
+
+        ctx.replace_type_aliases([
+            (kept.clone(), i32_ty),
+            (new.clone(), i64_ty),
+            (kept.clone(), i64_ty),
+        ]);
+
+        assert_eq!(ctx.type_aliases(), [(kept.clone(), i64_ty), (new, i64_ty)]);
+        assert_eq!(ctx.type_alias_by_name(&old), None);
+        assert_eq!(ctx.type_alias_by_name(&kept), Some(i64_ty));
+        assert_eq!(ctx.type_alias_by_type(i32_ty), None);
+        assert_eq!(ctx.type_alias_by_type(i64_ty), Some(kept));
     }
 }

@@ -9,7 +9,7 @@ use trunk_ir::parser::parse_test_module;
 use trunk_ir::symbol_table::nearest_table;
 
 use crate::lower_continuation_frames::lower_continuation_frames;
-use crate::test_support::assert_unchanged_on_error;
+use crate::test_support::{assert_unchanged_on_error, publish_evidence_marker};
 
 /// Run the conversion without operation declarations or intrinsics.
 fn run_pre_cps(ctx: &mut IrContext, module: Module) -> Result<(), TributeControlToCpsError> {
@@ -17,9 +17,12 @@ fn run_pre_cps(ctx: &mut IrContext, module: Module) -> Result<(), TributeControl
     lower_continuation_frames(ctx, module)
 }
 
+/// Parse `input` and publish the evidence marker, as the frontend does for
+/// every module.
 fn parse(input: &str) -> (IrContext, Module) {
     let mut ctx = IrContext::new();
     let module = parse_test_module(&mut ctx, input);
+    publish_evidence_marker(&mut ctx, module);
     (ctx, module)
 }
 
@@ -36,7 +39,7 @@ fn shared_function_conversion_preserves_lists_and_nested_attributes() {
             AttributeMap::from_entries(&mut ctx, [("nested", Attribute::Type(source_callable))]);
         let source = func::func_sig_with_attrs(&mut ctx, [source_callable], results.clone(), attrs)
             .as_type_ref();
-        let mut converter = Converter::new(&mut ctx, block, CallableGraph::default());
+        let mut converter = Converter::new(&mut ctx, module, block, CallableGraph::default());
         let converted = converter.convert_type(source);
         assert_eq!(
             converter.convert_type(source),
@@ -506,7 +509,7 @@ fn nested_modules_resolve_same_named_callables_in_their_own_module() {
 fn textual_nested_attribute_types_convert_atomically() {
     let input = r#"core.module @test {
   !callback = tribute_control.func_sig<(core.i32) -> core.i32, {metadata = [core.array<core.i32>, [7, @Callback]]}>
-  !record = adt.struct<CallbackRecord(callback: !callback)>
+  !record = adt.struct<"CallbackRecord", (!callback)>
   tribute_cps.func @identity(%value: !record) -> !record convention(direct) {
     tribute_control.return %value
   }
@@ -514,7 +517,11 @@ fn textual_nested_attribute_types_convert_atomically() {
     let (mut ctx, module) = parse(input);
     tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default()).unwrap();
     let printed = module.op().display(&ctx).to_string();
-    assert!(printed.contains("adt.struct<CallbackRecord("));
+    // The layout's field changes, so it gets a new key.
+    assert!(
+        printed.contains("adt.struct<\"CallbackRecord$cps\", ("),
+        "{printed}"
+    );
     assert!(
         printed.contains("closure.closure<func.func_sig<(core.i32) -> core.i32, {metadata"),
         "{printed}"
@@ -525,6 +532,124 @@ fn textual_nested_attribute_types_convert_atomically() {
     );
     assert!(!printed.contains("tribute_control."));
 
+    let mut reparsed = IrContext::new();
+    let reparsed_module = parse_test_module(&mut reparsed, &printed);
+    verify_tribute_control_post_cps(&reparsed, reparsed_module, &mut Default::default()).unwrap();
+}
+
+#[test]
+fn nominal_row_arguments_and_binders_are_erased() {
+    let input = r#"core.module @test {
+  !Callback = adt.struct<"Callback"['a0], (tribute_control.func_sig<() -> core.i32 row(| 'a0)>)>
+  !pure = adt.struct<"Callback"[row()]>
+  tribute_cps.func @identity(%value: !pure) -> !pure convention(direct) {
+    tribute_control.return %value
+  }
+}"#;
+    let (mut ctx, module) = parse(input);
+    tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default()).unwrap();
+    let printed = module.op().display(&ctx).to_string();
+    assert!(printed.contains("adt.struct<\"Callback\", ("), "{printed}");
+    assert!(
+        printed.contains("!pure = adt.struct<\"Callback\", ("),
+        "{printed}"
+    );
+    assert!(!printed.contains("row("), "{printed}");
+
+    let mut reparsed = IrContext::new();
+    let reparsed_module = parse_test_module(&mut reparsed, &printed);
+    verify_tribute_control_post_cps(&reparsed, reparsed_module, &mut Default::default()).unwrap();
+}
+
+/// Tuple layouts that differ only in their rows are renamed by their
+/// converted elements and become one layout under one alias.
+#[test]
+fn tuple_layouts_differing_in_rows_merge() {
+    let input = r#"core.module @test {
+  !__logical_tuple_open = adt.struct<"__logical_tuple_open", (tribute_control.func_sig<() -> core.i32 row(| 'a0)>, core.i32)>
+  !__logical_tuple_closed = adt.struct<"__logical_tuple_closed", (tribute_control.func_sig<() -> core.i32>, core.i32)>
+  !Box = adt.struct<"Box"['a0], (!__logical_tuple_open)>
+  !closed_box = adt.struct<"Box"[row()]>
+  tribute_cps.func @first(%box: !closed_box) -> core.i32 convention(direct) {
+    %pair = adt.struct_get %box {field = 0, type = !Box} : !__logical_tuple_closed
+    %n = adt.struct_get %pair {field = 1, type = !__logical_tuple_closed} : core.i32
+    tribute_control.return %n
+  }
+}"#;
+    let (mut ctx, module) = parse(input);
+    tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default()).unwrap();
+
+    let tuples: Vec<_> = ctx
+        .type_aliases()
+        .iter()
+        .filter(|(name, _)| name.with_str(|name| name.starts_with("__logical_tuple_")))
+        .cloned()
+        .collect();
+    let [(name, layout)] = tuples.as_slice() else {
+        panic!("expected one tuple alias, found {tuples:?}");
+    };
+    for old in ["__logical_tuple_open", "__logical_tuple_closed"] {
+        assert_eq!(ctx.type_alias_by_text(old), None, "{old}");
+    }
+    let mut projections = Vec::new();
+    let _ = trunk_ir::walk::walk_op::<()>(&ctx, module.op(), &mut |op| {
+        if let Ok(get) = adt::StructGet::from_op(&ctx, op) {
+            projections.push((get.r#type(&ctx), ctx.value_ty(get.result(&ctx))));
+        }
+        std::ops::ControlFlow::Continue(trunk_ir::walk::WalkAction::Advance)
+    });
+    let [(_, pair_ty), (pair_layout, _)] = projections[..] else {
+        panic!("expected two projections, found {projections:?}");
+    };
+    assert_eq!(adt::layout_of(&ctx, pair_ty), Some(*layout));
+    assert_eq!(pair_layout, *layout);
+    let box_layout = ctx.type_alias_by_text("Box").unwrap();
+    let field = adt::Struct::from_type_ref(&ctx, box_layout)
+        .unwrap()
+        .fields(&ctx)[0];
+    assert_eq!(adt::nominal_name(&ctx, field), Some(&*name.to_string()));
+
+    let printed = module.op().display(&ctx).to_string();
+    let mut reparsed = IrContext::new();
+    let reparsed_module = parse_test_module(&mut reparsed, &printed);
+    verify_tribute_control_post_cps(&reparsed, reparsed_module, &mut Default::default()).unwrap();
+}
+
+#[test]
+fn tuple_layouts_are_renamed_after_the_layouts_they_hold() {
+    // The module reaches the tuple before the layout it holds, which
+    // converts too.
+    let input = r#"core.module @test {
+  !Box = adt.struct<"Box", (tribute_control.func_sig<() -> core.i32>)>
+  !__logical_tuple_pair = adt.struct<"__logical_tuple_pair", (!Box, tribute_control.func_sig<() -> core.i32>)>
+  tribute_cps.func @second(%pair: !__logical_tuple_pair) -> tribute_control.func_sig<() -> core.i32> convention(direct) {
+    %f = adt.struct_get %pair {field = 1, type = !__logical_tuple_pair} : tribute_control.func_sig<() -> core.i32>
+    tribute_control.return %f
+  }
+}"#;
+    let (mut ctx, module) = parse(input);
+    tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default()).unwrap();
+
+    let box_layout = ctx.type_alias_by_text("Box").unwrap();
+    let tuples: Vec<_> = ctx
+        .type_aliases()
+        .iter()
+        .filter(|(name, _)| name.with_str(|name| name.starts_with("__logical_tuple_")))
+        .map(|&(_, layout)| layout)
+        .collect();
+    let [tuple] = tuples[..] else {
+        panic!("expected one tuple alias, found {tuples:?}");
+    };
+    let fields = adt::Struct::from_type_ref(&ctx, tuple)
+        .unwrap()
+        .fields(&ctx);
+    assert_eq!(fields[0], box_layout);
+    assert_eq!(
+        adt::nominal_name(&ctx, tuple),
+        Some(&*tribute_control::logical_tuple_name(&ctx, fields))
+    );
+
+    let printed = module.op().display(&ctx).to_string();
     let mut reparsed = IrContext::new();
     let reparsed_module = parse_test_module(&mut reparsed, &printed);
     verify_tribute_control_post_cps(&reparsed, reparsed_module, &mut Default::default()).unwrap();
@@ -782,6 +907,8 @@ fn post_candidate_failure_restores_alias_maps_and_canonical_ir() {
     let (alias_name, source_type) = source_aliases[0].clone();
     let converted_type = TypeDataBuilder::new("core.i32").intern(&mut ctx);
     ctx.register_type_alias(alias_name.clone(), converted_type);
+    let renamed = Symbol::new("__logical_tuple_renamed");
+    ctx.register_type_alias(renamed.clone(), converted_type);
 
     let error = verify_candidate_or_restore_aliases(
         &mut ctx,
@@ -794,6 +921,8 @@ fn post_candidate_failure_restores_alias_maps_and_canonical_ir() {
     assert_eq!(ctx.type_alias_by_name(&alias_name), Some(source_type));
     assert_eq!(ctx.type_alias_by_type(source_type), Some(alias_name));
     assert_eq!(ctx.type_alias_by_type(converted_type), None);
+    assert_eq!(ctx.type_alias_by_name(&renamed), None);
+    assert_eq!(ctx.type_aliases(), source_aliases);
     assert_eq!(candidate.op().display(&ctx).to_string(), before);
 }
 
@@ -840,7 +969,7 @@ fn named_boundaries_report_local_and_core_validation_errors() {
     );
 
     let malformed_delimiter = r#"core.module @test {
-  !evidence = adt.array<adt.typeref<{name = "std::runtime::evidence::Marker"}>>
+  !evidence = adt.array<adt.struct<"std::runtime::evidence::Marker">>
   func.func @broken(%ev: !evidence, %prompt: core.i32) -> core.never attributes {tribute.calling_convention = "cps"} {
     ability.handle_dispatch %ev, %prompt [] {
       ^body:
@@ -1001,7 +1130,7 @@ fn post_boundary_rejects_malformed_physical_callable_transfers() {
 #[test]
 fn post_boundary_rejects_nonphysical_dispatchers_and_residual_control_ops() {
     let dispatcher_input = r#"core.module @test {
-  !evidence = adt.array<adt.typeref<{name = "std::runtime::evidence::Marker"}>>
+  !evidence = adt.array<adt.struct<"std::runtime::evidence::Marker">>
   !tr = closure.closure<func.func_sig<(!evidence, core.i32, tribute_rt.anyref) -> tribute_rt.anyref>>
   func.func @caller(%ev: !evidence, %prompt: core.i32, %tr: !tr) -> core.never attributes {tribute.calling_convention = "cps"} {
     ability.handle_dispatch %ev, %prompt [@State: %tr] {
@@ -1020,7 +1149,7 @@ fn post_boundary_rejects_nonphysical_dispatchers_and_residual_control_ops() {
     );
 
     let wrong_abi_input = r#"core.module @test {
-  !evidence = adt.array<adt.typeref<{name = "std::runtime::evidence::Marker"}>>
+  !evidence = adt.array<adt.struct<"std::runtime::evidence::Marker">>
   func.func @caller(%ev: !evidence, %prompt: core.i32) -> core.never attributes {tribute.calling_convention = "cps"} {
     %tr = closure.lambda evidence_direct(%inner: !evidence) -> tribute_rt.anyref {
       func.unreachable
@@ -1040,7 +1169,7 @@ fn post_boundary_rejects_nonphysical_dispatchers_and_residual_control_ops() {
     );
 
     let wrong_metadata_input = r#"core.module @test {
-  !evidence = adt.array<adt.typeref<{name = "std::runtime::evidence::Marker"}>>
+  !evidence = adt.array<adt.struct<"std::runtime::evidence::Marker">>
   func.func @caller(%ev: !evidence, %prompt: core.i32) -> core.never attributes {tribute.calling_convention = "cps"} {
     %tr = closure.lambda direct(%inner: !evidence, %op_idx: core.i32, %payload: tribute_rt.anyref) -> tribute_rt.anyref {
       func.unreachable
@@ -1178,10 +1307,12 @@ fn textual_resumptive_handle_emits_one_resultless_delimiter() {
         consumed_get: &mut Option<ValueRef>,
         consumed_set: &mut Option<ValueRef>,
     ) {
+        // The one-shot state is a literal layout holding its consumed flag.
         let is_one_shot_type = |ty: TypeRef| {
-            ctx.type_attrs(ty)
-                .get_str("name")
-                .is_some_and(|name| name.starts_with("__tribute_one_shot_state"))
+            adt::Struct::from_type_ref(ctx, ty).is_some_and(|layout| {
+                layout.name(ctx).is_none()
+                    && matches!(layout.fields(ctx), [flag] if trunk_ir::dialect::core::I1::matches(ctx, *flag))
+            })
         };
         if let Ok(get) = adt::StructGet::from_op(ctx, op)
             && is_one_shot_type(get.r#type(ctx))
@@ -1877,8 +2008,8 @@ fn a_table_entry_weaker_than_its_cps_target_is_rejected_before_mutation() {
 #[test]
 fn raw_pointer_managed_masquerade_is_rejected_before_mutation() {
     let input = r#"core.module @test {
-  !S = adt.struct<S()>
-  !R = adt.typeref<{name = "S"}>
+  !S = adt.struct<"S", ()>
+  !R = adt.struct<"S">
   tribute_cps.func @broken(%raw: core.ptr) -> !R convention(direct) {
     %middle = core.unrealized_conversion_cast %raw : core.ptr to core.i64
     %managed = core.unrealized_conversion_cast %middle : core.i64 to !R

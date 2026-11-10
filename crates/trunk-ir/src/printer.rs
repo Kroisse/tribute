@@ -916,22 +916,13 @@ fn display_attribute_key(key: &str) -> impl fmt::Display + '_ {
     })
 }
 
-/// `name` bare when it is an identifier (`[A-Za-z_][A-Za-z0-9_]*`), and as
-/// a quoted string otherwise.
-pub fn display_name(name: &str) -> impl fmt::Display + '_ {
+/// `text` as a quoted string literal, which `parser::lexer::string_lit`
+/// reads back.
+pub fn display_string(text: &str) -> impl fmt::Display + '_ {
     fmt::from_fn(move |f| {
-        let mut chars = name.chars();
-        let is_ident = chars
-            .next()
-            .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
-            && chars.all(|c| c.is_ascii_alphanumeric() || c == '_');
-        if is_ident {
-            f.write_str(name)
-        } else {
-            f.write_char('"')?;
-            write_escaped_string(f, name)?;
-            f.write_char('"')
-        }
+        f.write_char('"')?;
+        write_escaped_string(f, text)?;
+        f.write_char('"')
     })
 }
 
@@ -1039,13 +1030,11 @@ fn generate_auto_aliases(
     let mut counts = collect_module_types(ctx, region);
     // Every identified type the module reaches gets an alias, whose
     // definition is the one place its body is written.
-    let mut identified = HashSet::default();
-    let mut seen = HashSet::default();
-    for &ty in counts.keys().chain(existing.keys()) {
-        collect_identified(ctx, ty, &mut seen, &mut identified);
-    }
-    for &ty in &identified {
-        counts.entry(ty).or_default();
+    let roots: Vec<_> = counts.keys().chain(existing.keys()).copied().collect();
+    for ty in crate::walk::reachable_types_from(ctx, roots) {
+        if crate::type_def::is_identified(ctx, ty) {
+            counts.entry(ty).or_default();
+        }
     }
     let mut candidates: Vec<(TypeRef, usize, usize, String)> = Vec::new();
 
@@ -1058,7 +1047,7 @@ fn generate_auto_aliases(
         // Types with a dialect-provided name hint (e.g. named structs) are
         // alias-eligible when used often enough. Types without a hint need
         // sufficient complexity to justify a fallback name like t0, t1.
-        let eligible = identified.contains(&ty)
+        let eligible = crate::type_def::is_identified(ctx, ty)
             || if has_hint {
                 count >= MIN_ALIAS_USES || complexity >= MIN_ALIAS_COMPLEXITY
             } else {
@@ -1091,32 +1080,6 @@ fn generate_auto_aliases(
     let ordered = topological_sort_aliases(ctx, &mut result);
 
     (result, ordered)
-}
-
-/// Collect the identified types `ty` reaches: through its parameters, the
-/// types in its attributes, and the bodies of identified types.
-fn collect_identified(
-    ctx: &IrContext,
-    ty: TypeRef,
-    seen: &mut HashSet<TypeRef>,
-    identified: &mut HashSet<TypeRef>,
-) {
-    if !seen.insert(ty) {
-        return;
-    }
-    if crate::type_def::is_identified(ctx, ty) {
-        identified.insert(ty);
-    }
-    let data = ctx.get_type(ty);
-    for &param in &data.params {
-        collect_identified(ctx, param, seen, identified);
-    }
-    for attr in data.attrs.values() {
-        attr.visit_types(&mut |nested| collect_identified(ctx, nested, seen, identified));
-    }
-    if let Some(body) = ctx.type_body(ty) {
-        collect_identified(ctx, body, seen, identified);
-    }
 }
 
 /// Choose an alias name for a type.

@@ -95,11 +95,13 @@ pub(super) fn contains_unresolved_type(
         return false;
     }
     let data = ctx.get_type(ty);
+    // A nominal layout's fields are in its body.
     let unresolved = is_unresolved_type(ctx, ty)
         || data
             .params
             .iter()
             .copied()
+            .chain(ctx.type_body(ty))
             .any(|param| contains_unresolved_type(ctx, param, visiting));
     visiting.remove(&ty);
     unresolved
@@ -110,18 +112,20 @@ fn contains_forbidden_logical_component(
     ty: TypeRef,
     visiting: &mut HashSet<TypeRef>,
 ) -> bool {
+    // A type met again is a recursive nominal layout, which the first visit
+    // checks.
     if !visiting.insert(ty) {
-        return true;
+        return false;
     }
     let data = ctx.get_type(ty);
-    let forbidden = (data.name.is(ctx, "func.func_sig"))
-        || (data.name.is(ctx, "closure.closure"))
+    let forbidden = DynPhysicalCallableType::is_implemented(ctx, ty)
         || ResumeToken::matches(ctx, ty)
         || is_unresolved_type(ctx, ty)
         || data
             .params
             .iter()
             .copied()
+            .chain(ctx.type_body(ty))
             .any(|param| contains_forbidden_logical_component(ctx, param, visiting));
     visiting.remove(&ty);
     forbidden
@@ -145,7 +149,7 @@ pub(super) fn validate_control_types(ctx: &IrContext, errors: &mut Vec<Validatio
                     push_type_error(
                         errors,
                         format!(
-                            "{ty}: callable component {component} is unresolved, recursive, physical, or contains a resume token"
+                            "{ty}: callable component {component} contains an unresolved type, a resume token, or a physical callable type"
                         ),
                     );
                 }
@@ -464,13 +468,7 @@ fn whole_ir(
     }
     let reachable_types = collect_reachable_ir_types(ctx, module.op());
     let nominal_layouts = canonical_nominal_layouts(ctx, &reachable_types, &mut errors);
-    validate_managed_reference_boundaries(
-        ctx,
-        body,
-        &reachable_types,
-        &nominal_layouts,
-        &mut errors,
-    );
+    validate_managed_reference_boundaries(ctx, body, &mut errors);
     validate_callable_origins(
         ctx,
         body,

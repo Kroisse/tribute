@@ -32,10 +32,9 @@ fn get_functions_with_evidence(ctx: &IrContext, module: &Module) -> Vec<(String,
             let name = func_op.sym_name(ctx).to_string();
             let func_ty = func_op.r#type(ctx);
             let signature = func::FuncSig::from_type_ref(ctx, func_ty).unwrap();
-            let has_evidence = signature
-                .inputs(ctx)
-                .first()
-                .is_some_and(|&ty| tribute_ir::dialect::ability::is_evidence_type_ref(ctx, ty));
+            let has_evidence = signature.inputs(ctx).first().is_some_and(|&ty| {
+                tribute_ir::dialect::ability::is_evidence_type(ctx, *module, ty)
+            });
             results.push((name, has_evidence));
         }
     }
@@ -59,7 +58,7 @@ fn function_abi(ctx: &IrContext, module: &Module, target: &str) -> (usize, bool,
     let params = function.inputs(ctx);
     let has_evidence = params
         .first()
-        .is_some_and(|ty| tribute_ir::dialect::ability::is_evidence_type_ref(ctx, *ty));
+        .is_some_and(|ty| tribute_ir::dialect::ability::is_evidence_type(ctx, *module, *ty));
     let is_cps = tribute_ir::calling_convention::DynConventionBearing::of(ctx, func_op.op_ref())
         == Some(tribute_ir::calling_convention::CallingConvention::Cps);
     let hidden_count = usize::from(has_evidence) + usize::from(has_evidence && is_cps);
@@ -209,7 +208,7 @@ fn main() -> Nil { }
         let evidence = function_param_types(&ctx, &module, "evidence_direct_closure::__clam_0");
         assert_eq!(evidence.len(), 3);
         assert!(
-            tribute_ir::dialect::ability::is_evidence_type_ref(&ctx, evidence[0]),
+            tribute_ir::dialect::ability::is_evidence_type(&ctx, module, evidence[0]),
             "{evidence:?}"
         );
         assert!(is_closure(&ctx, evidence[1]), "{evidence:?}");
@@ -218,7 +217,7 @@ fn main() -> Nil { }
         let cps = function_param_types(&ctx, &module, "cps_closure::__clam_0");
         assert_eq!(cps.len(), 3);
         assert!(
-            tribute_ir::dialect::ability::is_evidence_type_ref(&ctx, cps[0]),
+            tribute_ir::dialect::ability::is_evidence_type(&ctx, module, cps[0]),
             "{cps:?}"
         );
         assert!(is_closure(&ctx, cps[1]), "{cps:?}");
@@ -418,7 +417,11 @@ fn main() -> Nil { }
                 let evidence_count = args
                     .iter()
                     .filter(|&&arg| {
-                        tribute_ir::dialect::ability::is_evidence_type_ref(&ctx, ctx.value_ty(arg))
+                        tribute_ir::dialect::ability::is_evidence_type(
+                            &ctx,
+                            module,
+                            ctx.value_ty(arg),
+                        )
                     })
                     .count();
                 assert!(

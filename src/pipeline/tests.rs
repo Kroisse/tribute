@@ -62,15 +62,15 @@ fn declaration_with_name<'a, 'db>(
 
 fn source_logical_cps_root_module(body: &str) -> (IrContext, Module) {
     let mut ctx = IrContext::new();
-    let source = r#"core.module @test {tribute.entry = @main} {
-            !"std::runtime::evidence::Marker" = adt.struct<"std::runtime::evidence::Marker"(ability_id: core.i32, prompt_tag: core.i32)>
-            !Evidence = adt.array<adt.typeref<{name = "std::runtime::evidence::Marker"}>>
-            !Frame = adt.typeref<{name = "__tribute_continuation_frame_root_nil", tribute.cps_continuation_frame_result = core.nil}>
+    let source = r#"core.module @test {tribute.entry = @main, tribute.types = {"std::runtime::evidence::Marker" = adt.struct<"std::runtime::evidence::Marker">}} {
+            !"std::runtime::evidence::Marker" = adt.struct<"std::runtime::evidence::Marker", (core.i32, core.i32)>
+            !Evidence = adt.array<adt.struct<"std::runtime::evidence::Marker">>
+            !Frame = adt.struct<"__tribute_continuation_frame_root_nil", {tribute.cps_continuation_frame_result = core.nil}>
             !Done = closure.closure<func.func_sig<(core.nil) -> core.never>>
             !Resume = closure.closure<func.func_sig<(!Evidence, !Frame, tribute_rt.anyref) -> core.never>>
             !Dispatch = closure.closure<func.func_sig<(!Evidence, !Resume, core.i32, core.i32, core.i32, tribute_rt.anyref) -> core.never>>
-            !__tribute_continuation_frame_root_nil = adt.struct<__tribute_continuation_frame_root_nil(done: !Done, dispatch: !Dispatch), {tribute.cps_continuation_frame_result = core.nil}>
-            !Payload = adt.struct<__tribute_ability_payload_7590c57e()>
+            !__tribute_continuation_frame_root_nil = adt.struct<"__tribute_continuation_frame_root_nil", (!Done, !Dispatch), {tribute.cps_continuation_frame_result = core.nil}>
+            !Payload = adt.struct<()>
             func.func @main(%evidence: !Evidence, %frame: !Frame) -> core.never attributes {tribute.calling_convention = "cps"} {
                 BODY
             }
@@ -171,7 +171,7 @@ fn root_dispatch_definition_matches_fixed_wasm_tail_signature_and_validates_bina
         r#"
             %dispatch = adt.struct_get %frame {field = 1, type = !__tribute_continuation_frame_root_nil} : !Dispatch
             %resume = adt.ref_null {type = !Resume} : !Resume
-            %product = adt.struct_new {type = !Payload} : !Payload
+            %product = adt.struct_new() : () -> !Payload
             %payload = core.unrealized_conversion_cast %product : !Payload to tribute_rt.anyref
             effect.dispatch_cps @State @get(%payload) [%evidence, %dispatch, %resume] -> core.nil
         "#,
@@ -445,53 +445,52 @@ fn main() -> Nil {
 
     let block = module.first_block(&ctx).expect("module body");
     let mut declared = Vec::new();
+    // Each declaration follows its layout through the conversions: its
+    // `type` is a published layout, whatever key the conversions gave it,
+    // and its name is the source spelling of its type.
     for &op in &ctx.block(block).ops {
         if let Ok(decl) = adt::StructDecl::from_op(&ctx, op) {
-            let layout = ctx
-                .type_alias_by_text(decl.name(&ctx))
-                .and_then(|ty| adt::Struct::from_type_ref(&ctx, ty))
-                .unwrap_or_else(|| panic!("{} names a published struct", decl.name(&ctx)));
-            assert_eq!(decl.fields(&ctx).len(), layout.fields(&ctx).count());
-            declared.push(decl.name(&ctx).to_owned());
+            let layout = adt::Struct::from_type_ref(&ctx, decl.r#type(&ctx)).unwrap();
+            assert!(ctx.type_alias_by_type(decl.r#type(&ctx)).is_some());
+            assert_eq!(decl.fields(&ctx).len(), layout.fields(&ctx).len());
+            declared.push((decl.name(&ctx).to_owned(), decl.r#type(&ctx)));
         } else if let Ok(decl) = adt::EnumDecl::from_op(&ctx, op) {
-            let layout = ctx
-                .type_alias_by_text(decl.name(&ctx))
-                .and_then(|ty| adt::Enum::from_type_ref(&ctx, ty))
-                .unwrap_or_else(|| panic!("{} names a published enum", decl.name(&ctx)));
+            let layout = adt::Enum::from_type_ref(&ctx, decl.r#type(&ctx)).unwrap();
+            assert!(ctx.type_alias_by_type(decl.r#type(&ctx)).is_some());
             assert_eq!(decl.variants(&ctx).len(), layout.variant_count(&ctx));
-            declared.push(decl.name(&ctx).to_owned());
+            declared.push((decl.name(&ctx).to_owned(), decl.r#type(&ctx)));
         }
     }
     let declared_as = |name: &str| {
         declared
             .iter()
-            .find(|declared| declared.rsplit("::").next() == Some(name))
+            .find(|(declared, _)| declared.rsplit("::").next() == Some(name))
             .unwrap_or_else(|| panic!("{name} is declared: {declared:?}"))
-            .clone()
+            .1
     };
     let decls = adt::NominalDecls::collect(&ctx, module);
     for name in ["Point", "Handler"] {
-        let layout = ctx.type_alias_by_text(&declared_as(name)).unwrap();
-        let layout = adt::Struct::from_type_ref(&ctx, layout).unwrap();
-        assert!(decls.of_struct(&ctx, layout).is_some(), "{name}");
+        let layout = adt::Struct::from_type_ref(&ctx, declared_as(name)).unwrap();
+        assert!(decls.of_struct(layout).is_some(), "{name}");
     }
-    for name in ["Shape", "Maybe$Int"] {
-        let layout = ctx.type_alias_by_text(&declared_as(name)).unwrap();
-        let layout = adt::Enum::from_type_ref(&ctx, layout).unwrap();
-        assert!(decls.of_enum(&ctx, layout).is_some(), "{name}");
+    // A specialization is named by its source spelling, not its mangled
+    // layout name.
+    for name in ["Shape", "Maybe(Int)"] {
+        let layout = adt::Enum::from_type_ref(&ctx, declared_as(name)).unwrap();
+        assert!(decls.of_enum(layout).is_some(), "{name}");
     }
 
-    // The RTTI table takes its names from the declarations: renamed there,
-    // the names reach the table although the layouts still carry the old
-    // ones.
+    // The RTTI table takes its field and variant names from the
+    // declarations: renamed there, the names reach the table although the
+    // layouts are unchanged.
     let point = declared_as("Point");
     let shape = declared_as("Shape");
     for &op in &ctx.block(block).ops.clone() {
-        if adt::StructDecl::from_op(&ctx, op).is_ok_and(|decl| decl.name(&ctx) == point) {
+        if adt::StructDecl::from_op(&ctx, op).is_ok_and(|decl| decl.r#type(&ctx) == point) {
             let fields = ["declared_x", "declared_y"].map(|name| ctx.string_attr(name));
             ctx.op_attrs_mut(op)
                 .insert("fields", Attribute::List(fields.into()));
-        } else if adt::EnumDecl::from_op(&ctx, op).is_ok_and(|decl| decl.name(&ctx) == shape) {
+        } else if adt::EnumDecl::from_op(&ctx, op).is_ok_and(|decl| decl.r#type(&ctx) == shape) {
             let variants =
                 ["DeclaredDot", "DeclaredCircle", "DeclaredRect"].map(|name| ctx.string_attr(name));
             ctx.op_attrs_mut(op)
@@ -523,7 +522,12 @@ fn main() -> Nil {
         })
         .expect("the RTTI table");
     let bytes = table.bytes(&ctx);
-    for name in ["declared_x", "declared_y", "DeclaredCircle"] {
+    for name in [
+        "declared_x",
+        "declared_y",
+        "DeclaredCircle",
+        "pkg::Maybe(Int)",
+    ] {
         assert!(
             bytes
                 .windows(name.len())
@@ -895,7 +899,7 @@ fn native_one_shot_wrapper_traps_on_second_invocation() {
     use std::os::unix::process::ExitStatusExt;
 
     let input = r#"core.module @one_shot {tribute.entry = @main} {
-  !state = adt.struct<OneShotState(consumed: core.i1)>
+  !state = adt.struct<"OneShotState", (core.i1)>
 
   func.func @one_shot_wrapper(%state: !state, %value: core.i32) -> core.i32 attributes {tribute.calling_convention = "direct"} {
     %consumed = adt.struct_get %state {field = 0, type = !state} : core.i1
@@ -911,7 +915,7 @@ fn native_one_shot_wrapper_traps_on_second_invocation() {
 
   func.func @main() -> core.i32 attributes {tribute.calling_convention = "direct"} {
     %not_consumed = arith.constant 0 : core.i1
-    %state = adt.struct_new %not_consumed {type = !state} : !state
+    %state = adt.struct_new(%not_consumed) : (core.i1) -> !state
     %input = arith.constant 0 : core.i32
     %first = func.call @one_shot_wrapper(%state, %input) attributes {tribute.calling_convention = "direct"} : (!state, core.i32) -> core.i32
     %second = func.call @one_shot_wrapper(%state, %first) attributes {tribute.calling_convention = "direct"} : (!state, core.i32) -> core.i32
@@ -1732,17 +1736,18 @@ fn specialized_enum_schemas_and_dependencies_reach_logical_cps(db: &salsa::Datab
         let ty = ir
             .type_alias_by_name(&name)
             .expect("dependency layout is published");
+        // A layout that holds a converted layout gets a new key, tagged by
+        // the conversion.
+        let key = ir.type_attrs(ty).get_str("name").expect("a named layout");
         assert!(
-            ir.type_attrs(ty)
-                .get_str("name")
-                .is_some_and(|text| name == text)
+            name == key || key.starts_with(&format!("{name}$")),
+            "{name} is published as {key}"
         );
         ty
     }
     fn target(ir: &IrContext, ty: TypeRef) -> TypeRef {
-        assert!(tribute_ir::dialect::adt::Typeref::matches(ir, ty));
-        ir.type_alias_by_text(ir.type_attrs(ty).get_str("name").unwrap())
-            .expect("referenced layout")
+        assert!(tribute_ir::dialect::adt::is_nominal_value(ir, ty));
+        tribute_ir::dialect::adt::layout_of(ir, ty).expect("referenced layout")
     }
     let source = source_from_str(
         "specialized_enum_dependencies.trb",
@@ -1838,24 +1843,36 @@ fn main() -> Nil {}
             )
             .unwrap();
         }
+        use tribute_ir::dialect::adt;
         use trunk_ir::dialect::core::{I1, I32};
+        use trunk_ir::ops::DialectType;
+        let decls = adt::NominalDecls::collect(&ir, module);
+        let variant_names = |ir: &IrContext, layout: TypeRef| -> Vec<String> {
+            let layout = adt::Enum::from_type_ref(ir, layout).expect("enum layout");
+            decls
+                .of_enum(layout)
+                .expect("a source enum is declared")
+                .variants(ir)
+                .map(str::to_owned)
+                .collect()
+        };
         for (suffix, primitive) in [("Int", I32::NAME), ("Bool", I1::NAME)] {
             let inner = alias(&ir, &format!("pkg::Inner${suffix}"));
-            let value = get_struct_fields(&ir, inner).unwrap()[0].1;
+            let value = get_struct_fields(&ir, inner).unwrap()[0];
             assert_eq!(ir.get_type(value).name, primitive);
-            let outer =
-                get_enum_variants(&ir, alias(&ir, &format!("pkg::Outer${suffix}"))).unwrap();
-            assert_eq!(ir.str(outer[0].0), "Wrap");
-            assert_eq!(target(&ir, outer[0].1[0]), inner);
-            assert!(outer[2].1.is_empty());
-            assert_eq!(outer[3].1.len(), 2);
-            assert_eq!(outer[3].1[0], value);
-            assert_eq!(ir.get_type(outer[3].1[1]).name, I1::NAME);
-            assert_eq!(target(&ir, outer[4].1[0]), alias(&ir, "std::String"));
-            let tuple = target(&ir, outer[1].1[0]);
+            let outer_layout = alias(&ir, &format!("pkg::Outer${suffix}"));
+            let outer = get_enum_variants(&ir, outer_layout).unwrap();
+            assert_eq!(variant_names(&ir, outer_layout)[0], "Wrap");
+            assert_eq!(target(&ir, outer[0][0]), inner);
+            assert!(outer[2].is_empty());
+            assert_eq!(outer[3].len(), 2);
+            assert_eq!(outer[3][0], value);
+            assert_eq!(ir.get_type(outer[3][1]).name, I1::NAME);
+            assert_eq!(target(&ir, outer[4][0]), alias(&ir, "std::String"));
+            let tuple = target(&ir, outer[1][0]);
             let fields = get_struct_fields(&ir, tuple).unwrap();
-            assert_eq!(fields[0].1, value);
-            let callback = ir.get_type(fields[1].1);
+            assert_eq!(fields[0], value);
+            let callback = ir.get_type(fields[1]);
             assert_eq!(
                 callback.name.dialect(&ir),
                 if after_cps {
@@ -1866,21 +1883,22 @@ fn main() -> Nil {}
             );
             let boxed =
                 get_enum_variants(&ir, alias(&ir, &format!("pkg::Boxed${suffix}"))).unwrap();
-            assert_eq!(boxed[0].1, vec![value]);
+            assert_eq!(boxed[0], vec![value]);
         }
         let envelope = get_struct_fields(&ir, alias(&ir, "pkg::Envelope$Int")).unwrap();
-        assert_eq!(target(&ir, envelope[0].1), alias(&ir, "pkg::Outer$Int"));
+        assert_eq!(target(&ir, envelope[0]), alias(&ir, "pkg::Outer$Int"));
         let link = get_struct_fields(&ir, alias(&ir, "pkg::Link$Int")).unwrap();
-        assert_eq!(target(&ir, link[0].1), alias(&ir, "pkg::Loop$Int"));
+        assert_eq!(target(&ir, link[0]), alias(&ir, "pkg::Loop$Int"));
         let recursive = get_enum_variants(&ir, alias(&ir, "pkg::Loop$Int")).unwrap();
-        assert_eq!(target(&ir, recursive[0].1[0]), alias(&ir, "pkg::Link$Int"));
+        assert_eq!(target(&ir, recursive[0][0]), alias(&ir, "pkg::Link$Int"));
         for (name, primitive) in [
             ("pkg::A::Token$Int", I32::NAME),
             ("pkg::B::Token$Bool", I1::NAME),
         ] {
-            let variants = get_enum_variants(&ir, alias(&ir, name)).unwrap();
-            assert_eq!(ir.str(variants[0].0), "Item");
-            assert_eq!(ir.get_type(variants[0].1[0]).name, primitive);
+            let layout = alias(&ir, name);
+            let variants = get_enum_variants(&ir, layout).unwrap();
+            assert_eq!(variant_names(&ir, layout)[0], "Item");
+            assert_eq!(ir.get_type(variants[0][0]).name, primitive);
         }
         let output = module.op().display(&ir).to_string();
         for (name, primitive) in [
@@ -1913,30 +1931,19 @@ fn logical_nominal_layouts_are_published_through_cps(db: &salsa::DatabaseImpl) {
             .type_alias_by_name(name)
             .expect("published nominal layout");
         assert_eq!(ir.get_type(ty).name, kind);
+        // The published layout keeps the source name, or that name with the
+        // tag of a conversion that gave it a new key.
+        let key = ir.type_attrs(ty).get_str("name").expect("a named layout");
         assert!(
-            ir.type_attrs(ty)
-                .get_str("name")
-                .is_some_and(|text| name == text)
-        );
-        assert_eq!(
-            ir.type_aliases()
-                .iter()
-                .filter(|(_, ty)| {
-                    ir.type_attrs(*ty)
-                        .get_str("name")
-                        .is_some_and(|text| name == text)
-                })
-                .count(),
-            1,
-            "one published layout for {name}"
+            name == key || key.starts_with(&format!("{name}$")),
+            "{name} is published as {key}"
         );
         ty
     }
 
     fn reference_name(ir: &IrContext, ty: TypeRef) -> Symbol {
-        let data = ir.get_type(ty);
-        assert!(data.name == tribute_ir::dialect::adt::Typeref::NAME);
-        Symbol::new(ir.type_attrs(ty).get_str("name").expect("nominal identity"))
+        assert!(tribute_ir::dialect::adt::is_nominal_value(ir, ty));
+        Symbol::new(tribute_ir::dialect::adt::nominal_name(ir, ty).expect("nominal identity"))
     }
 
     // These specializations occur only in signatures, never in allocations.
@@ -2011,7 +2018,8 @@ fn main() -> Nil {}
                 .expect("signature-only specialization");
             let name = reference_name(&ir, parameter);
             assert_eq!(name, Symbol::new(nominal));
-            layout(&ir, &name, kind);
+            // A value of a layout without row parameters has its key as type.
+            assert_eq!(layout(&ir, &name, kind), parameter);
         }
         assert_ne!(
             layout(&ir, &Symbol::new("pkg::A::Token$Nat"), STRUCT),
@@ -2023,16 +2031,17 @@ fn main() -> Nil {}
             ("pkg::Second", "pkg::First"),
         ] {
             let owner = layout(&ir, &Symbol::new(owner), STRUCT);
-            let field = get_struct_fields(&ir, owner).unwrap()[0].1;
+            let field = get_struct_fields(&ir, owner).unwrap()[0];
             let name = reference_name(&ir, field);
             assert_eq!(name, Symbol::new(target));
-            layout(&ir, &name, STRUCT);
+            assert_eq!(layout(&ir, &name, STRUCT), field);
         }
         let holder = layout(&ir, &Symbol::new("pkg::Holder"), STRUCT);
-        let pair = get_struct_fields(&ir, holder).unwrap()[0].1;
-        let tuple = layout(&ir, &reference_name(&ir, pair), STRUCT);
+        let pair = get_struct_fields(&ir, holder).unwrap()[0];
+        reference_name(&ir, pair);
+        let tuple = tribute_ir::dialect::adt::layout_of(&ir, pair).expect("tuple layout");
         let fields = get_struct_fields(&ir, tuple).unwrap();
-        let callback = ir.get_type(fields[1].1);
+        let callback = ir.get_type(fields[1]);
         if after_cps {
             assert_ne!(Some(tuple), source_tuple);
             assert!(callback.name.is(&ir, "closure.closure"));
@@ -2661,10 +2670,21 @@ fn main() -> String { "hello" }
         .string
         .expect("String IR metadata");
 
+    let block = module.first_block(&ctx).expect("module body");
+    let decl = ctx
+        .block(block)
+        .ops
+        .iter()
+        .find_map(|&op| {
+            tribute_ir::dialect::adt::EnumDecl::from_op(&ctx, op)
+                .ok()
+                .filter(|decl| decl.r#type(&ctx) == string_ty)
+        })
+        .expect("String is declared");
     let Some(trunk_ir::Attribute::Location(definition)) =
-        ctx.type_attrs(string_ty).get("tribute.definition")
+        ctx.op_attrs(decl.op_ref()).get("tribute.definition")
     else {
-        panic!("String IR type records its definition location");
+        panic!("String's declaration records its definition location");
     };
     assert_eq!(
         ctx.paths().get(definition.path),

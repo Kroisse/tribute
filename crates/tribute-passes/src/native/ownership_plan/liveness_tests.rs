@@ -9,17 +9,17 @@ use trunk_ir::parser::parse_test_module;
 use super::*;
 
 const CROSS_BLOCK_BORROW: &str = r#"core.module @test {
-  !Child = adt.struct<Child(value: core.i32)>
-  !ChildRef = adt.typeref<{name = "Child"}>
-  !Box = adt.struct<Box(child: !ChildRef)>
-  !BoxRef = adt.typeref<{name = "Box"}>
+  !Child = adt.struct<"Child",(core.i32)>
+  !ChildRef = adt.struct<"Child">
+  !Box = adt.struct<"Box",(!ChildRef)>
+  !BoxRef = adt.struct<"Box">
   func.func @observe(%child: !ChildRef) -> core.i32 {
     %value = adt.struct_get %child {field = 0, type = !Child} : core.i32
     func.return %value
   }
   func.func @load(%child: !ChildRef) -> core.nil {
     ^entry:
-      %owner = adt.struct_new %child {type = !Box} : !BoxRef
+      %owner = adt.struct_new(%child) : (!ChildRef) -> !BoxRef
       %loaded = adt.struct_get %owner {field = 0, type = !Box} : !ChildRef
       cf.br [^next]
     ^next:
@@ -29,8 +29,8 @@ const CROSS_BLOCK_BORROW: &str = r#"core.module @test {
 }"#;
 
 const BRANCH_LOOP: &str = r#"core.module @test {
-  !R = adt.typeref<{name = "R"}>
-  !Layout = adt.struct<R(x: core.i32)>
+  !R = adt.struct<"R">
+  !Layout = adt.struct<"R",(core.i32)>
   func.func @flow(%condition: core.i1, %value: !R) -> core.nil {
     ^entry:
       cf.cond_br %condition [^left, ^right]
@@ -49,10 +49,10 @@ const BRANCH_LOOP: &str = r#"core.module @test {
 }"#;
 
 const ALIAS_PROJECTION: &str = r#"core.module @test {
-  !Child = adt.struct<Child(value: core.i32)>
-  !ChildRef = adt.typeref<{name = "Child"}>
-  !Choice = adt.enum<Choice { Some(!ChildRef) }>
-  !ChoiceRef = adt.typeref<{name = "Choice"}>
+  !Child = adt.struct<"Child",(core.i32)>
+  !ChildRef = adt.struct<"Child">
+  !Choice = adt.enum<"Choice",[(!ChildRef)]>
+  !ChoiceRef = adt.enum<"Choice">
   func.func @load(%choice: !ChoiceRef) -> !ChildRef {
     ^entry:
       %erased = adt.ref_cast %choice {type = tribute_rt.anyref} : tribute_rt.anyref
@@ -65,19 +65,19 @@ const ALIAS_PROJECTION: &str = r#"core.module @test {
 }"#;
 
 const NESTED_PROJECTION: &str = r#"core.module @test {
-  !Child = adt.struct<Child(value: core.i32)>
-  !ChildRef = adt.typeref<{name = "Child"}>
-  !Inner = adt.struct<Inner(child: !ChildRef)>
-  !InnerRef = adt.typeref<{name = "Inner"}>
-  !Box = adt.struct<Box(inner: !InnerRef)>
+  !Child = adt.struct<"Child",(core.i32)>
+  !ChildRef = adt.struct<"Child">
+  !Inner = adt.struct<"Inner",(!ChildRef)>
+  !InnerRef = adt.struct<"Inner">
+  !Box = adt.struct<"Box",(!InnerRef)>
   func.func @observe(%child: !ChildRef) -> core.i32 {
     %value = adt.struct_get %child {field = 0, type = !Child} : core.i32
     func.return %value
   }
   func.func @load(%child: !ChildRef) -> core.nil {
     ^entry:
-      %inner = adt.struct_new %child {type = !Inner} : !InnerRef
-      %owner = adt.struct_new %inner {type = !Box} : !Box
+      %inner = adt.struct_new(%child) : (!ChildRef) -> !InnerRef
+      %owner = adt.struct_new(%inner) : (!InnerRef) -> !Box
       %loaded = adt.struct_get %owner {field = 0, type = !Box} : !InnerRef
       %erased = adt.ref_cast %loaded {type = tribute_rt.anyref} : tribute_rt.anyref
       %restored = adt.ref_cast %erased {type = !InnerRef} : !InnerRef
@@ -421,8 +421,8 @@ fn failed_facts_lookup_does_not_publish_liveness() {
     let module = parse_test_module(
         &mut ctx,
         r#"core.module @test {
-  !R = adt.typeref<{name = "R"}>
-  !Layout = adt.struct<R(x: core.i32)>
+  !R = adt.struct<"R">
+  !Layout = adt.struct<"R",(core.i32)>
   func.func @bad(%value: !R) -> core.i32 {
     %field = adt.struct_get %value {field = 1, type = !Layout} : core.i32
     func.return %field

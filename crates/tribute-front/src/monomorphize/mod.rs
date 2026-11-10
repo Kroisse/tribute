@@ -43,7 +43,7 @@ const MAX_TRANSITIVE_SPECIALIZATION_ROUNDS: usize = 64;
 /// What specialization reads: one checked module, with the declarations of
 /// the packages it depends on for lookup and, when merged, those packages'
 /// bodies and per-expression metadata ahead of its own
-/// (`design/implementation.md`, "프론트엔드 단계 경계와 정보 소유권").
+/// (`design/frontend.md`, "프론트엔드 단계 경계와 정보 소유권").
 pub struct SpecializationInput<'db> {
     module: DeclTable<TypedRef<'db>>,
     declarations: DeclarationTypeMetadata<'db>,
@@ -371,7 +371,7 @@ pub fn monomorphize_functions<'db>(
 }
 
 /// Merge the specializations of the packages of one build into one result
-/// (`design/implementation.md`, "프론트엔드 단계 경계와 정보 소유권").
+/// (`design/frontend.md`, "프론트엔드 단계 경계와 정보 소유권").
 /// `results` are given each after the packages it depends on. The merged
 /// table has every result's sources, then every result's instances, each
 /// in that order; an instance more than one result has is kept once, the

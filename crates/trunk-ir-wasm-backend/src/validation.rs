@@ -2,18 +2,24 @@
 //!
 //! This module validates that IR is ready for emission:
 //! - All operations must be in the `wasm` dialect (error)
+//! - After `ExplicitLocals`, every function body satisfies the stack
+//!   contract ([`validate_wasm_stack`])
 //!
 //! Dialect validation errors prevent emission from proceeding.
+
+use std::ops::ControlFlow;
 
 use trunk_ir::IrContext;
 use trunk_ir::Module;
 use trunk_ir::SymbolPath;
-use trunk_ir::dialect::wasm as wasm_dialect;
+use trunk_ir::dialect::wasm::{self as wasm_dialect, DynStackOperandOrder};
 use trunk_ir::op_def::OpDef;
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::symbol_table::{SymbolTable, qualified_name};
+use trunk_ir::walk::{WalkAction, walk_op};
 
+use crate::stack_effect::{ends_block, parameter_local, pushed_results, trailing_parameters};
 use crate::{CompilationError, CompilationResult};
 
 /// Validation error details.
@@ -58,6 +64,111 @@ pub fn validate_wasm_ir(ctx: &IrContext, module: Module) -> CompilationResult<()
             errors.join("\n  - ")
         );
         Err(CompilationError::ir_validation(message))
+    }
+}
+
+/// Validate the stack contract every `wasm.func` body satisfies after
+/// `ExplicitLocals` (`design/wasm-backend.md`, "명시적 지역 변수와 stack 계약").
+///
+/// Each operation takes its stack operands from the top of the stack in its
+/// `StackOperandOrder`, each result it leaves there has exactly one use, which
+/// takes it from the stack later in the same block, and no block argument or
+/// result left off the stack is used. Values may remain at the end of a block
+/// only after an operation that ends it.
+pub(crate) fn validate_wasm_stack(ctx: &IrContext, module: Module) -> CompilationResult<()> {
+    let mut errors = Vec::new();
+    let _ = walk_op::<()>(ctx, module.op(), &mut |op| {
+        if wasm_dialect::Func::matches(ctx, op)
+            && let Some(body) = ctx.op_region(op, 0)
+        {
+            let name = qualified_name(ctx, op).unwrap_or_else(SymbolPath::root);
+            validate_stack_region(ctx, body, &name, &mut errors);
+            return ControlFlow::Continue(WalkAction::Skip);
+        }
+        ControlFlow::Continue(WalkAction::Advance)
+    });
+
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(CompilationError::ir_validation(format!(
+            "Wasm stack contract violated with {} error(s):\n  - {}",
+            errors.len(),
+            errors.join("\n  - ")
+        )))
+    }
+}
+
+fn validate_stack_region(
+    ctx: &IrContext,
+    region: RegionRef,
+    func: &SymbolPath,
+    errors: &mut Vec<String>,
+) {
+    for &block in &ctx.region(region).blocks {
+        if ctx
+            .block_args(block)
+            .iter()
+            .any(|&arg| ctx.has_uses(arg) && parameter_local(ctx, arg).is_none())
+        {
+            errors.push(format!(
+                "@{func}: a block argument is used instead of read from its local"
+            ));
+        }
+        let mut stack: Vec<ValueRef> = Vec::new();
+        let mut ended = false;
+        for &op in &ctx.block(block).ops {
+            let name = ctx.op(op).name;
+            let operands = DynStackOperandOrder::of(ctx, op);
+            if operands.len() != ctx.op_operands(op).len() {
+                errors.push(format!(
+                    "@{func}: {} has operands it does not take from the stack",
+                    name.display(ctx)
+                ));
+            }
+            // The trailing parameters are read right before the operation.
+            let on_stack = &operands[..operands.len() - trailing_parameters(ctx, op).len()];
+            match stack.len().checked_sub(on_stack.len()) {
+                Some(base) if stack[base..] == on_stack[..] => stack.truncate(base),
+                _ => {
+                    errors.push(format!(
+                        "@{func}: the operands of {} are not on top of the stack in order",
+                        name.display(ctx)
+                    ));
+                    stack.clear();
+                }
+            }
+
+            for nested in ctx.op_regions(op) {
+                validate_stack_region(ctx, nested, func, errors);
+            }
+
+            let pushed = pushed_results(ctx, op);
+            for &result in ctx.op_results(op) {
+                let uses = ctx.uses(result).len();
+                if pushed.contains(&result) {
+                    if uses != 1 {
+                        errors.push(format!(
+                            "@{func}: a result of {} left on the stack has {uses} uses, not one",
+                            name.display(ctx)
+                        ));
+                    }
+                } else if uses != 0 {
+                    errors.push(format!(
+                        "@{func}: a result of {} that is not left on the stack is used",
+                        name.display(ctx)
+                    ));
+                }
+            }
+            stack.extend(pushed);
+            ended |= ends_block(ctx, op);
+        }
+        if !stack.is_empty() && !ended {
+            errors.push(format!(
+                "@{func}: {} value(s) remain on the stack at the end of a block",
+                stack.len()
+            ));
+        }
     }
 }
 
@@ -411,6 +522,166 @@ fn is_allowed_dialect(ctx: &IrContext, op: OpRef, depth: usize) -> bool {
 mod tests {
     use super::*;
     use trunk_ir::parser::parse_test_module;
+
+    fn stack_error(source: &str) -> String {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, source);
+        validate_wasm_stack(&ctx, module)
+            .expect_err("the stack contract is violated")
+            .to_string()
+    }
+
+    #[test]
+    fn stack_contract_accepts_values_consumed_in_order() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  wasm.func @f() -> core.i32 {
+    %a = wasm.i32_const 1 : core.i32
+    %b = wasm.i32_const 2 : core.i32
+    %sum = wasm.i32_add %a, %b : core.i32
+    wasm.return %sum
+  }
+}"#,
+        );
+        validate_wasm_stack(&ctx, module).expect("each value is consumed once, in order");
+    }
+
+    #[test]
+    fn stack_contract_rejects_a_value_taken_twice() {
+        let error = stack_error(
+            r#"core.module @test {
+  wasm.func @f() -> core.i32 {
+    %a = wasm.i32_const 1 : core.i32
+    %sum = wasm.i32_add %a, %a : core.i32
+    wasm.return %sum
+  }
+}"#,
+        );
+        assert!(
+            error.contains("are not on top of the stack in order"),
+            "{error}"
+        );
+        assert!(error.contains("has 2 uses, not one"), "{error}");
+    }
+
+    #[test]
+    fn stack_contract_rejects_operands_out_of_order() {
+        let error = stack_error(
+            r#"core.module @test {
+  wasm.func @f() -> core.i32 {
+    %a = wasm.i32_const 1 : core.i32
+    %b = wasm.i32_const 2 : core.i32
+    %diff = wasm.i32_sub %b, %a : core.i32
+    wasm.return %diff
+  }
+}"#,
+        );
+        assert!(error.contains("wasm.i32_sub are not on top"), "{error}");
+    }
+
+    #[test]
+    fn stack_contract_rejects_a_used_loop_argument() {
+        let error = stack_error(
+            r#"core.module @test {
+  wasm.func @f() -> core.i32 {
+    wasm.loop() {
+      ^body(%i: core.i32):
+        wasm.return %i
+    }
+    wasm.unreachable
+  }
+}"#,
+        );
+        assert!(error.contains("a block argument is used"), "{error}");
+    }
+
+    #[test]
+    fn stack_contract_reads_trailing_parameters_before_their_user() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  wasm.func @f(%x: core.i32, %y: core.i32) -> core.i32 {
+    %one = wasm.i32_const 1 : core.i32
+    %sum = wasm.i32_add %one, %x : core.i32
+    %diff = wasm.i32_sub %x, %y : core.i32
+    %all = wasm.i32_add %sum, %diff : core.i32
+    wasm.return %all
+  }
+}"#,
+        );
+        validate_wasm_stack(&ctx, module).expect("trailing parameters are read in place");
+    }
+
+    #[test]
+    fn stack_contract_rejects_a_parameter_below_a_stack_value() {
+        let error = stack_error(
+            r#"core.module @test {
+  wasm.func @f(%x: core.i32) -> core.i32 {
+    %one = wasm.i32_const 1 : core.i32
+    %sum = wasm.i32_add %x, %one : core.i32
+    wasm.return %sum
+  }
+}"#,
+        );
+        assert!(error.contains("wasm.i32_add are not on top"), "{error}");
+    }
+
+    #[test]
+    fn stack_contract_rejects_a_value_left_at_the_end_of_a_block() {
+        let error = stack_error(
+            r#"core.module @test {
+  wasm.func @f() -> core.nil {
+    wasm.block {
+      %a = wasm.i32_const 1 : core.i32
+    }
+    wasm.return
+  }
+}"#,
+        );
+        assert!(error.contains("1 value(s) remain on the stack"), "{error}");
+    }
+
+    #[test]
+    fn stack_contract_rejects_a_used_result_that_leaves_no_value() {
+        let error = stack_error(
+            r#"core.module @test {
+  wasm.func @g() -> core.nil {
+    wasm.return
+  }
+  wasm.func @f() -> core.nil {
+    %unit = wasm.call @g() : () -> core.nil
+    wasm.return %unit
+  }
+}"#,
+        );
+        assert!(
+            error.contains("a result of wasm.call that is not left on the stack is used"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn stack_contract_rejects_loop_init_operands() {
+        let error = stack_error(
+            r#"core.module @test {
+  wasm.func @f() -> core.nil {
+    %n = wasm.i32_const 1 : core.i32
+    wasm.loop(%n) {
+      ^body(%i: core.i32):
+        wasm.return
+    }
+    wasm.return
+  }
+}"#,
+        );
+        assert!(
+            error.contains("wasm.loop has operands it does not take from the stack"),
+            "{error}"
+        );
+    }
 
     fn assert_rejects_tail_signature(source: &str) {
         let mut ctx = IrContext::new();

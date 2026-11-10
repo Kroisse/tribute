@@ -26,7 +26,7 @@ fn resume_block(
     location: Location,
     frame: &FrameTypes,
 ) -> (BlockRef, TypeRef) {
-    let evidence_type = ability::evidence_adt_type_ref(ctx);
+    let evidence_type = frame.evidence;
     let anyref = tribute_rt::Anyref::params().intern(ctx).as_type_ref();
     let block = make_block(ctx, location, &[evidence_type, frame.reference, anyref]);
     let resume_type = cps_resume_type(ctx, evidence_type, frame.reference, anyref);
@@ -53,21 +53,13 @@ fn push_one_shot_resume(
             )
         })?;
     let i1_type = TypeDataBuilder::new("core.i1").intern(ctx);
-    let state_name = ctx.intern_str("__tribute_one_shot_state");
-    let state_type = adt::Struct::from_fields(
-        ctx,
-        state_name,
-        [("consumed", i1_type)],
-        AttributeMap::new(),
-    )
-    .as_type_ref();
+    let state_type = adt::Struct::literal(ctx, [i1_type], AttributeMap::new()).as_type_ref();
     let not_consumed = arith::Constant::operands()
         .value(Attribute::Int(0))
         .results(i1_type)
         .build(ctx, location);
     ctx.push_op(block, not_consumed.op_ref());
     let state = adt::StructNew::operands([not_consumed.result(ctx)])
-        .r#type(state_type)
         .results(state_type)
         .build(ctx, location);
     ctx.push_op(block, state.op_ref());
@@ -85,7 +77,7 @@ fn push_one_shot_resume(
         let unit = core::NilValue::operands().build(ctx, location);
         ctx.push_op(wrapper_block, unit.op_ref());
         unit.result(ctx)
-    } else if input_data.name == tribute_ir::dialect::adt::Typeref::NAME {
+    } else if tribute_ir::dialect::adt::is_nominal_value(ctx, input_type) {
         // Dynamic effect values recover nominal references only through
         // their declared type, preserving the typed ownership boundary.
         let recovered = adt::RefCast::operands(args[2])
@@ -223,7 +215,7 @@ impl ExpandDispatches {
         let dispatch = frame_dispatch(ctx, block, location, &types, frame);
         detach_into(ctx, block, rewriter);
         let anyref = tribute_rt::Anyref::params().intern(ctx).as_type_ref();
-        let payload = pack_payload(ctx, rewriter, location, &ability, op_name, values, anyref);
+        let payload = pack_payload(ctx, rewriter, location, values, anyref);
         let dispatch = effect::DispatchCps::operands(evidence, dispatch, resume, payload)
             .ability(ability)
             .op_name(op_name)

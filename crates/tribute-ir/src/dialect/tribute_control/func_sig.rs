@@ -26,18 +26,39 @@ pub enum FuncSigTypeError {
 
 /// Typed wrapper for an input-first, exactly-one-result source signature.
 ///
+/// ```text
+/// tribute_control.func_sig<(T) -> R>
+/// tribute_control.func_sig<(T) -> R row(@"<instance A>", @"<instance B>" | 'a1)>
+/// ```
+///
 /// The type stores its inputs and results flat, as `[inputs..., results...]`,
 /// split by the required `u32` delimiters `num_inputs` and `num_results`; the
 /// source-owned validated API requires exactly one result. `Params` and
 /// `Result` are source-logical types. The type carries no calling convention
-/// (`design/tribute-dialects.md`, "Convention entry"); its ability row is
-/// the `ability_row` type attribute ("Ability row").
+/// (`design/tribute-dialects.md`, "Convention entry").
+///
+/// Its ability row is the `ability_row` type attribute, stored as
+/// `{ability_row = {instances = [@"<instance A>", @"<instance B>"], tail = 1}}`:
+/// `instances` lists symbol references to `ability.decl` definitions, sorted
+/// by symbol path with each instance once, and `tail` is the index of a row
+/// binder of the enclosing definition. Either may be absent; with both absent
+/// the row is closed and empty, and the attribute itself is omitted. The
+/// function form writes the row as a `row(..)` clause after the result:
+/// the instances, then `|` and the tail binder, so `row(| 'a1)` without
+/// instances and `row(@A)` without a tail. The closed empty row is never
+/// written. A tail inside a type alias has the same meaning as one written
+/// inline. What the row means and where it may appear is in
+/// `design/tribute-dialects.md`, "Ability row".
 ///
 /// The verifier checks that both delimiters are present `u32`s whose sum is
 /// the parameter count, that there is exactly one result, that no
 /// `tribute.calling_convention` attribute is present, and that the stored row
 /// is well formed and not written out when closed and empty. It does not
-/// inspect the component types.
+/// inspect the component types, since a type is interned once and shared by
+/// every phase. The `tribute_control` validator checks them at the
+/// source-logical boundary: no component contains an unresolved type, a
+/// resume token, or a type implementing `PhysicalCallableType`
+/// (`design/tribute-dialects.md`, "직접형 호출 대상과 제어").
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct FuncSig(pub(super) TypeRef);
 

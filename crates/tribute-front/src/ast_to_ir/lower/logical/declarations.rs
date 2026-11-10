@@ -7,8 +7,8 @@ use tribute_ir::dialect::tribute_control::{
 };
 use tribute_ir::dialect::{adt, tribute_control};
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
-use trunk_ir::ops::DialectOp;
-use trunk_ir::refs::{BlockRef, TypeRef, ValueRef};
+use trunk_ir::ops::{DialectOp, DialectType};
+use trunk_ir::refs::{BlockRef, OpRef, TypeRef, ValueRef};
 use trunk_ir::types::{Attribute, Location};
 use trunk_ir::{Symbol, SymbolPath};
 
@@ -156,10 +156,10 @@ pub(super) fn prescan_struct_accessor_signatures<'db>(
         let prefix = ctx.module_path().clone();
         let qualified = prefix.child(declaration.name.clone());
         let type_name = super::super::qualified_type_name(ctx.db, &CtorId::new(ctx.db, qualified));
-        let struct_type = ctx.adt_typeref(ir, &type_name);
         let layout = ctx
             .get_type(&type_name)
             .unwrap_or_else(|| panic!("missing logical struct layout for accessor"));
+        let (struct_type, row_params) = accessor_struct_type(ir, layout);
         let layout_fields = tribute_ir::dialect::adt::layout::get_struct_fields(ir, layout)
             .unwrap_or_else(|| panic!("malformed logical struct layout"));
         for (index, field) in declaration.fields.iter().enumerate() {
@@ -169,13 +169,13 @@ pub(super) fn prescan_struct_accessor_signatures<'db>(
                 .child(field_name.clone());
             let field_type = layout_fields
                 .get(index)
-                .map(|(_, ty)| *ty)
+                .copied()
                 .unwrap_or_else(|| panic!("missing logical struct accessor field type"));
             let closed = |param_types, return_type| LogicalGeneratedSignature {
                 param_types,
                 return_type,
                 row: Row::default(),
-                binders: vec![],
+                binders: accessor_binders(row_params, false),
             };
             ctx.register_logical_generated_signature(
                 &getter_name,
@@ -190,7 +190,7 @@ pub(super) fn prescan_struct_accessor_signatures<'db>(
                 closed(vec![struct_type, field_type], struct_type),
             );
             // The modifier performs whatever its callback performs.
-            let row = Row::new([], Some(0));
+            let row = Row::new([], Some(row_params));
             let callback = tribute_control::FuncSig::params([field_type], field_type)
                 .row(row.clone())
                 .intern(ir)
@@ -201,10 +201,43 @@ pub(super) fn prescan_struct_accessor_signatures<'db>(
                     param_types: vec![struct_type, callback],
                     return_type: struct_type,
                     row: row.clone(),
-                    binders: vec![RowBinder::Param],
+                    binders: accessor_binders(row_params, true),
                 },
             );
         }
+    }
+}
+
+/// The struct type the accessors of `layout` take, and the number of its
+/// row parameters. The accessors quantify the struct's row parameters
+/// first, as the struct's scheme does, and pass each binder to the
+/// parameter at its position, so the layout's field types are the
+/// accessors' field types as they are.
+fn accessor_struct_type(ir: &mut IrContext, layout: TypeRef) -> (TypeRef, u32) {
+    let row_params = adt::Struct::from_type_ref(ir, layout)
+        .and_then(|layout| layout.row_params(ir))
+        .unwrap_or(0);
+    let row_args = (0..row_params).map(|binder| Row::new([], Some(binder)));
+    (adt::value_type(ir, layout, row_args), row_params)
+}
+
+/// The binders of an accessor of a struct with `row_params` row
+/// parameters; a modifier also quantifies its callback's row.
+fn accessor_binders(row_params: u32, modifies: bool) -> Vec<RowBinder> {
+    let count = row_params + u32::from(modifies);
+    vec![RowBinder::Param; count as usize]
+}
+
+/// Declare on the accessor `function` the binders [`accessor_binders`]
+/// gives it, if any.
+fn set_accessor_binders(ir: &mut IrContext, function: OpRef, row_params: u32, modifies: bool) {
+    let binders: Vec<_> = accessor_binders(row_params, modifies)
+        .into_iter()
+        .map(|binder| ir.string_attr(binder.keyword()))
+        .collect();
+    if !binders.is_empty() {
+        ir.op_attrs_mut(function)
+            .insert(tribute_control::ROW_BINDERS_ATTR, Attribute::List(binders));
     }
 }
 
@@ -236,17 +269,17 @@ pub(super) fn lower_struct_accessors<'db>(
     let prefix = ctx.module_path().clone();
     let qualified = prefix.child(declaration.name.clone());
     let type_name = super::super::qualified_type_name(ctx.db, &CtorId::new(ctx.db, qualified));
-    let struct_type = ctx.adt_typeref(ir, &type_name);
     let layout_type = ctx
         .get_type(&type_name)
         .unwrap_or_else(|| panic!("prescan did not register struct layout {type_name}"));
+    let (struct_type, row_params) = accessor_struct_type(ir, layout_type);
     for (index, field) in declaration.fields.iter().enumerate() {
         let field_name = field.name.clone().unwrap_or_else(|| Symbol::new("_"));
         let getter_name = prefix
             .child(declaration.name.clone())
             .child(field_name.clone());
         let field_type = tribute_ir::dialect::adt::layout::get_struct_fields(ir, layout_type)
-            .and_then(|fields| fields.get(index).map(|(_, ty)| *ty))
+            .and_then(|fields| fields.get(index).copied())
             .unwrap_or_else(|| panic!("missing logical struct accessor field type"));
         let entry = ir.create_block(BlockData {
             location,
@@ -281,6 +314,7 @@ pub(super) fn lower_struct_accessors<'db>(
             .as_type_ref();
         let getter =
             tribute_control::func_declaration(ir, location, &getter_name.to_symbol(), callable);
+        set_accessor_binders(ir, getter.op_ref(), row_params, false);
         ir.push_op_region(getter.op_ref(), body);
         ir.push_op(top, getter.op_ref());
 
@@ -289,12 +323,9 @@ pub(super) fn lower_struct_accessors<'db>(
         }
         let field_types: Vec<TypeRef> =
             tribute_ir::dialect::adt::layout::get_struct_fields(ir, layout_type)
-                .unwrap_or_else(|| panic!("malformed logical struct layout"))
-                .iter()
-                .map(|(_, ty)| *ty)
-                .collect();
+                .unwrap_or_else(|| panic!("malformed logical struct layout"));
         let [setter_name, modifier_name] = field_update_names(&getter_name);
-        let callback_row = Row::new([], Some(0));
+        let callback_row = Row::new([], Some(row_params));
         let callback = tribute_control::FuncSig::params([field_type], field_type)
             .row(callback_row.clone())
             .intern(ir)
@@ -358,7 +389,6 @@ pub(super) fn lower_struct_accessors<'db>(
                 })
                 .collect();
             let updated = adt::StructNew::operands(values)
-                .r#type(layout_type)
                 .results(struct_type)
                 .build(ir, location);
             ir.push_op(entry, updated.op_ref());
@@ -387,13 +417,7 @@ pub(super) fn lower_struct_accessors<'db>(
                     .as_type_ref();
             let function =
                 tribute_control::func_declaration(ir, location, &name.to_symbol(), callable);
-            if modifies {
-                let param = ir.string_attr(RowBinder::Param.keyword());
-                ir.op_attrs_mut(function.op_ref()).insert(
-                    tribute_control::ROW_BINDERS_ATTR,
-                    Attribute::List(vec![param]),
-                );
-            }
+            set_accessor_binders(ir, function.op_ref(), row_params, modifies);
             ir.push_op_region(function.op_ref(), body);
             ir.push_op(top, function.op_ref());
         }

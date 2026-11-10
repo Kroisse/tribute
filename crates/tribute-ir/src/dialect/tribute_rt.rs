@@ -89,7 +89,7 @@ mod tribute_rt {
     /// released. Target lowering builds one table per distinct entry list:
     /// read-only data of function addresses on native targets, and
     /// consecutive slots of the function table on Wasm, whose start index is
-    /// the reference. See the closure storage layout in `design/ir.md`.
+    /// the reference. See the closure storage layout in `design/tribute-dialects.md`.
     ///
     /// ```text
     /// %table = tribute_rt.convention_table [@f] : tribute_rt.convention_table_ref
@@ -319,10 +319,8 @@ mod tests {
         let ptr_ty = make_ptr_type(&mut ctx);
         let f64_ty = TypeDataBuilder::new("core.f64").intern(&mut ctx);
         let bool_ty = TypeDataBuilder::new("core.i1").intern(&mut ctx);
-        let managed_ty = crate::dialect::adt::Typeref::params()
-            .name("Box")
-            .intern(&mut ctx)
-            .as_type_ref();
+        let managed_ty =
+            crate::dialect::adt::Struct::key(&mut ctx, "Box", Default::default()).as_type_ref();
 
         // Build `op` over a fresh operand of `operand_ty`, then check that
         // `from_op` matches it and that its operand accessor and result type

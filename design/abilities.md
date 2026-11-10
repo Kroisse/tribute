@@ -184,6 +184,34 @@ fn fetch(url: String) ->{Http} Response {
 
 타입 시그니처가 이미 `->{E}` 형태로 ability 정보를 담고 있으므로, 호출 시점에 별도 표기는 불필요하다.
 
+### 호출 시점의 handler
+
+클로저의 ability는 **호출 시점**에 해소된다. 클로저를 만든 시점의 handler를
+캡처하지 않는다:
+
+```rust
+fn make_counter() ->{State(Int)} fn() ->{State(Int)} Int {
+    fn() {
+        let n = State::get()
+        State::set(n + 1)
+        n
+    }
+}
+
+// 사용
+let counter = run_state(fn() make_counter(), 0)
+// counter: fn() ->{State(Int)} Int
+
+// 다른 State 핸들러 아래에서 호출
+run_state(fn() {
+    counter()  // 이 시점의 State 핸들러 사용
+    counter()
+}, 100)
+```
+
+클로저 타입에 `->{State(Int)}`가 명시되어 있으므로, 호출하는 쪽에서
+State 핸들러를 제공해야 한다. 이는 일반 함수 호출과 동일한 계약이다.
+
 ### UFCS와 Ability
 
 Ability operation도 UFCS를 통해 메서드처럼 호출할 수 있다. 인자가 없으면 괄호 생략 가능:
@@ -456,6 +484,12 @@ op SomeOp::cancel() { fallback_value }
 
 항상 resume하지 않는 operation은 `-> Never`로 선언하는 것이 좋다.
 `-> Never`는 continuation 캡처 자체를 생략하는 최적화를 가능하게 한다.
+
+Continuation은 자신을 캡처한 handler 스코프 내에서만 resume될 수 있다.
+`resume`은 키워드이므로 단독으로 값이 될 수 없고, 호출 위치(`resume expr`)에서만
+사용할 수 있다. 다만 `fn() resume state`처럼 람다 안에서 호출하는 것은 가능하며,
+이 경우 continuation의 affine 사용(최대 1회 호출)은 런타임에서 보장한다
+([논리적 CPS 적법화](cps-effects.md#논리적-cps-적법화)).
 
 #### `resume`과 handler 선택
 

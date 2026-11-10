@@ -8,8 +8,7 @@ use wasm_encoder::{Function, Instruction, MemArg};
 
 use crate::CompilationResult;
 
-use super::super::value_emission::emit_operands;
-use super::super::{FunctionEmitContext, ModuleInfo, set_result_local};
+use super::super::ModuleInfo;
 
 /// Create a MemArg for load/store instructions.
 ///
@@ -38,12 +37,10 @@ fn make_memarg(offset: u32, align: u32, memory_index: u32, natural_align: u32) -
 pub(crate) fn handle_memory_size(
     ctx: &IrContext,
     mem_size_op: wasm_dialect::MemorySize,
-    emit_ctx: &FunctionEmitContext,
     function: &mut Function,
 ) -> CompilationResult<()> {
     let memory = mem_size_op.memory(ctx);
     function.instruction(&Instruction::MemorySize(memory));
-    set_result_local(ctx, mem_size_op.op_ref(), emit_ctx, function)?;
     Ok(())
 }
 
@@ -51,15 +48,11 @@ pub(crate) fn handle_memory_size(
 pub(crate) fn handle_memory_grow(
     ctx: &IrContext,
     mem_grow_op: wasm_dialect::MemoryGrow,
-    emit_ctx: &FunctionEmitContext,
     _module_info: &ModuleInfo,
     function: &mut Function,
 ) -> CompilationResult<()> {
-    let operands = ctx.op_operands(mem_grow_op.op_ref());
-    emit_operands(ctx, operands, emit_ctx, function)?;
     let memory = mem_grow_op.memory(ctx);
     function.instruction(&Instruction::MemoryGrow(memory));
-    set_result_local(ctx, mem_grow_op.op_ref(), emit_ctx, function)?;
     Ok(())
 }
 
@@ -69,12 +62,9 @@ pub(crate) fn handle_memory_grow(
 pub(crate) fn handle_i32_load(
     ctx: &IrContext,
     load_op: wasm_dialect::I32Load,
-    emit_ctx: &FunctionEmitContext,
     _module_info: &ModuleInfo,
     function: &mut Function,
 ) -> CompilationResult<()> {
-    let operands = ctx.op_operands(load_op.op_ref());
-    emit_operands(ctx, operands, emit_ctx, function)?;
     let memarg = make_memarg(
         load_op.offset(ctx),
         load_op.align(ctx),
@@ -82,7 +72,6 @@ pub(crate) fn handle_i32_load(
         2,
     );
     function.instruction(&Instruction::I32Load(memarg));
-    set_result_local(ctx, load_op.op_ref(), emit_ctx, function)?;
     Ok(())
 }
 
@@ -90,12 +79,9 @@ pub(crate) fn handle_i32_load(
 pub(crate) fn handle_i64_load(
     ctx: &IrContext,
     load_op: wasm_dialect::I64Load,
-    emit_ctx: &FunctionEmitContext,
     _module_info: &ModuleInfo,
     function: &mut Function,
 ) -> CompilationResult<()> {
-    let operands = ctx.op_operands(load_op.op_ref());
-    emit_operands(ctx, operands, emit_ctx, function)?;
     let memarg = make_memarg(
         load_op.offset(ctx),
         load_op.align(ctx),
@@ -103,7 +89,6 @@ pub(crate) fn handle_i64_load(
         3,
     );
     function.instruction(&Instruction::I64Load(memarg));
-    set_result_local(ctx, load_op.op_ref(), emit_ctx, function)?;
     Ok(())
 }
 
@@ -111,12 +96,9 @@ pub(crate) fn handle_i64_load(
 pub(crate) fn handle_f32_load(
     ctx: &IrContext,
     load_op: wasm_dialect::F32Load,
-    emit_ctx: &FunctionEmitContext,
     _module_info: &ModuleInfo,
     function: &mut Function,
 ) -> CompilationResult<()> {
-    let operands = ctx.op_operands(load_op.op_ref());
-    emit_operands(ctx, operands, emit_ctx, function)?;
     let memarg = make_memarg(
         load_op.offset(ctx),
         load_op.align(ctx),
@@ -124,7 +106,6 @@ pub(crate) fn handle_f32_load(
         2,
     );
     function.instruction(&Instruction::F32Load(memarg));
-    set_result_local(ctx, load_op.op_ref(), emit_ctx, function)?;
     Ok(())
 }
 
@@ -132,12 +113,9 @@ pub(crate) fn handle_f32_load(
 pub(crate) fn handle_f64_load(
     ctx: &IrContext,
     load_op: wasm_dialect::F64Load,
-    emit_ctx: &FunctionEmitContext,
     _module_info: &ModuleInfo,
     function: &mut Function,
 ) -> CompilationResult<()> {
-    let operands = ctx.op_operands(load_op.op_ref());
-    emit_operands(ctx, operands, emit_ctx, function)?;
     let memarg = make_memarg(
         load_op.offset(ctx),
         load_op.align(ctx),
@@ -145,7 +123,6 @@ pub(crate) fn handle_f64_load(
         3,
     );
     function.instruction(&Instruction::F64Load(memarg));
-    set_result_local(ctx, load_op.op_ref(), emit_ctx, function)?;
     Ok(())
 }
 
@@ -155,12 +132,9 @@ pub(crate) fn handle_f64_load(
 pub(crate) fn handle_i32_load8_s(
     ctx: &IrContext,
     load_op: wasm_dialect::I32Load8S,
-    emit_ctx: &FunctionEmitContext,
     _module_info: &ModuleInfo,
     function: &mut Function,
 ) -> CompilationResult<()> {
-    let operands = ctx.op_operands(load_op.op_ref());
-    emit_operands(ctx, operands, emit_ctx, function)?;
     let memarg = make_memarg(
         load_op.offset(ctx),
         load_op.align(ctx),
@@ -168,7 +142,6 @@ pub(crate) fn handle_i32_load8_s(
         0,
     );
     function.instruction(&Instruction::I32Load8S(memarg));
-    set_result_local(ctx, load_op.op_ref(), emit_ctx, function)?;
     Ok(())
 }
 
@@ -176,12 +149,9 @@ pub(crate) fn handle_i32_load8_s(
 pub(crate) fn handle_i32_load8_u(
     ctx: &IrContext,
     load_op: wasm_dialect::I32Load8U,
-    emit_ctx: &FunctionEmitContext,
     _module_info: &ModuleInfo,
     function: &mut Function,
 ) -> CompilationResult<()> {
-    let operands = ctx.op_operands(load_op.op_ref());
-    emit_operands(ctx, operands, emit_ctx, function)?;
     let memarg = make_memarg(
         load_op.offset(ctx),
         load_op.align(ctx),
@@ -189,7 +159,6 @@ pub(crate) fn handle_i32_load8_u(
         0,
     );
     function.instruction(&Instruction::I32Load8U(memarg));
-    set_result_local(ctx, load_op.op_ref(), emit_ctx, function)?;
     Ok(())
 }
 
@@ -197,12 +166,9 @@ pub(crate) fn handle_i32_load8_u(
 pub(crate) fn handle_i32_load16_s(
     ctx: &IrContext,
     load_op: wasm_dialect::I32Load16S,
-    emit_ctx: &FunctionEmitContext,
     _module_info: &ModuleInfo,
     function: &mut Function,
 ) -> CompilationResult<()> {
-    let operands = ctx.op_operands(load_op.op_ref());
-    emit_operands(ctx, operands, emit_ctx, function)?;
     let memarg = make_memarg(
         load_op.offset(ctx),
         load_op.align(ctx),
@@ -210,7 +176,6 @@ pub(crate) fn handle_i32_load16_s(
         1,
     );
     function.instruction(&Instruction::I32Load16S(memarg));
-    set_result_local(ctx, load_op.op_ref(), emit_ctx, function)?;
     Ok(())
 }
 
@@ -218,12 +183,9 @@ pub(crate) fn handle_i32_load16_s(
 pub(crate) fn handle_i32_load16_u(
     ctx: &IrContext,
     load_op: wasm_dialect::I32Load16U,
-    emit_ctx: &FunctionEmitContext,
     _module_info: &ModuleInfo,
     function: &mut Function,
 ) -> CompilationResult<()> {
-    let operands = ctx.op_operands(load_op.op_ref());
-    emit_operands(ctx, operands, emit_ctx, function)?;
     let memarg = make_memarg(
         load_op.offset(ctx),
         load_op.align(ctx),
@@ -231,7 +193,6 @@ pub(crate) fn handle_i32_load16_u(
         1,
     );
     function.instruction(&Instruction::I32Load16U(memarg));
-    set_result_local(ctx, load_op.op_ref(), emit_ctx, function)?;
     Ok(())
 }
 
@@ -241,12 +202,9 @@ pub(crate) fn handle_i32_load16_u(
 pub(crate) fn handle_i64_load8_s(
     ctx: &IrContext,
     load_op: wasm_dialect::I64Load8S,
-    emit_ctx: &FunctionEmitContext,
     _module_info: &ModuleInfo,
     function: &mut Function,
 ) -> CompilationResult<()> {
-    let operands = ctx.op_operands(load_op.op_ref());
-    emit_operands(ctx, operands, emit_ctx, function)?;
     let memarg = make_memarg(
         load_op.offset(ctx),
         load_op.align(ctx),
@@ -254,7 +212,6 @@ pub(crate) fn handle_i64_load8_s(
         0,
     );
     function.instruction(&Instruction::I64Load8S(memarg));
-    set_result_local(ctx, load_op.op_ref(), emit_ctx, function)?;
     Ok(())
 }
 
@@ -262,12 +219,9 @@ pub(crate) fn handle_i64_load8_s(
 pub(crate) fn handle_i64_load8_u(
     ctx: &IrContext,
     load_op: wasm_dialect::I64Load8U,
-    emit_ctx: &FunctionEmitContext,
     _module_info: &ModuleInfo,
     function: &mut Function,
 ) -> CompilationResult<()> {
-    let operands = ctx.op_operands(load_op.op_ref());
-    emit_operands(ctx, operands, emit_ctx, function)?;
     let memarg = make_memarg(
         load_op.offset(ctx),
         load_op.align(ctx),
@@ -275,7 +229,6 @@ pub(crate) fn handle_i64_load8_u(
         0,
     );
     function.instruction(&Instruction::I64Load8U(memarg));
-    set_result_local(ctx, load_op.op_ref(), emit_ctx, function)?;
     Ok(())
 }
 
@@ -283,12 +236,9 @@ pub(crate) fn handle_i64_load8_u(
 pub(crate) fn handle_i64_load16_s(
     ctx: &IrContext,
     load_op: wasm_dialect::I64Load16S,
-    emit_ctx: &FunctionEmitContext,
     _module_info: &ModuleInfo,
     function: &mut Function,
 ) -> CompilationResult<()> {
-    let operands = ctx.op_operands(load_op.op_ref());
-    emit_operands(ctx, operands, emit_ctx, function)?;
     let memarg = make_memarg(
         load_op.offset(ctx),
         load_op.align(ctx),
@@ -296,7 +246,6 @@ pub(crate) fn handle_i64_load16_s(
         1,
     );
     function.instruction(&Instruction::I64Load16S(memarg));
-    set_result_local(ctx, load_op.op_ref(), emit_ctx, function)?;
     Ok(())
 }
 
@@ -304,12 +253,9 @@ pub(crate) fn handle_i64_load16_s(
 pub(crate) fn handle_i64_load16_u(
     ctx: &IrContext,
     load_op: wasm_dialect::I64Load16U,
-    emit_ctx: &FunctionEmitContext,
     _module_info: &ModuleInfo,
     function: &mut Function,
 ) -> CompilationResult<()> {
-    let operands = ctx.op_operands(load_op.op_ref());
-    emit_operands(ctx, operands, emit_ctx, function)?;
     let memarg = make_memarg(
         load_op.offset(ctx),
         load_op.align(ctx),
@@ -317,7 +263,6 @@ pub(crate) fn handle_i64_load16_u(
         1,
     );
     function.instruction(&Instruction::I64Load16U(memarg));
-    set_result_local(ctx, load_op.op_ref(), emit_ctx, function)?;
     Ok(())
 }
 
@@ -325,12 +270,9 @@ pub(crate) fn handle_i64_load16_u(
 pub(crate) fn handle_i64_load32_s(
     ctx: &IrContext,
     load_op: wasm_dialect::I64Load32S,
-    emit_ctx: &FunctionEmitContext,
     _module_info: &ModuleInfo,
     function: &mut Function,
 ) -> CompilationResult<()> {
-    let operands = ctx.op_operands(load_op.op_ref());
-    emit_operands(ctx, operands, emit_ctx, function)?;
     let memarg = make_memarg(
         load_op.offset(ctx),
         load_op.align(ctx),
@@ -338,7 +280,6 @@ pub(crate) fn handle_i64_load32_s(
         2,
     );
     function.instruction(&Instruction::I64Load32S(memarg));
-    set_result_local(ctx, load_op.op_ref(), emit_ctx, function)?;
     Ok(())
 }
 
@@ -346,12 +287,9 @@ pub(crate) fn handle_i64_load32_s(
 pub(crate) fn handle_i64_load32_u(
     ctx: &IrContext,
     load_op: wasm_dialect::I64Load32U,
-    emit_ctx: &FunctionEmitContext,
     _module_info: &ModuleInfo,
     function: &mut Function,
 ) -> CompilationResult<()> {
-    let operands = ctx.op_operands(load_op.op_ref());
-    emit_operands(ctx, operands, emit_ctx, function)?;
     let memarg = make_memarg(
         load_op.offset(ctx),
         load_op.align(ctx),
@@ -359,7 +297,6 @@ pub(crate) fn handle_i64_load32_u(
         2,
     );
     function.instruction(&Instruction::I64Load32U(memarg));
-    set_result_local(ctx, load_op.op_ref(), emit_ctx, function)?;
     Ok(())
 }
 
@@ -369,12 +306,9 @@ pub(crate) fn handle_i64_load32_u(
 pub(crate) fn handle_i32_store(
     ctx: &IrContext,
     store_op: wasm_dialect::I32Store,
-    emit_ctx: &FunctionEmitContext,
     _module_info: &ModuleInfo,
     function: &mut Function,
 ) -> CompilationResult<()> {
-    let operands = ctx.op_operands(store_op.op_ref());
-    emit_operands(ctx, operands, emit_ctx, function)?;
     let memarg = make_memarg(
         store_op.offset(ctx),
         store_op.align(ctx),
@@ -389,12 +323,9 @@ pub(crate) fn handle_i32_store(
 pub(crate) fn handle_i64_store(
     ctx: &IrContext,
     store_op: wasm_dialect::I64Store,
-    emit_ctx: &FunctionEmitContext,
     _module_info: &ModuleInfo,
     function: &mut Function,
 ) -> CompilationResult<()> {
-    let operands = ctx.op_operands(store_op.op_ref());
-    emit_operands(ctx, operands, emit_ctx, function)?;
     let memarg = make_memarg(
         store_op.offset(ctx),
         store_op.align(ctx),
@@ -409,12 +340,9 @@ pub(crate) fn handle_i64_store(
 pub(crate) fn handle_f32_store(
     ctx: &IrContext,
     store_op: wasm_dialect::F32Store,
-    emit_ctx: &FunctionEmitContext,
     _module_info: &ModuleInfo,
     function: &mut Function,
 ) -> CompilationResult<()> {
-    let operands = ctx.op_operands(store_op.op_ref());
-    emit_operands(ctx, operands, emit_ctx, function)?;
     let memarg = make_memarg(
         store_op.offset(ctx),
         store_op.align(ctx),
@@ -429,12 +357,9 @@ pub(crate) fn handle_f32_store(
 pub(crate) fn handle_f64_store(
     ctx: &IrContext,
     store_op: wasm_dialect::F64Store,
-    emit_ctx: &FunctionEmitContext,
     _module_info: &ModuleInfo,
     function: &mut Function,
 ) -> CompilationResult<()> {
-    let operands = ctx.op_operands(store_op.op_ref());
-    emit_operands(ctx, operands, emit_ctx, function)?;
     let memarg = make_memarg(
         store_op.offset(ctx),
         store_op.align(ctx),
@@ -451,12 +376,9 @@ pub(crate) fn handle_f64_store(
 pub(crate) fn handle_i32_store8(
     ctx: &IrContext,
     store_op: wasm_dialect::I32Store8,
-    emit_ctx: &FunctionEmitContext,
     _module_info: &ModuleInfo,
     function: &mut Function,
 ) -> CompilationResult<()> {
-    let operands = ctx.op_operands(store_op.op_ref());
-    emit_operands(ctx, operands, emit_ctx, function)?;
     let memarg = make_memarg(
         store_op.offset(ctx),
         store_op.align(ctx),
@@ -471,12 +393,9 @@ pub(crate) fn handle_i32_store8(
 pub(crate) fn handle_i32_store16(
     ctx: &IrContext,
     store_op: wasm_dialect::I32Store16,
-    emit_ctx: &FunctionEmitContext,
     _module_info: &ModuleInfo,
     function: &mut Function,
 ) -> CompilationResult<()> {
-    let operands = ctx.op_operands(store_op.op_ref());
-    emit_operands(ctx, operands, emit_ctx, function)?;
     let memarg = make_memarg(
         store_op.offset(ctx),
         store_op.align(ctx),
@@ -491,12 +410,9 @@ pub(crate) fn handle_i32_store16(
 pub(crate) fn handle_i64_store8(
     ctx: &IrContext,
     store_op: wasm_dialect::I64Store8,
-    emit_ctx: &FunctionEmitContext,
     _module_info: &ModuleInfo,
     function: &mut Function,
 ) -> CompilationResult<()> {
-    let operands = ctx.op_operands(store_op.op_ref());
-    emit_operands(ctx, operands, emit_ctx, function)?;
     let memarg = make_memarg(
         store_op.offset(ctx),
         store_op.align(ctx),
@@ -511,12 +427,9 @@ pub(crate) fn handle_i64_store8(
 pub(crate) fn handle_i64_store16(
     ctx: &IrContext,
     store_op: wasm_dialect::I64Store16,
-    emit_ctx: &FunctionEmitContext,
     _module_info: &ModuleInfo,
     function: &mut Function,
 ) -> CompilationResult<()> {
-    let operands = ctx.op_operands(store_op.op_ref());
-    emit_operands(ctx, operands, emit_ctx, function)?;
     let memarg = make_memarg(
         store_op.offset(ctx),
         store_op.align(ctx),
@@ -531,12 +444,9 @@ pub(crate) fn handle_i64_store16(
 pub(crate) fn handle_i64_store32(
     ctx: &IrContext,
     store_op: wasm_dialect::I64Store32,
-    emit_ctx: &FunctionEmitContext,
     _module_info: &ModuleInfo,
     function: &mut Function,
 ) -> CompilationResult<()> {
-    let operands = ctx.op_operands(store_op.op_ref());
-    emit_operands(ctx, operands, emit_ctx, function)?;
     let memarg = make_memarg(
         store_op.offset(ctx),
         store_op.align(ctx),
@@ -549,8 +459,6 @@ pub(crate) fn handle_i64_store32(
 
 #[cfg(test)]
 mod tests {
-    use rustc_hash::FxHashMap as HashMap;
-
     use trunk_ir::Span;
     use trunk_ir::refs::PathRef;
     use trunk_ir::types::{Location, TypeDataBuilder};
@@ -570,7 +478,7 @@ mod tests {
     }
 
     #[test]
-    fn i32_memory_handlers_emit_with_mapped_operands_and_result() {
+    fn i32_memory_handlers_emit_through_the_dispatcher() {
         let mut ctx = IrContext::new();
         let location = Location::new(PathRef::from_u32(0), Span::default());
         let i32_ty = TypeDataBuilder::new("core.i32").intern(&mut ctx);
@@ -600,21 +508,11 @@ mod tests {
             .align(7)
             .memory(0)
             .build(&mut ctx, location);
-        let emit_ctx = FunctionEmitContext {
-            value_locals: [
-                (address_result, 0),
-                (value_result, 1),
-                (load.result(&ctx), 2),
-            ]
-            .into_iter()
-            .collect::<HashMap<_, _>>(),
-            effective_types: HashMap::default(),
-        };
         let module_info = ModuleInfo::default();
         let mut function = Function::new([(3, ValType::I32)]);
 
         for op in [load.op_ref(), store.op_ref(), store8.op_ref()] {
-            crate::emit::emit_op_nested(&ctx, op, &emit_ctx, &module_info, &mut function, &[])
+            crate::emit::emit_op_nested(&ctx, op, &module_info, &mut function)
                 .expect("memory operation should emit through the dispatcher");
         }
     }

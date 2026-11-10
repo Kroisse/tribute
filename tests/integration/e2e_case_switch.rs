@@ -4,6 +4,9 @@
 use crate::common;
 
 use common::assert_output_on_both_targets;
+use salsa_test_macros::salsa_test;
+use tribute::pipeline::compile_to_wasm_binary;
+use tribute_front::SourceCst;
 
 /// The `Nat` scrutinees are read from a `Bytes` value at run time, so
 /// canonicalization cannot fold a switch into one of its arms.
@@ -209,5 +212,113 @@ fn main() ->{Io} Nil {
 }
 "#,
         "line 5\ncircle 4\nrect 10\ndot\nsmall\nlong line 5\nother\n3\n100\n42\n40\n0",
+    );
+}
+
+/// Count the `br_table` instructions in every function body of a module.
+fn br_table_count(binary: &[u8]) -> usize {
+    let mut count = 0;
+    for payload in wasmparser::Parser::new(0).parse_all(binary) {
+        let wasmparser::Payload::CodeSectionEntry(body) = payload.expect("valid Wasm payload")
+        else {
+            continue;
+        };
+        let mut reader = body.get_operators_reader().expect("function operators");
+        while !reader.eof() {
+            if let wasmparser::Operator::BrTable { .. } = reader.read().expect("operator") {
+                count += 1;
+            }
+        }
+    }
+    count
+}
+
+/// A dense switch dispatches through one Wasm `br_table`: a variant case
+/// over four variants, and a literal case whose values have a hole and
+/// whose scrutinee also falls below and above them.
+#[salsa_test]
+fn dense_case_switches_dispatch_through_br_table_on_wasm(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "dense_case_switch.trb",
+        r#"
+use std::io::{Io, print_line}
+
+enum Color {
+    Red,
+    Green,
+    Blue,
+    Gray(Nat),
+}
+
+fn color(n: Nat) -> Color {
+    case n {
+        0 -> Color::Red
+        1 -> Color::Green
+        2 -> Color::Blue
+        level -> Color::Gray(level)
+    }
+}
+
+fn name(color: Color) -> String {
+    case color {
+        .Red -> "red"
+        .Green -> "green"
+        .Blue -> "blue"
+        .Gray(level) -> "gray " <> level.to_string
+    }
+}
+
+fn digit(n: Nat) -> String {
+    case n {
+        1 -> "one"
+        2 -> "two"
+        4 -> "four"
+        _ -> "other"
+    }
+}
+
+fn main() ->{Io} Nil {
+    let bs = b"\x00\x01\x02\x03\x04\x05"
+    print_line(name(color(bs.get_or_panic(0))))
+    print_line(name(color(bs.get_or_panic(1))))
+    print_line(name(color(bs.get_or_panic(2))))
+    print_line(name(color(bs.get_or_panic(5))))
+    print_line(digit(bs.get_or_panic(0)))
+    print_line(digit(bs.get_or_panic(1)))
+    print_line(digit(bs.get_or_panic(2)))
+    print_line(digit(bs.get_or_panic(3)))
+    print_line(digit(bs.get_or_panic(4)))
+    print_line(digit(bs.get_or_panic(5)))
+}
+"#,
+    );
+    // The same library functions without the program's own switches, to
+    // count the `br_table`s the library brings.
+    let baseline = SourceCst::from_source_str(
+        db,
+        "dense_case_switch_baseline.trb",
+        r#"
+use std::io::{Io, print_line}
+
+fn main() ->{Io} Nil {
+    let bs = b"\x00\x01\x02\x03\x04\x05"
+    print_line("gray " <> bs.get_or_panic(5).to_string)
+}
+"#,
+    );
+    let library_tables =
+        br_table_count(compile_to_wasm_binary(db, baseline).expect("baseline compiles to Wasm"));
+    let binary = compile_to_wasm_binary(db, source).expect("dense switches compile to Wasm");
+    // Inlining may copy a switch into each caller, so only require that
+    // the program's own switches add tables.
+    let tables = br_table_count(binary);
+    assert!(
+        tables >= library_tables + 3,
+        "{tables} tables, {library_tables} from the library"
+    );
+    common::assert_wasm_output(
+        binary,
+        "red\ngreen\nblue\ngray 5\nother\none\ntwo\nother\nfour\nother\n",
     );
 }

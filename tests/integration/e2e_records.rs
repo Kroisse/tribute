@@ -25,3 +25,32 @@ fn main() ->{Io} Nil {
         "John\n30\nadmin",
     );
 }
+
+#[test]
+fn test_mutually_recursive_struct_and_enum() {
+    // A struct and an enum that hold each other, each through the other's
+    // layout key (`design/tribute-dialects.md`, "Nominal 값 타입"). The native run is
+    // checked under AddressSanitizer.
+    crate::common::assert_output_on_both_targets_with_native_asan(
+        "mutually_recursive_records.trb",
+        r#"
+use std::io::{Io, print_line}
+
+struct Link { value: Int, rest: Chain }
+enum Chain { More(Link), End }
+
+fn total(chain: Chain) -> Int {
+    case chain {
+        .More(link) -> link.value + total(link.rest)
+        .End -> +0
+    }
+}
+
+fn main() ->{Io} Nil {
+    let chain = Chain::More(Link { value: +1, rest: Chain::More(Link { value: +2, rest: Chain::End }) })
+    print_line(Int::to_string(total(chain)))
+}
+"#,
+        "3",
+    );
+}

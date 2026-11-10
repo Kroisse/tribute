@@ -51,7 +51,7 @@ fn f64_type(ctx: &mut IrContext) -> TypeRef {
 }
 
 /// Get the BoxedF64 struct type:
-/// `adt.struct<_BoxedF64(value: core.f64), {layout = "boxed_f64"}>`
+/// `adt.struct<(core.f64), {layout = "boxed_f64"}>`
 fn boxed_f64_type(ctx: &mut IrContext) -> TypeRef {
     let f64_ty = f64_type(ctx);
     let mut attrs = AttributeMap::new();
@@ -59,7 +59,7 @@ fn boxed_f64_type(ctx: &mut IrContext) -> TypeRef {
     attrs
         .view_mut(ctx)
         .insert(tribute_ir::runtime_layout::LAYOUT_ATTR, layout);
-    adt::Struct::from_fields(ctx, "_BoxedF64", [("value", f64_ty)], attrs).as_type_ref()
+    adt::Struct::literal(ctx, [f64_ty], attrs).as_type_ref()
 }
 
 /// Create i31 unbox operations (ref_cast to i31ref + i31_get_s/u).
@@ -390,8 +390,8 @@ impl OpRewritePattern for UnboxNatPattern {
 
 /// Pattern for `tribute_rt.box_float` -> `adt.struct_new(BoxedF64, anyref)`
 ///
-/// Boxing converts an f64 to a BoxedF64 struct typed as anyref via
-/// `adt.struct_new` with `anyref_ty` as the result type.
+/// Boxing builds a BoxedF64 struct holding the f64 and casts it to anyref,
+/// which reference upcast legalization writes as `wasm.ref_upcast`.
 struct BoxFloatPattern;
 
 impl OpRewritePattern for BoxFloatPattern {
@@ -409,13 +409,15 @@ impl OpRewritePattern for BoxFloatPattern {
         let anyref_ty = wasm_dialect::Anyref::params().intern(ctx).as_type_ref();
         let boxed_f64_ty = boxed_f64_type(ctx);
 
-        // adt.struct_new creates BoxedF64 struct with the f64 value
         let struct_op = adt::StructNew::operands(vec![value])
-            .r#type(boxed_f64_ty)
-            .results(anyref_ty)
+            .results(boxed_f64_ty)
             .build(ctx, location);
-
-        rewriter.replace_op(struct_op.op_ref());
+        rewriter.insert_op(struct_op.op_ref());
+        let upcast =
+            trunk_ir::dialect::core::UnrealizedConversionCast::operands(struct_op.result(ctx))
+                .results(anyref_ty)
+                .build(ctx, location);
+        rewriter.replace_op(upcast.op_ref());
         Some(())
     }
 
@@ -616,7 +618,7 @@ mod tests {
         let body = module.body(&ctx).expect("module body");
         let _ = walk_region::<()>(&ctx, body, &mut |op| {
             if let Ok(op) = adt::StructNew::from_op(&ctx, op) {
-                boxed.push(op.r#type(&ctx));
+                boxed.push(op.layout(&ctx));
             } else if let Ok(op) = adt::StructGet::from_op(&ctx, op) {
                 boxed.push(op.r#type(&ctx));
             }

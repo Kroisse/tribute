@@ -1,20 +1,19 @@
 ---
 source: crates/tribute-passes/src/native/adapt_closure_layout.rs
-assertion_line: 417
 expression: result
 ---
 core.module @test {
-  !Base = adt.struct<_closure(entries: tribute_rt.convention_table_ref), {layout = "closure"}>
-  !Captures = adt.struct<_closure_captures(entries: tribute_rt.convention_table_ref, _0: core.ptr), {closure_base = !Base, layout = "closure_captures"}>
-  !_closure_captures = adt.struct<_closure_captures(entries: core.ptr, _0: core.ptr), {closure_base = adt.struct<_closure(entries: core.ptr), {layout = "closure"}>, layout = "closure_captures"}>
+  !Base = adt.struct<(tribute_rt.convention_table_ref), {layout = "closure"}>
+  !Captures = adt.struct<(tribute_rt.convention_table_ref, core.ptr), {closure_base = !Base, layout = "closure_captures"}>
+  !closure_captures = adt.struct<(core.ptr, core.ptr), {closure_base = adt.struct<(core.ptr), {layout = "closure"}>, layout = "closure_captures"}>
 
   clif.func @test_fn() -> core.i32 {
       %0 = clif.symbol_addr @__tribute_convention_table_0 : core.ptr
       %1 = mem.null : core.ptr
-      %2 = adt.struct_new %0, %1 {type = !_closure_captures} : !_closure_captures
-      %3 = core.unrealized_conversion_cast %2 : !_closure_captures to core.ptr
-      %4 = adt.struct_get %3 {field = 0, type = !_closure_captures} : core.ptr
-      %5 = adt.struct_get %3 {field = 1, type = !_closure_captures} : core.ptr
+      %2 = adt.struct_new(%0, %1) : (core.ptr, core.ptr) -> !closure_captures
+      %3 = core.unrealized_conversion_cast %2 : !closure_captures to core.ptr
+      %4 = adt.struct_get %3 {field = 0, type = !closure_captures} : core.ptr
+      %5 = adt.struct_get %3 {field = 1, type = !closure_captures} : core.ptr
       %6 = clif.load %4 {offset = 0} : core.i64
       %7 = clif.call_indirect %6(%5) : (core.ptr) -> core.i32
       clif.return %7

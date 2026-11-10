@@ -3,50 +3,49 @@ source: crates/tribute-front/tests/record_field_type.rs
 expression: ir_text
 ---
 core.module @test {
-  !"pkg::Config" = adt.struct<"pkg::Config"(debug: core.i1, verbose: core.i1)>
-  !"pkg::Config_1" = adt.typeref<{name = "pkg::Config"}>
-  !t1 = tribute_control.func_sig<(!"pkg::Config_1", core.i1) -> !"pkg::Config_1">
+  !"pkg::Config" = adt.struct<"pkg::Config", (core.i1, core.i1)>
+  !t1 = tribute_control.func_sig<(!"pkg::Config", core.i1) -> !"pkg::Config">
   !t2 = tribute_control.func_sig<(core.i1) -> core.i1 row(| 'a0)>
-  !t0 = tribute_control.func_sig<(!"pkg::Config_1", !t2) -> !"pkg::Config_1" row(| 'a0)>
-  !t3 = tribute_control.func_sig<(!"pkg::Config_1") -> core.i1>
+  !t0 = tribute_control.func_sig<(!"pkg::Config", !t2) -> !"pkg::Config" row(| 'a0)>
+  !t3 = tribute_control.func_sig<(!"pkg::Config") -> core.i1>
 
-  adt.struct_decl "pkg::Config" (debug, verbose)
-  tribute_control.func @"pkg::Config::debug"(%0: !"pkg::Config_1") -> core.i1 {
+  adt.struct_decl "pkg::Config" !"pkg::Config" ["debug", "verbose"]
+  tribute_control.func @"pkg::Config::debug"(%0: !"pkg::Config") -> core.i1 {
       %1 = adt.struct_get %0 {field = 0, type = !"pkg::Config"} : core.i1
       tribute_control.return %1
   }
-  tribute_control.func @"pkg::Config::debug::set"(%0: !"pkg::Config_1", %1: core.i1) -> !"pkg::Config_1" {
+  tribute_control.func @"pkg::Config::debug::set"(%0: !"pkg::Config", %1: core.i1) -> !"pkg::Config" {
       %2 = adt.struct_get %0 {field = 1, type = !"pkg::Config"} : core.i1
-      %3 = adt.struct_new %1, %2 {type = !"pkg::Config"} : !"pkg::Config_1"
+      %3 = adt.struct_new(%1, %2) : (core.i1, core.i1) -> !"pkg::Config"
       tribute_control.return %3
   }
-  tribute_control.func @"pkg::Config::debug::modify"['a0](%0: !"pkg::Config_1", %1: !t2) -> !"pkg::Config_1" row(| 'a0) {
+  tribute_control.func @"pkg::Config::debug::modify"['a0](%0: !"pkg::Config", %1: !t2) -> !"pkg::Config" row(| 'a0) {
       %2 = adt.struct_get %0 {field = 0, type = !"pkg::Config"} : core.i1
       %3 = tribute_control.call_indirect %1(%2) : (core.i1) -> core.i1 row(| 'a0)
       %4 = adt.struct_get %0 {field = 1, type = !"pkg::Config"} : core.i1
-      %5 = adt.struct_new %3, %4 {type = !"pkg::Config"} : !"pkg::Config_1"
+      %5 = adt.struct_new(%3, %4) : (core.i1, core.i1) -> !"pkg::Config"
       tribute_control.return %5
   }
-  tribute_control.func @"pkg::Config::verbose"(%0: !"pkg::Config_1") -> core.i1 {
+  tribute_control.func @"pkg::Config::verbose"(%0: !"pkg::Config") -> core.i1 {
       %1 = adt.struct_get %0 {field = 1, type = !"pkg::Config"} : core.i1
       tribute_control.return %1
   }
-  tribute_control.func @"pkg::Config::verbose::set"(%0: !"pkg::Config_1", %1: core.i1) -> !"pkg::Config_1" {
+  tribute_control.func @"pkg::Config::verbose::set"(%0: !"pkg::Config", %1: core.i1) -> !"pkg::Config" {
       %2 = adt.struct_get %0 {field = 0, type = !"pkg::Config"} : core.i1
-      %3 = adt.struct_new %2, %1 {type = !"pkg::Config"} : !"pkg::Config_1"
+      %3 = adt.struct_new(%2, %1) : (core.i1, core.i1) -> !"pkg::Config"
       tribute_control.return %3
   }
-  tribute_control.func @"pkg::Config::verbose::modify"['a0](%0: !"pkg::Config_1", %1: !t2) -> !"pkg::Config_1" row(| 'a0) {
+  tribute_control.func @"pkg::Config::verbose::modify"['a0](%0: !"pkg::Config", %1: !t2) -> !"pkg::Config" row(| 'a0) {
       %2 = adt.struct_get %0 {field = 1, type = !"pkg::Config"} : core.i1
       %3 = tribute_control.call_indirect %1(%2) : (core.i1) -> core.i1 row(| 'a0)
       %4 = adt.struct_get %0 {field = 0, type = !"pkg::Config"} : core.i1
-      %5 = adt.struct_new %4, %3 {type = !"pkg::Config"} : !"pkg::Config_1"
+      %5 = adt.struct_new(%4, %3) : (core.i1, core.i1) -> !"pkg::Config"
       tribute_control.return %5
   }
-  tribute_control.func @"pkg::copy_config"['a0](%0: !"pkg::Config_1") -> !"pkg::Config_1" row(| 'a0) inferred {
+  tribute_control.func @"pkg::copy_config"['a0](%0: !"pkg::Config") -> !"pkg::Config" row(| 'a0) inferred {
       %1 = adt.struct_get %0 {field = 0, type = !"pkg::Config"} : core.i1
       %2 = adt.struct_get %0 {field = 1, type = !"pkg::Config"} : core.i1
-      %3 = adt.struct_new %1, %2 {type = !"pkg::Config"} : !"pkg::Config_1"
+      %3 = adt.struct_new(%1, %2) : (core.i1, core.i1) -> !"pkg::Config"
       tribute_control.return %3
   }
 }

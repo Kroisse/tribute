@@ -15,8 +15,16 @@ pub(super) fn display_row(row: &Row) -> impl fmt::Display + '_ {
         if row.is_empty() {
             return Ok(());
         }
+        write!(f, " {}", display_row_argument(row))
+    })
+}
+
+/// `row(@A, @B | 'a0)`, written in full even for the empty row `row()`, as
+/// a nominal row argument is.
+pub(crate) fn display_row_argument(row: &Row) -> impl fmt::Display + '_ {
+    fmt::from_fn(move |f| {
         let instances = row.instances.iter().map(display_symbol_ref).format(", ");
-        write!(f, " row({instances}")?;
+        write!(f, "row({instances}")?;
         if let Some(tail) = row.tail {
             if !row.instances.is_empty() {
                 f.write_str(" ")?;
@@ -25,6 +33,41 @@ pub(super) fn display_row(row: &Row) -> impl fmt::Display + '_ {
         }
         f.write_str(")")
     })
+}
+
+/// A list of row binders `['a0, 'a1]` with no kinds or unions, as a nominal
+/// layout declares them; nothing for no binders.
+pub(crate) fn display_layout_binders(count: u32) -> impl fmt::Display {
+    fmt::from_fn(move |f| {
+        if count == 0 {
+            return Ok(());
+        }
+        let binders = (0..count).format_with(", ", |index, f| f(&format_args!("'a{index}")));
+        write!(f, "[{binders}]")
+    })
+}
+
+/// The binder list of [`display_layout_binders`], as its count; zero when
+/// the text has no list.
+pub(crate) fn parse_layout_binders(p: &mut AsmParser<'_>) -> ParseResult<u32> {
+    if !p.parse_optional_punct("[") {
+        return Ok(0);
+    }
+    let mut count = 0;
+    loop {
+        p.peek();
+        let offset = p.offset();
+        let index = p.parse_token("a row binder `'aN`", parse_binder_name)?;
+        if index != count {
+            return Err(p.error_at(offset, "expected row binders numbered in order"));
+        }
+        count += 1;
+        if !p.parse_optional_punct(",") {
+            break;
+        }
+    }
+    p.parse_punct("]")?;
+    Ok(count)
 }
 
 /// A definition's row binders as its header declares them, or `None` when
@@ -311,10 +354,25 @@ pub(super) fn parse_row(p: &mut AsmParser<'_>) -> ParseResult<Option<Attribute>>
     if !p.parse_optional_punct("row(") {
         return Ok(None);
     }
+    let row = parse_row_entries(p)?;
+    if row.is_empty() {
+        return Err(p.expected("a row with abilities or a tail"));
+    }
+    Ok(Some(row.to_attribute(p.ctx_mut())))
+}
+
+/// A nominal row argument, `row(@A | 'a0)` or the empty `row()`.
+pub(crate) fn parse_row_argument(p: &mut AsmParser<'_>) -> ParseResult<Row> {
+    p.parse_punct("row(")?;
+    parse_row_entries(p)
+}
+
+/// The entries of a row after its `row(`, through its `)`.
+fn parse_row_entries(p: &mut AsmParser<'_>) -> ParseResult<Row> {
     let mut instances = Vec::new();
     if p.peek().starts_with('@') {
         loop {
-            instances.push(Attribute::SymbolRef(p.parse_symbol_ref()?));
+            instances.push(p.parse_symbol_ref()?);
             if !p.parse_optional_punct(",") {
                 break;
             }
@@ -326,20 +384,8 @@ pub(super) fn parse_row(p: &mut AsmParser<'_>) -> ParseResult<Option<Attribute>>
         None
     };
     p.parse_punct(")")?;
-    if instances.is_empty() && tail.is_none() {
-        return Err(p.expected("a row with abilities or a tail"));
-    }
-    let mut entries = Vec::new();
-    if !instances.is_empty() {
-        entries.push(("instances", Attribute::List(instances)));
-    }
-    if let Some(tail) = tail {
-        entries.push(("tail", Attribute::Int(i128::from(tail))));
-    }
-    Ok(Some(Attribute::Dict(AttributeMap::from_entries(
-        p.ctx_mut(),
-        entries,
-    ))))
+    // Kept in written order, so the verifier rejects an unsorted row.
+    Ok(Row { instances, tail })
 }
 
 /// The source signature `(params) -> result` with `row`.

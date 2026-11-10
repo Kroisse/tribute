@@ -33,7 +33,7 @@ selection, and specialization must still compare declaration identity.
 특수화된 타입의 path는 선언의 모듈 component를 유지하고 마지막 component만
 맹글링한다.
 중첩 타입 인자는 기존 `$0`/`$1` 맹글링 규칙을 따른다. 이 symbol은 IR의
-`adt.typeref`와 대응하는 struct/enum layout의 `name`에 동일하게 사용하며,
+struct/enum layout의 `name`에 사용하며,
 선언 identity나 타입 인자를 이름에서 역으로 복원하는 근거로 쓰지 않는다.
 
 ## Primitive Numeric Types
@@ -285,6 +285,9 @@ case opt {
 identity is compiler-owned and distinct from every source declaration, including
 a user declaration also spelled `List`. Name-based equality is not sufficient
 for named types: type checking and lowering compare declaration identities.
+A source declaration with the same short name may shadow ordinary annotation
+lookup, but it remains a different nominal type and cannot capture list literal
+or list-pattern syntax.
 
 The concrete RRB-node layout is not a source contract. In particular, `Empty`
 and `Cons` are not public constructors or patterns. Construction uses list
@@ -508,6 +511,10 @@ user.age::modify(fn(n) n + 1)    // User::age::modify(user, fn(n) n + 1)
 - Generic struct에서는 세 함수 모두 struct의 타입 매개변수를 그대로 받는다.
   Setter와 modifier는 타입 인자를 바꾸지 않는다(spread와 같은 규칙).
   `struct Box(a) { value: a }`이면 `Box::value::set : fn(Box(a), a) -> Box(a)`이다.
+  [Row 매개변수](#row-매개변수)도 같아서 세 함수 모두 struct의 row 매개변수를 그대로
+  받고 row 인자를 바꾸지 않는다. Modifier 콜백의 row는 struct의 row 매개변수와 별개다.
+  `C`가 `Callback({e}, a)`, `F`가 `fn(a) ->{e} a`이면
+  `Callback::run::modify : fn(C, fn(F) ->{e2} F) ->{e2} C`이다.
 - Modifier는 콜백의 ability row에 대해 다형적이다:
   `T::f::modify : fn(T, fn(F) ->{e} F) ->{e} T`. Getter와 setter는 순수하다.
 - `T::f`는 값 namespace의 getter이면서 `set`·`modify`를 담는 모듈 `T::f`이기도

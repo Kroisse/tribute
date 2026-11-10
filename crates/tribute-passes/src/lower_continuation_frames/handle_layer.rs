@@ -25,7 +25,7 @@ use super::suffix_layer::{
     DispatchAdapters, LayerFrames, SuffixLayer, build_done_adapter, build_suffix_rebound,
     finish_rebound, frame_dispatch, pack_frame,
 };
-use super::{FrameLayouts, detach_into};
+use super::{FrameLayouts, FrameTypes, detach_into};
 use crate::cps_builders::{
     closure_over, emit_cps_tail_call_indirect, helper_symbol, make_block, set_evidence_plan,
     single_block_region,
@@ -112,10 +112,6 @@ struct LayerValues {
     arms: Vec<ValueRef>,
 }
 
-fn evidence_type(ctx: &mut IrContext) -> TypeRef {
-    ability::evidence_adt_type_ref(ctx)
-}
-
 fn anyref_type(ctx: &mut IrContext) -> TypeRef {
     tribute_rt::Anyref::params().intern(ctx).as_type_ref()
 }
@@ -125,11 +121,11 @@ fn i32_type(ctx: &mut IrContext) -> TypeRef {
 }
 
 /// The block arguments of a `Dispatch<R>` over `frame`.
-fn dispatch_block(ctx: &mut IrContext, location: Location, frame: TypeRef) -> BlockRef {
-    let evidence_type = evidence_type(ctx);
+fn dispatch_block(ctx: &mut IrContext, location: Location, frame: &FrameTypes) -> BlockRef {
+    let evidence_type = frame.evidence;
     let anyref = anyref_type(ctx);
     let i32_type = i32_type(ctx);
-    let resume_type = cps_resume_type(ctx, evidence_type, frame, anyref);
+    let resume_type = cps_resume_type(ctx, evidence_type, frame.reference, anyref);
     make_block(
         ctx,
         location,
@@ -175,7 +171,7 @@ fn build_handle_rebound(
     resume_body: ValueRef,
 ) -> Result<(OpRef, ValueRef), TributeControlToCpsError> {
     let boundary = layer.frames.boundary;
-    let evidence_type = evidence_type(ctx);
+    let evidence_type = boundary.evidence;
     let anyref = anyref_type(ctx);
     let block = make_block(ctx, location, &[evidence_type, boundary.reference, anyref]);
     let args = ctx.block_args(block).to_vec();
@@ -292,7 +288,7 @@ fn build_layer_resume_factory(
     installed: bool,
 ) -> Result<OpRef, TributeControlToCpsError> {
     let LayerFrames { value, boundary } = layer.frames;
-    let evidence_type = evidence_type(ctx);
+    let evidence_type = boundary.evidence;
     let anyref = anyref_type(ctx);
     let resume_body_type = cps_resume_type(ctx, evidence_type, value.reference, anyref);
     let resume_type = cps_resume_type(ctx, evidence_type, boundary.reference, anyref);
@@ -363,7 +359,7 @@ fn call_layer_resume_factory(
             vec![values.completion, resume_body],
         )
     };
-    let evidence_type = evidence_type(ctx);
+    let evidence_type = layer.frames.boundary.evidence;
     let anyref = anyref_type(ctx);
     let resume_type = cps_resume_type(ctx, evidence_type, layer.frames.boundary.reference, anyref);
     let resume = func::Call::operands(args)
@@ -387,7 +383,7 @@ fn build_exact_handler_token(
     resume_body: ValueRef,
     installed: bool,
 ) -> Result<(OpRef, ValueRef), TributeControlToCpsError> {
-    let evidence_type = evidence_type(ctx);
+    let evidence_type = layer.frames.boundary.evidence;
     let frame_type = layer.frames.boundary.reference;
     let block = make_block(ctx, location, &[evidence_type, frame_type, input_type]);
     let args = ctx.block_args(block).to_vec();
@@ -426,7 +422,7 @@ fn build_local_dispatcher_factory(
         layer.completion_type,
         boundary.reference,
         i32_type(ctx),
-        evidence_type(ctx),
+        boundary.evidence,
     ];
     params.extend(layer.arms.iter().map(|arm| arm.closure_type));
     let signature = func::func_sig(ctx, params.clone(), [value.dispatch]).as_type_ref();
@@ -470,7 +466,7 @@ fn build_local_foreign_dispatch(
     parent_dispatch: ValueRef,
 ) -> Result<(OpRef, ValueRef), TributeControlToCpsError> {
     let value = layer.frames.value;
-    let block = dispatch_block(ctx, location, value.reference);
+    let block = dispatch_block(ctx, location, &value);
     let args = ctx.block_args(block).to_vec();
     let rebound = call_layer_resume_factory(ctx, block, location, layer, values, args[1], true);
     emit_cps_tail_call_indirect(
@@ -503,7 +499,7 @@ fn build_local_dispatcher_instance(
     outer_evidence: ValueRef,
 ) -> Result<(OpRef, ValueRef), TributeControlToCpsError> {
     let value = layer.frames.value;
-    let block = dispatch_block(ctx, location, value.reference);
+    let block = dispatch_block(ctx, location, &value);
     let args = ctx.block_args(block).to_vec();
     let (foreign_op, foreign_dispatch) =
         build_local_foreign_dispatch(ctx, location, layer, values, parent_dispatch)?;
@@ -610,12 +606,8 @@ fn unpack_handler_payload(
 ) -> Vec<ValueRef> {
     let value_params = &arm.params[..arm.params.len() - usize::from(arm.resumptive)];
     let anyref = anyref_type(ctx);
-    let payload_type = ability::operation_payload_type_ref(
-        ctx,
-        &arm.binding.ability,
-        arm.binding.op_name,
-        value_params.iter().map(|_| anyref),
-    );
+    let payload_type =
+        ability::operation_payload_type_ref(ctx, value_params.iter().map(|_| anyref));
     let cast = core::UnrealizedConversionCast::operands(payload)
         .results(payload_type)
         .build(ctx, location);
@@ -649,7 +641,8 @@ fn build_tail_dispatcher(
     outer_evidence: ValueRef,
 ) -> Result<(OpRef, ValueRef), TributeControlToCpsError> {
     let anyref = anyref_type(ctx);
-    let params = vec![evidence_type(ctx), i32_type(ctx), anyref];
+    // The dispatcher takes evidence of the type of the evidence it captures.
+    let params = vec![ctx.value_ty(outer_evidence), i32_type(ctx), anyref];
     let block = make_block(ctx, location, &params);
     let args = ctx.block_args(block).to_vec();
     let (op_idx, payload) = (args[1], args[2]);

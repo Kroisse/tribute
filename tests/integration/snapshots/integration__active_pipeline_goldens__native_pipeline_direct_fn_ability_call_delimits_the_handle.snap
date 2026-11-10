@@ -2,9 +2,9 @@
 source: tests/integration/active_pipeline_goldens.rs
 expression: "pipeline_contract_summary(ir_text, true)"
 ---
-__tribute_delimit_done_0: (core.i32, adt.struct<_closure>) -> ()
+__tribute_delimit_done_0: (core.i32, adt.struct<closure>) -> ()
   func.return operands=0 results=0: 1
-__tribute_delimit_unhandled_0: (adt.array<adt.typeref<std::runtime::evidence::Marker>>, adt.struct<_closure>, adt.struct<_closure>, core.i32, core.i32, core.i32, tribute_rt.anyref) -> ()
+__tribute_delimit_unhandled_0: (adt.array<adt.struct<std::runtime::evidence::Marker>>, adt.struct<closure>, adt.struct<closure>, core.i32, core.i32, core.i32, tribute_rt.anyref) -> ()
   func.unreachable operands=0 results=0: 1
 __tribute_main: () -> (core.nil)
   func.call_indirect operands=4 results=0: 1

@@ -2,9 +2,8 @@
 
 이 문서는 직접형 IR을 CPS로 바꾸는 conversion source of truth다. Operation
 구조와 verifier 계약은
-[tribute-dialects.md](tribute-dialects.md#direct-style-control), 계층별 소유권과
-pipeline 조합은 [implementation.md](implementation.md#직접형-제어-소유권)를
-따른다.
+[tribute-dialects.md](tribute-dialects.md#direct-style-control), pass 순서는
+[lowering.md](lowering.md#pipeline-order)를 따른다.
 
 핵심 전략은 **tail-call CPS + evidence-based handler dispatch**이다.
 모든 CPS 이전은 proper tail call이며 제어 값을 반환하지 않는다.
@@ -570,9 +569,9 @@ closure는 convention마다 다른 entry ABI로 불리므로 `S`에서 hidden pa
 Environment를 받는 `func.func`는 entry block의 environment 인자에
 `bind_name = "__env"` 표식을 단다. 표식은 함수 하나에 하나이고, 그 위치는 함수
 convention의 environment index와 같으며, 그 인자의 type은 그 closure의 exact closure
-type이다([closure 저장 layout](ir.md#closure-저장-layout)). 본문이 없는 선언은
-environment를 받을 수 없다. 물리화 검증은 이 표식으로 entry 함수를 알아보고 slot을
-대조하며, type이나 arity로 slot을 추측하지 않는다.
+type이다([closure 저장 layout](tribute-dialects.md#closure-저장-layout)). 본문이
+없는 선언은 environment를 받을 수 없다. 물리화 검증은 이 표식으로 entry 함수를
+알아보고 slot을 대조하며, type이나 arity로 slot을 추측하지 않는다.
 
 생성한 physical definition, `func_ref` entry 함수, direct/indirect call에는 그 정의,
 entry, 이전이 가진 convention을 기존 `tribute.calling_convention` attribute로
@@ -609,8 +608,8 @@ Legalization 출구 검증과 물리화 입구는 module 전체의 convention을
 이 결정은 `CallableAbi`에 encode하지 않으며 pass가 operation kind를 추론하거나
 변경해서는 안 된다.
 
-Root `main`과 external ABI 조합 책임은
-[implementation.md](implementation.md#직접형-제어-소유권)을 따른다.
+Root `main`의 조합은 [Root `main`](#root-main)을, external ABI의 물리 계약은
+[representation/ABI 경계](abi-boundary.md#representationabi-경계)를 따른다.
 
 ### 논리적 CPS 적법화
 
@@ -1067,8 +1066,9 @@ Evidence는 [`Slots(Marker)`](types.md#slots)다. 아래에서 `Evidence`는
 - `outer`: 그 handler를 설치한 지점의 evidence
 
 `Dispatch`는 runtime 모듈 전용 compiler 소유 타입이며 IR에서
-[closure base](ir.md#closure-저장-layout) 타입이다. 위의 `tr_dispatch_fn` signature를 가진
-closure를 담는다. Runtime code는 이 값을 저장하고 돌려주기만 하며 부르지 않는다.
+[closure base](tribute-dialects.md#closure-저장-layout) 타입이다. 위의
+`tr_dispatch_fn` signature를 가진 closure를 담는다. Runtime code는 이 값을
+저장하고 돌려주기만 하며 부르지 않는다.
 
 Evidence는 ability id 기준으로 정렬된 marker 배열이다. 각 칸은 그 ability의 가장
 위 marker이며, marker는 자신이 가린 같은 ability의 marker를 `shadowed`로 가리킨다.
@@ -1087,9 +1087,11 @@ Marker의 source 선언이 필드 순서와 타입의 유일한 정의다. Marke
 `std::runtime::evidence::Marker`이며 root module의 `tribute.types` 속성에서 이
 경로의 항목이 그 IR 타입을 게시한다.
 Hidden evidence parameter나 frame field처럼 evidence 타입이 필요한 shared pass는
-이 경로를 이름으로 가진 `adt.typeref`를 원소로 하는 `adt.array`를 만들며, 이
-타입이 evidence 타입이다. 이 이름은 게시된 marker 타입을 가리키므로 타입을 만드는
-데 module 접근이 필요 없다. Marker를 만들고 필드를 읽는
+root module의 `tribute.types`에서 marker 타입을 읽고, 그 marker를 원소로 하는
+`adt.array`를 evidence 타입으로 쓴다. Layout 변환이 module 속성의 타입도 변환하므로
+게시된 marker는 변환된 layout을 따라간다. Module을 볼 수 없는 operation schema는
+evidence를 nominal struct 값의 `adt.array`라는 모양으로만 확인하고, 정확한 marker는
+module을 가진 pass가 확인한다. Marker를 만들고 필드를 읽는
 code는 runtime 모듈 안에만 있으며, effect lowering과 그 밖의 pass는 marker를 직접
 만들거나 읽지 않는다.
 
@@ -1101,6 +1103,78 @@ code는 runtime 모듈 안에만 있으며, effect lowering과 그 밖의 pass�
 (shadow). Lookup은 가장 위의 marker를 고르고, 가려진 marker는 아래에 남는다.
 호출의 evidence 선택이 이 순서를 row 구조에 맞추므로, 가장 위의 marker는 항상
 현재 callable row의 명시 label에 묶인 handler다.
+
+#### Prompt와 handler 인스턴스
+
+중첩된 handler에서 올바른 경계를 찾기 위해 prompt가 필요하다:
+
+```text
+스택 (아래가 바닥)
+─────────────────────
+[State prompt: P1]     ← 바깥쪽 run_state
+[Logger prompt: P2]    ← run_logger
+[State prompt: P3]     ← 안쪽 run_state (같은 ability 중첩)
+[현재 실행 지점]        ← State::get() 호출
+─────────────────────
+```
+
+`State::get()`은 evidence에서 State의 가장 위 marker를 조회한다. 그 marker는 호출
+지점의 row가 명시한 State에 묶인 handler의 것이다. Shared CPS
+conversion이 만든 suffix continuation과 frame이 담은 handle 층의 dispatcher는 그 marker의
+prompt(P3)를 기준으로 handler boundary와 resume 경로를 연결한다. 이 그림은
+논리적 delimiter 중첩이며 machine stack을 runtime에 탐색한다는 뜻이 아니다.
+
+Evidence 기반 dispatch에서 두 식별자가 협력한다:
+
+| 식별자 | 역할 | 결정 시점 | 범위 |
+| ------ | ---- | --------- | ---- |
+| `ability_id` | 어떤 ability인지 식별 | 컴파일 타임 | 프로그램 전역 |
+| `prompt_tag` | 어떤 handler 인스턴스인지 식별 | 런타임 | 동적으로 생성 |
+
+둘은 N:N 관계다. 같은 ability를 중첩하면 `ability_id`는 같고 `prompt_tag`는
+다르다. 한 handle이 여러 ability를 처리하면 `ability_id`는 다르고, 그 handle의 모든
+ability marker가 같은 `prompt_tag`를 공유한다.
+
+```rust
+fn inner(comp: fn() ->{e, State(Int)} Int) ->{e} Int {
+    handle comp() {                      // prompt_tag = P2
+        op State::get() { resume 10 }
+        op State::set(v) { resume Nil }
+    }
+}
+
+fn nested_state_example() -> Int {
+    handle inner(fn() State::get()) {    // prompt_tag = P1
+        op State::get() { resume 20 }
+        op State::set(v) { resume Nil }
+    }
+}
+```
+
+`comp` 안의 `State::get()`은 다음 순서로 처리된다.
+
+1. Evidence에서 `ability_id`로 marker를 조회한다. 그 instance의 가장 위 marker,
+   곧 안쪽 handle(P2)의 marker가 선택된다.
+2. Marker의 `prompt_tag`(P2)와 ability/operation identity를 frame의 dispatcher에
+   전달한다.
+3. Dispatcher가 이미 생성된 suffix continuation과 안쪽 handler를 연결한다.
+
+#### Runtime identity와 ordering
+
+`ability::compute_ability_id`는 ability instance를 선언하는 `ability.decl`의
+symbol, 곧 instance key의 hash로 31-bit runtime key를 만든다. Operation index는 그
+symbol과 operation 이름의 hash다. 둘 다 참조만으로 계산하며 선언을 읽지 않는다.
+Marker의 `i32` slot에 음수가 아닌 값으로 저장하고, 음수 key는 위의 tail 칸이 쓴다.
+Call-site와 handler 설치가 같은 함수를 사용한다. Type parameter가 다른
+ability instance는 별도 key를 가진다.
+
+Instance key는 frontend가 typecheck된 source type argument에서 만들어
+`ability.decl`의 `sym_name`으로 쓴다. Lowering된 표현
+타입에서 만들지 않는다. 표현이 같은 source 타입(`Int`와 `Nat`)이나 모양이 같은
+서로 다른 nominal 타입도 별도 instance다. Instance의 타입 인자는 IR에 나타나지
+않으므로 이후 단계의 타입 변환은 runtime key를 바꿀 수 없다. Runtime array는 이
+key로 정렬하고 binary search로 그 instance의 marker 칸을 찾는다. 표준 ability와
+사용자 ability에 별도 연속 번호 대역을 예약하지 않는다.
 
 <!-- markdownlint-disable-next-line MD033 -->
 <a id="row-directed-evidence"></a>
@@ -1249,9 +1323,10 @@ Root wrapper의 생성은 exact root contract에 따르며, 별도의 호환 clo
 `ability.handle_dispatch`가 있다. Shared ability/evidence pass와 strict target
 ABI validation은 `closure.closure` type의 callable과 closure transfer의 convention을
 그대로 소비한다. 그 뒤 경계 안에서 closure operation과 모든 type-bearing storage
-surface를 [closure 저장 layout](ir.md#closure-저장-layout)으로 함께 바꾸고 target evidence/runtime
-lowering이 이를 소비한다. 경계 이후의 proper tail transfer lowering은 이 layout을
-명시적 layout 식별자로 구별하며 이름으로 판별하지 않는다. Closure lowering이
+surface를 [closure 저장 layout](tribute-dialects.md#closure-저장-layout)으로 함께
+바꾸고 target evidence/runtime lowering이 이를 소비한다. 경계 이후의 proper tail
+transfer lowering은 이 layout을 명시적 layout 식별자로 구별하며 이름으로 판별하지
+않는다. Closure lowering이
 `closure.new`를 capture layout 할당으로 바꾸면 남은 사용처는
 `core.unrealized_conversion_cast`로 exact closure type을 유지한다. Storage
 finalization이 closure type을 closure base로 바꾸면 이 cast는 capture layout에서

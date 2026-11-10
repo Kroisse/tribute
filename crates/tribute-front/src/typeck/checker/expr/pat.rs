@@ -119,6 +119,12 @@ impl<'db> TypeChecker<'db> {
 
         solver.expand_union_dependencies(&mut environment_type_vars, &mut environment_row_vars);
         let resolved_value = type_subst.apply_with_rows(self.db(), value_ty, &row_subst);
+        if !should_generalize {
+            // This solve can resolve a row to a variable it invented, which
+            // the final solve would leave unrelated to the value's producer.
+            // The binding's uses share its rows with the producer.
+            ctx.constrain_eq(resolved_value, value_ty);
+        }
         let mut bindings = Vec::new();
         self.collect_pattern_bindings_with_ctx(
             ctx,

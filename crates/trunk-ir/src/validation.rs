@@ -1327,51 +1327,14 @@ pub fn validate_all(
 /// (`design/ir.md` § "식별 타입"): the types of its values and in its
 /// attributes, their parameters, and the bodies of identified types.
 pub fn validate_type_bodies(ctx: &IrContext, module: Module) -> ValidationResult {
-    fn reach(
-        ctx: &IrContext,
-        ty: crate::TypeRef,
-        seen: &mut HashSet<crate::TypeRef>,
-        errors: &mut Vec<ValidationError>,
-    ) {
-        if !seen.insert(ty) {
-            return;
-        }
-        let data = ctx.get_type(ty);
-        for &param in &data.params {
-            reach(ctx, param, seen, errors);
-        }
-        for attr in data.attrs.values() {
-            attr.visit_types(&mut |nested| reach(ctx, nested, seen, errors));
-        }
-        if !crate::type_def::is_identified(ctx, ty) {
-            return;
-        }
-        match ctx.type_body(ty) {
-            Some(body) => reach(ctx, body, seen, errors),
-            None => errors.push(ValidationError::Operation {
-                message: format!("identified type {} has no body", ty.display(ctx)),
-            }),
-        }
-    }
-
-    let mut seen = HashSet::default();
-    let mut errors = Vec::new();
-    let _ = walk::walk_op::<std::convert::Infallible>(ctx, module.op(), &mut |op| {
-        for &ty in ctx.op_result_types(op) {
-            reach(ctx, ty, &mut seen, &mut errors);
-        }
-        for (_, attr) in ctx.op(op).attributes.iter() {
-            attr.visit_types(&mut |ty| reach(ctx, ty, &mut seen, &mut errors));
-        }
-        for region in ctx.op_regions(op) {
-            for &block in &ctx.region(region).blocks {
-                for arg in &ctx.block(block).args {
-                    reach(ctx, arg.ty, &mut seen, &mut errors);
-                }
-            }
-        }
-        std::ops::ControlFlow::Continue(walk::WalkAction::Advance)
-    });
+    let errors = walk::reachable_types(ctx, module.op())
+        .into_iter()
+        .filter(|&ty| ctx.type_body(ty).is_none())
+        .filter_map(|ty| crate::type_def::identifier(ctx, ty))
+        .map(|identifier| ValidationError::Operation {
+            message: format!("identified type {identifier:?} has no body"),
+        })
+        .collect();
     ValidationResult { errors }
 }
 

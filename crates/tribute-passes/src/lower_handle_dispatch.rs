@@ -180,7 +180,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !marker = adt.typeref<{name = "std::runtime::evidence::Marker"}>
+  !marker = adt.struct<"std::runtime::evidence::Marker">
   !ev = adt.array<!marker>
   !frame = ability.frame<core.i32>
   !resume = closure.closure<func.func_sig<(!ev, !frame, core.i32) -> core.never>>
@@ -220,7 +220,7 @@ mod tests {
                 &mut ctx,
                 &format!(
                     r#"core.module @test {{
-  !marker = adt.typeref<{{name = "std::runtime::evidence::Marker"}}>
+  !marker = adt.struct<"std::runtime::evidence::Marker">
   !evidence = adt.array<!marker>
   func.func @run(%ev: !evidence, %prompt: core.i32) -> core.never {{
     {operation}

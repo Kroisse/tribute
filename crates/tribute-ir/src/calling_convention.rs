@@ -4,7 +4,7 @@ use std::fmt;
 use std::str::FromStr;
 
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::{core, func};
+use trunk_ir::dialect::{clif, core, func, wasm};
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{OpRef, TypeRef};
 use trunk_ir::types::Attribute;
@@ -264,6 +264,23 @@ trunk_ir::register_interfaces!(
     func::CallIndirect: ConventionBearing;
     func::TailCall: ConventionBearing;
     func::TailCallIndirect: ConventionBearing
+);
+
+/// Marks a physical callable type: the type of a callable entered through
+/// the ABI of a calling convention. Physical signatures and closures
+/// implement it; the source-logical boundary holds none
+/// (`design/tribute-dialects.md`, "직접형 호출 대상과 제어").
+#[trunk_ir::type_interface]
+pub trait PhysicalCallableType: DialectType {}
+
+impl PhysicalCallableType for func::FuncSig {}
+impl PhysicalCallableType for clif::FuncSig {}
+impl PhysicalCallableType for wasm::FuncSig {}
+
+trunk_ir::register_interfaces!(
+    func::FuncSig: PhysicalCallableType;
+    clif::FuncSig: PhysicalCallableType;
+    wasm::FuncSig: PhysicalCallableType
 );
 
 /// Result-indexed CPS completion target `Done<R>`.

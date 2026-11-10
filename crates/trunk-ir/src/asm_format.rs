@@ -47,8 +47,12 @@ pub(crate) fn erased_alias_hint<T: TypeAliasHint>(ctx: &IrContext, ty: TypeRef) 
     T::from_type_ref(ctx, ty)?.alias_hint(ctx)
 }
 
-/// The alias name `ty`'s definition suggests, if any.
+/// The alias name `ty`'s definition suggests, if any: an identified type's
+/// identifier, or else its alias hint.
 pub fn suggest_type_alias_name(ctx: &IrContext, ty: TypeRef) -> Option<&str> {
+    if let Some(identifier) = crate::type_def::identifier(ctx, ty) {
+        return Some(identifier);
+    }
     let hint = crate::TypeDef::of(ctx, ty)?.alias_hint?;
     hint(ctx, ty)
 }

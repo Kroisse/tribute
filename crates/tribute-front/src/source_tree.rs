@@ -1,5 +1,5 @@
 //! The source tree of a package: its root file and the files of its file
-//! modules, read into one AST (`design/implementation.md` § 패키지 source
+//! modules, read into one AST (`design/frontend.md` § 패키지 source
 //! 트리와 파일 입력, `design/modules.md` § 모듈 선언).
 //!
 //! Each file is parsed by its own query, so editing one file parses only

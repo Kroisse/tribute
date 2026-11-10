@@ -263,6 +263,9 @@ Row ::= {}                    -- 빈 row (순수)
 // OK: 타입 파라미터가 다르면 다른 ability로 취급
 fn foo() ->{State(Int), State(String)} Nil
 
+// OK: 닫힌 row {Ask}와 {Tell}은 같아질 수 없으므로 함수 인자의 effect만 달라도 다른 instance
+fn quux() ->{State(fn() ->{Ask} Nat), State(fn() ->{Tell} Nat)} Nil
+
 // Error: 동일한 ability 중복
 fn bar() ->{State(Int), State(Int)} Nil
 
@@ -1190,6 +1193,28 @@ fn compose(f: fn(a) ->{e1} b, g: fn(b) ->{e2} c) -> fn(a) ->{e1, e2} c
 컨텍스트에 한정되며, 서로 다른 람다 노드나 일반화한 함수 값의 서로 다른 사용
 위치를 합치지 않는다. 람다 생성 자체는 본문의 latent effect를 수행하지 않으므로
 재사용 때 본문 effect를 바깥 누적 row에 추가하지 않는다.
+
+## 진단
+
+Constraints produced from calls, lambdas, and handler boundaries retain their
+source origin through solving. User-facing failures render ability rows in
+canonical source syntax, hide internal row-variable identities, and attach the
+primary diagnostic to the originating expression with the enclosing effect
+contract as secondary context. A frontend error stops the pipeline before AST
+to IR conversion and shared lowering so invalid source does not produce
+cascading diagnostics containing internal IR operation identities.
+
+타입과 effect의 진단 표기는 AST 타입 계층이 소유한다. Ability row의 구체적인
+effect들은 표시 문자열의 사전순으로 출력하고, 열린 tail은 마지막에 `e`로
+표시한다. 각 effect의 표시 문자열을 정렬 키와 출력에 함께 사용한다. 표시
+문자열이 같더라도 선언이나 타입의 identity가 같다는 뜻은 아니며, 이 문자열을
+추론·제약 해결의 동등성 판정에 사용하지 않는다.
+
+Effect-annotation conversion also preserves the source origin of each concrete
+effect separately from the semantic `AbilityRow`. Duplicate annotations are
+diagnosed at the repeated annotation after solving, with the first matching
+annotation attached as secondary context; parameterized and qualified effects
+keep the origin recorded at their shared annotation-to-row conversion point.
 
 ## Open Questions
 

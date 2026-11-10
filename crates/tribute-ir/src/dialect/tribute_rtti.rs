@@ -243,10 +243,10 @@ pub fn allocation_descriptor(
     op: trunk_ir::OpRef,
 ) -> Option<(TypeRef, Option<u32>)> {
     if let Ok(new) = adt::StructNew::from_op(ctx, op) {
-        return Some((new.r#type(ctx), None));
+        return Some((new.layout(ctx), None));
     }
     let new = adt::VariantNew::from_op(ctx, op).ok()?;
-    Some((new.r#type(ctx), Some(new.tag(ctx))))
+    Some((new.layout(ctx), Some(new.variant(ctx))))
 }
 
 /// The runtime type descriptor a native allocation operation creates: an
@@ -283,7 +283,6 @@ pub fn descriptor_field_types(
     }
     match tag {
         None => get_struct_fields(ctx, ty)
-            .map(|fields| fields.into_iter().map(|(_, ty)| ty).collect())
             .ok_or_else(|| "a layout without a tag must be an adt.struct".into()),
         Some(tag) => adt::Enum::from_type_ref(ctx, ty)
             .ok_or_else(|| "a layout with a tag must be an adt.enum".to_owned())?
@@ -382,9 +381,9 @@ mod tests {
         parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !point = adt.struct<Point(x: core.i32)>
-  !point_ref = adt.typeref<{name = "Point"}>
-  !choice = adt.enum<Choice { None() }>
+  !point = adt.struct<"Point", (core.i32)>
+  !point_ref = adt.struct<"Point">
+  !choice = adt.enum<"Choice", [()]>
   !any = tribute_rt.anyref
   !small = tribute_rt.intref
   !raw = core.ptr
@@ -420,8 +419,8 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !Pair = adt.struct<Pair(left: tribute_rt.anyref, right: core.i64)>
-  !Choice = adt.enum<Choice { None(), Some(!Pair, core.f64) }>
+  !Pair = adt.struct<"Pair", (tribute_rt.anyref, core.i64)>
+  !Choice = adt.enum<"Choice", [(), (!Pair, core.f64)]>
   tribute_rtti.layout {type = !Pair, index = 32, fields = ["dynamic", "u64"]}
   tribute_rtti.layout {type = !Choice, tag = 1, index = 33, fields = ["managed", "f64"]}
 }"#,
@@ -499,8 +498,8 @@ mod tests {
                 &mut ctx,
                 &format!(
                     r#"core.module @test {{
-  !Pair = adt.struct<Pair(left: tribute_rt.anyref, right: core.i64)>
-  !Choice = adt.enum<Choice {{ None() }}>
+  !Pair = adt.struct<"Pair", (tribute_rt.anyref, core.i64)>
+  !Choice = adt.enum<"Choice", [()]>
   {layout}
 }}"#
                 ),

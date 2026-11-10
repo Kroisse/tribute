@@ -3,7 +3,7 @@
 use tribute_ir::dialect::adt;
 use trunk_ir::context::{BlockData, IrContext, RegionData};
 use trunk_ir::dialect::{arith, core, func, mem, scf};
-use trunk_ir::ops::{DialectOp, DialectType};
+use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{
     ConversionError, ConversionTarget, Module, OpRewritePattern, PatternApplicator,
@@ -52,17 +52,19 @@ struct ReadLineResult {
     system: u32,
 }
 
+/// The layout `std::io` declares as `ReadLineResult`, found by its
+/// declaration's source name, which a conversion's tag on the layout's name
+/// leaves alone (`design/tribute-dialects.md` § "Nominal 선언").
 fn find_read_line_result(ctx: &IrContext, module: Module) -> Option<ReadLineResult> {
-    let ty = ctx.types().iter().find_map(|(ty, data)| {
-        (data.name == <adt::Enum as DialectType>::NAME
-            && data.attrs.view(ctx).get_str("name") == Some(READ_LINE_RESULT_TYPE))
-        .then_some(ty)
+    let block = module.first_block(ctx)?;
+    let decl = ctx.block(block).ops.iter().find_map(|&op| {
+        adt::EnumDecl::from_op(ctx, op)
+            .ok()
+            .filter(|decl| decl.name(ctx) == READ_LINE_RESULT_TYPE)
     })?;
-    let layout = adt::Enum::from_type_ref(ctx, ty)?;
-    let decls = adt::NominalDecls::collect(ctx, module);
+    let ty = decl.r#type(ctx);
     let position = |variant| {
-        decls
-            .variant_position(ctx, layout, variant)
+        decl.position_of(ctx, variant)
             .unwrap_or_else(|| panic!("std::io declares the `{variant}` of ReadLineResult"))
     };
     Some(ReadLineResult {
@@ -281,15 +283,27 @@ fn variant_region<const N: usize>(
     tag: u32,
     fields: [ValueRef; N],
 ) -> RegionRef {
+    // The variant is of the enum's type, cast to the operation's result type.
     let variant = adt::VariantNew::operands(fields)
-        .r#type(enum_ty)
-        .tag(tag)
+        .tag(u64::from(tag))
+        .results(enum_ty)
+        .build(ctx, loc);
+    let cast = core::UnrealizedConversionCast::operands(variant.result(ctx))
         .results(result_ty)
         .build(ctx, loc);
-    op_region(ctx, loc, variant.op_ref(), variant.result(ctx))
+    ops_region(
+        ctx,
+        loc,
+        &[variant.op_ref(), cast.op_ref()],
+        cast.result(ctx),
+    )
 }
 
 fn op_region(ctx: &mut IrContext, loc: Location, op: OpRef, result: ValueRef) -> RegionRef {
+    ops_region(ctx, loc, &[op], result)
+}
+
+fn ops_region(ctx: &mut IrContext, loc: Location, ops: &[OpRef], result: ValueRef) -> RegionRef {
     let yield_op = scf::Yield::operands([result]).build(ctx, loc);
     let block = ctx.create_block(BlockData {
         location: loc,
@@ -297,7 +311,9 @@ fn op_region(ctx: &mut IrContext, loc: Location, op: OpRef, result: ValueRef) ->
         ops: smallvec![],
         parent_region: None,
     });
-    ctx.push_op(block, op);
+    for &op in ops {
+        ctx.push_op(block, op);
+    }
     ctx.push_op(block, yield_op.op_ref());
     ctx.create_region(RegionData {
         location: loc,
@@ -339,8 +355,8 @@ mod tests {
             &mut ctx,
             r#"
             core.module @test {
-                !"std::io::ReadLineResult" = adt.enum<"std::io::ReadLineResult" { ReadLine(core.bytes), ReadEndOfFile(), ReadInvalidEncoding(), ReadSystem(core.i32, core.bytes) }>
-                adt.enum_decl "std::io::ReadLineResult" [ReadLine, ReadEndOfFile, ReadInvalidEncoding, ReadSystem]
+                !"std::io::ReadLineResult" = adt.enum<"std::io::ReadLineResult", [(core.bytes), (), (), (core.i32, core.bytes)]>
+                adt.enum_decl "std::io::ReadLineResult" !"std::io::ReadLineResult" ["ReadLine", "ReadEndOfFile", "ReadInvalidEncoding", "ReadSystem"]
 
                 func.func @caller(%0: core.bytes, %1: core.i1) -> tribute_rt.anyref {
                 ^bb0:
@@ -365,7 +381,10 @@ mod tests {
             "{output}"
         );
         for tag in 0..4 {
-            assert!(output.contains(&format!("tag = {tag}, ")), "{output}");
+            assert!(
+                output.contains(&format!("adt.variant_new {tag}(")),
+                "{output}"
+            );
         }
 
         let validation = trunk_ir::validation::validate_value_integrity(&ctx, module);

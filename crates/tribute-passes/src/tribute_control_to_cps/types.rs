@@ -3,13 +3,44 @@
 
 use super::*;
 
+impl tribute_ir::dialect::adt::convert::LayoutBlindConversion for Converter<'_> {
+    type Error = std::convert::Infallible;
+
+    fn ctx(&self) -> &IrContext {
+        self.ctx
+    }
+
+    fn ctx_mut(&mut self) -> &mut IrContext {
+        self.ctx
+    }
+
+    fn convert(&mut self, ty: TypeRef) -> Result<TypeRef, Self::Error> {
+        Ok(self.convert_type(ty))
+    }
+
+    fn key_follows_body(&self, layout: TypeRef) -> bool {
+        tribute_control::logical_tuple_elements(self.ctx, layout).is_some()
+    }
+
+    fn fix(&mut self, from: TypeRef, to: TypeRef) {
+        self.converted_types.insert(from, to);
+    }
+
+    fn reset(&mut self) {
+        self.converted_types.clear();
+    }
+}
+
 impl Converter<'_> {
     pub(super) fn never_type(&mut self) -> TypeRef {
         core::Never::params().intern(self.ctx).as_type_ref()
     }
 
+    /// The converted evidence type: that of the source module's marker,
+    /// whose layout this conversion may give a new key.
     pub(super) fn evidence_type(&mut self) -> TypeRef {
-        ability::evidence_adt_type_ref(self.ctx)
+        let source = ability::evidence_type(self.ctx, self.module);
+        self.convert_type(source)
     }
 
     pub(super) fn resumption_type(&mut self, input: TypeRef, answer: TypeRef) -> TypeRef {
@@ -83,19 +114,50 @@ impl Converter<'_> {
             self.converted_types.insert(ty, converted);
             return converted;
         }
+        // A tuple layout is named by its element types, so converting them
+        // renames it, and tuples that differed only in rows become one
+        // (`design/tribute-dialects.md` § "Nominal layout의 게시").
+        if let Some(elements) = tribute_control::logical_tuple_elements(self.ctx, ty) {
+            let mut elements = elements.to_vec();
+            for element in &mut elements {
+                *element = self.convert_type(*element);
+            }
+            let converted = tribute_control::logical_tuple_type(self.ctx, &elements);
+            self.converted_types.insert(ty, converted);
+            return converted;
+        }
 
+        // Nominal row arguments and layout row binders stay inside the
+        // source-logical boundary, as callable rows do
+        // (`design/tribute-dialects.md` § "Nominal row 인자"): a row
+        // instance becomes its layout's key.
+        if let Some(def) = tribute_control::DynRowParameterized::get(self.ctx, ty)
+            .and_then(|instance| instance.instance_def(self.ctx))
+        {
+            let converted = self.convert_type(def);
+            self.converted_types.insert(ty, converted);
+            return converted;
+        }
+        let erased = if tribute_ir::dialect::adt::is_nominal(self.ctx, ty) {
+            Some(tribute_control::ROW_PARAMS_ATTR)
+        } else {
+            None
+        };
         let params: Vec<_> = data
             .params
             .iter()
             .copied()
             .map(|param| self.convert_type(param))
             .collect();
+        let erased = erased.and_then(|name| self.ctx.lookup_str(name));
         let attrs: Vec<_> = data
             .attrs
             .iter()
+            .filter(|(key, _)| Some(*key) != erased)
             .map(|(key, value)| (key, self.convert_attribute(value)))
             .collect();
         if params == data.params.as_slice()
+            && attrs.len() == data.attrs.len()
             && attrs
                 .iter()
                 .all(|(key, value)| data.attrs.view(self.ctx).get(*key) == Some(value))

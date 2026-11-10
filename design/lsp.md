@@ -14,7 +14,7 @@ Language server는 CLI와 같은 frontend query로 source를 분석한다. 다�
 분석한다.
 
 패키지에 속한 문서는 그 패키지의 루트 파일에서 출발한
-[source 트리](implementation.md#패키지-source-트리와-파일-입력) 안에서 분석한다.
+[source 트리](frontend.md#패키지-source-트리와-파일-입력) 안에서 분석한다.
 
 - `src/main.trb`는 실행 파일 루트이며, 의존성 표는 그 매니페스트의 표다.
 - `src/lib.trb`는 라이브러리 패키지의 루트이며, 패키지 이름과 의존성 표는 그
@@ -35,7 +35,7 @@ Language server는 CLI와 같은 frontend query로 source를 분석한다. 다�
 경로의 입력을 디스크에서 다시 읽어 같은 방식으로 무효화한다.
 
 열려 있지 않은 파일의 변경은 클라이언트의 파일 감시로 받는다. 감시하는 경로는 열린
-문서마다 그 문서를 분석하며 읽는 [빌드 입력 파일](implementation.md#패키지-source-트리와-파일-입력)의
+문서마다 그 문서를 분석하며 읽는 [빌드 입력 파일](frontend.md#패키지-source-트리와-파일-입력)의
 합집합이다.
 
 - 문서를 분석하는 루트마다 그 source 트리가 물어본 경로.
