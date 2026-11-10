@@ -34,7 +34,7 @@ fn imported_parent_type_keeps_its_nominal_identity(db: &salsa::DatabaseImpl) {
         "nested_nominal_annotation.trb",
         r#"
 pub mod A {
-    pub struct Thing { value: Nat }
+    pub struct Thing { pub value: Nat }
 
     pub mod Inner {
         use super::Thing
@@ -115,7 +115,7 @@ struct Later {
 
 pub mod A {
     pub struct Later {
-        value: Nat
+        pub value: Nat
     }
 }
 

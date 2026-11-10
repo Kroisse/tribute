@@ -486,9 +486,13 @@ TypeParam  ::= LowerIdentifier                // 타입 매개변수
 
 StructBody ::= '{' StructFields '}'
 StructFields ::= StructField (FieldSep StructField)* FieldSep?
-StructField ::= Identifier ':' Type
+StructField ::= Visibility Identifier ':' Type
 FieldSep ::= ',' | '\n'
 ```
+
+Field의 `Visibility`는 [가시성](#visibility)과 같은 문법이며, 규칙은
+modules.md의 Struct field의 가시성을 따른다. Enum variant의 이름 있는 field도 같은
+`StructFields`를 쓰지만 수식자를 쓸 수 없다.
 
 **예시:**
 
@@ -509,6 +513,9 @@ struct Callback({e}, a) {
 
 // 한 줄이면 쉼표 필수
 struct Point { x: Int, y: Int }
+
+// 공개 struct의 field도 수식자가 없으면 이 모듈에서만 보인다
+pub struct Span { pub start: Nat, pub len: Nat, source: String }
 ```
 
 Row 매개변수는 모든 타입 매개변수보다 앞에 쓴다. 문법은 두 종류를 어떤 순서로든
@@ -1336,6 +1343,7 @@ VisibilityPath ::= PathKeyword ('::' PathSegment)*
 - `pub fn`
 - `pub mod`
 - `pub use` (reexport)
+- struct field (`pub start: Nat`)
 
 ---
 

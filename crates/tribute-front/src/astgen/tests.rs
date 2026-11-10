@@ -2290,6 +2290,24 @@ fn test_struct_field_tuple_type() {
     assert_eq!(elements.len(), 2);
 }
 
+#[test]
+fn test_struct_field_visibility() {
+    let source = r#"
+            pub struct Span {
+                source: String
+                pub start: Nat
+                pub(pkg::io) len: Nat
+            }
+        "#;
+    let module = parse_and_lower(source);
+
+    let ModuleItem::Decl(Decl::Struct(s)) = &module.decls[0] else {
+        panic!("Expected struct");
+    };
+    let visibilities: Vec<_> = s.fields.iter().map(|f| f.visibility.to_string()).collect();
+    assert_eq!(visibilities, ["private", "pub", "pub(pkg::io)"]);
+}
+
 // =============================================================================
 // Extern Function Tests
 // =============================================================================

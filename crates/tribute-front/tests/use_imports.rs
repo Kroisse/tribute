@@ -184,7 +184,7 @@ fn relative_type_imports_keep_the_resolved_type(db: &salsa::DatabaseImpl) {
                 r#"
 mod outer {{
     pub mod a {{
-        pub struct P {{ x: Nat }}
+        pub struct P {{ pub x: Nat }}
     }}
     {import}
 
@@ -211,11 +211,11 @@ fn inline_module_paths_start_from_the_module(db: &salsa::DatabaseImpl) {
         db,
         r#"
 mod a {
-    pub struct P { root: Nat }
+    pub struct P { pub root: Nat }
 }
 mod outer {
     pub mod a {
-        pub struct P { nested: Nat }
+        pub struct P { pub nested: Nat }
     }
     use a::P
 
@@ -278,7 +278,7 @@ fn inline_module_imports_cover_constructors_and_abilities(db: &salsa::DatabaseIm
         r#"
 mod outer {
     mod a {
-        pub struct P { x: Nat }
+        pub struct P { pub x: Nat }
     }
     mod fx {
         pub ability Tick {

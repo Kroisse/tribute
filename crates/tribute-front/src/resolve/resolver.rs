@@ -3,6 +3,8 @@
 //! This module transforms `Expr<UnresolvedName>` into `Expr<ResolvedRef<'db>>`
 //! by looking up names in the package environment and local scopes.
 
+use std::cell::Cell;
+
 use rustc_hash::FxHashMap as HashMap;
 
 use itertools::Itertools;
@@ -12,10 +14,10 @@ use trunk_ir::{Symbol, SymbolPath};
 
 use crate::ast::{
     Arm, Candidates, CtorId, Decl, DeclEntry, DeclTable, Expr, ExprKind, FIELD_LENS_FUNCTIONS,
-    FieldDecl, FieldInit, FieldPattern, FuncDecl, HandlerArm, HandlerKind, LocalId, LocalIdGen,
-    Module, ModuleItem, ModulePath, NodeDiagnostic, NodeId, Param, ParamDecl, Pattern, PatternKind,
-    ResolvedRef, Stmt, TypeAnnotation, TypeAnnotationKind, TypeKind, TypeParamDecl, UnresolvedName,
-    UseDecl, Visibility,
+    FieldDecl, FieldInit, FieldPattern, FuncDecl, FuncDefId, HandlerArm, HandlerKind, LocalId,
+    LocalIdGen, Module, ModuleItem, ModulePath, NodeDiagnostic, NodeId, Param, ParamDecl, Pattern,
+    PatternKind, ResolvedRef, Stmt, TypeAnnotation, TypeAnnotationKind, TypeKind, TypeParamDecl,
+    UnresolvedName, UseDecl, Visibility,
 };
 
 use super::env::{Binding, Restriction};
@@ -115,6 +117,11 @@ pub struct Resolver<'e, 'db> {
     redefinitions: Vec<NodeId>,
     /// The package whose module tree `module_path` is a path of.
     package: PackageName,
+    /// Whether the name being resolved is a value, so that a struct
+    /// constructor it names builds a value from scratch. A spread record and
+    /// a record pattern name only some fields and see the constructor where
+    /// they see the struct, as `use`s and types do.
+    constructing: Cell<bool>,
 }
 
 /// Resolver for the body of one module-level function, in the scope its
@@ -147,6 +154,7 @@ impl<'e, 'db> Resolver<'e, 'db> {
             module_imported_functions: Vec::new(),
             redefinitions: Vec::new(),
             package: PackageName::executable_root(),
+            constructing: Cell::new(false),
         }
     }
 
@@ -202,7 +210,7 @@ impl<'e, 'db> Resolver<'e, 'db> {
     ) -> Vec<&Restriction> {
         let entry = self.view().entry_restrictions(namespace, name);
         if entry.is_empty() {
-            self.view().restriction(binding).into_iter().collect()
+            self.restriction(binding).into_iter().collect()
         } else {
             entry.iter().collect()
         }
@@ -234,10 +242,62 @@ impl<'e, 'db> Resolver<'e, 'db> {
             || self.hidden_entry(namespace, name, binding).is_none()
     }
 
+    /// Where `binding` is visible, if it is not public. A struct constructor
+    /// named as a value builds one from scratch, so it is visible only where
+    /// every field is.
+    fn restriction(&self, binding: &Binding<'db>) -> Option<&Restriction> {
+        if self.constructing.get()
+            && let Binding::Constructor { id, tag: None, .. } = binding
+            && let Some(construction) = self.view().construction_restriction(*id)
+        {
+            return Some(construction);
+        }
+        self.view().restriction(binding)
+    }
+
+    /// Run `resolve` with `constructing` set as given.
+    fn with_constructing<T>(&self, constructing: bool, resolve: impl FnOnce() -> T) -> T {
+        let outer = self.constructing.replace(constructing);
+        let resolved = resolve();
+        self.constructing.set(outer);
+        resolved
+    }
+
+    /// Report each of `fields`, the field names a record form writes for
+    /// the struct constructor `ctor`, that the current module does not see.
+    fn report_hidden_fields<'a>(
+        &self,
+        ctor: &ResolvedRef<'db>,
+        fields: impl IntoIterator<Item = (NodeId, &'a Symbol)>,
+    ) {
+        let ResolvedRef::Constructor { id, .. } = ctor else {
+            return;
+        };
+        if self.view().construction_restriction(*id).is_none() {
+            return;
+        }
+        let ctor_path = id.path(self.db);
+        for (node, field) in fields {
+            let getter = FuncDefId::new(self.db, ctor_path.child(field.clone()));
+            if let Some(restriction) = self.hidden(&Binding::Function { id: getter }) {
+                NodeDiagnostic::new(
+                    format!(
+                        "field `{field}` of `{}` is not visible here: {}",
+                        id.name(self.db),
+                        restriction.display(&self.names())
+                    ),
+                    node,
+                    DiagnosticSeverity::Error,
+                    CompilationPhase::NameResolution,
+                )
+                .accumulate(self.db);
+            }
+        }
+    }
+
     /// The restriction that hides `binding` from the current module.
     fn hidden(&self, binding: &Binding<'db>) -> Option<&Restriction> {
-        self.view()
-            .restriction(binding)
+        self.restriction(binding)
             .filter(|restriction| !restriction.is_visible_from(&self.package, &self.module_path))
     }
 
@@ -571,14 +631,20 @@ impl<'e, 'db> Resolver<'e, 'db> {
             .view()
             .restrictions()
             .filter_map(|(binding, restriction)| match binding {
-                Binding::Constructor { id, .. }
-                    if id.name(self.db) == ctor
-                        && !restriction.is_visible_from(&self.package, &self.module_path) =>
-                {
-                    Some((*id, restriction.display(&self.names()).to_string()))
-                }
+                Binding::Constructor { id, .. } => Some((*id, restriction)),
                 _ => None,
             })
+            .chain(
+                self.view()
+                    .construction_restrictions()
+                    .filter(|_| self.constructing.get())
+                    .map(|(id, restriction)| (*id, restriction)),
+            )
+            .filter(|(id, restriction)| {
+                id.name(self.db) == ctor
+                    && !restriction.is_visible_from(&self.package, &self.module_path)
+            })
+            .map(|(id, restriction)| (id, restriction.display(&self.names()).to_string()))
             .collect();
         hidden.sort_by_key(|(id, _)| id.path(self.db));
         ResolvedRef::ImplicitConstructor {
@@ -1270,18 +1336,47 @@ impl<'e, 'db> Resolver<'e, 'db> {
         self.redefinitions.contains(&id)
     }
 
-    /// Report a `pub(path)` marker on `item` whose path names neither the
-    /// current module nor a module around it.
+    /// Report a `pub(path)` marker on `item` or one of its struct fields
+    /// whose path names neither the current module nor a module around it,
+    /// and a marker on an enum variant field, which follows the enum.
     fn report_visibility_path(&self, item: &ModuleItem<UnresolvedName>) {
         let (id, visibility) = match item {
             ModuleItem::Decl(Decl::Function(f)) => (f.id, &f.visibility),
             ModuleItem::Decl(Decl::ExternFunction(f)) => (f.id, &f.visibility),
-            ModuleItem::Decl(Decl::Struct(s)) => (s.id, &s.visibility),
-            ModuleItem::Decl(Decl::Enum(e)) => (e.id, &e.visibility),
+            ModuleItem::Decl(Decl::Struct(s)) => {
+                for field in &s.fields {
+                    self.report_restriction_path(field.id, &field.visibility);
+                }
+                (s.id, &s.visibility)
+            }
+            ModuleItem::Decl(Decl::Enum(e)) => {
+                for field in e.variants.iter().flat_map(|variant| &variant.fields) {
+                    if field.visibility != Visibility::Private {
+                        NodeDiagnostic::new(
+                            format!(
+                                "`{}` on an enum variant field: a variant's fields follow \
+                                 the enum's visibility",
+                                field.visibility
+                            ),
+                            field.id,
+                            DiagnosticSeverity::Error,
+                            CompilationPhase::NameResolution,
+                        )
+                        .accumulate(self.db);
+                    }
+                }
+                (e.id, &e.visibility)
+            }
             ModuleItem::Decl(Decl::Ability(a)) => (a.id, &a.visibility),
             ModuleItem::Decl(Decl::Use(u)) => (u.id, &u.visibility),
             ModuleItem::Module(m) => (m.id, &m.visibility),
         };
+        self.report_restriction_path(id, visibility);
+    }
+
+    /// Report the `pub(path)` marker `visibility` of the declaration `id` if
+    /// its path names neither the current module nor a module around it.
+    fn report_restriction_path(&self, id: NodeId, visibility: &Visibility) {
         let Visibility::Restricted(scope) = visibility else {
             return;
         };
@@ -1562,6 +1657,13 @@ impl<'r, 'e, 'db> FunctionResolver<'r, 'e, 'db> {
 
     /// Resolve an unresolved name to a ResolvedRef.
     fn resolve_name(&self, name: &UnresolvedName) -> ResolvedRef<'db> {
+        self.module
+            .with_constructing(true, || self.resolve_name_seeing(name))
+    }
+
+    /// Resolve `name` with the visibility the module's `constructing` flag
+    /// gives a struct constructor.
+    fn resolve_name_seeing(&self, name: &UnresolvedName) -> ResolvedRef<'db> {
         let sym = name.name();
 
         // For simple names: check locals, builtins, then the package environment
@@ -1752,10 +1854,26 @@ impl<'r, 'e, 'db> FunctionResolver<'r, 'e, 'db> {
     ///
     /// [`resolve_name`]: Self::resolve_name
     fn resolve_constructor(&self, name: &UnresolvedName) -> ResolvedRef<'db> {
+        self.module
+            .with_constructing(true, || self.resolve_constructor_seeing(name))
+    }
+
+    /// Resolve `name`, the constructor of a record form that names only
+    /// some fields: a spread record or a record pattern. It sees a struct
+    /// constructor where it sees the struct; the caller checks the fields
+    /// it names.
+    fn resolve_record_constructor(&self, name: &UnresolvedName) -> ResolvedRef<'db> {
+        self.module
+            .with_constructing(false, || self.resolve_constructor_seeing(name))
+    }
+
+    /// Resolve the constructor `name` with the visibility the module's
+    /// `constructing` flag gives a struct constructor.
+    fn resolve_constructor_seeing(&self, name: &UnresolvedName) -> ResolvedRef<'db> {
         if name.implicit {
             self.module.implicit_constructor(name)
         } else {
-            self.resolve_name(name)
+            self.resolve_name_seeing(name)
         }
     }
 
@@ -1967,7 +2085,17 @@ impl<'r, 'e, 'db> FunctionResolver<'r, 'e, 'db> {
                 fields,
                 spread,
             } => {
-                let resolved_type = self.resolve_constructor(type_name);
+                // A spread record writes only the fields it names; one
+                // without a spread writes every field, as the constructor
+                // does.
+                let resolved_type = if spread.is_some() {
+                    let resolved = self.resolve_record_constructor(type_name);
+                    self.module
+                        .report_hidden_fields(&resolved, fields.iter().map(|f| (f.id, &f.name)));
+                    resolved
+                } else {
+                    self.resolve_constructor(type_name)
+                };
                 let fields = fields
                     .iter()
                     .map(|f| FieldInit {
@@ -2260,7 +2388,11 @@ impl<'r, 'e, 'db> FunctionResolver<'r, 'e, 'db> {
                 fields,
                 rest,
             } => {
-                let resolved_type = self.resolve_constructor(type_name);
+                // A record pattern matches only the fields it names; `..`
+                // skips the others, hidden ones included.
+                let resolved_type = self.resolve_record_constructor(type_name);
+                self.module
+                    .report_hidden_fields(&resolved_type, fields.iter().map(|f| (f.id, &f.name)));
                 let fields = fields
                     .iter()
                     .map(|f| {

@@ -345,8 +345,8 @@ fn record_shape_uses_qualified_declaration_identity(db: &salsa::DatabaseImpl) {
     let a_record = "A::Point { y: +1 }";
     let b_record = "B::Point { x: +2 }";
     let text = format!(
-        "pub mod A {{ pub struct Point {{ x: Int }} }}\n\
-         pub mod B {{ pub struct Point {{ y: Int }} }}\n\
+        "pub mod A {{ pub struct Point {{ pub x: Int }} }}\n\
+         pub mod B {{ pub struct Point {{ pub y: Int }} }}\n\
          fn make_a() -> A::Point {{ {a_record} }}\n\
          fn make_b() -> B::Point {{ {b_record} }}"
     );
@@ -377,8 +377,8 @@ fn valid_record_shapes_keep_field_and_callable_inference(db: &salsa::DatabaseImp
 struct Point { x: Int, y: Int }
 struct Pair(a, b) { first: a, second: b }
 struct Callback { run: fn(Int) -> Int }
-pub mod A { pub struct Point { x: Int } }
-pub mod B { pub struct Point { y: Int } }
+pub mod A { pub struct Point { pub x: Int } }
+pub mod B { pub struct Point { pub y: Int } }
 
 fn complete() -> Point { Point { y: +2, x: +1 } }
 fn spread_only(base: Point) -> Point { Point { ..base } }

@@ -326,7 +326,7 @@ fn specialize_struct_decl<'db>(
             .map(|f| FieldDecl {
                 id: f.id.with_variant(variant),
                 name_id: f.name_id.with_variant(variant),
-                is_pub: f.is_pub,
+                visibility: f.visibility.clone(),
                 name: f.name.clone(),
                 ty: substitute_annotation(db, &f.ty, &param_names, type_args),
             })
@@ -364,7 +364,7 @@ fn specialize_enum_decl<'db>(
                     .map(|f| FieldDecl {
                         id: f.id.with_variant(variant),
                         name_id: f.name_id.with_variant(variant),
-                        is_pub: f.is_pub,
+                        visibility: f.visibility.clone(),
                         name: f.name.clone(),
                         ty: substitute_annotation(db, &f.ty, &param_names, type_args),
                     })
@@ -680,7 +680,7 @@ mod tests {
     use super::super::mangle::mangle_name;
     use crate::ast::{
         AbilityRow, Arm, Expr, ExprKind, FieldPattern, HandlerArm, HandlerKind, Module, Pattern,
-        PatternKind, ResolvedRef, Stmt, TypeParam,
+        PatternKind, ResolvedRef, Stmt, TypeParam, Visibility,
     };
 
     use super::*;
@@ -1212,7 +1212,7 @@ mod tests {
                 FieldDecl {
                     id: node_id(4),
                     name_id: node_id(4),
-                    is_pub: false,
+                    visibility: Visibility::Private,
                     name: Some(Symbol::new("first")),
                     ty: TypeAnnotation {
                         id: node_id(5),
@@ -1222,7 +1222,7 @@ mod tests {
                 FieldDecl {
                     id: node_id(6),
                     name_id: node_id(6),
-                    is_pub: false,
+                    visibility: Visibility::Private,
                     name: Some(Symbol::new("second")),
                     ty: TypeAnnotation {
                         id: node_id(7),
@@ -1292,14 +1292,14 @@ mod tests {
                 FieldDecl {
                     id: node_id(3),
                     name_id: node_id(3),
-                    is_pub: false,
+                    visibility: Visibility::Private,
                     name: Some(Symbol::new("value")),
                     ty: named(4, "a"),
                 },
                 FieldDecl {
                     id: node_id(5),
                     name_id: node_id(5),
-                    is_pub: false,
+                    visibility: Visibility::Private,
                     name: Some(Symbol::new("callback")),
                     ty: TypeAnnotation {
                         id: node_id(6),
@@ -1375,7 +1375,7 @@ mod tests {
                     fields: vec![FieldDecl {
                         id: node_id(4),
                         name_id: node_id(4),
-                        is_pub: false,
+                        visibility: Visibility::Private,
                         name: None,
                         ty: TypeAnnotation {
                             id: node_id(5),

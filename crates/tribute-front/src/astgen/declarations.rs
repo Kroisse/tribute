@@ -644,7 +644,7 @@ fn lower_struct_field(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Option<FieldD
     Some(FieldDecl {
         id,
         name_id,
-        is_pub: false,
+        visibility: lower_visibility(ctx, node),
         name,
         ty,
     })
@@ -744,7 +744,7 @@ fn lower_variant_fields(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Vec<FieldDe
                     fields.push(FieldDecl {
                         id,
                         name_id: id,
-                        is_pub: false,
+                        visibility: Visibility::Private,
                         name: None, // Tuple fields are anonymous
                         ty,
                     });

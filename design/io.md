@@ -26,8 +26,8 @@ The `std::io` module exports:
 // No source `ability` declaration or synthetic AST node exists.
 
 pub struct SystemError {
-    code: Int
-    message: String
+    pub code: Int
+    pub message: String
 }
 
 pub enum Error {
