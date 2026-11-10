@@ -5,7 +5,7 @@ use std::ops::ControlFlow;
 use tribute_ir::dialect::adt;
 use tribute_ir::dialect::list;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext};
-use trunk_ir::dialect::{cf, func};
+use trunk_ir::dialect::{cf, core, func};
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{OpRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::helpers::split_block;
@@ -172,11 +172,16 @@ impl OpRewritePattern for PrependPattern {
         let op = prepend.op_ref();
         let result_ty = ctx.op_result_types(op)[0];
         let node_ty = node_type(ctx, prepend.element_type(ctx));
+        let location = ctx.op(op).location;
         let node = adt::StructNew::operands([prepend.element(ctx), prepend.tail(ctx)])
             .r#type(node_ty)
+            .results(node_ty)
+            .build(ctx, location);
+        rewriter.insert_op(node.op_ref());
+        let list = core::UnrealizedConversionCast::operands(node.result(ctx))
             .results(result_ty)
-            .build(ctx, ctx.op(op).location);
-        rewriter.replace_op(node.op_ref());
+            .build(ctx, location);
+        rewriter.replace_op(list.op_ref());
         Some(())
     }
 }
