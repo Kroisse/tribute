@@ -266,17 +266,31 @@ impl<'e, 'db> Resolver<'e, 'db> {
         }
     }
 
-    /// Add to `hidden` each struct constructor named `ctor` that an
-    /// implicit record form naming `fields` may select but must not: one
-    /// with a field among them that the current module does not see.
+    /// Add to `hidden` each struct constructor that an implicit record form
+    /// written `ctor` and naming `fields` may select but must not: one with
+    /// a field among them that the current module does not see. The form
+    /// may select one of `candidates`, which an alias may spell otherwise,
+    /// or by an expected type the constructor named `ctor`.
     fn hide_record_constructors(
         &self,
         hidden: &mut Vec<(CtorId<'db>, String)>,
         ctor: &Symbol,
+        candidates: &Candidates<CtorId<'db>>,
         fields: &[&Symbol],
     ) {
-        for (id, _) in self.view().construction_restrictions() {
-            if id.name(self.db) != *ctor {
+        let selectable: Vec<CtorId<'db>> = candidates
+            .iter()
+            .copied()
+            .chain(
+                self.view()
+                    .construction_restrictions()
+                    .map(|(id, _)| *id)
+                    .filter(|id| id.name(self.db) == *ctor),
+            )
+            .unique()
+            .collect();
+        for id in &selectable {
+            if self.view().construction_restriction(*id).is_none() {
                 continue;
             }
             let ctor_path = id.path(self.db);
@@ -1916,7 +1930,7 @@ impl<'r, 'e, 'db> FunctionResolver<'r, 'e, 'db> {
                 let fields: SmallVec<[&Symbol; 4]> =
                     fields.into_iter().map(|(_, field)| field).collect();
                 self.module
-                    .hide_record_constructors(&mut hidden, &name, &fields);
+                    .hide_record_constructors(&mut hidden, &name, &candidates, &fields);
                 // A hidden constructor is selected only by an expected
                 // type, which reports it; the scope's candidates leave it
                 // out, as they leave out any constructor it does not see.

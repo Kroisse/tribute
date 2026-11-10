@@ -613,6 +613,15 @@ fn unannotated(window: Window) -> Nil {
     let relabeled = .Window { ..window, label: "b" }
 }
 
+mod aliased {
+    use pkg::m::Window as Pane
+
+    fn update(window: pkg::m::Window) -> Nil {
+        let changed = .Pane { ..window, data: 1 }
+        let relabeled = .Pane { ..window, label: "b" }
+    }
+}
+
 fn matched(window: Window) -> Nat {
     case window {
         .Window { data, .. } -> data
@@ -635,6 +644,8 @@ fn reexported() -> Window { facade::Window("b", 1) }
             format!("`facade::Window` is not visible here: {hidden}"),
             format!("`m::Window` is not visible here: {hidden}"),
             format!("`m::Window` is not visible here: {hidden}"),
+            // The alias selects no constructor once its candidate is hidden.
+            "type `m::Window` has no constructor `Pane`".to_owned(),
             format!("`m::Window` is not visible here: {hidden}"),
         ]
     );
