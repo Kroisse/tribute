@@ -41,7 +41,7 @@ mod closure {
     ///   with `unpack`.
     /// - **Lowering:** closure lowering makes it one allocation of the
     ///   convention table reference (`tribute_rt.convention_table`) and the
-    ///   captures; see the closure storage layout in `design/ir.md`.
+    ///   captures; see the closure storage layout in `design/tribute-dialects.md`.
     ///
     /// ```text
     /// %c = closure.new [@f, @trap_e, @trap_c] %x, %y : closure.closure<S>

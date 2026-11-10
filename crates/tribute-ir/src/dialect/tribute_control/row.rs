@@ -588,7 +588,7 @@ pub fn logical_tuple_type(ctx: &mut IrContext, elements: &[TypeRef]) -> TypeRef 
 
 /// The name of the layout a nominal value type `ty` refers to: an
 /// `adt.typeref`'s name, or the name of a layout key or of a row instance's
-/// `def` (`design/ir.md` § "Nominal 값 타입"); `None` for a literal layout or
+/// `def` (`design/tribute-dialects.md` § "Nominal 값 타입"); `None` for a literal layout or
 /// any other type.
 fn nominal_value_name(ctx: &IrContext, ty: TypeRef) -> Option<&str> {
     let data = ctx.get_type(ty);

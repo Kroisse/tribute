@@ -749,7 +749,8 @@ impl Pass for FinalizeClosureStorageLayout {
 /// aliases, nested type parameters and attributes, the fields of nominal
 /// layouts, type-bearing operation attributes, results, and block arguments.
 /// A nominal layout whose fields change gets a new key, tagged with `tag`
-/// when its key attributes stay (`design/ir.md` § "Nominal layout 변환").
+/// when its key attributes stay (`design/tribute-dialects.md` § "Nominal
+/// layout 변환").
 /// The plan is complete before any update applies. Casts that the
 /// replacement turns into identities are removed.
 pub(crate) fn substitute_module_types(

@@ -1,5 +1,5 @@
 //! Conversion of nominal layouts, whose fields are in identified bodies
-//! (`design/ir.md` § "Nominal layout 변환").
+//! (`design/tribute-dialects.md` § "Nominal layout 변환").
 
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use trunk_ir::context::IrContext;
