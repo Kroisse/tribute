@@ -131,8 +131,9 @@ mod adt {
     ///
     /// When the layout declares row parameters, each field operand has the
     /// layout's field type with the layout's row binders replaced by the
-    /// `row_args` of the result's `adt.typeref`, using call-site row
-    /// substitution; see `design/tribute-dialects.md` § "Nominal row 인자".
+    /// `row_args` of the result's row instance or `adt.typeref`, using
+    /// call-site row substitution; see `design/tribute-dialects.md` §
+    /// "Nominal row 인자".
     #[flags(Pure)]
     #[asm_format(fields attr_dict_bare ":" type(result))]
     fn struct_new(r#type: Attr<Type>, fields: Variadic<_>) -> Value<_> {}
@@ -141,8 +142,8 @@ mod adt {
     ///
     /// When the layout declares row parameters, the result has the layout's
     /// field type with the layout's row binders replaced by the `row_args` of
-    /// the `ref` operand's `adt.typeref`, using call-site row substitution; see
-    /// `design/tribute-dialects.md` § "Nominal row 인자".
+    /// the `ref` operand's row instance or `adt.typeref`, using call-site row
+    /// substitution; see `design/tribute-dialects.md` § "Nominal row 인자".
     #[flags(Pure)]
     #[asm_format(r#ref attr_dict_bare ":" type(result))]
     fn struct_get(r#type: Attr<Type>, field: Attr<u32>, r#ref: Value<_>) -> Value<_> {}
@@ -163,8 +164,9 @@ mod adt {
     ///
     /// When the layout declares row parameters, each field operand has the
     /// layout's field type with the layout's row binders replaced by the
-    /// `row_args` of the result's `adt.typeref`, using call-site row
-    /// substitution; see `design/tribute-dialects.md` § "Nominal row 인자".
+    /// `row_args` of the result's row instance or `adt.typeref`, using
+    /// call-site row substitution; see `design/tribute-dialects.md` §
+    /// "Nominal row 인자".
     #[flags(Pure)]
     #[verify]
     #[asm_format(fields attr_dict_bare ":" type(result))]
@@ -205,8 +207,8 @@ mod adt {
     ///
     /// When the layout declares row parameters, the result has the layout's
     /// field type with the layout's row binders replaced by the `row_args` of
-    /// the `ref` operand's `adt.typeref`, using call-site row substitution; see
-    /// `design/tribute-dialects.md` § "Nominal row 인자".
+    /// the `ref` operand's row instance or `adt.typeref`, using call-site row
+    /// substitution; see `design/tribute-dialects.md` § "Nominal row 인자".
     #[flags(Pure)]
     #[verify]
     #[asm_format(r#ref attr_dict_bare ":" type(result))]
@@ -321,8 +323,9 @@ mod adt {
     #[asm_format(r#ref attr_dict_bare ":" type(result))]
     fn array_len(r#ref: Value<impl Array>) -> Value<Index> {}
 
-    /// The null inhabitant of exactly the `adt.typeref` `type`, which is
-    /// also the result type. Retaining or releasing it is a no-op.
+    /// The null inhabitant of exactly the nominal value type `type` (a
+    /// layout key, a row instance, or an `adt.typeref`), which is also the
+    /// result type. Retaining or releasing it is a no-op.
     #[flags(Pure)]
     #[asm_format(attr_dict_bare ":" type(result))]
     fn ref_null(r#type: Attr<Type>) -> Value<_> {}
@@ -331,9 +334,10 @@ mod adt {
     #[asm_format(r#ref attr_dict_bare ":" type(result))]
     fn ref_is_null(r#ref: Value<_>) -> Value<_> {}
 
-    /// `ref` as the `adt.typeref` `type`, which is also the result type. It
-    /// is allowed only between managed references whose nominal identity has
-    /// been established to be the same.
+    /// `ref` as the nominal value type `type` (a layout key, a row instance,
+    /// or an `adt.typeref`), which is also the result type. It is allowed
+    /// only between managed references whose nominal identity has been
+    /// established to be the same.
     #[implements(Fold)]
     #[flags(Pure)]
     #[asm_format(r#ref attr_dict_bare ":" type(result))]
