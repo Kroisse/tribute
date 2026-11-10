@@ -520,9 +520,13 @@ fn type_key(ctx: &IrContext, ty: TypeRef) -> String {
         // Row arguments are part of the type, so they tell tuples apart.
         return key(
             "named",
-            [text(name)]
-                .into_iter()
-                .chain(adt::value_rows(ctx, ty).iter().map(row_key)),
+            [text(name)].into_iter().chain(
+                DynRowParameterized::get(ctx, ty)
+                    .map(|row| row.instance_rows(ctx))
+                    .unwrap_or_default()
+                    .iter()
+                    .map(row_key),
+            ),
         );
     }
     let attributes = |reserved: &[&str]| -> Vec<String> {
@@ -622,16 +626,10 @@ fn nominal_value_name(ctx: &IrContext, ty: TypeRef) -> Option<&str> {
 /// The element types of a compiler-generated tuple layout, whose value type
 /// is its key.
 pub fn logical_tuple_elements(ctx: &IrContext, ty: TypeRef) -> Option<&[TypeRef]> {
-    let data = ctx.get_type(ty);
-    if data.name != adt::Struct::NAME {
+    let layout = adt::Struct::from_type_ref(ctx, ty)?;
+    if !layout.name(ctx)?.starts_with(LOGICAL_TUPLE_PREFIX) {
         return None;
     }
-    let name = data.attrs.view(ctx).get_str("name")?;
-    if !name.starts_with(LOGICAL_TUPLE_PREFIX) {
-        return None;
-    }
-    let layout = adt::layout_of(ctx, ty)?;
-    let layout = adt::Struct::from_type_ref(ctx, layout)?;
     layout.body(ctx)?;
     Some(layout.fields(ctx))
 }
@@ -739,8 +737,10 @@ impl<S: TypeSink> Substitution<'_, S> {
             };
         }
         let ctx = self.sink.ctx();
-        if adt::row_instance_def(ctx, ty).is_some() {
-            return self.row_args(ty);
+        if let Some(instance) = DynRowParameterized::get(ctx, ty)
+            .filter(|instance| instance.instance_def(ctx).is_some())
+        {
+            return self.row_args(ty, instance.instance_rows(ctx));
         }
         // A layout's own rows name its binders, not the substituted ones.
         if binds_rows(ctx, ty) {
@@ -777,10 +777,9 @@ impl<S: TypeSink> Substitution<'_, S> {
         }
     }
 
-    /// The row instance `ty` with its row arguments substituted.
-    fn row_args(&mut self, ty: TypeRef) -> Option<TypeRef> {
-        let ctx = self.sink.ctx();
-        let rows = adt::value_rows(ctx, ty);
+    /// The row instance `ty`, whose row arguments are `rows`, with them
+    /// substituted.
+    fn row_args(&mut self, ty: TypeRef, rows: Vec<Row>) -> Option<TypeRef> {
         if rows.is_empty() {
             return Some(ty);
         }
@@ -791,7 +790,7 @@ impl<S: TypeSink> Substitution<'_, S> {
         if substituted == rows {
             return Some(ty);
         }
-        let mut data = ctx.get_type(ty).clone();
+        let mut data = self.sink.ctx().get_type(ty).clone();
         let key = self.sink.key(ROW_ARGS_ATTR)?;
         let values = substituted
             .iter()
@@ -817,7 +816,7 @@ impl<S: TypeSink> Substitution<'_, S> {
 /// Whether `ty` is a nominal layout that declares row binders, which the
 /// rows inside it name.
 fn binds_rows(ctx: &IrContext, ty: TypeRef) -> bool {
-    DynRowParameterized::is_implemented(ctx, ty) && ctx.type_attrs(ty).contains_key(ROW_PARAMS_ATTR)
+    DynRowParameterized::get(ctx, ty).is_some_and(|layout| layout.row_param_count(ctx).is_some())
 }
 
 /// Replace, in every callable type inside `ty`, a tail that `args` names
@@ -875,11 +874,11 @@ fn visit_rows_in(
         return;
     }
     let data = ctx.get_type(ty);
-    if adt::row_instance_def(ctx, ty).is_some() {
-        if let Some(Attribute::List(rows)) = data.attrs.view(ctx).get(ROW_ARGS_ATTR) {
-            for row in rows {
-                visit(Row::from_attribute(ctx, row));
-            }
+    if let Some(instance) =
+        DynRowParameterized::get(ctx, ty).filter(|instance| instance.instance_def(ctx).is_some())
+    {
+        for row in instance.instance_rows(ctx) {
+            visit(Ok(row));
         }
         return;
     }

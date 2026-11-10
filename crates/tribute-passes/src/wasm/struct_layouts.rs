@@ -66,7 +66,8 @@ pub fn variant_type(ctx: &mut IrContext, enum_ty: TypeRef, tag: u32) -> Option<T
 /// each enum layout or row instance with the type of its values.
 pub(crate) fn convert(ctx: &mut IrContext, module: Module) {
     crate::closure_lower::substitute_module_types(ctx, module, "gc", |ctx, ty| {
-        let reference = tribute_ir::dialect::adt::row_instance_def(ctx, ty).is_some()
+        let reference = tribute_ir::dialect::tribute_control::DynRowParameterized::get(ctx, ty)
+            .is_some_and(|instance| instance.instance_def(ctx).is_some())
             || tribute_ir::dialect::adt::Enum::matches(ctx, ty);
         if reference {
             return Some(reference_type(ctx, ty));

@@ -181,7 +181,7 @@ impl Settler<'_> {
 
 /// Whether `ty` is a nominal layout's key, which a body is bound to.
 fn is_nominal_layout(ctx: &IrContext, ty: TypeRef) -> bool {
-    super::is_nominal(ctx, ty) && ctx.type_attrs(ty).contains_key(STRUCT_NAME_ATTR)
+    super::DynAdtLayout::get(ctx, ty).is_some_and(|layout| layout.key_name_ref(ctx).is_some())
 }
 
 /// Collect the nominal layout keys `ty` is or holds, without entering

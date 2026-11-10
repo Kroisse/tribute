@@ -374,11 +374,11 @@ impl RowParameterized for Struct {
     }
 
     fn instance_def(&self, ctx: &IrContext) -> Option<TypeRef> {
-        row_instance_def(ctx, self.as_type_ref())
+        ctx.type_attrs(self.0).get_type(DEF_ATTR)
     }
 
     fn instance_rows(&self, ctx: &IrContext) -> Vec<Row> {
-        value_rows(ctx, self.as_type_ref())
+        instance_rows(ctx, self.0)
     }
 }
 
@@ -388,11 +388,22 @@ impl RowParameterized for Enum {
     }
 
     fn instance_def(&self, ctx: &IrContext) -> Option<TypeRef> {
-        row_instance_def(ctx, self.as_type_ref())
+        ctx.type_attrs(self.0).get_type(DEF_ATTR)
     }
 
     fn instance_rows(&self, ctx: &IrContext) -> Vec<Row> {
-        value_rows(ctx, self.as_type_ref())
+        instance_rows(ctx, self.0)
+    }
+}
+
+/// The `row_args` of the verified row instance `ty`; empty for a layout.
+fn instance_rows(ctx: &IrContext, ty: TypeRef) -> Vec<Row> {
+    match ctx.type_attrs(ty).get(ROW_ARGS_ATTR) {
+        Some(Attribute::List(rows)) => rows
+            .iter()
+            .map(|row| Row::from_attribute(ctx, row).expect("verified row argument"))
+            .collect(),
+        _ => Vec::new(),
     }
 }
 
@@ -564,33 +575,28 @@ pub const STRUCT_NAME_ATTR: &str = "name";
 /// applies (`design/tribute-dialects.md` § "Nominal 값 타입").
 pub const DEF_ATTR: &str = "def";
 
-// The helpers below read the layout attributes directly, so they answer for
-// unverified IR too, where [`AdtLayout`]'s and [`RowParameterized`]'s
-// methods may not be queried.
+// The helpers below combine [`AdtLayout`] and [`RowParameterized`]. Their
+// handles exist only for well-formed types, so a malformed layout type is
+// none of these.
 
-/// Whether `ty` is an [`AdtLayout`], `adt.struct` or `adt.enum`. A nominal
-/// one is named by its `name` attribute, or by its `def`'s for a row
-/// instance; a literal `adt.struct` has none.
+/// Whether `ty` is a well-formed [`AdtLayout`], `adt.struct` or `adt.enum`.
+/// A nominal one is named by its key, or by its `def`'s for a row instance;
+/// a literal `adt.struct` has none.
 pub fn is_nominal(ctx: &IrContext, ty: TypeRef) -> bool {
-    DynAdtLayout::is_implemented(ctx, ty)
+    DynAdtLayout::get(ctx, ty).is_some()
 }
 
 /// Whether `ty` is a nominal value type: a nominal layout's key or a row
 /// instance, rather than a literal layout.
 pub fn is_nominal_value(ctx: &IrContext, ty: TypeRef) -> bool {
-    is_nominal(ctx, ty)
-        && (ctx.type_attrs(ty).contains_key(STRUCT_NAME_ATTR)
-            || row_instance_def(ctx, ty).is_some())
+    DynAdtLayout::get(ctx, ty).is_some_and(|layout| layout.key_name_ref(ctx).is_some())
+        || DynRowParameterized::get(ctx, ty).is_some_and(|row| row.instance_def(ctx).is_some())
 }
 
-/// The nominal name of an `adt.struct` or `adt.enum`: its `name` type
-/// attribute, or the name of a row instance's `def`.
+/// The nominal name of an `adt.struct` or `adt.enum`: its key's name, or
+/// that of a row instance's `def`.
 pub fn nominal_name_ref(ctx: &IrContext, ty: TypeRef) -> Option<StringRef> {
-    if !is_nominal(ctx, ty) {
-        return None;
-    }
-    let ty = row_instance_def(ctx, ty).unwrap_or(ty);
-    ctx.type_attrs(ty).get_string_ref(STRUCT_NAME_ATTR)
+    DynAdtLayout::get(ctx, layout_of(ctx, ty)?)?.key_name_ref(ctx)
 }
 
 /// The text of [`nominal_name_ref`].
@@ -602,19 +608,8 @@ pub fn nominal_name(ctx: &IrContext, ty: TypeRef) -> Option<&str> {
 /// itself when it is a layout, or a row instance's `def`. `None` for any
 /// other type.
 pub fn layout_of(ctx: &IrContext, ty: TypeRef) -> Option<TypeRef> {
-    if let Some(def) = row_instance_def(ctx, ty) {
-        return Some(def);
-    }
-    is_nominal(ctx, ty).then_some(ty)
-}
-
-/// The layout key a row instance `ty` applies, its `def`; `None` for any
-/// other type (`design/tribute-dialects.md` § "Nominal 값 타입").
-pub fn row_instance_def(ctx: &IrContext, ty: TypeRef) -> Option<TypeRef> {
-    if !DynRowParameterized::is_implemented(ctx, ty) {
-        return None;
-    }
-    ctx.type_attrs(ty).get_type(DEF_ATTR)
+    let row = DynRowParameterized::get(ctx, ty)?;
+    Some(row.instance_def(ctx).unwrap_or(ty))
 }
 
 /// The value type of the nominal layout `key` applied to `rows`, one for
@@ -640,21 +635,6 @@ pub fn value_type(
         .intern(ctx);
     verify_row_instance(ctx, ty).unwrap_or_else(|error| panic!("row instance: {error}"));
     ty
-}
-
-/// The row arguments a value of type `ty` passes to its layout's row
-/// parameters: those of a row instance; empty for any other type.
-pub fn value_rows(ctx: &IrContext, ty: TypeRef) -> Vec<Row> {
-    if !DynRowParameterized::is_implemented(ctx, ty) {
-        return Vec::new();
-    }
-    match ctx.type_attrs(ty).get(ROW_ARGS_ATTR) {
-        Some(Attribute::List(rows)) => rows
-            .iter()
-            .map(|row| Row::from_attribute(ctx, row).expect("verified row argument"))
-            .collect(),
-        _ => Vec::new(),
-    }
 }
 
 /// A malformed row instance.
@@ -744,7 +724,7 @@ pub fn substitute_layout_binders(
     if row_params.is_none() {
         return Some(ty);
     }
-    let rows = value_rows(ctx, value_ty);
+    let rows = DynRowParameterized::get(ctx, value_ty)?.instance_rows(ctx);
     if rows.is_empty() {
         return None;
     }
@@ -788,7 +768,7 @@ fn find_layout_binders(
     if row_params.is_none() {
         return Some(ty);
     }
-    let rows = value_rows(ctx, value_ty);
+    let rows = DynRowParameterized::get(ctx, value_ty)?.instance_rows(ctx);
     if rows.is_empty() {
         return None;
     }
@@ -1189,7 +1169,7 @@ impl Struct {
     /// which must have one, that of a row instance's `def`, or a literal
     /// layout itself.
     pub fn literal_layout(self, ctx: &IrContext) -> Struct {
-        if let Some(def) = row_instance_def(ctx, self.0) {
+        if let Some(def) = self.instance_def(ctx) {
             return Struct(def).literal_layout(ctx);
         }
         if self.is_nominal(ctx) {
@@ -1358,8 +1338,8 @@ fn write_struct_type(
     let s = p.state();
     let ctx = s.ctx();
     p.write_str("adt.struct<")?;
-    if row_instance_def(ctx, adt_struct.as_type_ref()).is_some() {
-        return write_row_instance(p, adt_struct.as_type_ref());
+    if adt_struct.instance_def(ctx).is_some() {
+        return write_row_instance(p, adt_struct);
     }
     if let Some(name) = adt_struct.name(ctx) {
         write!(
@@ -1484,15 +1464,15 @@ fn build_row_instance(
 /// bracket: the name of its `def` and its row arguments.
 fn write_row_instance(
     p: &mut trunk_ir::printer::AsmPrinter<'_>,
-    instance: TypeRef,
+    instance: impl RowParameterized,
 ) -> std::fmt::Result {
     use itertools::Itertools as _;
     use std::fmt::Write;
     use trunk_ir::printer::display_string;
 
     let ctx = p.state().ctx();
-    let name = nominal_name(ctx, instance).expect("a row instance's def is named");
-    let rows = value_rows(ctx, instance);
+    let name = nominal_name(ctx, instance.as_type_ref()).expect("a row instance's def is named");
+    let rows = instance.instance_rows(ctx);
     let rows = rows
         .iter()
         .map(crate::dialect::tribute_control::display_row_argument)
@@ -1705,7 +1685,7 @@ impl Enum {
     /// which must have one, that of a row instance's `def`, or a literal
     /// enum itself.
     pub fn literal_layout(self, ctx: &IrContext) -> Enum {
-        if let Some(def) = row_instance_def(ctx, self.0) {
+        if let Some(def) = self.instance_def(ctx) {
             return Enum(def).literal_layout(ctx);
         }
         if self.is_nominal(ctx) {
@@ -1856,8 +1836,8 @@ fn write_enum_type(p: &mut trunk_ir::printer::AsmPrinter<'_>, adt_enum: Enum) ->
             })
     };
     p.write_str("adt.enum<")?;
-    if row_instance_def(ctx, adt_enum.as_type_ref()).is_some() {
-        return write_row_instance(p, adt_enum.as_type_ref());
+    if adt_enum.instance_def(ctx).is_some() {
+        return write_row_instance(p, adt_enum);
     }
     if let Some(name) = adt_enum.name(ctx) {
         write!(
@@ -2331,8 +2311,9 @@ mod tests {
         assert_eq!(callback.row_params(&ctx), Some(1));
         let step = Enum::from_type_ref(&ctx, alias(&ctx, "Step")).unwrap();
         assert_eq!(step.row_params(&ctx), Some(1));
+        let open = Struct::from_type_ref(&ctx, alias(&ctx, "Open")).unwrap();
         assert_eq!(
-            value_rows(&ctx, alias(&ctx, "Open")),
+            open.instance_rows(&ctx),
             [Row::default(), Row::new([SymbolPath::new(["A"])], Some(0))]
         );
         // Instances that differ only in their row arguments are distinct
@@ -2385,8 +2366,9 @@ mod tests {
         assert_eq!(layout_of(&ctx, ticked), Some(callback));
         assert_eq!(layout_of(&ctx, open), Some(step));
         assert_eq!(nominal_name(&ctx, open), Some("Step"));
+        let ticked_instance = Struct::from_type_ref(&ctx, ticked).unwrap();
         assert_eq!(
-            value_rows(&ctx, ticked),
+            ticked_instance.instance_rows(&ctx),
             [Row::new([SymbolPath::new(["Tick"])], None)]
         );
         assert_eq!(
@@ -2406,7 +2388,7 @@ mod tests {
         let node_body = Struct::from_type_ref(&ctx, node).unwrap().fields(&ctx)[1];
         assert_eq!(node_body, node);
         // The constructor makes the instance the text spells.
-        let rows = value_rows(&ctx, ticked);
+        let rows = ticked_instance.instance_rows(&ctx);
         assert_eq!(value_type(&mut ctx, callback, rows), ticked);
         assert_eq!(value_type(&mut ctx, node, []), node);
 
@@ -2442,15 +2424,19 @@ mod tests {
                     && Enum::from_type_ref(&ctx, alias).is_none(),
                 "{spelling}"
             );
-            // The helpers read the attributes, so they answer for an
-            // unverified type, which the interfaces' methods may not.
+            // A malformed instance has no interface handle, so the helpers
+            // answer for it without querying a method.
             assert!(
-                is_nominal(&ctx, alias) && is_nominal_value(&ctx, alias),
+                DynRowParameterized::get(&ctx, alias).is_none()
+                    && DynRowParameterized::is_implemented(&ctx, alias),
                 "{spelling}"
             );
-            let def = row_instance_def(&ctx, alias);
-            assert!(def.is_some(), "{spelling}");
-            assert_eq!(layout_of(&ctx, alias), def, "{spelling}");
+            assert!(
+                !is_nominal(&ctx, alias) && !is_nominal_value(&ctx, alias),
+                "{spelling}"
+            );
+            assert_eq!(layout_of(&ctx, alias), None, "{spelling}");
+            assert_eq!(nominal_name(&ctx, alias), None, "{spelling}");
             let result = validate_operation_verifiers(&ctx, Module::new(&ctx, module).unwrap());
             assert!(!result.is_ok(), "{spelling}");
         }
