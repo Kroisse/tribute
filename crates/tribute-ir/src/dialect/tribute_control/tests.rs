@@ -1489,6 +1489,48 @@ fn resume_token_components_are_checked_recursively() {
 }
 
 #[test]
+fn callable_components_reject_physical_callable_types() {
+    for physical in [
+        "func.func_sig<() -> core.i32>",
+        "clif.func_sig<() -> core.i32>",
+        "wasm.func_sig<() -> core.i32>",
+        "closure.closure<func.func_sig<() -> core.i32>>",
+    ] {
+        let (ctx, module) = parse_fixture(&format!(
+            r#"core.module @test {{
+  !physical = {physical}
+  !wrapper = core.tuple<!physical>
+  !as_input = tribute_control.func_sig<(!wrapper) -> core.i32>
+  !as_result = tribute_control.func_sig<(core.i32) -> !wrapper>
+}}"#
+        ));
+
+        let result = validate_local(&ctx, module);
+        let rejected = result
+            .errors
+            .iter()
+            .filter(|error| error.message.contains("a physical callable type"))
+            .count();
+        assert_eq!(rejected, 2, "{physical}: {result}");
+    }
+}
+
+#[test]
+fn callable_components_accept_source_logical_types() {
+    let (ctx, module) = parse_fixture(
+        r#"core.module @test {
+  !S = adt.struct<"S", ()>
+  !R = adt.struct<"S">
+  !callback = tribute_control.func_sig<(!R) -> tribute_rt.anyref>
+  !sig = tribute_control.func_sig<(!callback, core.ptr, core.tuple<!R, core.i32>) -> !R>
+}"#,
+    );
+
+    let result = validate_local(&ctx, module);
+    assert!(result.is_ok(), "{result}");
+}
+
+#[test]
 fn validator_reports_malformed_resume_token_uses_without_panicking() {
     let (ctx, module) = parse_fixture(
         r#"core.module @test {

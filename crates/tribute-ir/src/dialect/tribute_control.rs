@@ -11,7 +11,9 @@ use std::ops::ControlFlow;
 use trunk_ir::attr_kind::SymbolRef;
 use trunk_ir::op_flag::{IsolatedFromAbove, OpFlag, Pure};
 
-use crate::calling_convention::{CALLING_CONVENTION_ATTR, CallingConvention};
+use crate::calling_convention::{
+    CALLING_CONVENTION_ATTR, CallingConvention, DynPhysicalCallableType,
+};
 use crate::dialect::{adt, tribute_cps};
 use itertools::Itertools;
 use trunk_ir::analysis::AnalysisCache;

@@ -29,6 +29,14 @@ verifier가 검사하는 것은
 [`FuncSig` 선언](../crates/tribute-ir/src/dialect/tribute_control/func_sig.rs)이
 정한다.
 
+Type은 한 번 intern되어 모든 phase가 공유하므로 type verifier는 component
+type을 검사하지 않는다. 이 경계의 `tribute_control` validator가 검사한다.
+Component는 어느 깊이에도 미해결 type, resume token, physical callable type을
+담지 않는다. Physical callable type은 calling convention의 ABI로 들어가는
+callable의 type이며 `PhysicalCallableType` type interface를 구현한다.
+`func.func_sig`, `clif.func_sig`, `wasm.func_sig`, `closure.closure`가 여기에
+속한다. `tribute_rt.anyref`와 `core.ptr`는 source-logical type이다.
+
 Convention 값은 keyword 문자열 `"direct"`, `"evidence_direct"`, `"cps"` 가운데
 하나다. 이 문자열이 convention의 유일한 저장 형식이다. 정수나 다른 값은 잘못된
 convention이다. Convention은 [CPS 전략](cps-effects.md#row와-호출-규약)이
