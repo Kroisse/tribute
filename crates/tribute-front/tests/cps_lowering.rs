@@ -1360,7 +1360,7 @@ fn from_list(callback: fn(Int) ->{e} Int) ->{e} Int {
             .split("adt.struct_new")
             .nth(1)
             .and_then(|rest| rest.lines().next())
-            .and_then(|line| line.split(" : !").nth(1))
+            .and_then(|line| line.rsplit_once(" -> !").map(|(_, layout)| layout))
             .expect("tuple fixture must construct a logical tuple")
     };
     let tuple_int_layout = tuple_layout("tuple_int");

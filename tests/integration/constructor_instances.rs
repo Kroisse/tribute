@@ -77,7 +77,7 @@ fn main() -> Nil {
         let layout = format!("type = !\"pkg::{name}\"");
         assert!(
             ir.lines().any(|line| line.contains("adt.variant_new")
-                && line.ends_with(&format!(": !\"pkg::{name}\""))),
+                && line.ends_with(&format!(" -> !\"pkg::{name}\""))),
             "missing construction for {name}"
         );
         assert!(

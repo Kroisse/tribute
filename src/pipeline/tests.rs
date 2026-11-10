@@ -171,7 +171,7 @@ fn root_dispatch_definition_matches_fixed_wasm_tail_signature_and_validates_bina
         r#"
             %dispatch = adt.struct_get %frame {field = 1, type = !__tribute_continuation_frame_root_nil} : !Dispatch
             %resume = adt.ref_null {type = !Resume} : !Resume
-            %product = adt.struct_new : !Payload
+            %product = adt.struct_new : () -> !Payload
             %payload = core.unrealized_conversion_cast %product : !Payload to tribute_rt.anyref
             effect.dispatch_cps @State @get(%payload) [%evidence, %dispatch, %resume] -> core.nil
         "#,
@@ -915,7 +915,7 @@ fn native_one_shot_wrapper_traps_on_second_invocation() {
 
   func.func @main() -> core.i32 attributes {tribute.calling_convention = "direct"} {
     %not_consumed = arith.constant 0 : core.i1
-    %state = adt.struct_new %not_consumed : !state
+    %state = adt.struct_new %not_consumed : (core.i1) -> !state
     %input = arith.constant 0 : core.i32
     %first = func.call @one_shot_wrapper(%state, %input) attributes {tribute.calling_convention = "direct"} : (!state, core.i32) -> core.i32
     %second = func.call @one_shot_wrapper(%state, %first) attributes {tribute.calling_convention = "direct"} : (!state, core.i32) -> core.i32

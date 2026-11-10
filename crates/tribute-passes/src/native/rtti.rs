@@ -1313,8 +1313,8 @@ mod tests {
             r#"core.module @test {
   !Choice = adt.enum<"Choice", [(), (core.i32, tribute_rt.anyref)]>
   func.func @f(%n: core.i32, %v: tribute_rt.anyref) -> core.nil {
-    %none = adt.variant_new {tag = 0} : !Choice
-    %pair = adt.variant_new %n, %v {tag = 1} : !Choice
+    %none = adt.variant_new {tag = 0} : () -> !Choice
+    %pair = adt.variant_new %n, %v {tag = 1} : (core.i32, tribute_rt.anyref) -> !Choice
     func.return
   }
 }"#,

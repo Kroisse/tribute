@@ -10,7 +10,7 @@ core.module @test {
   clif.func @test_fn() -> core.i32 {
       %0 = clif.symbol_addr @__tribute_convention_table_0 : core.ptr
       %1 = mem.null : core.ptr
-      %2 = adt.struct_new %0, %1 : !closure_captures
+      %2 = adt.struct_new %0, %1 : (core.ptr, core.ptr) -> !closure_captures
       %3 = core.unrealized_conversion_cast %2 : !closure_captures to core.ptr
       %4 = adt.struct_get %3 {field = 0, type = !closure_captures} : core.ptr
       %5 = adt.struct_get %3 {field = 1, type = !closure_captures} : core.ptr
