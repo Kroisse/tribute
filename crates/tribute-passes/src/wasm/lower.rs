@@ -73,9 +73,10 @@ pub fn add_lowering_passes(pm: &mut PassManager) {
         // Convert all adt operations, including String::Leaf from const lowering,
         // after declaring the runtime type descriptors they store.
         .add_pass(AdtToWasm)
-        // Replace the evidence type with its GC array once no `adt` operation
-        // reads it, which leaves the casts `adt` lowering made to it as identities.
-        .add_pass(ConvertEvidenceArrays)
+        // Replace the evidence type and scalar arrays with their GC arrays once
+        // no `adt` operation reads them, which leaves the casts `adt` lowering
+        // made to them as identities.
+        .add_pass(ConvertTypedArrays)
         // Fold the round trips that array operands of parameters took through
         // their `adt.array` type while signature conversion ran ahead of `adt`
         // lowering.
@@ -393,13 +394,13 @@ impl Pass for AdtToWasm {
     }
 }
 
-struct ConvertEvidenceArrays;
+struct ConvertTypedArrays;
 
-impl Pass for ConvertEvidenceArrays {
+impl Pass for ConvertTypedArrays {
     type Target = core::Module;
 
     fn name(&self) -> &'static str {
-        "convert-evidence-arrays"
+        "convert-typed-arrays"
     }
 
     fn run(
@@ -408,7 +409,7 @@ impl Pass for ConvertEvidenceArrays {
         target: core::Module,
         _analyses: &mut AnalysisCache,
     ) -> PassRunResult {
-        super::type_converter::convert_evidence_arrays(ctx, target.into());
+        super::type_converter::convert_typed_arrays(ctx, target.into());
         Ok(())
     }
 }
@@ -798,7 +799,7 @@ mod tests {
         let tc = wasm_type_converter(&mut ctx, module);
         crate::wasm::descriptors::declare(&mut ctx, module);
         crate::wasm::adt_to_wasm::lower(&mut ctx, module, tc);
-        crate::wasm::type_converter::convert_evidence_arrays(&mut ctx, module);
+        crate::wasm::type_converter::convert_typed_arrays(&mut ctx, module);
 
         let func = module.ops(&ctx)[0];
         let body = ctx.op_region(func, 0).unwrap();
@@ -822,7 +823,7 @@ mod tests {
         // Converting the evidence field gives the layout a new key.
         assert_eq!(
             ctx.type_attrs(struct_get.r#type(&ctx)).get_str("name"),
-            Some("Env$evidence")
+            Some("Env$arrays")
         );
 
         finalize_wasm_gc_types(&mut ctx, module)
@@ -1234,6 +1235,39 @@ mod tests {
             "{error}"
         );
         assert_eq!(module.op().display(&ctx).to_string(), before);
+    }
+
+    #[test]
+    fn lower_to_wasm_keeps_scalar_arrays_typed() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  !Bytes = adt.array<core.i8>
+  !Holder = adt.struct<"Holder", (!Bytes, core.i32)>
+  func.func @first(%holder: !Holder) -> core.i32 {
+    %data = adt.struct_get %holder {field = 0, type = !Holder} : !Bytes
+    %zero = arith.constant 0 : core.index
+    %byte = adt.array_get %data, %zero : core.i8
+    %wide = arith.extui %byte : core.i8 to core.i32
+    func.return %wide
+  }
+  func.func @wrap(%data: !Bytes) -> !Holder {
+    %len = arith.constant 1 : core.i32
+    %holder = adt.struct_new(%data, %len) : (!Bytes, core.i32) -> !Holder
+    func.return %holder
+  }
+}"#,
+        );
+
+        lower_to_wasm(&mut ctx, module, &mut Default::default())
+            .expect("scalar arrays should lower to wasm");
+
+        let output = module.op().display(&ctx).to_string();
+        assert!(output.contains("wasm_gc.array<core.i8>"), "{output}");
+        assert!(!output.contains("wasm.arrayref"), "{output}");
+        assert!(!output.contains("ref_cast"), "{output}");
+        assert!(!output.contains("adt.array"), "{output}");
     }
 
     #[test]

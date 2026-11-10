@@ -103,16 +103,20 @@ fn described_struct(ctx: &mut IrContext, fields: impl IntoIterator<Item = TypeRe
 /// The Wasm storage representation of a source field of type `ty`.
 ///
 /// Bool storage is `i32`. A nominal value, which may be recursive, is the
-/// abstract struct supertype, an array the abstract array supertype, and a
-/// literal enum value the erased reference it is emitted as; a read casts
-/// each back to its value's type. Structural types cannot refer to themselves,
-/// and an array field may hold its own struct, as a marker's `outer`
-/// evidence does. A nested literal struct is its own structural type; any
+/// abstract struct supertype, an array of references the abstract array
+/// supertype, and a literal enum value the erased reference it is emitted as;
+/// a read casts each back to its value's type. Structural types cannot refer
+/// to themselves, and an array field may hold its own struct, as a marker's
+/// `outer` evidence does. An array of scalars refers to no type and is its
+/// own GC array; so is a nested literal struct its own structural type. Any
 /// other field keeps its type.
 fn field_type(ctx: &mut IrContext, ty: TypeRef) -> TypeRef {
     let data = ctx.get_type(ty);
     if data.name == core::I1::NAME {
         return core::I32::type_ref(ctx);
+    }
+    if super::type_converter::is_scalar_array(ctx, ty) {
+        return super::type_converter::gc_array_type(ctx, ty);
     }
     if tribute_ir::dialect::adt::Array::matches(ctx, ty) {
         return wasm::Arrayref::params().intern(ctx).as_type_ref();
