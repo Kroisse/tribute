@@ -545,10 +545,17 @@ descriptor](runtime-types.md#wasm-배치) index를 두어 runtime identity를 �
   된다.
 - 배열 연산의 GC 타입은 `wasm_gc.array<E>`다. `adt_to_wasm`은 `adt.array<E>`를
   같은 매개변수와 속성의 `wasm_gc.array`로 바꿔 `wasm_gc` 배열 연산에 쓰고, 원소
-  타입이 같은 배열은 같은 GC 타입이다. Builtin 배열 layout은 없다. 배열은 값과
-  signature에서 erased `wasm.arrayref`가 되고, 배열 연산은 operand를 자기 GC 배열
-  타입으로 cast한 뒤 쓴다. `Bytes`의 byte 배열도 그렇다. Wasm backend는
-  unmanaged `core.array`를 GC 배열로 다루지 않는다.
+  타입이 같은 배열은 같은 GC 타입이다. Builtin 배열 layout은 없다. 값, 필드,
+  signature에서의 표현은 원소 타입으로 정한다.
+  - 원소가 scalar인 배열은 자기 `wasm_gc.array<E>`를 그대로 쓰고, 배열 연산은
+    cast 없이 쓴다. 원소가 다른 타입을 가리키지 않으므로 재귀 GC 타입이 생기지
+    않는다. `Bytes`의 byte 배열이 여기에 든다.
+  - 원소가 참조인 배열은 erased `wasm.arrayref`가 되고, 배열 연산은 operand를 자기
+    GC 배열 타입으로 cast한 뒤 쓴다. 원소가 그 배열을 담은 struct를 다시 가리키면
+    재귀 GC 타입이 되기 때문이다([WasmGC evidence](cps-effects.md#wasmgc)의
+    `Slots(Marker)`).
+
+  Wasm backend는 unmanaged `core.array`를 GC 배열로 다루지 않는다.
 - Backend에 도달하는 `adt` 타입은 [`layout`](ir.md#runtime-layout-식별자)을 가진
   builtin layout뿐이다. Backend는 builtin layout을 `layout` 식별자로만 식별하고,
   그 타입의 dialect나 이름을 보지 않는다. 연산이나 값이 가리키지 않는 소스 layout

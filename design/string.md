@@ -380,12 +380,14 @@ ability Display {
 ;; Bytes는 다른 사용자 struct와 같은 structural GC 타입이다.
 (type $bytes (sub $described (struct
   (field $descriptor i32)
-  (field $data arrayref)     ;; 다른 배열처럼 erased arrayref로 저장
+  (field $data (ref $byte_array))
   (field $start i32)
   (field $len i32))))
 ```
 
-Byte를 읽는 곳은 `data`를 `$byte_array`로 cast한 뒤 `array.get_u`로 읽는다.
+원소가 scalar인 배열은 erased `arrayref`가 되지 않으므로
+([GC 타입 표현](wasm-backend.md#structural-gc-타입과-descriptor-필드)) byte를
+읽는 곳은 cast 없이 `array.get_u`로 읽는다.
 
 ### String (Rope)
 
