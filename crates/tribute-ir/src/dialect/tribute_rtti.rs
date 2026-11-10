@@ -8,7 +8,6 @@
 //! module-level declarations and erases them, so none reaches the
 //! backend-ready boundary.
 
-use crate::dialect::adt::Array;
 use std::fmt;
 use trunk_ir::attr_kind::Type;
 use trunk_ir::dialect::core::I32;
@@ -18,12 +17,11 @@ use rustc_hash::FxHashMap as HashMap;
 
 use trunk_ir::TypeRef;
 use trunk_ir::context::IrContext;
-use trunk_ir::ops::{DialectOp, DialectType};
+use trunk_ir::ops::DialectOp;
 use trunk_ir::rewrite::Module;
 use trunk_ir::types::{Attribute, Location};
 
 use crate::dialect::adt;
-use crate::dialect::adt::layout::get_struct_fields;
 
 #[trunk_ir::dialect]
 mod tribute_rtti {
@@ -76,6 +74,53 @@ pub struct ManagedRef;
 /// impl with `#[implements(ManagedRefType)]`.
 #[trunk_ir::type_interface]
 pub trait ManagedRefType: trunk_ir::ops::DialectType {}
+
+/// Marks a managed reference type as the layout of the allocation its values
+/// point to: that allocation's runtime type descriptor is keyed by the type
+/// itself, as `tribute_rtti.layout` names it. A struct layout, an enum layout
+/// (one descriptor per variant), and on native an array type are.
+///
+/// `tribute_rt.anyref`, `tribute_rt.intref`, `core.bytes`, and
+/// `closure.closure` are managed references but not descriptor layouts of
+/// their own, so this is narrower than [`ManagedRefType`]. A nominal
+/// layout's body is no allocation layout of its own; its key is.
+#[trunk_ir::type_interface]
+pub trait DescriptorLayoutType: trunk_ir::ops::DialectType {
+    /// The field types of this layout's descriptor `tag`: a struct's fields
+    /// without a tag, the fields of the enum variant at position `tag`, or
+    /// an array's element without a tag.
+    fn descriptor_fields<'a>(
+        &self,
+        ctx: &'a IrContext,
+        tag: Option<u32>,
+    ) -> Result<&'a [TypeRef], DescriptorFieldsError>;
+}
+
+impl DynDescriptorLayoutType {
+    /// The field types of the descriptor `(ty, tag)`.
+    pub fn fields_of(
+        ctx: &IrContext,
+        ty: TypeRef,
+        tag: Option<u32>,
+    ) -> Result<&[TypeRef], DescriptorFieldsError> {
+        Self::get(ctx, ty)
+            .ok_or(DescriptorFieldsError::NotLayout)?
+            .descriptor_fields(ctx, tag)
+    }
+}
+
+/// Why a type and a tag name no runtime type descriptor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, derive_more::Display, derive_more::Error)]
+pub enum DescriptorFieldsError {
+    #[display("the type is not a well-formed descriptor layout")]
+    NotLayout,
+    #[display("an {layout} descriptor has no tag")]
+    UnexpectedTag { layout: &'static str },
+    #[display("an adt.enum descriptor needs a variant tag")]
+    MissingTag,
+    #[display("adt.enum has no variant at position {tag}")]
+    NoVariant { tag: u32 },
+}
 
 impl trunk_ir::type_constraint::TypeConstraint for ManagedRef {
     const DESC: &'static trunk_ir::type_constraint::ConstraintDesc =
@@ -268,30 +313,6 @@ pub fn native_allocation_descriptor(
     Some((array_ty, None))
 }
 
-/// The field types of the descriptor `(ty, tag)`: the struct's fields, the
-/// fields of the enum variant at position `tag`, or an array's element.
-pub fn descriptor_field_types(
-    ctx: &IrContext,
-    ty: TypeRef,
-    tag: Option<u32>,
-) -> Result<Vec<TypeRef>, String> {
-    if let Some(array) = Array::from_type_ref(ctx, ty) {
-        return match tag {
-            None => Ok(vec![array.element(ctx)]),
-            Some(_) => Err("an array descriptor has no tag".into()),
-        };
-    }
-    match tag {
-        None => get_struct_fields(ctx, ty)
-            .ok_or_else(|| "a layout without a tag must be an adt.struct".into()),
-        Some(tag) => adt::Enum::from_type_ref(ctx, ty)
-            .ok_or_else(|| "a layout with a tag must be an adt.enum".to_owned())?
-            .variant_fields(ctx, tag)
-            .map(<[TypeRef]>::to_vec)
-            .ok_or_else(|| format!("adt.enum has no variant at position {tag}")),
-    }
-}
-
 impl Layout {
     /// Build a layout declaration for the descriptor `(ty, tag)`.
     pub fn declare(
@@ -318,7 +339,9 @@ impl Layout {
     }
 
     fn decode(self, ctx: &IrContext) -> Result<Vec<FieldKind>, String> {
-        let expected = descriptor_field_types(ctx, self.r#type(ctx), self.tag(ctx))?.len();
+        let expected = DynDescriptorLayoutType::fields_of(ctx, self.r#type(ctx), self.tag(ctx))
+            .map_err(|error| error.to_string())?
+            .len();
         let fields = self.fields(ctx);
         if fields.len() != expected {
             return Err(format!(
@@ -486,7 +509,7 @@ mod tests {
             ),
             (
                 r#"tribute_rtti.layout {type = !Choice, index = 33, fields = []}"#,
-                "must be an adt.struct",
+                "needs a variant tag",
             ),
             (
                 r#"tribute_rtti.layout {type = !Choice, tag = 2, index = 33, fields = []}"#,
