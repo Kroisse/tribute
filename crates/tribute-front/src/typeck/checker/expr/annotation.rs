@@ -34,8 +34,6 @@ impl<'db> TypeChecker<'db> {
                     ctx.float_type()
                 } else if *name == "Bool" {
                     ctx.bool_type()
-                } else if *name == "Bytes" {
-                    ctx.bytes_type()
                 } else if *name == "Rune" {
                     ctx.rune_type()
                 } else if *name == "Nil" {

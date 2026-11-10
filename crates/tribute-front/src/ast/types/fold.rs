@@ -287,7 +287,6 @@ impl<'db> Type<'db> {
             | TypeKind::Nat
             | TypeKind::Float
             | TypeKind::Bool
-            | TypeKind::Bytes
             | TypeKind::Rune
             | TypeKind::Nil
             | TypeKind::Never
@@ -332,7 +331,6 @@ impl<'db> Type<'db> {
             | TypeKind::Nat
             | TypeKind::Float
             | TypeKind::Bool
-            | TypeKind::Bytes
             | TypeKind::Rune
             | TypeKind::Nil
             | TypeKind::Never

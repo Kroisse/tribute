@@ -1147,7 +1147,9 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !String = adt.enum<"String", [(core.bytes), (tribute_rt.anyref, tribute_rt.anyref, core.i32)]>
+  !Bytes = adt.struct<"std::Bytes", (adt.array<core.i8>, core.i32, core.i32)>
+  !String = adt.enum<"String", [(!Bytes), (tribute_rt.anyref, tribute_rt.anyref, core.i32)]>
+  adt.struct_decl "std::Bytes" !Bytes ["data", "start", "len"]
   adt.enum_decl "String" !String ["Leaf", "Branch"]
   func.func @main() -> core.nil {
     %string = adt.string_const "wrong" : core.i32
@@ -1182,8 +1184,8 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  func.func @main(%bytes: core.bytes, %cond: core.i1) -> core.nil {
-    %write = tribute_io.write %bytes, %cond : core.nil
+  func.func @main(%bytes: adt.array<core.i8>, %n: core.i32, %cond: core.i1) -> core.nil {
+    %write = tribute_io.write %bytes, %n, %n, %cond : core.nil
     %never = scf.if %cond -> (core.never) {
       func.unreachable
     } else {
@@ -1211,8 +1213,8 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  func.func @main(%bytes: core.bytes, %newline: core.i1, %choice: core.i16) -> core.nil {
-    %write = tribute_io.write %bytes, %newline : core.nil
+  func.func @main(%bytes: adt.array<core.i8>, %n: core.i32, %newline: core.i1, %choice: core.i16) -> core.nil {
+    %write = tribute_io.write %bytes, %n, %n, %newline : core.nil
     scf.index_switch %choice : (core.i16) -> ()
     case 0 { scf.yield }
     default { scf.yield }
@@ -1408,12 +1410,12 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  func.func @run(%newline: core.i1) -> core.nil {
-    %first = adt.bytes_const b"first" : core.bytes
-    %second = adt.bytes_const b"second" : core.bytes
-    %again = adt.bytes_const b"first" : core.bytes
-    %write = tribute_io.write %first, %newline : core.nil
-    %rewrite = tribute_io.write %again, %newline : core.nil
+  func.func @run(%n: core.i32, %newline: core.i1) -> core.nil {
+    %first = adt.bytes_const b"first" : adt.array<core.i8>
+    %second = adt.bytes_const b"second" : adt.array<core.i8>
+    %again = adt.bytes_const b"first" : adt.array<core.i8>
+    %write = tribute_io.write %first, %n, %n, %newline : core.nil
+    %rewrite = tribute_io.write %again, %n, %n, %newline : core.nil
     func.return
   }
 }"#,

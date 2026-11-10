@@ -449,7 +449,6 @@ fn type_to_annotation(db: &dyn salsa::Database, ty: Type<'_>, id: NodeId) -> Typ
         TypeKind::Nat => TypeAnnotationKind::Named(Symbol::new("Nat")),
         TypeKind::Float => TypeAnnotationKind::Named(Symbol::new("Float")),
         TypeKind::Bool => TypeAnnotationKind::Named(Symbol::new("Bool")),
-        TypeKind::Bytes => TypeAnnotationKind::Named(Symbol::new("Bytes")),
         TypeKind::Rune => TypeAnnotationKind::Named(Symbol::new("Rune")),
         TypeKind::Nil => TypeAnnotationKind::Named(Symbol::new("Nil")),
         TypeKind::Never => TypeAnnotationKind::Named(Symbol::new("Never")),

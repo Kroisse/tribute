@@ -362,7 +362,7 @@ pub enum String {
 }
 
 pub mod String {
-    use super::{Nat, Bytes, __tribute_bytes_concat, __tribute_bytes_range_equal}
+    use super::{Nat, Bytes}
 
     // Internal depth-first traversal state used to compare rope leaves without
     // flattening. Chunk offsets and remaining lengths always describe a valid
@@ -401,7 +401,7 @@ pub mod String {
     pub fn to_bytes(s: String) -> Bytes {
         case s {
             .Leaf(bytes) -> bytes
-            .Branch(left, right, _) -> __tribute_bytes_concat(left.to_bytes(), right.to_bytes())
+            .Branch(left, right, _) -> Bytes::concat(left.to_bytes(), right.to_bytes())
         }
     }
 
@@ -462,7 +462,7 @@ pub mod String {
                         True -> left_remaining
                         False -> right_remaining
                     }
-                    case __tribute_bytes_range_equal(
+                    case Bytes::range_equal(
                         left_bytes,
                         left_offset,
                         right_bytes,
@@ -514,7 +514,7 @@ pub mod String {
         case len == right.len() {
             True -> case left {
                 .Leaf(left_bytes) -> case right {
-                    .Leaf(right_bytes) -> __tribute_bytes_range_equal(
+                    .Leaf(right_bytes) -> Bytes::range_equal(
                         left_bytes,
                         0,
                         right_bytes,
@@ -539,60 +539,120 @@ pub mod String {
 }
 
 // =============================================================================
-// Intrinsic declarations
-// =============================================================================
-// These functions are lowered to inline IR by compiler passes.
-// The `__` prefix marks them as internal/reserved.
-
-extern "intrinsic" fn __bytes_get_or_panic(bytes: Bytes, index: Nat) -> Nat
-
-// =============================================================================
 // Native extern "C" declarations
 // =============================================================================
-// These functions are provided by the tribute-runtime static library.
+// These functions are provided by the tribute-runtime static library. Each
+// borrows its byte arrays and reads the given ranges, ending the execution
+// when a range lies outside its array; a byte array result is a new array.
 
-extern "C" fn __tribute_bytes_len(bytes: Bytes) -> Nat
-extern "C" fn __tribute_bytes_concat(left: Bytes, right: Bytes) -> Bytes
-extern "C" fn __tribute_bytes_range_equal(
-    left: Bytes,
+extern "C" fn __tribute_byte_array_concat(
+    left: runtime::ByteArray,
     left_start: Nat,
-    right: Bytes,
+    left_len: Nat,
+    right: runtime::ByteArray,
+    right_start: Nat,
+    right_len: Nat,
+) -> runtime::ByteArray
+extern "C" fn __tribute_byte_array_range_equal(
+    left: runtime::ByteArray,
+    left_start: Nat,
+    right: runtime::ByteArray,
     right_start: Nat,
     len: Nat,
 ) -> Bool
-extern "C" fn __tribute_bytes_slice_or_panic(bytes: Bytes, start: Nat, end: Nat) -> Bytes
 
 // =============================================================================
-// Bytes module
+// Bytes
 // =============================================================================
+
+/// An immutable byte sequence: the bytes `[start, start + len)` of `data`.
+/// Slicing shares `data` instead of copying it. Every read checks its range
+/// against `data`, so a value whose range lies outside `data` ends the
+/// execution when it is read rather than reading other memory.
+pub struct Bytes {
+    data: runtime::ByteArray,
+    start: Nat,
+    len: Nat,
+}
 
 /// Bytes module with operations for byte sequences.
 pub mod Bytes {
-    use super::{Nat, Option, __bytes_get_or_panic, __tribute_bytes_len, __tribute_bytes_concat, __tribute_bytes_range_equal, __tribute_bytes_slice_or_panic}
+    use super::{Nat, Option, __tribute_byte_array_concat, __tribute_byte_array_range_equal}
+    use pkg::runtime::ByteArray
 
     /// Create an empty byte sequence.
     pub fn empty() -> Bytes { b"" }
 
-    /// Get the length of a byte sequence.
-    pub fn len(bytes: Bytes) -> Nat {
-        __tribute_bytes_len(bytes)
+    /// The byte sequence of all of `data`.
+    pub(pkg) fn from_array(data: ByteArray) -> Bytes {
+        Bytes { data: data, start: 0, len: ByteArray::len(data) }
     }
 
     /// Get the byte at the given index.
     /// Panics if index is out of bounds.
     pub fn get_or_panic(bytes: Bytes, index: Nat) -> Nat {
-        __bytes_get_or_panic(bytes, index)
+        case index < bytes.len() {
+            True -> ByteArray::get(bytes.data(), bytes.start() + index)
+            False -> trap_out_of_range(bytes.data())
+        }
+    }
+
+    // Always traps: it reads the position past the end of `data`.
+    fn trap_out_of_range(data: ByteArray) -> Nat {
+        ByteArray::get(data, ByteArray::len(data))
+    }
+
+    // Always traps, as `trap_out_of_range` does, before building its result.
+    fn trap_slice(bytes: Bytes) -> Bytes {
+        Bytes { data: bytes.data(), start: trap_out_of_range(bytes.data()), len: 0 }
     }
 
     /// Create a slice of the byte sequence.
     /// Panics if start or end is out of bounds.
     pub fn slice_or_panic(bytes: Bytes, start: Nat, end: Nat) -> Bytes {
-        __tribute_bytes_slice_or_panic(bytes, start, end)
+        case end > bytes.len() {
+            True -> trap_slice(bytes)
+            False -> case start > end {
+                True -> trap_slice(bytes)
+                False -> Bytes {
+                    data: bytes.data(),
+                    start: bytes.start() + start,
+                    len: end - start,
+                }
+            }
+        }
     }
 
     /// Concatenate two byte sequences.
     pub fn concat(left: Bytes, right: Bytes) -> Bytes {
-        __tribute_bytes_concat(left, right)
+        from_array(
+            __tribute_byte_array_concat(
+                left.data(),
+                left.start(),
+                left.len(),
+                right.data(),
+                right.start(),
+                right.len()
+            )
+        )
+    }
+
+    /// Whether `len` bytes of `left` from `left_start` equal those of
+    /// `right` from `right_start`.
+    pub(pkg) fn range_equal(
+        left: Bytes,
+        left_start: Nat,
+        right: Bytes,
+        right_start: Nat,
+        len: Nat,
+    ) -> Bool {
+        __tribute_byte_array_range_equal(
+            left.data(),
+            left.start() + left_start,
+            right.data(),
+            right.start() + right_start,
+            len
+        )
     }
 
     /// Concatenation operator for byte sequences.
@@ -604,7 +664,7 @@ pub mod Bytes {
     pub fn (==)(left: Bytes, right: Bytes) -> Bool {
         let len = left.len()
         case len == right.len() {
-            True -> __tribute_bytes_range_equal(left, 0, right, 0, len)
+            True -> range_equal(left, 0, right, 0, len)
             False -> False
         }
     }
@@ -682,7 +742,8 @@ pub mod collections {
 }
 
 pub mod io {
-    use super::{String, abilities}
+    use super::{String, Bytes, abilities}
+    use pkg::runtime::ByteArray
 
     /// Platform error details reported by an I/O operation.
     pub struct SystemError { pub code: Int, pub message: String }
@@ -697,29 +758,39 @@ pub mod io {
     // Private transport value used only between the embedded wrapper and
     // the compiler-owned, target-independent I/O boundary.
     enum ReadLineResult {
-        ReadLine(Bytes),
+        ReadLine(ByteArray),
         ReadEndOfFile,
         ReadInvalidEncoding,
-        ReadSystem(Int, Bytes),
+        ReadSystem(Int, ByteArray),
     }
 
-    extern "intrinsic" fn __tribute_io_write(bytes: Bytes, newline: Bool) -> Nil
+    // Writes `len` bytes of `data` from `start`, then a newline if `newline`.
+    extern "intrinsic" fn __tribute_io_write(
+        data: ByteArray,
+        start: Nat,
+        len: Nat,
+        newline: Bool,
+    ) -> Nil
     extern "intrinsic" fn __tribute_io_read_line() -> ReadLineResult
+
+    fn write_bytes(bytes: Bytes, newline: Bool) ->{pkg::io::Io} Nil {
+        __tribute_io_write(bytes.data(), bytes.start(), bytes.len(), newline)
+    }
 
     /// Print a string to standard output (no trailing newline).
     pub fn print(message: String) ->{pkg::io::Io} Nil {
-        __tribute_io_write(String::to_bytes(message), False)
+        write_bytes(String::to_bytes(message), False)
     }
 
     /// Print a line to standard output.
     pub fn print_line(message: String) ->{pkg::io::Io} Nil {
-        __tribute_io_write(String::to_bytes(message), True)
+        write_bytes(String::to_bytes(message), True)
     }
 
     /// Read one UTF-8 line from standard input.
     pub fn read_line() ->{pkg::io::Io, abilities::Throw(Error)} String {
         case __tribute_io_read_line() {
-            ReadLineResult::ReadLine(bytes) -> String::from_bytes(bytes)
+            ReadLineResult::ReadLine(data) -> String::from_bytes(Bytes::from_array(data))
             ReadLineResult::ReadEndOfFile -> abilities::Throw::throw(
                 Error::EndOfFile
             )
@@ -729,7 +800,7 @@ pub mod io {
             ReadLineResult::ReadSystem(code, message) -> abilities::Throw::throw(
                 Error::System(SystemError {
                     code: code,
-                    message: String::from_bytes(message),
+                    message: String::from_bytes(Bytes::from_array(message)),
                 })
             )
         }
@@ -770,6 +841,15 @@ pub(pkg) mod runtime {
         pub(pkg) extern "intrinsic" fn insert(slots: Slots(a), at: Nat, value: a) -> Slots(a)
         pub(pkg) extern "intrinsic" fn remove(slots: Slots(a), at: Nat) -> Slots(a)
         pub(pkg) extern "intrinsic" fn replace(slots: Slots(a), at: Nat, value: a) -> Slots(a)
+    }
+
+    // The operations of the compiler-owned immutable byte array that holds
+    // the bytes of a `Bytes`. `get` widens the byte to a `Nat`.
+    pub(pkg) mod ByteArray {
+        use super::ByteArray
+
+        pub(pkg) extern "intrinsic" fn len(bytes: ByteArray) -> Nat
+        pub(pkg) extern "intrinsic" fn get(bytes: ByteArray, at: Nat) -> Nat
     }
 
     // The evidence runtime both targets call by canonical path

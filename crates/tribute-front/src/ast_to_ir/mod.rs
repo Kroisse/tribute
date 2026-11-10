@@ -89,12 +89,12 @@ static SUPPORTED_COMPILER_INTRINSICS: LazyLock<HashSet<Symbol>> = LazyLock::new(
         "std::Float::<=",
         "std::Float::>",
         "std::Float::>=",
-        "std::__bytes_get_or_panic",
         "std::io::__tribute_io_write",
         "std::io::__tribute_io_read_line",
     ]
     .into_iter()
     .chain(tribute_ir::runtime_items::SLOTS_INTRINSICS)
+    .chain(tribute_ir::runtime_items::BYTE_ARRAY_INTRINSICS)
     .map(Symbol::new)
     .collect()
 });

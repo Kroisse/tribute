@@ -897,6 +897,13 @@ impl NominalDecls {
     pub fn variant_position(&self, ctx: &IrContext, layout: Enum, variant: &str) -> Option<u32> {
         self.of_enum(layout)?.position_of(ctx, variant)
     }
+
+    /// The position of the field the declaration of `layout` names `field`,
+    /// for a pass that builds a value of a compiler-owned struct by its
+    /// source field names.
+    pub fn field_position(&self, ctx: &IrContext, layout: Struct, field: &str) -> Option<u32> {
+        self.of_struct(layout)?.position_of(ctx, field)
+    }
 }
 
 /// A nominal declaration that does not fit its layout.
@@ -933,6 +940,14 @@ impl trunk_ir::ops::Verify for EnumDecl {
             return Err(NominalDeclError::CountMismatch { names, positions }.into());
         }
         Ok(())
+    }
+}
+
+impl StructDecl {
+    /// The position of the field this declaration names `field`.
+    pub fn position_of(self, ctx: &IrContext, field: &str) -> Option<u32> {
+        let position = self.fields(ctx).position(|name| name == field)?;
+        Some(u32::try_from(position).expect("a struct has fewer than 2^32 fields"))
     }
 }
 

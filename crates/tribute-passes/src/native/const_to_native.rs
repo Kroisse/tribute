@@ -5,8 +5,8 @@
 //! 2. **Lowering**: Declare a `clif.data` object for each payload and replace
 //!    const operations with clif operations that:
 //!    - Reference the data object via `clif.symbol_addr`
-//!    - Allocate RC-managed `TributeBytes` structs
-//!    - Wrap bytes in `adt.variant_new(String, Leaf, bytes)` for string constants
+//!    - Copy it into a new byte array the runtime allocates
+//!    - Wrap the array in `String::Leaf(Bytes { .. })` for string constants
 //!
 //! The Cranelift backend emits the declared `clif.data` objects from the IR.
 //!
@@ -33,11 +33,12 @@ use trunk_ir::rewrite::{
 };
 use trunk_ir::types::{Attribute, TypeDataBuilder};
 
-use tribute_ir::dialect::tribute_rt::{RC_HEADER_SIZE, REFCOUNT_OFFSET, RTTI_IDX_OFFSET};
+use tribute_ir::metadata::StringLeaf;
 use trunk_ir::SymbolPath;
+use trunk_ir::dialect::func;
 
-/// Name of the runtime allocation function.
-const ALLOC_FN: &str = "__tribute_alloc";
+/// Name of the runtime function that copies bytes into a new byte array.
+const BYTE_ARRAY_FROM_FN: &str = "__tribute_byte_array_from";
 
 /// Prefix of the data objects this pass declares.
 const RODATA_PREFIX: &str = "__tribute_rodata_";
@@ -48,9 +49,8 @@ pub struct NativeConstAnalysis {
     contents: Vec<Vec<u8>>,
     /// Whether the module contains any `adt.string_const` ops.
     has_string_consts: bool,
-    /// The exact prelude String enum type from module metadata, and the
-    /// position of its `Leaf`.
-    string_leaf: Option<(TypeRef, u32)>,
+    /// What a string constant builds, from module metadata.
+    string_leaf: Option<StringLeaf>,
 }
 
 impl NativeConstAnalysis {
@@ -144,22 +144,12 @@ fn analyze_consts(ctx: &IrContext, module: Module) -> NativeConstAnalysis {
 /// ```text
 /// %data_ptr = clif.symbol_addr @__tribute_rodata_0
 /// %len = clif.iconst 5
-/// %raw = clif.call @__tribute_alloc(40) : (core.i64) -> core.ptr  // RC(8) + ptr, len, owner, cap
-/// // Store RC header
-/// clif.store 1, %raw, offset=0          // refcount
-/// clif.store 0, %raw, offset=4          // rtti_idx
-/// // Compute payload pointer
-/// %payload = clif.iadd %raw, 8
-/// // Store TributeBytes fields
-/// clif.store %data_ptr, %payload, offset=0
-/// clif.store %len, %payload, offset=8
-/// clif.store 0, %payload, offset=16     // owner: the bytes are static
-/// clif.store 0, %payload, offset=24     // cap: none stored in the object
-/// → result = %payload
+/// %payload = clif.call @__tribute_byte_array_from(%data_ptr, %len)
+/// %result = tribute_rt.from_raw %payload : adt.array<core.i8>
 /// ```
 ///
-/// `adt.string_const("hello")` becomes the above bytes lowering +
-/// `adt.variant_new(type=String, tag=Leaf, %bytes_payload)`
+/// `adt.string_const("hello")` becomes `String::Leaf(Bytes { .. })` over an
+/// `adt.bytes_const` of the same bytes, which is then lowered as above.
 fn lower(
     ctx: &mut IrContext,
     module: Module,
@@ -171,26 +161,20 @@ fn lower(
 
     let ptr_ty = core::Ptr::params().intern(ctx).as_type_ref();
     let i64_ty = TypeDataBuilder::new("core.i64").intern(ctx);
-    let i32_ty = TypeDataBuilder::new("core.i32").intern(ctx);
 
     let content_to_symbol = declare_rodata(ctx, module, &analysis.contents);
-    let string_leaf = analysis.string_leaf;
+    declare_byte_array_from(ctx, module, ptr_ty, i64_ty);
 
     let mut applicator =
         PatternApplicator::new(TypeConverter::new()).add_pattern(BytesConstNativePattern {
-            content_to_symbol: content_to_symbol.clone(),
+            content_to_symbol,
             ptr_ty,
             i64_ty,
-            i32_ty,
         });
 
     if analysis.has_string_consts {
         applicator = applicator.add_pattern(StringConstNativePattern {
-            content_to_symbol,
-            ptr_ty,
-            i64_ty,
-            i32_ty,
-            string_leaf,
+            string_leaf: analysis.string_leaf,
         });
     }
 
@@ -257,118 +241,61 @@ fn declare_rodata(
     content_to_symbol
 }
 
-/// Emit clif ops to allocate an RC-managed TributeBytes from a rodata symbol.
+/// Emit clif ops that copy the bytes of a rodata symbol into a new byte
+/// array, which the runtime allocates with the byte array's reserved
+/// descriptor (`design/rc.md` § "Bytes").
 ///
 /// Returns the ops to insert, in order, and the payload pointer they produce.
-fn emit_bytes_alloc(
+fn emit_byte_array(
     ctx: &mut IrContext,
     loc: trunk_ir::types::Location,
     data_sym: Symbol,
     content_len: u64,
     ptr_ty: TypeRef,
     i64_ty: TypeRef,
-    i32_ty: TypeRef,
 ) -> (Vec<OpRef>, ValueRef) {
-    let mut ops: Vec<OpRef> = Vec::new();
-
-    // 1. Get rodata address
-    let data_ptr_op = clif::SymbolAddr::operands()
+    let data_ptr = clif::SymbolAddr::operands()
         .sym(SymbolPath::new([data_sym]))
         .results(ptr_ty)
         .build(ctx, loc);
-    ops.push(data_ptr_op.op_ref());
-    let data_ptr = data_ptr_op.result(ctx);
-
-    // 2. Length constant
-    let len_op = clif::Iconst::operands()
+    let len = clif::Iconst::operands()
         .value(content_len as i64)
         .results(i64_ty)
         .build(ctx, loc);
-    ops.push(len_op.op_ref());
-    let len_val = len_op.result(ctx);
-
-    // 3. Allocate RC header (8) + the fixed TributeBytes payload
-    //    (ptr, len, owner, cap = 32 bytes).
-    let alloc_size = RC_HEADER_SIZE + 32;
-    let size_op = clif::Iconst::operands()
-        .value(alloc_size as i64)
-        .results(i64_ty)
-        .build(ctx, loc);
-    ops.push(size_op.op_ref());
-
-    let call_op = clif::Call::operands([size_op.result(ctx)])
-        .callee(SymbolPath::new([ALLOC_FN]))
+    let call = clif::Call::operands([data_ptr.result(ctx), len.result(ctx)])
+        .callee(SymbolPath::new([BYTE_ARRAY_FROM_FN]))
         .results([ptr_ty])
         .build(ctx, loc);
-    ops.push(call_op.op_ref());
-    let raw_ptr = call_op.results(ctx)[0];
-
-    // 4. Store RC header: refcount=1, rtti_idx=0
-    let rc_one = clif::Iconst::operands()
-        .value(1)
-        .results(i32_ty)
-        .build(ctx, loc);
-    ops.push(rc_one.op_ref());
-    let store_rc = clif::Store::operands(rc_one.result(ctx), raw_ptr)
-        .offset(REFCOUNT_OFFSET as i32)
-        .build(ctx, loc);
-    ops.push(store_rc.op_ref());
-
-    let rtti_zero = clif::Iconst::operands()
-        .value(0)
-        .results(i32_ty)
-        .build(ctx, loc);
-    ops.push(rtti_zero.op_ref());
-    let store_rtti = clif::Store::operands(rtti_zero.result(ctx), raw_ptr)
-        .offset(RTTI_IDX_OFFSET as i32)
-        .build(ctx, loc);
-    ops.push(store_rtti.op_ref());
-
-    // 5. Compute payload pointer = raw + 8
-    let hdr_size = clif::Iconst::operands()
-        .value(RC_HEADER_SIZE as i64)
-        .results(i64_ty)
-        .build(ctx, loc);
-    ops.push(hdr_size.op_ref());
-    let payload_op = clif::Iadd::operands(raw_ptr, hdr_size.result(ctx))
-        .results(ptr_ty)
-        .build(ctx, loc);
-    ops.push(payload_op.op_ref());
-    let payload = payload_op.result(ctx);
-
-    // 6. Store TributeBytes fields: ptr at payload+0, len at payload+8
-    let store_ptr = clif::Store::operands(data_ptr, payload)
-        .offset(0)
-        .build(ctx, loc);
-    ops.push(store_ptr.op_ref());
-
-    let store_len = clif::Store::operands(len_val, payload)
-        .offset(8)
-        .build(ctx, loc);
-    ops.push(store_len.op_ref());
-
-    // Static bytes have no owner, and the object stores none after itself.
-    let zero = clif::Iconst::operands()
-        .value(0)
-        .results(i64_ty)
-        .build(ctx, loc);
-    ops.push(zero.op_ref());
-    for offset in [16, 24] {
-        let store = clif::Store::operands(zero.result(ctx), payload)
-            .offset(offset)
-            .build(ctx, loc);
-        ops.push(store.op_ref());
-    }
-
-    (ops, payload)
+    let payload = call.results(ctx)[0];
+    (
+        vec![data_ptr.op_ref(), len.op_ref(), call.op_ref()],
+        payload,
+    )
 }
 
-/// Pattern for `adt.bytes_const` → clif ops (rodata + alloc).
+/// Declare the runtime function that copies bytes into a new byte array,
+/// unless the module already declares it.
+fn declare_byte_array_from(ctx: &mut IrContext, module: Module, ptr_ty: TypeRef, i64_ty: TypeRef) {
+    let Some(block) = module.first_block(ctx) else {
+        return;
+    };
+    let declared = ctx.block(block).ops.iter().any(|&op| {
+        func::Func::from_op(ctx, op).is_ok_and(|func| func.sym_name(ctx) == BYTE_ARRAY_FROM_FN)
+    });
+    if declared {
+        return;
+    }
+    let loc = ctx.op(module.op()).location;
+    let declaration =
+        super::build_extern_func(ctx, loc, BYTE_ARRAY_FROM_FN, &[ptr_ty, i64_ty], ptr_ty);
+    ctx.push_op(block, declaration);
+}
+
+/// Pattern for `adt.bytes_const` → clif ops (rodata + a copying allocation).
 struct BytesConstNativePattern {
     content_to_symbol: HashMap<Vec<u8>, Symbol>,
     ptr_ty: TypeRef,
     i64_ty: TypeRef,
-    i32_ty: TypeRef,
 }
 
 impl OpRewritePattern for BytesConstNativePattern {
@@ -386,14 +313,13 @@ impl OpRewritePattern for BytesConstNativePattern {
         let data_sym = self.content_to_symbol.get(&content).cloned()?;
 
         let loc = ctx.op(op).location;
-        let (insert_ops, payload) = emit_bytes_alloc(
+        let (insert_ops, payload) = emit_byte_array(
             ctx,
             loc,
             data_sym,
             content.len() as u64,
             self.ptr_ty,
             self.i64_ty,
-            self.i32_ty,
         );
 
         // The allocation is a `core.ptr` to a new object; the constant is the
@@ -415,13 +341,10 @@ impl OpRewritePattern for BytesConstNativePattern {
     }
 }
 
-/// Pattern for `adt.string_const` → bytes alloc + `adt.variant_new(String, Leaf, bytes)`.
+/// Pattern for `adt.string_const` → `String::Leaf` of a `Bytes` over a byte
+/// array constant, which [`BytesConstNativePattern`] then lowers.
 struct StringConstNativePattern {
-    content_to_symbol: HashMap<Vec<u8>, Symbol>,
-    ptr_ty: TypeRef,
-    i64_ty: TypeRef,
-    i32_ty: TypeRef,
-    string_leaf: Option<(TypeRef, u32)>,
+    string_leaf: Option<StringLeaf>,
 }
 
 impl OpRewritePattern for StringConstNativePattern {
@@ -434,58 +357,27 @@ impl OpRewritePattern for StringConstNativePattern {
         rewriter: &mut PatternRewriter<'_>,
     ) -> Option<()> {
         let op = string_const.op_ref();
-        let content = string_const.value(ctx).as_bytes();
-        let content_len = content.len() as u64;
-        let data_sym = self.content_to_symbol.get(content).cloned()?;
-
-        let (string_enum_ty, leaf) = rewriter.require(
+        let leaf = rewriter.require(
             self.string_leaf,
             "String enum type not found, skipping string_const",
         )?;
-
-        let loc = ctx.op(op).location;
-
-        // Emit bytes allocation
-        let (insert_ops, bytes_payload) = emit_bytes_alloc(
-            ctx,
-            loc,
-            data_sym,
-            content_len,
-            self.ptr_ty,
-            self.i64_ty,
-            self.i32_ty,
-        );
-
-        // Get the result type of the original string_const
+        let text = string_const.value(ctx).as_bytes().to_vec();
         let result_ty = ctx.op_result_types(op)[0];
-
-        // Create adt.variant_new(tag=Leaf, bytes_payload) of the String enum,
-        // so that adt_rc_header computes the enum layout from its result,
-        // and cast it to the original result type.
-        // The allocation is a `core.ptr`; the `Leaf` field takes the `Bytes`
-        // object it points to as an owned managed value.
-        let bytes_ty = core::Bytes::params().intern(ctx).as_type_ref();
-        let bytes = tribute_rt::FromRaw::operands(bytes_payload)
-            .results(bytes_ty)
-            .build(ctx, loc);
-        let variant_new = adt::VariantNew::operands([bytes.result(ctx)])
-            .tag(u64::from(leaf))
-            .results(string_enum_ty)
-            .build(ctx, loc);
-
-        for o in insert_ops {
-            rewriter.insert_op(o);
+        let loc = ctx.op(op).location;
+        let ops =
+            crate::string_literal::build(ctx, &leaf, &text, result_ty, loc, |ctx, ty, value| {
+                let constant = trunk_ir::dialect::arith::Constant::operands()
+                    .value(Attribute::Int(i128::from(value)))
+                    .results(ty)
+                    .build(ctx, loc);
+                (constant.op_ref(), constant.result(ctx))
+            });
+        let mut ops = rewriter.require(ops, "the String leaf has no Bytes layout")?;
+        let last = ops.pop().expect("a string constant builds its value");
+        for inserted in ops {
+            rewriter.insert_op(inserted);
         }
-        rewriter.insert_op(bytes.op_ref());
-        if result_ty == string_enum_ty {
-            rewriter.replace_op(variant_new.op_ref());
-        } else {
-            rewriter.insert_op(variant_new.op_ref());
-            let cast = core::UnrealizedConversionCast::operands(variant_new.result(ctx))
-                .results(result_ty)
-                .build(ctx, loc);
-            rewriter.replace_op(cast.op_ref());
-        }
+        rewriter.replace_op(last);
         Some(())
     }
 
@@ -533,8 +425,10 @@ mod tests {
         parse_test_module(
             ctx,
             r#"core.module @test {
-  !PreludeString = adt.enum<"String", [(core.bytes), (tribute_rt.anyref, tribute_rt.anyref, core.i32)]>
-  !UserString = adt.enum<"user::String", [(core.bytes), (tribute_rt.anyref, tribute_rt.anyref, core.i32)]>
+  !Bytes = adt.struct<"std::Bytes", (core.i32, adt.array<core.i8>, core.i32)>
+  !PreludeString = adt.enum<"String", [(!Bytes), (tribute_rt.anyref, tribute_rt.anyref, core.i32)]>
+  !UserString = adt.enum<"user::String", [(!Bytes), (tribute_rt.anyref, tribute_rt.anyref, core.i32)]>
+  adt.struct_decl "std::Bytes" !Bytes ["len", "data", "start"]
   adt.enum_decl "String" !PreludeString ["Leaf", "Branch"]
   adt.enum_decl "user::String" !UserString ["Leaf", "Branch"]
   func.func @main() -> core.nil {
@@ -550,7 +444,6 @@ mod tests {
         let mut ctx = IrContext::new();
         let module = string_module(&mut ctx);
         let prelude_string = type_alias(&ctx, "PreludeString");
-        let user_string = type_alias(&ctx, "UserString");
         tribute_ir::metadata::WellKnownTypes {
             string: Some(prelude_string),
         }
@@ -558,8 +451,38 @@ mod tests {
 
         let analysis = analyze_consts(&ctx, module);
 
-        assert_eq!(analysis.string_leaf, Some((prelude_string, 0)));
-        assert_ne!(analysis.string_leaf, Some((user_string, 0)));
+        let leaf = analysis.string_leaf.expect("the prelude String's leaf");
+        assert_eq!(
+            (leaf.string, leaf.leaf, leaf.bytes),
+            (prelude_string, 0, type_alias(&ctx, "Bytes"))
+        );
+        // Fields are found by their declared names, not their positions.
+        assert_eq!((leaf.data, leaf.start, leaf.len), (1, 2, 0));
+    }
+
+    #[test]
+    fn string_constant_builds_a_leaf_of_bytes_over_a_byte_array() {
+        let mut ctx = IrContext::new();
+        let module = string_module(&mut ctx);
+        let prelude_string = type_alias(&ctx, "PreludeString");
+        tribute_ir::metadata::WellKnownTypes {
+            string: Some(prelude_string),
+        }
+        .attach(&mut ctx, module.op());
+        let analysis = analyze_consts(&ctx, module);
+
+        lower(&mut ctx, module, &analysis).expect("string constants should lower");
+
+        let output = module.op().display(&ctx).to_string();
+        assert!(!output.contains("adt.string_const"), "{output}");
+        assert!(!output.contains("adt.bytes_const"), "{output}");
+        assert!(
+            output.contains("func.call @__tribute_byte_array_from")
+                || output.contains("clif.call @__tribute_byte_array_from"),
+            "{output}"
+        );
+        assert!(output.contains("adt.struct_new"), "{output}");
+        assert!(output.contains("adt.variant_new 0"), "{output}");
     }
 
     #[test]
@@ -614,9 +537,9 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @main() -> core.nil {
-    %first = adt.bytes_const b"first" : core.bytes
-    %second = adt.bytes_const b"second" : core.bytes
-    %again = adt.bytes_const b"first" : core.bytes
+    %first = adt.bytes_const b"first" : adt.array<core.i8>
+    %second = adt.bytes_const b"second" : adt.array<core.i8>
+    %again = adt.bytes_const b"first" : adt.array<core.i8>
     func.return
   }
 }"#,
@@ -654,8 +577,8 @@ mod tests {
     func.return
   }
   func.func @main() -> core.nil {
-    %kept = adt.bytes_const b"kept" : core.bytes
-    %wide = adt.bytes_const b"wide" : core.bytes
+    %kept = adt.bytes_const b"kept" : adt.array<core.i8>
+    %wide = adt.bytes_const b"wide" : adt.array<core.i8>
     func.return
   }
 }"#,
@@ -684,15 +607,15 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  func.func @pick(%x: core.bytes, %flag: core.i1) -> core.bytes {
+  func.func @pick(%x: adt.array<core.i8>, %flag: core.i1) -> adt.array<core.i8> {
     ^entry:
       cf.cond_br %flag [^param, ^literal]
     ^param:
       cf.br %x [^merge]
     ^literal:
-      %no = adt.bytes_const b"no" : core.bytes
+      %no = adt.bytes_const b"no" : adt.array<core.i8>
       cf.br %no [^merge]
-    ^merge(%picked: core.bytes):
+    ^merge(%picked: adt.array<core.i8>):
       func.return %picked
   }
 }"#,
@@ -701,7 +624,7 @@ mod tests {
 
         lower(&mut ctx, module, &analysis).expect("bytes constants should lower");
 
-        let bytes_ty = core::Bytes::params().intern(&mut ctx).as_type_ref();
+        let bytes_ty = tribute_ir::runtime_layout::byte_array(&mut ctx);
         let mut forwarded = Vec::new();
         let body = module.body(&ctx).expect("module body");
         walk_ops_in_region(&ctx, body, &mut |ctx, op| {

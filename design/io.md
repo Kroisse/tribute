@@ -127,24 +127,28 @@ EOF는 runtime failure와 같은 `Throw(Error)` 채널을 사용하므로 반환
 ## Runtime Boundary
 
 Public API는 `extern "C"`, WASI import, `__print_line` 같은 target detail을
-노출하지 않는다. Shared lowering은 동적 `Bytes`를 읽고 쓸 수 있는
-target-independent I/O boundary를 생성한다.
+노출하지 않는다. Shared lowering은 동적 byte를 읽고 쓸 수 있는
+target-independent I/O boundary를 생성한다. Boundary는 `Bytes` struct가 아니라
+[byte 배열](types.md#bytearray)과 범위를 주고받으므로, target은 `Bytes`의 layout을
+알 필요가 없다.
 
 ```text
-tribute_io.write(bytes: Bytes, newline: Bool) -> Nil
+tribute_io.write(data: ByteArray, start: Nat, len: Nat, newline: Bool) -> Nil
 tribute_io.read_line() -> ReadLineResult
 
 ReadLineResult =
-    Line(valid_utf8: Bytes)
+    Line(valid_utf8: ByteArray)
   | EndOfFile
   | InvalidEncoding
-  | System(code: Int, message_utf8: Bytes)
+  | System(code: Int, message_utf8: ByteArray)
 ```
 
-Embedded `std::io` source는 `String::to_bytes`로 rope를 flatten한 뒤 `write`를
-호출한다. `read_line`의 `Line` payload와 `System` message는 boundary가 유효한 UTF-8임을
-보장하므로 source wrapper가 `String::from_bytes`로 감싼다. 나머지 status는
-`std::io::Error`로 변환하여 `Throw(Error)` operation을 호출한다.
+Embedded `std::io` source는 `String::to_bytes`로 rope를 flatten한 뒤 그 `Bytes`의
+`data`, `start`, `len`으로 `write`를 호출한다. `write`는 `data`를 빌리며, 범위가 배열
+밖이면 실행을 끝낸다. `read_line`의 `Line` payload와 `System` message는 boundary가
+유효한 UTF-8임을 보장하므로 source wrapper가 배열 전체를 보는 `Bytes`를 만들어
+`String::from_bytes`로 감싼다. 나머지 status는 `std::io::Error`로 변환하여
+`Throw(Error)` operation을 호출한다.
 
 `tribute_io.*`는 shared IR operation이며 public source symbol이 아니다. Embedded source가
 사용하는 private runtime bridge stub은 frontend lowering에서 이 operation으로 즉시 바뀌고,
@@ -201,14 +205,13 @@ NativeReadLineResult = repr(C) {
 
 `ByteArray`는 [byte 배열](rc.md#bytes) 객체의 payload(`[len: i64] [bytes...]`)다.
 `__tribute_io_write`는 `data`를 호출 동안 빌리고 `[start, start + len)`를 쓴다.
-Native lowering은 `Bytes`의 `data`, `start`, `len` field를 읽어 넘긴다. Runtime은
-범위가 배열 안인지 검사하고, 벗어나면 실행을 끝낸다.
+Runtime은 범위가 배열 안인지 검사하고, 벗어나면 실행을 끝낸다.
 
 Runtime은 Tribute enum, struct, `Bytes`를 직접 생성하지 않으며, 직접 할당하는 RC 객체는
 예약 RTTI index의 byte 배열뿐이다. Native lowering이 descriptor의 필드를 읽어
 `std::io::ReadLineResult` ADT를 만들고 descriptor를 즉시 해제한다. `bytes`와
-`message`는 unit 하나를 가진 byte 배열이며, lowering이 배열 전체를 보는 `Bytes`로
-감싸 해당 variant로 소유권을 이전한다. 사용하지 않는 pointer field는 null이다.
+`message`는 unit 하나를 가진 byte 배열이며, 해당 variant로 소유권이 이전된다.
+사용하지 않는 pointer field는 null이다.
 
 `newline`은 native ABI에서 `u32` 0/1로 전달한다. Runtime은 byte 범위를 먼저 모두
 쓰고, 값이 1일 때만 `\n` 하나를 추가한다.

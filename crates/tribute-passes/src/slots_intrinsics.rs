@@ -1,7 +1,9 @@
-//! Lower the `std::runtime::Slots` intrinsics to `adt` array operations.
+//! Lower the `std::runtime::Slots` and `std::runtime::ByteArray` intrinsics
+//! to `adt` array operations.
 //!
 //! Each intrinsic is one `adt.array_*` operation (`design/types.md`,
-//! "Slots"). Positions and lengths are `Nat` at the call and `core.index` at
+//! "Slots" and "ByteArray"); a byte read is zero-extended to the `Nat` it
+//! returns. Positions and lengths are `Nat` at the call and `core.index` at
 //! the array, converted with `arith.index_castui`; a length that does not
 //! fit `Nat` is truncated, as `Nat` bounds every array the runtime builds. A call is selected through
 //! the declaration its callee names and that declaration's verified compiler
@@ -45,10 +47,19 @@ enum SlotsOp {
     Insert,
     Remove,
     Replace,
+    /// `ByteArray::get`: an element read widened to `Nat`.
+    ByteGet,
 }
 
 impl SlotsOp {
     fn from_identity(identity: &str) -> Option<Self> {
+        if let Some(name) = identity.strip_prefix("std::runtime::ByteArray::") {
+            return Some(match name {
+                "len" => Self::Len,
+                "get" => Self::ByteGet,
+                _ => return None,
+            });
+        }
         Some(match identity.strip_prefix("std::runtime::Slots::")? {
             "empty" => Self::Empty,
             "len" => Self::Len,
@@ -64,7 +75,7 @@ impl SlotsOp {
         match self {
             Self::Empty => 0,
             Self::Len => 1,
-            Self::Get | Self::Remove => 2,
+            Self::Get | Self::ByteGet | Self::Remove => 2,
             Self::Insert | Self::Replace => 3,
         }
     }
@@ -185,6 +196,15 @@ impl OpRewritePattern for SlotsCallPattern<'_> {
             SlotsOp::Get => {
                 let at = lower.position(args[1]);
                 adt::ArrayGet::operands(args[0], at)
+                    .build(lower.ctx, location)
+                    .op_ref()
+            }
+            SlotsOp::ByteGet => {
+                let at = lower.position(args[1]);
+                let byte = adt::ArrayGet::operands(args[0], at).build(lower.ctx, location);
+                lower.insert(byte.op_ref());
+                arith::Extui::operands(byte.result(lower.ctx))
+                    .results(result_ty)
                     .build(lower.ctx, location)
                     .op_ref()
             }
@@ -336,8 +356,33 @@ mod tests {
     }
 
     #[test]
+    fn lowers_byte_array_reads_to_widened_array_reads() {
+        let output = lower(
+            r#"core.module @test {
+  func.func @"std::runtime::ByteArray::len"(%b: adt.array<core.i8>) -> core.i32 attributes {abi = "intrinsic", tribute.compiler_intrinsic = "std::runtime::ByteArray::len"}
+  func.func @"std::runtime::ByteArray::get"(%b: adt.array<core.i8>, %at: core.i32) -> core.i32 attributes {abi = "intrinsic", tribute.compiler_intrinsic = "std::runtime::ByteArray::get"}
+  func.func @run(%b: adt.array<core.i8>, %at: core.i32) -> core.i32 {
+    %0 = func.call @"std::runtime::ByteArray::len"(%b) : (adt.array<core.i8>) -> core.i32
+    %1 = func.call @"std::runtime::ByteArray::get"(%b, %at) : (adt.array<core.i8>, core.i32) -> core.i32
+    func.return %1
+  }
+}"#,
+        );
+        assert!(!output.contains("ByteArray"), "{output}");
+        assert!(output.contains("adt.array_len"), "{output}");
+        assert!(output.contains("adt.array_get"), "{output}");
+        assert!(
+            output.contains("arith.extui") && output.contains(": core.i8 to core.i32"),
+            "{output}"
+        );
+    }
+
+    #[test]
     fn handles_every_registered_identity() {
-        for identity in tribute_ir::runtime_items::SLOTS_INTRINSICS {
+        for identity in tribute_ir::runtime_items::SLOTS_INTRINSICS
+            .into_iter()
+            .chain(tribute_ir::runtime_items::BYTE_ARRAY_INTRINSICS)
+        {
             assert!(SlotsOp::from_identity(identity).is_some(), "{identity}");
         }
         assert_eq!(SlotsOp::from_identity("std::runtime::Slots::set"), None);

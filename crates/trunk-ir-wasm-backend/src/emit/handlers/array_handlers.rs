@@ -36,6 +36,20 @@ pub(crate) fn handle_array_new_default(
     Ok(())
 }
 
+/// Handle array.new_data operation: a new array of `size` elements read from
+/// a passive data segment at `offset`, both on the stack.
+pub(crate) fn handle_array_new_data(
+    ctx: &IrContext,
+    array_new_data: wasm_dialect::ArrayNewData,
+    function: &mut Function,
+) -> CompilationResult<()> {
+    function.instruction(&Instruction::ArrayNewData {
+        array_type_index: array_new_data.type_idx(ctx),
+        array_data_index: array_new_data.data_idx(ctx),
+    });
+    Ok(())
+}
+
 /// Handle array.new_fixed operation
 pub(crate) fn handle_array_new_fixed(
     ctx: &IrContext,

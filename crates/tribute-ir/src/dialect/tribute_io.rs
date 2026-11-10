@@ -1,12 +1,20 @@
 //! Target-independent standard I/O boundary.
 //!
-//! These operations carry flattened bytes and target-neutral result values.
+//! These operations carry byte arrays and target-neutral result values.
 //! Native and Wasm pipelines lower them to their respective host interfaces.
 
 #[trunk_ir::dialect]
 mod tribute_io {
-    #[asm_format(bytes "," newline attr_dict_bare ":" type(result))]
-    fn write(bytes: Value<_>, newline: Value<_>) -> Value<_> {}
+    /// Write the `len` bytes of the byte array `data` from `start` to
+    /// standard output, then one newline if `newline` is true. The operation
+    /// borrows `data`; a range outside it ends the execution
+    /// (`design/io.md` § "Runtime Boundary").
+    ///
+    /// ```text
+    /// %r = tribute_io.write %data, %start, %len, %newline : core.nil
+    /// ```
+    #[asm_format(data "," start "," len "," newline attr_dict_bare ":" type(result))]
+    fn write(data: Value<_>, start: Value<_>, len: Value<_>, newline: Value<_>) -> Value<_> {}
     #[asm_format(attr_dict_bare ":" type(result))]
     fn read_line() -> Value<_> {}
 }
@@ -41,11 +49,11 @@ mod tests {
             .build(&mut ctx, loc)
             .result(&ctx);
 
-        let write = super::Write::operands(bytes, newline)
+        let write = super::Write::operands(bytes, newline, newline, newline)
             .results(ty)
             .build(&mut ctx, loc);
         let parsed = super::Write::from_op(&ctx, write.op_ref()).expect("tribute_io.write");
-        assert_eq!(parsed.bytes(&ctx), bytes);
+        assert_eq!(parsed.data(&ctx), bytes);
         assert_eq!(parsed.newline(&ctx), newline);
 
         let read = super::ReadLine::operands().results(ty).build(&mut ctx, loc);

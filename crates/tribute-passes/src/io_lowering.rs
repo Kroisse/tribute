@@ -53,11 +53,11 @@ impl OpRewritePattern for IoCallPattern {
         let result_ty = ctx.op_result_types(op).first().copied();
 
         let replacement = if callee == [WRITE_INTRINSIC] {
-            let (Some(result_ty), [bytes, newline]) = (result_ty, ctx.op_operands(op)) else {
+            let (Some(result_ty), &[data, start, len, newline]) = (result_ty, ctx.op_operands(op))
+            else {
                 return None;
             };
-            let (bytes, newline) = (*bytes, *newline);
-            tribute_io::Write::operands(bytes, newline)
+            tribute_io::Write::operands(data, start, len, newline)
                 .results(result_ty)
                 .build(ctx, loc)
                 .op_ref()
@@ -113,7 +113,7 @@ mod tests {
             &mut ctx,
             r#"
             core.module @test {
-                func.func @"std::io::__tribute_io_write"(%0: core.ptr, %1: core.i1) -> core.ptr
+                func.func @"std::io::__tribute_io_write"(%0: adt.array<core.i8>, %s: core.i32, %n: core.i32, %1: core.i1) -> core.ptr
                     attributes {abi = "intrinsic"} {
                 ^bb0:
                     func.unreachable
@@ -123,9 +123,9 @@ mod tests {
                 ^bb0:
                     func.unreachable
                 }
-                func.func @caller(%0: core.ptr, %1: core.i1) -> core.ptr {
+                func.func @caller(%0: adt.array<core.i8>, %s: core.i32, %n: core.i32, %1: core.i1) -> core.ptr {
                 ^bb0:
-                    %2 = func.call @"std::io::__tribute_io_write"(%0, %1) : (core.ptr, core.i1) -> core.ptr
+                    %2 = func.call @"std::io::__tribute_io_write"(%0, %s, %n, %1) : (adt.array<core.i8>, core.i32, core.i32, core.i1) -> core.ptr
                     %3 = func.call @"std::io::__tribute_io_read_line"() : () -> core.ptr
                     func.return %3
                 }

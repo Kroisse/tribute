@@ -24,6 +24,58 @@ use super::callable::{
 use super::declarations::Declarations;
 use super::nominal::expr_type_for_id;
 
+/// A `bytes_ty` value, the prelude `Bytes`, that views all of `bytes`: the
+/// byte array constant with `start` 0 and `len` its length
+/// (`design/string.md` § "Constant lowering"). Fields are placed by their
+/// declared names.
+pub(in crate::ast_to_ir::lower) fn emit_bytes_literal(
+    builder: &mut IrBuilder<'_, '_>,
+    location: Location,
+    bytes: Vec<u8>,
+    bytes_ty: TypeRef,
+) -> ValueRef {
+    let len = bytes.len();
+    let array_ty = tribute_ir::runtime_layout::byte_array(builder.ir);
+    let data = adt::BytesConst::operands()
+        .value(bytes.into())
+        .results(array_ty)
+        .build(builder.ir, location);
+    builder.ir.push_op(builder.block, data.op_ref());
+    let data = data.result(builder.ir);
+    let nat_ty = builder.ctx.i32_type(builder.ir);
+    let nat = |builder: &mut IrBuilder<'_, '_>, value: usize| {
+        let constant = arith::Constant::operands()
+            .value(Attribute::Int(value as i128))
+            .results(nat_ty)
+            .build(builder.ir, location);
+        builder.ir.push_op(builder.block, constant.op_ref());
+        constant.result(builder.ir)
+    };
+    let start = nat(builder, 0);
+    let len = nat(builder, len);
+    let ctor = crate::ast::CtorId::new(
+        builder.db(),
+        crate::resolve::PackageName::std().identity_path_of(&["Bytes"]),
+    );
+    let fields = builder
+        .ctx
+        .struct_field_names(ctor)
+        .unwrap_or_else(|| panic!("a bytes literal needs the prelude `Bytes` struct"))
+        .iter()
+        .map(|name| match name.as_str() {
+            "data" => data,
+            "start" => start,
+            "len" => len,
+            other => panic!("the prelude `Bytes` has an unexpected field `{other}`"),
+        })
+        .collect::<Vec<_>>();
+    let record = adt::StructNew::operands(fields)
+        .results(bytes_ty)
+        .build(builder.ir, location);
+    builder.ir.push_op(builder.block, record.op_ref());
+    record.result(builder.ir)
+}
+
 pub(super) fn lower_expr<'db>(
     builder: &mut IrBuilder<'_, 'db>,
     expr: Expr<TypedRef<'db>>,
@@ -78,13 +130,8 @@ pub(super) fn lower_expr<'db>(
             Some(value.result(builder.ir))
         }
         ExprKind::BytesLit(value) => {
-            let ty = builder.ctx.bytes_type(builder.ir);
-            let value = adt::BytesConst::operands()
-                .value(value.into())
-                .results(ty)
-                .build(builder.ir, location);
-            builder.ir.push_op(builder.block, value.op_ref());
-            Some(value.result(builder.ir))
+            let ty = expr_type_for_id(builder, expr.id);
+            Some(emit_bytes_literal(builder, location, value, ty))
         }
         ExprKind::StringLit(value) => {
             let ty = expr_type_for_id(builder, expr.id);

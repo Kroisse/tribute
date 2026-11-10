@@ -66,7 +66,6 @@ fn write_kind<'db>(
         TypeKind::Nat => f.write_str("Nat"),
         TypeKind::Float => f.write_str("Float"),
         TypeKind::Bool => f.write_str("Bool"),
-        TypeKind::Bytes => f.write_str("Bytes"),
         TypeKind::Rune => f.write_str("Rune"),
         TypeKind::Nil => f.write_str("Nil"),
         TypeKind::Never => f.write_str("Never"),

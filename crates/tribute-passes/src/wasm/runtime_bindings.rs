@@ -11,19 +11,13 @@ use trunk_ir::refs::OpRef;
 use trunk_ir::symbol_table::{SymbolTable, link_name};
 use trunk_ir::{Symbol, SymbolPath};
 
-use super::intrinsic_to_wasm::{BYTES_CONCAT, BYTES_LEN, BYTES_RANGE_EQUAL, BYTES_SLICE_OR_PANIC};
+use super::intrinsic_to_wasm::{BYTE_ARRAY_CONCAT, BYTE_ARRAY_RANGE_EQUAL};
 use super::prompt_tag::NEXT_TAG;
 
 /// Every C helper with a Wasm implementation: the prompt tag allocator
-/// `prompt_tag` binds and the bytes helpers `intrinsic_to_wasm` binds.
+/// `prompt_tag` binds and the byte array helpers `intrinsic_to_wasm` binds.
 /// The evidence runtime is Tribute source, compiled like any other function.
-pub const PROVIDED: &[&str] = &[
-    NEXT_TAG,
-    BYTES_LEN,
-    BYTES_CONCAT,
-    BYTES_RANGE_EQUAL,
-    BYTES_SLICE_OR_PANIC,
-];
+pub const PROVIDED: &[&str] = &[NEXT_TAG, BYTE_ARRAY_CONCAT, BYTE_ARRAY_RANGE_EQUAL];
 
 /// Whether the Wasm target binds the C helper named `name`.
 pub fn provides(name: &Symbol) -> bool {

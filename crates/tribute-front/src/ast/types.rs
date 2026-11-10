@@ -76,8 +76,6 @@ pub enum TypeKind<'db> {
     Float,
     /// Boolean type
     Bool,
-    /// Byte sequence type
-    Bytes,
     /// Unicode code point (i32)
     Rune,
     /// Unit type (empty tuple)
@@ -157,7 +155,6 @@ impl<'db> TypeKind<'db> {
             Self::Nat => Some("Nat"),
             Self::Float => Some("Float"),
             Self::Bool => Some("Bool"),
-            Self::Bytes => Some("Bytes"),
             Self::Rune => Some("Rune"),
             Self::Nil => Some("Nil"),
             Self::Never => Some("Never"),
@@ -167,7 +164,16 @@ impl<'db> TypeKind<'db> {
 
     /// Create a synthetic String type for isolated contexts.
     pub fn string(db: &'db dyn salsa::Database) -> Self {
-        let name = Symbol::new("String");
+        Self::synthetic_named(db, "String")
+    }
+
+    /// Create a synthetic Bytes type for isolated contexts.
+    pub fn bytes(db: &'db dyn salsa::Database) -> Self {
+        Self::synthetic_named(db, "Bytes")
+    }
+
+    fn synthetic_named(db: &'db dyn salsa::Database, name: &str) -> Self {
+        let name = Symbol::new(name);
         Self::Named {
             id: TypeDefId::synthetic(db, SymbolPath::new([name.clone()])),
             name,
@@ -184,7 +190,6 @@ impl<'db> TypeKind<'db> {
             "Nat" => Some(Self::Nat),
             "Float" => Some(Self::Float),
             "Bool" => Some(Self::Bool),
-            "Bytes" => Some(Self::Bytes),
             "Rune" => Some(Self::Rune),
             "Nil" => Some(Self::Nil),
             "Never" => Some(Self::Never),

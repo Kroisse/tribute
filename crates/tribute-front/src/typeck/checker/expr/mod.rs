@@ -64,7 +64,6 @@ fn type_contains_univar<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> boo
         | TypeKind::Nat
         | TypeKind::Float
         | TypeKind::Bool
-        | TypeKind::Bytes
         | TypeKind::Rune
         | TypeKind::Nil
         | TypeKind::Never

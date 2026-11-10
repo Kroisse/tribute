@@ -1,100 +1,39 @@
-//! Bind the `extern "C"` bytes helpers to WasmGC operations past the
+//! Bind the `extern "C"` byte array helpers to WasmGC operations past the
 //! representation/ABI boundary.
 //!
-//! `__tribute_bytes_len`, `__tribute_bytes_range_equal`,
-//! `__tribute_bytes_concat`, and `__tribute_bytes_slice_or_panic` become
-//! struct/array operations on the bytes layout. The bytes element read intrinsic is lowered inside the boundary by
-//! `wasm/bytes.rs`.
+//! `__tribute_byte_array_range_equal` and `__tribute_byte_array_concat`
+//! become operations on the byte array's GC array, which a byte array keeps
+//! in values and signatures (`design/wasm-backend.md` § "Structural GC 타입과
+//! descriptor 필드"). A range that is not inside its array traps: an
+//! `array.get_u` or `array.copy` past the end traps, and a range whose end
+//! wraps around `i32` traps before any read.
 
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
 use trunk_ir::dialect::core;
 use trunk_ir::dialect::wasm as wasm_dialect;
-use trunk_ir::refs::{OpRef, ValueRef};
+use trunk_ir::dialect::wasm_gc;
+use trunk_ir::refs::{OpRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{
     Module, OpRewritePattern, PatternApplicator, PatternRewriter, TypeConverter,
 };
 use trunk_ir::smallvec::smallvec;
 use trunk_ir::symbol_table::SymbolTable;
-use trunk_ir::types::TypeDataBuilder;
+use trunk_ir::types::Location;
 
-use trunk_ir_wasm_backend::gc_types::{BYTES_ARRAY_IDX, BYTES_STRUCT_IDX};
+/// C link name of the byte array concatenation helper.
+pub const BYTE_ARRAY_CONCAT: &str = "__tribute_byte_array_concat";
+/// C link name of the byte array range comparison helper.
+pub const BYTE_ARRAY_RANGE_EQUAL: &str = "__tribute_byte_array_range_equal";
 
-use super::bytes::{
-    DATA_FIELD as BYTES_DATA_FIELD, LEN_FIELD as BYTES_LEN_FIELD,
-    OFFSET_FIELD as BYTES_OFFSET_FIELD,
-};
-
-/// Extracted Bytes struct fields: (data, offset, len) values.
-struct BytesFields {
-    data: ValueRef,
-    offset: ValueRef,
-    len: ValueRef,
-}
-
-/// Extract (data, offset, len) fields from a Bytes struct value.
-///
-/// Returns the extracted field values and the operations that produced them.
-fn extract_bytes_fields(
-    ctx: &mut IrContext,
-    location: trunk_ir::types::Location,
-    bytes_value: ValueRef,
-) -> (BytesFields, Vec<OpRef>) {
-    let i32_ty = TypeDataBuilder::new("core.i32").intern(ctx);
-    let array_ref_ty = super::bytes::bytes_data_gc_type(ctx);
-
-    let get_data = wasm_dialect::StructGet::operands(bytes_value)
-        .type_idx(BYTES_STRUCT_IDX)
-        .field_idx(BYTES_DATA_FIELD)
-        .results(array_ref_ty)
-        .build(ctx, location);
-
-    let get_offset = wasm_dialect::StructGet::operands(bytes_value)
-        .type_idx(BYTES_STRUCT_IDX)
-        .field_idx(BYTES_OFFSET_FIELD)
-        .results(i32_ty)
-        .build(ctx, location);
-
-    let get_len = wasm_dialect::StructGet::operands(bytes_value)
-        .type_idx(BYTES_STRUCT_IDX)
-        .field_idx(BYTES_LEN_FIELD)
-        .results(i32_ty)
-        .build(ctx, location);
-
-    let fields = BytesFields {
-        data: get_data.result(ctx),
-        offset: get_offset.result(ctx),
-        len: get_len.result(ctx),
-    };
-
-    let ops = vec![get_data.op_ref(), get_offset.op_ref(), get_len.op_ref()];
-
-    (fields, ops)
-}
-
-/// C link name of the bytes length helper.
-pub const BYTES_LEN: &str = "__tribute_bytes_len";
-/// C link name of the bytes concatenation helper.
-pub const BYTES_CONCAT: &str = "__tribute_bytes_concat";
-/// C link name of the bytes range comparison helper.
-pub const BYTES_RANGE_EQUAL: &str = "__tribute_bytes_range_equal";
-/// C link name of the bounds-checked bytes slicing helper.
-pub const BYTES_SLICE_OR_PANIC: &str = "__tribute_bytes_slice_or_panic";
-
-/// Bind calls to the `extern "C"` bytes helpers to WasmGC operations.
+/// Bind calls to the `extern "C"` byte array helpers to WasmGC operations.
 pub(crate) fn lower(ctx: &mut IrContext, module: Module) {
     let symbols = SymbolTable::collect(ctx, module);
     let applicator = PatternApplicator::new(TypeConverter::new())
-        .add_pattern(BytesLenPattern(&symbols))
-        .add_pattern(BytesRangeEqualPattern(&symbols))
-        .add_pattern(BytesConcatPattern(&symbols))
-        .add_pattern(BytesSliceOrPanicPattern(&symbols));
+        .add_pattern(RangeEqualPattern(&symbols))
+        .add_pattern(ConcatPattern(&symbols));
 
     applicator.apply_partial(ctx, module);
 }
-
-// =============================================================================
-// Bytes helper patterns
-// =============================================================================
 
 /// Whether `call` calls the C helper `helper`: its callee resolves to a
 /// bodyless `abi = "C"` declaration with that link name.
@@ -108,55 +47,42 @@ fn calls_c_helper(
         .is_some_and(|name| name == helper)
 }
 
-/// Pattern for `__tribute_bytes_len(bytes)` -> `struct.get $bytes 2`
-///
-/// Returns i32 directly since Nat is mapped to i32.
-struct BytesLenPattern<'a>(&'a SymbolTable);
-
-impl OpRewritePattern for BytesLenPattern<'_> {
-    type Op = wasm_dialect::Call;
-
-    fn match_and_rewrite(
-        &self,
-        ctx: &mut IrContext,
-        call: Self::Op,
-        rewriter: &mut PatternRewriter<'_>,
-    ) -> Option<()> {
-        let op = call.op_ref();
-        if !calls_c_helper(ctx, self.0, call, BYTES_LEN) {
-            return None;
-        }
-
-        let operands = ctx.op_operands(op).to_vec();
-        let bytes_ref = operands.first().copied()?;
-
-        let location = ctx.op(op).location;
-        let i32_ty = TypeDataBuilder::new("core.i32").intern(ctx);
-
-        // struct.get to get len field (field 2)
-        let get_len = wasm_dialect::StructGet::operands(bytes_ref)
-            .type_idx(BYTES_STRUCT_IDX)
-            .field_idx(BYTES_LEN_FIELD)
-            .results(i32_ty)
-            .build(ctx, location);
-
-        rewriter.replace_op(get_len.op_ref());
-        Some(())
-    }
-
-    fn name(&self) -> &'static str {
-        "BytesLenPattern"
-    }
+/// The GC array of the byte array.
+fn byte_array_type(ctx: &mut IrContext) -> TypeRef {
+    let array = tribute_ir::runtime_layout::byte_array(ctx);
+    super::type_converter::gc_array_type(ctx, array)
 }
 
-/// Pattern for comparing equal-length ranges in two Bytes values.
-///
-/// The generated Wasm loop compares bytes directly in the two backing arrays
-/// and exits at the first mismatch. String equality invokes this once per pair
-/// of contiguous rope-leaf spans rather than once per logical byte.
-struct BytesRangeEqualPattern<'a>(&'a SymbolTable);
+/// Trap if `start + len` wraps around `i32`. Returns the operations, in order.
+fn trap_if_range_wraps(
+    ctx: &mut IrContext,
+    location: Location,
+    start: ValueRef,
+    len: ValueRef,
+) -> Vec<OpRef> {
+    let i32_ty = core::I32::type_ref(ctx);
+    let nil_ty = core::Nil::params().intern(ctx).as_type_ref();
+    let end = wasm_dialect::I32Add::operands(start, len).build(ctx, location);
+    let wrapped = wasm_dialect::I32LtU::operands(end.result(ctx), start)
+        .results(i32_ty)
+        .build(ctx, location);
+    let trap = trap_region(ctx, location);
+    let ok = empty_region(ctx, location);
+    let check = wasm_dialect::If::operands(wrapped.result(ctx))
+        .results([nil_ty])
+        .regions(trap, ok)
+        .build(ctx, location);
+    vec![end.op_ref(), wrapped.op_ref(), check.op_ref()]
+}
 
-impl OpRewritePattern for BytesRangeEqualPattern<'_> {
+/// Pattern for comparing equal-length ranges of two byte arrays.
+///
+/// The generated Wasm loop compares bytes directly in the two arrays and
+/// exits at the first mismatch. String equality invokes this once per pair of
+/// contiguous rope-leaf spans rather than once per logical byte.
+struct RangeEqualPattern<'a>(&'a SymbolTable);
+
+impl OpRewritePattern for RangeEqualPattern<'_> {
     type Op = wasm_dialect::Call;
 
     fn match_and_rewrite(
@@ -166,26 +92,19 @@ impl OpRewritePattern for BytesRangeEqualPattern<'_> {
         rewriter: &mut PatternRewriter<'_>,
     ) -> Option<()> {
         let op = call.op_ref();
-        if !calls_c_helper(ctx, self.0, call, BYTES_RANGE_EQUAL) {
+        if !calls_c_helper(ctx, self.0, call, BYTE_ARRAY_RANGE_EQUAL) {
             return None;
         }
 
         let operands = ctx.op_operands(op).to_vec();
-        rewriter.ensure(
-            operands.len() == 5,
-            "bytes range comparison does not take five operands",
-        )?;
+        let &[left, left_start, right, right_start, len] = operands.as_array()?;
         let location = ctx.op(op).location;
         let result_ty = ctx.op_result_types(op)[0];
-        let i32_ty = TypeDataBuilder::new("core.i32").intern(ctx);
+        let i32_ty = core::I32::type_ref(ctx);
         let nil_ty = core::Nil::params().intern(ctx).as_type_ref();
-        let (left, left_ops) = extract_bytes_fields(ctx, location, operands[0]);
-        let (right, right_ops) = extract_bytes_fields(ctx, location, operands[2]);
-        let left_start =
-            wasm_dialect::I32Add::operands(left.offset, operands[1]).build(ctx, location);
-        let right_start =
-            wasm_dialect::I32Add::operands(right.offset, operands[3]).build(ctx, location);
-        let len = operands[4];
+        let array_ty = byte_array_type(ctx);
+        let mut checks = trap_if_range_wraps(ctx, location, left_start, len);
+        checks.extend(trap_if_range_wraps(ctx, location, right_start, len));
         let zero = wasm_dialect::I32Const::operands()
             .value(0)
             .results(i32_ty)
@@ -214,23 +133,19 @@ impl OpRewritePattern for BytesRangeEqualPattern<'_> {
             .build(ctx, location);
         ctx.push_op(loop_block, break_when_done.op_ref());
 
-        let left_index =
-            wasm_dialect::I32Add::operands(left_start.result(ctx), index).build(ctx, location);
-        ctx.push_op(loop_block, left_index.op_ref());
-        let left_byte = wasm_dialect::ArrayGetU::operands(left.data, left_index.result(ctx))
-            .type_idx(BYTES_ARRAY_IDX)
-            .results(i32_ty)
-            .build(ctx, location);
-        ctx.push_op(loop_block, left_byte.op_ref());
-        let right_index =
-            wasm_dialect::I32Add::operands(right_start.result(ctx), index).build(ctx, location);
-        ctx.push_op(loop_block, right_index.op_ref());
-        let right_byte = wasm_dialect::ArrayGetU::operands(right.data, right_index.result(ctx))
-            .type_idx(BYTES_ARRAY_IDX)
-            .results(i32_ty)
-            .build(ctx, location);
-        ctx.push_op(loop_block, right_byte.op_ref());
-        let mismatch = wasm_dialect::I32Ne::operands(left_byte.result(ctx), right_byte.result(ctx))
+        let read = |ctx: &mut IrContext, array: ValueRef, start: ValueRef| {
+            let at = wasm_dialect::I32Add::operands(start, index).build(ctx, location);
+            ctx.push_op(loop_block, at.op_ref());
+            let byte = wasm_gc::ArrayGetU::operands(array, at.result(ctx))
+                .r#type(array_ty)
+                .results(i32_ty)
+                .build(ctx, location);
+            ctx.push_op(loop_block, byte.op_ref());
+            byte.result(ctx)
+        };
+        let left_byte = read(ctx, left, left_start);
+        let right_byte = read(ctx, right, right_start);
+        let mismatch = wasm_dialect::I32Ne::operands(left_byte, right_byte)
             .results(i32_ty)
             .build(ctx, location);
         ctx.push_op(loop_block, mismatch.op_ref());
@@ -279,25 +194,20 @@ impl OpRewritePattern for BytesRangeEqualPattern<'_> {
             .regions(outer_region)
             .build(ctx, location);
 
-        for field_op in left_ops.into_iter().chain(right_ops) {
-            rewriter.insert_op(field_op);
+        for check in checks {
+            rewriter.insert_op(check);
         }
-        rewriter.insert_op(left_start.op_ref());
-        rewriter.insert_op(right_start.op_ref());
         rewriter.insert_op(zero.op_ref());
         rewriter.replace_op(compare.op_ref());
         Some(())
     }
 
     fn name(&self) -> &'static str {
-        "BytesRangeEqualPattern"
+        "ByteArrayRangeEqualPattern"
     }
 }
 
-pub(super) fn empty_region(
-    ctx: &mut IrContext,
-    location: trunk_ir::types::Location,
-) -> trunk_ir::RegionRef {
+pub(super) fn empty_region(ctx: &mut IrContext, location: Location) -> trunk_ir::RegionRef {
     let block = ctx.create_block(BlockData {
         location,
         args: vec![],
@@ -313,8 +223,8 @@ pub(super) fn empty_region(
 
 fn value_break_region(
     ctx: &mut IrContext,
-    location: trunk_ir::types::Location,
-    i32_ty: trunk_ir::TypeRef,
+    location: Location,
+    i32_ty: TypeRef,
     value: i32,
 ) -> trunk_ir::RegionRef {
     let block = ctx.create_block(BlockData {
@@ -339,10 +249,12 @@ fn value_break_region(
     })
 }
 
-/// Pattern for `__tribute_bytes_concat(left, right)` -> allocate a new array and copy both
-struct BytesConcatPattern<'a>(&'a SymbolTable);
+/// Pattern for `__tribute_byte_array_concat(left, ls, ll, right, rs, rl)`:
+/// allocate a new byte array and copy both ranges into it. `array.copy`
+/// traps on a range outside its source.
+struct ConcatPattern<'a>(&'a SymbolTable);
 
-impl OpRewritePattern for BytesConcatPattern<'_> {
+impl OpRewritePattern for ConcatPattern<'_> {
     type Op = wasm_dialect::Call;
 
     fn match_and_rewrite(
@@ -352,178 +264,55 @@ impl OpRewritePattern for BytesConcatPattern<'_> {
         rewriter: &mut PatternRewriter<'_>,
     ) -> Option<()> {
         let op = call.op_ref();
-        if !calls_c_helper(ctx, self.0, call, BYTES_CONCAT) {
+        if !calls_c_helper(ctx, self.0, call, BYTE_ARRAY_CONCAT) {
             return None;
         }
 
         let operands = ctx.op_operands(op).to_vec();
-        rewriter.ensure(
-            operands.len() >= 2,
-            "bytes concatenation takes fewer than two operands",
-        )?;
-        let left = operands[0];
-        let right = operands[1];
-
+        let &[left, left_start, left_len, right, right_start, right_len] = operands.as_array()?;
         let location = ctx.op(op).location;
-        let i32_ty = TypeDataBuilder::new("core.i32").intern(ctx);
-        let bytes_ty = super::bytes::bytes_struct_type(ctx);
-        let array_ref_ty = super::bytes::bytes_data_gc_type(ctx);
+        let i32_ty = core::I32::type_ref(ctx);
+        let array_ty = byte_array_type(ctx);
 
-        // Extract fields from left and right Bytes structs
-        let (left_fields, left_ops) = extract_bytes_fields(ctx, location, left);
-        let (right_fields, right_ops) = extract_bytes_fields(ctx, location, right);
-
-        // Calculate total_len = left.len + right.len
-        let total_len =
-            wasm_dialect::I32Add::operands(left_fields.len, right_fields.len).build(ctx, location);
-
-        // Allocate new array: array_new_default(total_len)
-        let new_array = wasm_dialect::ArrayNewDefault::operands(total_len.result(ctx))
-            .type_idx(BYTES_ARRAY_IDX)
-            .results(array_ref_ty)
+        // A total that wraps would allocate too few bytes; trap instead.
+        let mut ops = trap_if_range_wraps(ctx, location, left_len, right_len);
+        let total = wasm_dialect::I32Add::operands(left_len, right_len).build(ctx, location);
+        let joined = wasm_gc::ArrayNewDefault::operands(total.result(ctx))
+            .r#type(array_ty)
             .build(ctx, location);
-
-        // Copy left bytes: array_copy(new_arr, 0, left.data, left.offset, left.len)
         let zero = wasm_dialect::I32Const::operands()
             .value(0)
             .results(i32_ty)
             .build(ctx, location);
-
-        let copy_left = wasm_dialect::ArrayCopy::operands(
-            new_array.result(ctx),
-            zero.result(ctx),
-            left_fields.data,
-            left_fields.offset,
-            left_fields.len,
-        )
-        .dst_type_idx(BYTES_ARRAY_IDX)
-        .src_type_idx(BYTES_ARRAY_IDX)
-        .build(ctx, location);
-
-        // Copy right bytes: array_copy(new_arr, left.len, right.data, right.offset, right.len)
-        let copy_right = wasm_dialect::ArrayCopy::operands(
-            new_array.result(ctx),
-            left_fields.len,
-            right_fields.data,
-            right_fields.offset,
-            right_fields.len,
-        )
-        .dst_type_idx(BYTES_ARRAY_IDX)
-        .src_type_idx(BYTES_ARRAY_IDX)
-        .build(ctx, location);
-
-        // Create new Bytes struct: struct_new(new_arr, 0, total_len)
-        let struct_new = wasm_dialect::StructNew::operands(vec![
-            new_array.result(ctx),
-            zero.result(ctx),
-            total_len.result(ctx),
-        ])
-        .type_idx(BYTES_STRUCT_IDX)
-        .results(bytes_ty)
-        .build(ctx, location);
-
-        // Combine all operations in order
-        let mut ops = Vec::with_capacity(left_ops.len() + right_ops.len() + 6);
-        ops.extend(left_ops);
-        ops.extend(right_ops);
-        ops.push(total_len.op_ref());
-        ops.push(new_array.op_ref());
-        ops.push(zero.op_ref());
-        ops.push(copy_left.op_ref());
-        ops.push(copy_right.op_ref());
-        ops.push(struct_new.op_ref());
-
-        let last = ops.pop().unwrap();
-        for o in ops {
-            rewriter.insert_op(o);
+        let copy = |ctx: &mut IrContext, at: ValueRef, src: ValueRef, start, len| {
+            wasm_gc::ArrayCopy::operands(joined.result(ctx), at, src, start, len)
+                .dst_type(array_ty)
+                .src_type(array_ty)
+                .build(ctx, location)
+                .op_ref()
+        };
+        let copy_left = copy(ctx, zero.result(ctx), left, left_start, left_len);
+        let copy_right = copy(ctx, left_len, right, right_start, right_len);
+        ops.extend([
+            total.op_ref(),
+            joined.op_ref(),
+            zero.op_ref(),
+            copy_left,
+            copy_right,
+        ]);
+        for inserted in ops {
+            rewriter.insert_op(inserted);
         }
-        rewriter.replace_op(last);
+        rewriter.erase_op(vec![joined.result(ctx)]);
         Some(())
     }
 
     fn name(&self) -> &'static str {
-        "BytesConcatPattern"
+        "ByteArrayConcatPattern"
     }
 }
 
-/// Pattern for `__tribute_bytes_slice_or_panic(bytes, start, end)`: trap
-/// unless `start <= end <= bytes.len`, then share the backing array in a new
-/// Bytes struct.
-struct BytesSliceOrPanicPattern<'a>(&'a SymbolTable);
-
-impl OpRewritePattern for BytesSliceOrPanicPattern<'_> {
-    type Op = wasm_dialect::Call;
-
-    fn match_and_rewrite(
-        &self,
-        ctx: &mut IrContext,
-        call: Self::Op,
-        rewriter: &mut PatternRewriter<'_>,
-    ) -> Option<()> {
-        let op = call.op_ref();
-        if !calls_c_helper(ctx, self.0, call, BYTES_SLICE_OR_PANIC) {
-            return None;
-        }
-
-        let operands = ctx.op_operands(op).to_vec();
-        let &[bytes, start, end] = operands.as_array()?;
-        let location = ctx.op(op).location;
-        let bytes_ty = super::bytes::bytes_struct_type(ctx);
-        let i32_ty = TypeDataBuilder::new("core.i32").intern(ctx);
-        let nil_ty = core::Nil::params().intern(ctx).as_type_ref();
-
-        let (fields, field_ops) = extract_bytes_fields(ctx, location, bytes);
-        let reversed = wasm_dialect::I32GtU::operands(start, end)
-            .results(i32_ty)
-            .build(ctx, location);
-        let past_len = wasm_dialect::I32GtU::operands(end, fields.len)
-            .results(i32_ty)
-            .build(ctx, location);
-        let out_of_range =
-            wasm_dialect::I32Or::operands(reversed.result(ctx), past_len.result(ctx))
-                .results(i32_ty)
-                .build(ctx, location);
-        let trap = trap_region(ctx, location);
-        let ok = empty_region(ctx, location);
-        let check = wasm_dialect::If::operands(out_of_range.result(ctx))
-            .results([nil_ty])
-            .regions(trap, ok)
-            .build(ctx, location);
-        let offset = wasm_dialect::I32Add::operands(fields.offset, start).build(ctx, location);
-        let len = wasm_dialect::I32Sub::operands(end, start)
-            .results(i32_ty)
-            .build(ctx, location);
-        let slice = wasm_dialect::StructNew::operands(vec![
-            fields.data,
-            offset.result(ctx),
-            len.result(ctx),
-        ])
-        .type_idx(BYTES_STRUCT_IDX)
-        .results(bytes_ty)
-        .build(ctx, location);
-
-        for field_op in field_ops {
-            rewriter.insert_op(field_op);
-        }
-        for checked in [reversed.op_ref(), past_len.op_ref(), out_of_range.op_ref()] {
-            rewriter.insert_op(checked);
-        }
-        rewriter.insert_op(check.op_ref());
-        rewriter.insert_op(offset.op_ref());
-        rewriter.insert_op(len.op_ref());
-        rewriter.replace_op(slice.op_ref());
-        Some(())
-    }
-
-    fn name(&self) -> &'static str {
-        "BytesSliceOrPanicPattern"
-    }
-}
-
-pub(super) fn trap_region(
-    ctx: &mut IrContext,
-    location: trunk_ir::types::Location,
-) -> trunk_ir::RegionRef {
+pub(super) fn trap_region(ctx: &mut IrContext, location: Location) -> trunk_ir::RegionRef {
     let region = empty_region(ctx, location);
     let block = ctx.region(region).blocks[0];
     let unreachable = wasm_dialect::Unreachable::operands().build(ctx, location);

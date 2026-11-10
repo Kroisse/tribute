@@ -1271,11 +1271,14 @@ fn main() ->{std::io::Io} Nil {
     assert!(output.contains("tribute_io.read_line"), "{output}");
     assert!(!output.contains("__tribute_io_"), "{output}");
 
+    // `print` and `print_line` reach `tribute_io.write` through one helper,
+    // passing it the newline flag.
     let mut newline_values = Vec::new();
     let _ = trunk_ir::walk::walk_op::<()>(&ctx, module.op(), &mut |op| {
-        if let Ok(write) = tribute_ir::dialect::tribute_io::Write::from_op(&ctx, op)
-            && let trunk_ir::refs::ValueDef::OpResult(producer, _) =
-                ctx.value_def(write.newline(&ctx))
+        if let Ok(call) = trunk_ir::dialect::func::Call::from_op(&ctx, op)
+            && *call.callee(&ctx) == ["std::io::write_bytes"]
+            && let Some(&newline) = ctx.op_operands(op).last()
+            && let trunk_ir::refs::ValueDef::OpResult(producer, _) = ctx.value_def(newline)
             && let Ok(constant) = trunk_ir::dialect::arith::Constant::from_op(&ctx, producer)
             && let trunk_ir::Attribute::Bool(value) = constant.value(&ctx)
         {
@@ -2289,9 +2292,9 @@ fn arithmetic_intrinsic_lowering_consumes_its_identities(db: &salsa::DatabaseImp
              declarations nothing references"
     );
     assert_eq!(
-        identity("std::__bytes_get_or_panic"),
-        Some(Some("std::__bytes_get_or_panic")),
-        "bytes lowering consumes its identity inside the target boundary"
+        identity("std::runtime::ByteArray::get"),
+        None,
+        "byte array lowering is the last reader of its identities"
     );
 }
 
@@ -2829,8 +2832,8 @@ fn library_names_are_the_prelude_short_names(db: &crate::TributeDatabaseImpl) {
     assert_eq!(
         names,
         [
+            "ctor Bytes",
             "fn absurd",
-            "mod Bytes",
             "mod Float",
             "mod Int",
             "mod Nat",

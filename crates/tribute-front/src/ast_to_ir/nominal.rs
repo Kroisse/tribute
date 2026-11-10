@@ -23,6 +23,9 @@ fn nominal_origin_key(origin: crate::ast::TypeOrigin) -> String {
         crate::ast::TypeOrigin::Source { disambiguator } => format!("source{disambiguator}"),
         crate::ast::TypeOrigin::Builtin(crate::ast::BuiltinType::List) => "builtin_list".into(),
         crate::ast::TypeOrigin::Builtin(crate::ast::BuiltinType::Slots) => "builtin_slots".into(),
+        crate::ast::TypeOrigin::Builtin(crate::ast::BuiltinType::ByteArray) => {
+            "builtin_byte_array".into()
+        }
         crate::ast::TypeOrigin::Builtin(crate::ast::BuiltinType::Dispatch) => {
             "builtin_dispatch".into()
         }
@@ -249,7 +252,6 @@ impl<'db> NominalTypes<'db> {
             TypeKind::Int | TypeKind::Nat | TypeKind::Rune => self.i32_type(ir),
             TypeKind::Float => self.f64_type(ir),
             TypeKind::Bool => self.bool_type(ir),
-            TypeKind::Bytes => self.bytes_type(ir),
             TypeKind::Nil | TypeKind::Error => self.nil_type(ir),
             TypeKind::Never => core::Never::params().intern(ir).as_type_ref(),
             TypeKind::BoundVar { .. }
@@ -258,6 +260,9 @@ impl<'db> NominalTypes<'db> {
             TypeKind::Named { id, .. } if id.is_builtin_list(self.db) => self.anyref_type(ir),
             TypeKind::Named { id, .. } if id.is_builtin_dispatch(self.db) => {
                 tribute_ir::runtime_layout::closure_base(ir)
+            }
+            TypeKind::Named { id, .. } if id.is_builtin_byte_array(self.db) => {
+                tribute_ir::runtime_layout::byte_array(ir)
             }
             TypeKind::Named { id, args, .. } if id.is_builtin_slots(self.db) => {
                 let [element] = args.as_slice() else {
@@ -317,7 +322,6 @@ impl<'db> NominalTypes<'db> {
             TypeKind::Nat => "nat".into(),
             TypeKind::Float => "float".into(),
             TypeKind::Bool => "bool".into(),
-            TypeKind::Bytes => "bytes".into(),
             TypeKind::Rune => "rune".into(),
             TypeKind::Nil => "nil".into(),
             TypeKind::Never => "never".into(),
@@ -521,11 +525,6 @@ impl<'db> NominalTypes<'db> {
     /// Get the `core.f64` type.
     pub(crate) fn f64_type(&self, ir: &mut IrContext) -> TypeRef {
         TypeDataBuilder::new("core.f64").intern(ir)
-    }
-
-    /// Get the `core.bytes` type.
-    pub(crate) fn bytes_type(&self, ir: &mut IrContext) -> TypeRef {
-        core::Bytes::params().intern(ir).as_type_ref()
     }
 
     /// Get the `tribute_rt.anyref` type.
@@ -760,6 +759,7 @@ mod tests {
             TypeOrigin::Source { disambiguator: 1 },
             TypeOrigin::Builtin(BuiltinType::List),
             TypeOrigin::Builtin(BuiltinType::Slots),
+            TypeOrigin::Builtin(BuiltinType::ByteArray),
             TypeOrigin::Builtin(BuiltinType::Dispatch),
             TypeOrigin::Synthetic,
         ]
@@ -771,6 +771,7 @@ mod tests {
                 "source1",
                 "builtin_list",
                 "builtin_slots",
+                "builtin_byte_array",
                 "builtin_dispatch",
                 "synthetic"
             ]

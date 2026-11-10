@@ -96,18 +96,67 @@ impl WellKnownTypes {
     }
 }
 
-/// The prelude `String` layout of the root module `module` and the position
-/// of its `Leaf` variant, which a string literal builds, as the module's
-/// nominal declarations name it. `None` when the module publishes no
-/// `String` or does not declare it.
-pub fn string_leaf(ctx: &IrContext, module: trunk_ir::rewrite::Module) -> Option<(TypeRef, u32)> {
+/// What a string literal builds: the `Leaf` variant of the prelude `String`
+/// holding a prelude `Bytes` that views all of a byte array
+/// (`design/string.md` § "Constant lowering").
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StringLeaf {
+    /// The `String` layout.
+    pub string: TypeRef,
+    /// The position of `Leaf` in `string`.
+    pub leaf: u32,
+    /// The type of `Leaf`'s field, the `Bytes` value type.
+    pub bytes: TypeRef,
+    /// The positions of the `data`, `start`, and `len` fields of `bytes`.
+    pub data: u32,
+    pub start: u32,
+    pub len: u32,
+}
+
+impl StringLeaf {
+    /// The `Bytes` field values in their positions: `data`, a start of
+    /// `start`, and a length of `len`.
+    pub fn bytes_fields(
+        &self,
+        data: trunk_ir::refs::ValueRef,
+        start: trunk_ir::refs::ValueRef,
+        len: trunk_ir::refs::ValueRef,
+    ) -> [trunk_ir::refs::ValueRef; 3] {
+        let mut fields = [data; 3];
+        fields[self.start as usize] = start;
+        fields[self.len as usize] = len;
+        fields[self.data as usize] = data;
+        fields
+    }
+}
+
+/// The [`StringLeaf`] of the root module `module`, as the module's nominal
+/// declarations name the variant and fields. `None` when the module
+/// publishes no `String` or does not declare it and its `Bytes`.
+pub fn string_leaf(ctx: &IrContext, module: trunk_ir::rewrite::Module) -> Option<StringLeaf> {
+    use crate::dialect::adt;
     use trunk_ir::ops::DialectType;
 
     let string = WellKnownTypes::from_module(ctx, module.op()).string?;
-    let layout = crate::dialect::adt::Enum::from_type_ref(ctx, string)?;
-    let leaf = crate::dialect::adt::NominalDecls::collect(ctx, module)
-        .variant_position(ctx, layout, "Leaf")?;
-    Some((string, leaf))
+    let layout = adt::Enum::from_type_ref(ctx, string)?;
+    let decls = adt::NominalDecls::collect(ctx, module);
+    let leaf = decls.variant_position(ctx, layout, "Leaf")?;
+    let &[bytes] = layout.variant_fields(ctx, leaf)? else {
+        return None;
+    };
+    let bytes_layout = adt::Struct::from_type_ref(ctx, adt::layout_of(ctx, bytes)?)?;
+    let position = |field| decls.field_position(ctx, bytes_layout, field);
+    let (data, start, len) = (position("data")?, position("start")?, position("len")?);
+    let mut positions = [data, start, len];
+    positions.sort_unstable();
+    (positions == [0, 1, 2] && bytes_layout.fields(ctx).len() == 3).then_some(StringLeaf {
+        string,
+        leaf,
+        bytes,
+        data,
+        start,
+        len,
+    })
 }
 
 #[cfg(test)]

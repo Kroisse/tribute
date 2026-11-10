@@ -360,7 +360,10 @@ fn the_prelude_shows_only_its_public_items(db: &salsa::DatabaseImpl) {
         r#"
 use std::io::ReadLineResult
 
-fn raw(bytes: Bytes) -> Nat { __tribute_bytes_len(bytes) + std::__tribute_bytes_len(bytes) }
+fn raw(bytes: Bytes) -> Bool {
+    __tribute_byte_array_range_equal(bytes.data, 0, bytes.data, 0, 0)
+        && std::__tribute_byte_array_range_equal(bytes.data, 0, bytes.data, 0, 0)
+}
 
 fn cursor(c: String::Cursor) -> Nat { 0 }
 
@@ -375,8 +378,8 @@ fn main() -> Nil {
     for expected in [
         "`std::io::ReadLineResult` is not visible here: `std::io::ReadLineResult` is private",
         // Not an item of `std::prelude::v0`, so not a short name.
-        "unresolved name `__tribute_bytes_len`",
-        "`std::__tribute_bytes_len` is not visible here: `std::__tribute_bytes_len` is private",
+        "unresolved name `__tribute_byte_array_range_equal`",
+        "`std::__tribute_byte_array_range_equal` is not visible here: `std::__tribute_byte_array_range_equal` is private",
         "`std::String::Cursor` is not visible here: `std::String::Cursor` is private",
         "`rope_equal` is not visible here: `std::String::rope_equal` is private",
     ] {

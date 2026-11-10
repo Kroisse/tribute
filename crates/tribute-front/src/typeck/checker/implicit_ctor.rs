@@ -288,7 +288,6 @@ impl<'db> TypeChecker<'db> {
             | TypeKind::Nat
             | TypeKind::Float
             | TypeKind::Bool
-            | TypeKind::Bytes
             | TypeKind::Rune
             | TypeKind::Nil
             | TypeKind::Func { .. }

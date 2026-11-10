@@ -21,7 +21,7 @@ use trunk_ir::smallvec::smallvec;
 use trunk_ir::types::Location;
 use trunk_ir::{BlockRef, OpRef, SymbolPath, TypeRef};
 
-use super::rtti::{RTTI_BOOL, RTTI_FLOAT, RTTI_INT, RTTI_NAT, RTTI_NIL};
+use super::rtti::{RTTI_BOOL, RTTI_BYTE_ARRAY, RTTI_FLOAT, RTTI_INT, RTTI_NAT};
 
 /// Name of the RTTI table: one record per RTTI index.
 pub const RTTI_TABLE: &str = "__tribute_rtti";
@@ -185,7 +185,18 @@ fn positional(fields: Vec<FieldKind>) -> Vec<(String, FieldKind)> {
 /// The records of the reserved RTTI indices.
 fn reserved_records() -> [(u32, DescriptorRecord); 5] {
     [
-        (RTTI_NIL, DescriptorRecord::builtin("Bytes", vec![])),
+        (
+            RTTI_BYTE_ARRAY,
+            DescriptorRecord {
+                kind: RecordKind::Array,
+                name: "Array".to_owned(),
+                owner: None,
+                fields: positional(vec![FieldKind::Int {
+                    width: 8,
+                    signed: false,
+                }]),
+            },
+        ),
         (
             RTTI_BOOL,
             DescriptorRecord::builtin("Bool", vec![FieldKind::Bool]),
@@ -563,8 +574,11 @@ mod tests {
         assert_eq!(text(fields), "0");
         assert_eq!(word(fields + 8), FieldKind::Dynamic.record_code());
 
-        // Every reserved index has a named builtin record.
-        for index in 0..5 {
+        // The byte array's reserved index has an array record of unsigned
+        // bytes, and the other reserved indices named builtin records.
+        assert_eq!(word(8), RecordKind::Array as u32);
+        assert_eq!(word(12), 1);
+        for index in 1..5 {
             let base = index * RECORD_SIZE;
             assert_eq!(word(base + 8), RecordKind::Builtin as u32);
             assert!(!text(base + 16).is_empty());

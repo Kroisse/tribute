@@ -224,13 +224,16 @@ fn test_execute_dynamic_bytes_write_boundary() {
     let right = "y".repeat(35_000);
     let ir = format!(
         r#"core.module @test {{
-  func.func @__tribute_bytes_concat(%left: core.bytes, %right: core.bytes) -> core.bytes attributes {{abi = "C"}}
+  func.func @__tribute_byte_array_concat(%left: adt.array<core.i8>, %left_start: core.i32, %left_len: core.i32, %right: adt.array<core.i8>, %right_start: core.i32, %right_len: core.i32) -> adt.array<core.i8> attributes {{abi = "C"}}
   func.func @main() -> core.nil {{
-    %left = adt.bytes_const b"{left}" : core.bytes
-    %right = adt.bytes_const b"{right}" : core.bytes
-    %joined = func.call @__tribute_bytes_concat(%left, %right) : (core.bytes, core.bytes) -> core.bytes
+    %left = adt.bytes_const b"{left}" : adt.array<core.i8>
+    %right = adt.bytes_const b"{right}" : adt.array<core.i8>
+    %zero = arith.constant 0 : core.i32
+    %len = arith.constant 35000 : core.i32
+    %total = arith.constant 70000 : core.i32
+    %joined = func.call @__tribute_byte_array_concat(%left, %zero, %len, %right, %zero, %len) : (adt.array<core.i8>, core.i32, core.i32, adt.array<core.i8>, core.i32, core.i32) -> adt.array<core.i8>
     %newline = arith.constant 1 : core.i1
-    %result = tribute_io.write %joined, %newline : core.nil
+    %result = tribute_io.write %joined, %zero, %total, %newline : core.nil
     func.return
   }}
 }}"#
@@ -464,7 +467,11 @@ fn test_execute_bytes_slice_or_panic_traps_out_of_range(db: &salsa::DatabaseImpl
         let output = run_wasm(binary);
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(!output.status.success(), "{name} must trap");
-        assert!(stderr.contains("unreachable"), "{name}: {stderr}");
+        // The prelude traps by reading past the end of the byte array.
+        assert!(
+            stderr.contains("out of bounds array access"),
+            "{name}: {stderr}"
+        );
     }
 }
 

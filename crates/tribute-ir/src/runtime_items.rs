@@ -90,6 +90,13 @@ pub const SLOTS_INTRINSICS: [&str; 6] = [
     "std::runtime::Slots::replace",
 ];
 
+/// The compiler intrinsic identities of the runtime byte array `ByteArray`
+/// (`design/types.md`, "ByteArray").
+pub const BYTE_ARRAY_INTRINSICS: [&str; 2] = [
+    "std::runtime::ByteArray::len",
+    "std::runtime::ByteArray::get",
+];
+
 /// The IR symbol of the root-module definition at `path`.
 ///
 /// This is the one place that turns a runtime item's path into a symbol.
