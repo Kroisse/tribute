@@ -1736,10 +1736,11 @@ fn specialized_enum_schemas_and_dependencies_reach_logical_cps(db: &salsa::Datab
         let ty = ir
             .type_alias_by_name(&name)
             .expect("dependency layout is published");
+        // A layout CPS legalization changes gets a `$cps` key.
         assert!(
             ir.type_attrs(ty)
                 .get_str("name")
-                .is_some_and(|text| name == text)
+                .is_some_and(|text| name == text.strip_suffix("$cps").unwrap_or(text))
         );
         ty
     }
