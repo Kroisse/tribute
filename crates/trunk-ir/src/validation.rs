@@ -401,7 +401,7 @@ pub fn validate_op_schemas(ctx: &IrContext, root: OpRef) -> ValidationResult {
 }
 
 /// Check that every operation under `root` flagged
-/// [`Terminator`](crate::op_flag::Terminator) is the last of its block.
+/// [`Terminator`] is the last of its block.
 ///
 /// Backend boundaries run it on their target IR, which no other declarative
 /// check covers in release builds.
