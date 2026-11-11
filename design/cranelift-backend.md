@@ -316,7 +316,7 @@ machine 호출이 잘못된 register와 stack 배치를 쓴다.
 
 Private native runtime helper는 target stage에서 exact physical callable ABI로만
 선언한다. 이 helper의 parameter와 result는 `core.ptr` 또는 scalar physical type이며
-nominal 값 타입을 사용할 수 없다. Source-logical managed reference와 private runtime
+`heap.box`와 nominal 값 타입을 사용할 수 없다. Source-logical managed reference와 private runtime
 pointer 사이의 경계는 이름, `abi` 문자열 또는 symbol 위치로 추론하지 않는다.
 
 Native ownership/RTTI plan은 `scf_to_cf` 뒤와 `func_to_clif` 앞에서 한 번 만들며
@@ -367,30 +367,30 @@ Array:  [length: i64] [elements, stride = element size]
 배열의 stride, 할당 크기와 소유 규칙은 [rc.md](rc.md#array)를, byte literal의 정적
 객체는 [rc.md](rc.md#정적-객체)를 따른다.
 
-[`adt` 배열 operation](tribute-dialects.md#adt-배열)은 RC header lowering 단계에서
+[`heap` 배열 operation](tribute-dialects.md#heap)은 RC header lowering 단계에서
 struct 할당과 함께 낮춘다. [할당 크기](rc.md#array)로 `__tribute_alloc`을 부르고 header에 배열
 타입의 RTTI index를 기록한 뒤 `len`을 payload offset 0에 쓴다.
 
-- `adt.array_new`는 모든 원소 자리에 `initial`을 쓴다.
-- `adt.array_of`는 operand를 차례로 원소 자리에 쓴다. 각 operand의 unit은 plan이
+- `heap.array_new`는 모든 원소 자리에 `initial`을 쓴다.
+- `heap.array_of`는 operand를 차례로 원소 자리에 쓴다. 각 operand의 unit은 plan이
   저장 자리에 둔 것(기준 동작의 획득이나 last-use move)이다.
-- `adt.array_splice`는 `source`의 두 범위를 결과의 앞뒤로 복사하고 그 사이에
+- `heap.array_splice`는 `source`의 두 범위를 결과의 앞뒤로 복사하고 그 사이에
   `elements`를 쓴다.
-- 원소가 managed 참조이면 `adt.array_new`와 `adt.array_splice`는 채우거나 복사한
+- 원소가 managed 참조이면 `heap.array_new`와 `heap.array_splice`는 채우거나 복사한
   원소마다 retain한다. 이 획득은 [operation이 소유한다](rc.md#1-typed-ownership-and-rtti-plan).
-- `adt.array_set`이 managed 원소를 바꾸면 plan이 새 원소의 저장 자리에 둔 unit을
+- `heap.array_set`이 managed 원소를 바꾸면 plan이 새 원소의 저장 자리에 둔 unit을
   먼저 확보한 뒤(기준 동작의 획득이나 last-use move), 이전 원소를 읽어 plan의
   replaced-field release를 적용하고 새 원소를 쓴다. 새 원소가 이전 원소와 같은
   object여도 release가 그것을 먼저 해제하지 않는다.
-- `adt.array_get`, `adt.array_set`, `adt.array_len`은 `len`과 원소 자리의
+- `heap.array_get`, `heap.array_set`, `heap.array_len`은 `len`과 원소 자리의
   `clif.load`/`clif.store`가 된다. 원소 자리는 `payload + 8 + index × stride`다.
 
-`adt.array_new`와 `adt.array_splice`가 원소를 채우거나 복사하는 반복은 배열
-descriptor마다 한 번 만드는 helper `clif.func`가 맡는다. `adt.array_splice`의
+`heap.array_new`와 `heap.array_splice`가 원소를 채우거나 복사하는 반복은 배열
+descriptor마다 한 번 만드는 helper `clif.func`가 맡는다. `heap.array_splice`의
 `elements`는 helper가 남겨 둔 자리에 호출한 쪽이 쓴다.
 
-범위 검사는 모든 `adt.array_get`, `adt.array_set`, `adt.array_splice` 앞에 둔다.
-[`adt` 선언](../crates/tribute-ir/src/dialect/adt.rs)이 정한 전제(`index < len`,
+범위 검사는 모든 `heap.array_get`, `heap.array_set`, `heap.array_splice` 앞에 둔다.
+[`heap` 선언](tribute-dialects.md#heap)이 정한 전제(`index < len`,
 `start ≤ end ≤ len`)를 부호 없는 정수 비교로 검사하고, 어기면 `clif.trapnz`로
 끝낸다. 할당 크기 계산이 넘치는 길이도 `clif.trapnz`다. `clif.trapnz`는 terminator가
 아니므로 검사가 block을 나누지 않는다.

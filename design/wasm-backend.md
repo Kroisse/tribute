@@ -61,8 +61,8 @@ Native (Cranelift) 백엔드는
 
 ```text
 tribute-ir (High-level)
-├── adt.struct_new
-├── adt.variant_new
+├── heap.struct_new
+├── heap.variant_new
 ├── closure.new
 ├── effect.extend
 ├── effect.dispatch_tail / effect.dispatch_cps
@@ -91,7 +91,7 @@ Shared ability lowering은 `effect.*`를 만들며 Marker field 번호나 closur
 [representation/ABI 경계](abi-boundary.md#representationabi-경계) 안에서 `effect.*`를 공유
 value/control dialect로 낮춘다. Evidence 조회와 확장은
 [evidence runtime 항목](cps-effects.md#handle-evidence-extension--handler-closures)을
-`func.call`로 호출한다. Canonical closure layout은 `adt.struct_get`으로
+`func.call`로 호출한다. Canonical closure layout은 `heap.struct_get`으로
 풀고, semantic role에 맞게 `func.call_indirect` 또는 `call_conv = "tail"`
 signature의 proper-tail `func.tail_call_indirect`를 만든다. 이 lowering은 `wasm.*`
 operation을 만들지 않고 `tribute.calling_convention`을 읽거나 쓰지 않는다.
@@ -263,7 +263,7 @@ Wasm 검증기는 각 structured block의 `end` 뒤에 branch 내부의 도달 �
 
 Wasm 경계를 넘어 새로 생성되는 모든 `wasm.*` operation의 result type과 block
 argument type은 Wasm target `TypeConverter`가 만든 값이어야 한다. Shared IR
-spelling을 그대로 복사하면 nominal 값 타입이나 logical `adt.array`가 backend-ready
+spelling을 그대로 복사하면 `heap.box`나 그 안의 `adt` layout이 backend-ready
 경계까지 남아, physical assignability와 GC layout 검증이 정상 producer를
 거부한다. 이것은 구현 편의가 아니라 [ir.md](ir.md)의 backend-ready 소거
 요구를 Wasm 쪽에서 만족시키는 조건이다.
@@ -559,7 +559,7 @@ signature처럼 다른 타입 안에 들어 있는 타입까지 구조적으로 
 선언된 field 타입과 그 field의 값이 같은 타입 표기를 쓰므로, 이후 단계는 두 표기를
 use site에서 맞추지 않으며 그 뒤의 Wasm IR에는 `tribute_rt` 타입이 나타나지 않는다.
 Layout 필드 안의 [nominal 값 타입](tribute-dialects.md#nominal-값-타입)은 이 첫
-단계의 대상이 아니다. `adt` 연산이 nominal layout을 읽는 동안에는 layout에 남고,
+단계의 대상이 아니다. `heap` 연산이 `heap.box` 안의 nominal layout을 읽는 동안에는 layout에 남고,
 Wasm dialect lowering의 마지막 단계가 없앤다.
 
 [`core.index`](ir.md#coreindex-주소-폭-정수)는 module memory의 index type이 된다.
@@ -580,12 +580,12 @@ Closure는 environment를 따로 두지 않는다.
 
 WasmGC 배열 명령(`array.new`, `array.new_fixed`, `array.get`, `array.set`,
 `array.len`, `array.copy`)의 index와 길이는 memory의 index type과 관계없이 `i32`다.
-ADT lowering은 `adt` 배열 operation의 `core.index`를 이 폭에 맞춘다.
+ADT lowering은 `heap` 배열 operation의 `core.index`를 이 폭에 맞춘다.
 
 - 32비트 memory에서는 `core.index`가 이미 `i32`이므로 그대로 넘긴다.
 - memory64에서 index, `start`, `end`, 길이는 `i32`의 부호 없는 범위를 넘으면 trap한
   뒤 `i32`로 좁힌다. GC 배열의 길이는 이 범위 안에 있으므로 좁힐 수 없는 index는
-  어차피 범위 밖이고, trap은 [`adt` 배열](tribute-dialects.md#adt-배열)의 범위 계약과 같다.
+  어차피 범위 밖이고, trap은 [`heap` 배열 operation](tribute-dialects.md#heap)의 범위 계약과 같다.
 - `array.len`의 결과는 0 확장으로 `core.index`가 된다.
 
 ### Structural GC 타입과 descriptor 필드
@@ -597,8 +597,9 @@ descriptor](runtime-types.md#wasm-배치) index를 두어 runtime identity를 �
 - 사용자 struct와 variant의 타입은 `wasm_gc.struct<T...>`이다. 매개변수는
   descriptor 필드의 `core.i32`와 각 소스 필드의 Wasm 저장 표현이며, 같은 매개변수
   목록은 interning으로 같은 타입이 된다.
-- 소스 필드의 저장 표현은 다음과 같다. `core.i1`은 `core.i32`, nominal 값 타입은
-  자기를 담을 수 있으므로 `wasm.structref`, literal `adt.enum` 값은 emission이
+- 소스 필드의 저장 표현은 다음과 같다. `core.i1`은 `core.i32`, `heap.box`는
+  자기를 담을 수 있으므로 `wasm.structref`, inline 필드는 자신의 leaf들을 둘러싼
+  GC struct의 필드로 기여하며, literal `adt.enum` 값은 emission이
   쓰는 erased `wasm.anyref`, 중첩된 사용자 struct는 그 struct의
   `wasm_gc.struct`이다. Builtin layout을 포함한 나머지 타입은 그대로 둔다.
 - Variant의 타입은 그 variant 자신의 필드로 만든다. Enum의 다른 variant 필드를

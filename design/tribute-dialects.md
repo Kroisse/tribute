@@ -774,8 +774,9 @@ layout은 저장 표현에만 있다.
 
 Closure 저장 layout은 두 종류다.
 
-- **Closure base**(`layout = "closure"`)는 convention table 필드 하나를 가진다. 모든 closure
-  값의 저장 타입이며, closure를 저장하거나 전달하는 위치(signature, block 인자,
+- **Closure base**(`layout = "closure"`)는 convention table 필드 하나를 가진다. Closure
+  값은 언제나 object에 담기며, 그 box `heap.box<base>`가 모든 closure 값의 저장
+  타입이다. Closure를 저장하거나 전달하는 위치(signature, block 인자,
   `ContinuationFrame<R>`의 필드, evidence runtime의 `Dispatch`)는 이 타입을 쓴다. Capture가
   없는 closure는 이 layout으로 할당한다.
 - **Closure capture layout**(`layout = "closure_captures"`)은 base의 필드 뒤에
@@ -787,9 +788,10 @@ Closure 저장 layout은 두 종류다.
   필드와 타입과 속성이 같다. Type verifier가 이 규칙을 `"closure_captures"` layout에
   적용한다. 이 속성은 저장 표현만 설명하며, Tribute 소스와 의미적 타입 검사에는
   subtyping이 없다.
-- Capture layout 값은 변환 없이 base 자리에 놓인다(upcast). Base 값을 capture
-  layout으로 보려면 정확한 결과 타입을 가진 명시적 cast가 필요하며, target이 그
-  cast를 검증하고 물리화한다. Target은 base와 capture layout의 관계를
+- Capture layout의 box는 `heap.cast` 하나로 base의 box 자리에 놓인다(upcast). 이
+  cast는 참조만 바꾸며 object를 바꾸지 않는다. Base의 box를 capture layout의 box로
+  보려면 정확한 결과 타입을 가진 명시적 cast가 필요하며, target이 그 cast를 검증하고
+  물리화한다. Target은 base와 capture layout의 관계를
   `closure_base`로만 정하고, 필드 모양이 prefix처럼 보인다는 사실에서 추론하지
   않는다.
 - Capture layout의 identity는 base와 capture 필드 타입 목록이다. Base와 capture
@@ -810,19 +812,21 @@ Closure 저장 layout은 두 종류다.
 closure operation lowering과
 storage 확정은 다음 변환을 함께 적용한다.
 
-- `closure.new`는 convention table 참조와 capture를 필드로 가진 할당 하나가 된다.
-  Capture가 있으면 결과는 capture layout에서 base로의 upcast이고, 없으면 base
-  할당 그대로다. Table 참조는 entry 함수 목록을 담은
+- `closure.new`는 convention table 참조와 capture를 필드로 가진 `heap.struct_new`
+  하나가 된다. Capture가 있으면 결과는 capture layout의 box에서 base의 box로의
+  upcast이고, 없으면 base 할당 그대로다. Table 참조는 entry 함수 목록을 담은
   `tribute_rt.convention_table`이 만든다.
-- `closure.entry`는 base의 convention table 필드를 읽고 그 table에서
-  `tribute_rt.convention_entry`로 convention의 entry를 읽는 일이 된다. 간접 호출은
-  closure 필드 하나와 table 원소 하나를 읽는다.
+- `closure.entry`는 base의 convention table 필드를 `heap.struct_get`으로 읽고 그
+  table에서 `tribute_rt.convention_entry`로 convention의 entry를 읽는 일이 된다. 간접
+  호출은 closure 필드 하나와 table 원소 하나를 읽는다.
 - 두 `tribute_rt` operation은 경계 출구를 지나며, target 단계가 convention table을 entry
   함수 목록마다 정적 data 하나로 한 번 만든다.
-- `closure.unpack`은 environment 입력을 base에서 정확한 capture layout으로 바꾸는
-  cast 하나와 capture 필드 읽기가 된다. 이 cast는 위의 복원 규칙을 따르며,
-  Wasm에서는 `ref.cast`, native에서는 pointer 그대로다.
-- `closure.closure<S>`는 모든 type-bearing surface에서 `S`의 base가 된다.
+- `closure.unpack`은 environment 입력을 base의 box에서 정확한 capture layout의 box로
+  바꾸는 `heap.cast` 하나와 capture 필드 읽기가 된다. 이 cast는 위의 복원 규칙을
+  따르며, Wasm에서는 `ref.cast`, native에서는 pointer 그대로다.
+- `closure.closure<S>`는 모든 type-bearing surface에서 `S`의 base의 box가 된다.
+- Capture 필드의 타입은 capture 값의 `adt` 값 타입이다. [표현 선택](abi-boundary.md#표현-선택)이
+  다른 layout의 필드처럼 그 저장 표현을 정한다.
 - Closure 값이 일반 reference erasure 자리(boxed source value, effect payload 등)를
   지날 수 있지만, 거기서 closure로 돌아오는 cast는 exact base를 결과 타입으로
   명시한다.
@@ -831,22 +835,24 @@ storage 확정은 다음 변환을 함께 적용한다.
 
 ## `adt`
 
-`adt.*`는 target에 독립적인 product, sum, array, reference, literal
-operation을 나타낸다.
+`adt.*`는 target에 독립적인 product, sum, array 값과 literal operation을
+나타낸다. `adt`는 값 의미론이다. `adt` 타입의 값은 object에 대한 참조가 아니라 값
+자체이며, 제자리 쓰기, null, 참조 사이의 cast는 `adt`에 없다. 값이 object에 담기는지,
+SSA 값으로 쪼개지는지, 다른 object 안에 inline으로 놓이는지는
+[표현 선택](abi-boundary.md#표현-선택)이 정한다. Object와 그 참조는
+[`heap`](#heap)이 나타낸다.
 
-[Nominal 값 타입](#nominal-값-타입)은 managed reference type이며, `adt.ref_null`,
-`adt.ref_cast`의 계약은 [`adt` dialect 선언](../crates/tribute-ir/src/dialect/adt.rs)이
-정한다. `core.ptr`는 항상 unmanaged다. Raw pointer, allocator result, code
-address, Evidence, borrowed buffer와 이를 통과하는 cast chain은 nominal 값 타입이
-될 수 없다. Managed 여부에 관한 이 규칙은 typed frontend 경계에서 reachable
-IR을 바꾸기 전에 검사한다.
+`core.ptr`는 항상 unmanaged다. Raw pointer, allocator result, code address,
+Evidence, borrowed buffer와 이를 통과하는 cast chain은
+[nominal 값 타입](#nominal-값-타입)이 될 수 없다. 이 규칙은 typed frontend 경계에서
+reachable IR을 바꾸기 전에 검사한다.
 
-Dynamic `tribute_rt.anyref`에서 nominal 값 타입으로 복원하는 명시적인
-`core.unrealized_conversion_cast`는 generic cleanup에서 no-op으로 소거하지
-않는다. Nominal reference의 정확한 결과 타입은 target 변환까지 보존한다.
-Native는 이를 pointer 표현으로 물리화하고 Wasm은 concrete `ref.cast`를
-생성한다. 이 규칙은 일반 `adt.struct` 복원이나 nominal provenance 검증을
-바꾸지 않는다.
+값이 지워지는 자리(effect payload, 제네릭으로 지운 값 등)에서 nominal 값 타입과
+`tribute_rt.anyref` 사이의 명시적인 `core.unrealized_conversion_cast`는 generic
+cleanup에서 no-op으로 소거하지 않는다. 표현 선택이 이 cast를 값을 object에 담는
+일(또는 담긴 값을 꺼내는 일)과 `heap.box`와 `anyref` 사이의 cast로 바꾸며, 정확한
+결과 타입은 target 변환까지 보존한다. Native는 이를 pointer 표현으로 물리화하고
+Wasm은 concrete `ref.cast`를 생성한다.
 
 ### `adt.struct` nominal layout type
 
@@ -936,32 +942,47 @@ adt.struct<(core.ptr, core.i32),
 #### Nominal 수준과 structural 수준
 
 Struct 이름은 IR에서 nominal layout을 해석하는 단계까지만 의미를 가진다.
-Ownership 계획, ABI 검증, frontend의 record pattern 해석이 여기에 속한다. 그 아래의 target lowering은
-필드의 물리 표현과 순서만 사용한다. 이름이 필요한 runtime 동작(해제, 값 출력,
-variant 판별)은 [runtime 타입 descriptor](runtime-types.md)가 맡는다. Nominal
-layout을 마지막으로 해석하는 target 경계가 할당에 descriptor 번호를 새긴다.
+표현 선택, ownership 계획, ABI 검증, frontend의 record pattern 해석이 여기에 속한다.
+그 아래의 target lowering은 필드의 물리 표현과 순서만 사용한다. 이름이 필요한 runtime
+동작(해제, 값 출력, variant 판별)은 [runtime 타입 descriptor](runtime-types.md)가
+맡는다. Nominal layout을 마지막으로 해석하는 target 경계가 할당에 descriptor 번호를
+새긴다.
+
+Nominal layout은 두 수준을 거친다.
+
+- 표현 선택부터 descriptor 번호가 정해질 때까지 object의 layout은
+  [`heap.box<L>`](#heap)의 `L`인 `adt` layout이다. Descriptor는 nominal identity로
+  정하므로 이 구간에서 `L`은 nominal layout이어야 한다. 재귀 layout은 식별 타입의
+  키로 자기를 가리키고, enum layout의 box는 그 enum의 어느 variant object든 가리킨다.
+  구조적인 저수준 struct로는 이 셋을 나타낼 수 없다.
+- 번호를 할당에 새긴 뒤에는 이름이 필요 없다. 그 아래에서 object 접근은 이름 없는
+  저수준 struct로 field의 물리 위치만 읽는다.
 
 저수준 struct 타입이 갖는 identity는 runtime 동작이 달라지는 경우로 한정한다.
 Layout과 runtime 동작이 같은 두 소스 타입은 같은 저수준 struct를 쓰고
 descriptor로만 구별된다.
 
-- Native는 nominal layout을 마지막으로 해석하는 경계에서 struct field 접근의
-  `adt.struct`를 이름 없는 `mem.struct<T...>`로 내린다. `mem.struct`는 필드 타입만
-  갖고 자연 정렬 memory layout을 뜻한다. 필드 타입은 target 표현이며, 해제 동작이
-  다른 managed 참조(`tribute_rt.anyref`)와 unmanaged 포인터(`core.ptr`)는 크기가
-  같아도 구분한다. 할당이 해제하는 필드가 managed 참조이며, 이 판정은 ownership
-  계획의 것이고 물리 타입에서 다시 유도하지 않는다. `mem.struct`의 field offset과
-  크기는 같은 nominal layout에서 계산한 할당 크기와 일치한다.
+- Native에서 `heap.box<L>` 값은 native 타입 변환이 pointer로 바꾼다. 저수준 struct는
+  값의 타입이 아니라 field 접근 operation의 layout 속성에만 남는다. Nominal layout을
+  마지막으로 해석하는 경계에서 struct field 접근의 `adt` layout을 이름 없는
+  `mem.struct<T...>`로 내린다. `mem.struct`는 필드 타입만 갖고 자연 정렬 memory
+  layout을 뜻한다. 필드 타입은 target 표현이며, 해제 동작이 다른 managed
+  참조(`tribute_rt.anyref`)와 unmanaged 포인터(`core.ptr`)는 크기가 같아도 구분한다.
+  Inline으로 놓인 필드는 중첩된 `mem.struct`이며 그 offset도 같은 자연 정렬 규칙으로
+  정한다. 할당이 해제하는 필드가 managed 참조이며, 이 판정은 ownership 계획의 것이고
+  물리 타입에서 다시 유도하지 않는다. `mem.struct`의 field offset과 크기는 같은
+  nominal layout에서 계산한 할당 크기와 일치한다.
 - 할당은 descriptor를 nominal layout 타입으로 찾으므로 RC header를 새기는 단계가
-  nominal `adt.struct`의 마지막 사용처다. Field offset 계산은 타입 변환 없이
+  nominal layout의 마지막 사용처다. Field offset 계산은 타입 변환 없이
   `mem.struct`만 읽고, field 접근이 `clif.load`와 `clif.store`의 offset이 될 때
   `mem.struct`도 사라진다. Cranelift에는 aggregate 타입이 없다.
-- Wasm은 nominal layout을 마지막으로 읽는 `adt_to_wasm` 뒤에 `adt.struct`를 이름
-  없는 `wasm_gc.struct<T...>`로 바꾼다. 이 치환은 함수 signature와 block 인자를
-  포함한 모듈 전체에 적용되므로 모든 위치가 같은 타입을 가진다. Variant는 처음부터
-  자기 필드의 `wasm_gc.struct`로 낮춘다. 필드 표현이 같은 struct와 variant는 같은
-  GC 타입이며, 첫 필드의 descriptor가 runtime identity를 맡는다. Compiler 소유 layout은
-  [`layout`](ir.md#runtime-layout-식별자)으로 식별한다.
+- Wasm에서 `heap.box<L>`은 GC 참조가 된다. Nominal layout을 마지막으로 읽는
+  `heap` lowering 뒤에 `L`을 이름 없는 `wasm_gc.struct<T...>`로 바꾼다. 이 치환은
+  함수 signature와 block 인자를 포함한 모듈 전체에 적용되므로 모든 위치가 같은
+  타입을 가진다. Variant는 처음부터 자기 필드의 `wasm_gc.struct`로 낮춘다. 필드
+  표현이 같은 struct와 variant는 같은 GC 타입이며, 첫 필드의 descriptor가 runtime
+  identity를 맡는다. Inline으로 놓인 필드는 그 leaf들이 바깥 GC struct의 필드가
+  된다. Compiler 소유 layout은 [`layout`](ir.md#runtime-layout-식별자)으로 식별한다.
 - 저수준 struct는 재귀하지 않는다. 재귀 참조는 이미 native pointer나 Wasm 추상
   reference로 끊겨 있다.
 - 두 target 모두 [`adt.enum`](#adtenum-nominal-layout-type)의 variant 객체를 자기
@@ -1019,9 +1040,12 @@ adt.enum<[(), (core.i32)]>
 
 ### Nominal 값 타입
 
-Nominal layout의 값은 managed 참조이며, 그 타입은 layout을 가리키는 nominal 값
-타입이다. 값이 있는 위치(operation 결과와 피연산자, block 인자, 함수 signature,
-다른 layout의 필드)는 이 타입을 쓴다.
+Nominal layout의 값의 타입은 layout을 가리키는 nominal 값 타입이다. 값이 있는
+위치(operation 결과와 피연산자, block 인자, 함수 signature, 다른 layout의 필드)는 이
+타입을 쓴다. Nominal 값 타입은 값이며 managed 참조가 아니다. 그 값이 object에
+담기는지는 [표현 선택](abi-boundary.md#표현-선택)이 정하고, object에 담긴 값의
+참조는 [`heap.box`](#heap) 타입이다. 표현 선택 뒤에는 nominal 값 타입을 가진 값이
+없다.
 
 ```text
 adt.struct<"Point">
@@ -1093,14 +1117,18 @@ adt.enum_decl "Shape" !Shape ["Dot", "Rect"]
   번호(`"0"`, `"1"`, ...)를 필드와 variant의 이름으로 쓰고, 레코드 이름은 layout의
   이름이다. 이름이 없는 literal layout이면 `layout` 속성 값, 그것도 없으면
   `"struct"`다. 선언은
-  값의 의미를 바꾸지 않으며, `adt` operation을 내리는 target
+  값의 의미를 바꾸지 않으며, `heap` operation을 내리는 target
   pass가 지운다.
 
 ### `adt` 배열
 
-`adt.array<E>`는 원소 타입 `E`의 값을 순서대로 담는 배열 object에 대한 managed
-참조이며, 원소가 될 수 있는 타입은
-[`adt` dialect 선언](../crates/tribute-ir/src/dialect/adt.rs)이 정한다.
+`adt.array<E>`는 원소 타입 `E`의 값을 순서대로 나열한 배열 값이며, 원소가 될 수
+있는 타입은 [`adt` dialect 선언](../crates/tribute-ir/src/dialect/adt.rs)이 정한다.
+배열의 길이는 값마다 다르므로 배열 값은 SSA 값으로 쪼개거나 다른 object 안에 놓을 수
+없고, [표현 선택](abi-boundary.md#표현-선택)은 배열 값을 언제나
+[`heap.box`](#heap)에 담는다. 원소의 표현도 표현 선택이 정한다. 원소를 inline으로
+저장할 수 없는 동안 aggregate 원소는 box에 담긴 값이며, 배열 object는 그 box를
+원소로 가진다.
 
 `core.array<E>`는 이와 다른 unmanaged linear array다. 연속된 memory에 놓인 `E`
 값의 나열일 뿐 object가 아니며, 소유권이나 회수 방식을 갖지 않는다. `adt` 배열
@@ -1110,14 +1138,15 @@ operation은 `core.array`를 받지 않으며, 어느 target도 `core.array`를 
 배열을 만드는 operation은 `adt.array_new`, `adt.array_of`, `adt.array_splice`
 셋이며, 각각 결과 배열의 원소를 정하는 방법이 하나로 고정되어 있다. Operand
 개수나 모양으로 operation의 뜻을 고르지 않는다. 각 operation의 결과와 전제는
-그 선언이 정한다.
+그 선언이 정한다. 배열 값은 바뀌지 않으므로 `adt`에는 원소를 쓰는 operation이
+없다. 원소를 바꾼 배열은 `adt.array_splice`로 새로 만든다.
 
 `adt`의 배열 operation은 target이 객체를 회수하는 방식을 가정하지 않는다.
-Native RC가 배열 operation에 두는 ownership 규칙과 제자리 쓰기의 순환 제약은
+Native RC가 배열 object에 두는 ownership 규칙과 순환 제약은
 [rc.md](rc.md#비순환-object-그래프)가 정한다.
 
-`adt.array_get`과 `adt.array_set`의 index, `adt.array_splice`의 `start`와
-`end`, `adt.array_new`의 `length`, `adt.array_len`의 결과는
+`adt.array_get`의 index, `adt.array_splice`의 `start`와 `end`,
+`adt.array_new`의 `length`, `adt.array_len`의 결과는
 [`core.index`](ir.md#coreindex-주소-폭-정수)다. 배열의 원소 개수와 위치는
 target의 주소 폭으로 센다. 고정 폭 정수에서 온 index는 `arith.index_cast`나
 `arith.index_castui`로 명시적으로 바꾼다.
@@ -1125,7 +1154,65 @@ target의 주소 폭으로 센다. 고정 폭 정수에서 온 index는 `arith.i
 Index는 부호 없는 값으로 해석한다. Target은 각 operation이 선언한 범위 전제를
 어긴 실행을 trap으로 끝내며, 범위 밖 원소를 읽거나 쓰거나 다른 값으로
 대신하지 않는다. Target이 표현할 수 있는 최대 길이나 할당 크기를 넘는 길이도
-trap이다.
+trap이다. 같은 범위 계약은 배열 object를 다루는 `heap` 배열 operation에도 적용된다.
+
+## `heap`
+
+`heap.*`는 값을 담은 object와 그 참조를 나타낸다. `adt`가 값을 다룬다면 `heap`은
+object를 다룬다. 두 target이 같은 dialect를 쓰며, target이 object를 회수하는
+방식(native RC, WasmGC)을 가정하지 않는다. 각 operation의 계약은 `heap` dialect
+선언이 정한다.
+
+### `heap.box`
+
+- `heap.box<L>`은 layout `L`인 object에 대한 managed 참조다. `L`은 `adt.struct`,
+  `adt.enum`, `adt.array` layout이다. `heap.box`는 managed 참조라는 표지
+  (`ManagedRefType`)를 가지며, layout 타입은 그 표지를 갖지 않고 descriptor가 기술하는
+  layout이라는 표지(`DescriptorLayoutType`)만 가진다.
+- Object의 [descriptor](runtime-types.md)는 `L`로 정한다. Enum layout의 box는 그
+  enum의 어느 variant object든 가리키며, 어느 variant인지는 object의 descriptor가
+  정한다.
+- 모든 `heap.box<L>`은 null 값을 가진다. `heap.null`이 만들며, retain과 release는
+  null에 대해 아무 일도 하지 않는다. 소스 값은 null이 아니다. Null은 compiler가 만든
+  표현(native `List`의 빈 node, 아직 채우지 않은 completion cell 등)만 쓴다.
+- `L`의 필드 타입은 표현 선택 전에는 `adt` 값 타입이고, 표현 선택 뒤에는 그 필드의
+  저장 표현이다. Box에 담는 값의 필드는 `heap.box`, inline으로 놓는 값의 필드는 그
+  layout, scalar는 scalar다. 필드 타입을 바꾸는 이 변환은
+  [nominal layout 변환](#nominal-layout-변환)을 따른다.
+
+### Operation
+
+`heap` operation은 `adt` operation을 object 위에서 하는 것이다.
+
+- 할당: `heap.struct_new`, `heap.variant_new`, `heap.array_new`,
+  `heap.array_of`, `heap.array_splice`. 같은 이름의 `adt` operation이 만드는 값을 담은
+  object를 할당하고 그 box를 낸다.
+- 읽기: `heap.struct_get`, `heap.variant_is`, `heap.variant_tag`, `heap.variant_get`,
+  `heap.array_get`, `heap.array_len`. Box를 빌려 object를 읽는다. Variant 판별과 선언
+  위치는 object의 [descriptor](runtime-types.md#variant-판별)로 구한다. Inline으로
+  놓인 필드를 읽으면 그 값의 leaf들이 나온다.
+- 쓰기: `heap.struct_set`, `heap.array_set`. Object를 제자리에서 바꾼다. 소스 값은
+  바뀌지 않으므로 compiler가 소유하는 cell만 쓰며, 순환 제약은
+  [rc.md](rc.md#비순환-object-그래프)가 정한다.
+- 참조: `heap.null`, `heap.is_null`, `heap.cast`. `heap.cast`는 nominal identity가
+  같다고 확립된 box 사이와, closure capture layout의 box와 closure base의 box 사이에
+  쓴다. `heap.box`와 `tribute_rt.anyref` 사이의 이동은 [`adt`](#adt)의 erasure cast
+  규칙을 따른다.
+
+### 위치
+
+- `heap`은 대부분 [표현 선택](abi-boundary.md#표현-선택)이 `adt`에서 만든다. 표현
+  선택보다 앞에서 `heap`을 직접 만드는 곳은 참조 의미론이 필요한 compiler 소유 저장뿐이다.
+  [값 delimiter](cps-effects.md#값-delimiter)의 completion cell, one-shot resumption의
+  소비 표시, [closure 저장](#closure-저장-layout)이 그렇다. 이 구간에서 `adt`와
+  `heap`은 함께 쓰인다.
+- Representation/ABI 경계 출구 뒤에는 `adt` 타입을 가진 값과 `adt`의 값 operation이
+  없다. `adt` layout은 `heap.box`의 매개변수, `heap` operation의 layout 속성,
+  [nominal 선언](#nominal-선언) 안에만 남는다. Object 접근은 모두 `heap` operation이며
+  target lowering이 이를 내린다.
+- 예외는 literal operation(`adt.bytes_const`, `adt.string_const`)이다. 결과가 배열이나
+  enum이라 언제나 boxed이므로, 표현 선택은 결과 타입만 `heap.box`로 바꾸고 operation은
+  target의 상수 lowering까지 남긴다. 그 결과는 다른 할당처럼 unit 하나를 가진 object다.
 
 ## `list`
 

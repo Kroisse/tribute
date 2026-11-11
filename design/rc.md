@@ -1,14 +1,19 @@
 # Reference Counting (Native Backend)
 
 > This document defines the RC memory management strategy for the Cranelift
-> native backend. The WASM backend uses WasmGC and is not affected.
+> native backend. The Wasm backend currently represents objects with WasmGC and
+> does not run this RC. The direction to move Wasm to linear memory with the
+> same RC is set in [design.md](design.md#target-전략).
 >
 > See also: [cranelift-backend.md](cranelift-backend.md)
 
 ## Overview
 
-The native backend uses **reference counting** for heap-allocated objects
-(structs, enums, arrays, boxed primitives). Key principles:
+The native backend uses **reference counting** for heap-allocated objects:
+the objects behind [`heap.box`](tribute-dialects.md#heap) (boxed structs,
+enum variants, arrays, closures) and boxed primitives. Unboxed values are
+not objects; their managed fields are ordinary ownership units.
+Key principles:
 
 - **No runtime library** — all RC logic is compiler-generated code
 - **libc only** — depends solely on `malloc`/`free` (via allocator indirection)
@@ -109,7 +114,7 @@ std::runtime::ByteArray:  adt.array<core.i8>  →  [len: i64] [bytes...]
   release는 일반 struct의 [type-specific release](#type-specific-release)이고, byte
   배열의 release는 managed 원소가 없는 배열의 release다.
 - `start + len ≤ len(data)`는 `std`가 지키는 불변식이다([string.md](string.md#내부-표현)).
-  메모리 안전성은 이 불변식에 기대지 않는다. `adt.array_get`은 범위 밖 index를 trap으로
+  메모리 안전성은 이 불변식에 기대지 않는다. `heap.array_get`은 범위 밖 index를 trap으로
   끝내고, byte 범위를 받는 runtime 함수는 overflow를 검사한 덧셈으로 범위를 확인한 뒤
   벗어나면 실행을 끝낸다. 범위 검사 없이 byte 주소를 만드는 경로는 없다.
 
@@ -126,7 +131,7 @@ code가 한다.
 
 ### Array
 
-[`adt.array<E>`](tribute-dialects.md#adt-배열) 값은 compiler가 할당하는 RC object다.
+[`heap.box<adt.array<E>>`](tribute-dialects.md#adt-배열) 값은 compiler가 할당하는 RC object다.
 
 ```text
 Array: [len: i64] [element: E...]
@@ -139,7 +144,7 @@ Array: [len: i64] [element: E...]
   정렬된다.
 - 할당 크기는 RC header, `len`, 원소를 더한 `16 + len × stride`다. 해제도 같은
   크기를 쓴다.
-- Managed 참조 원소는 owned 참조다. `adt.ref_null`이 만든 null도 원소가 될 수
+- Managed 참조 원소는 owned 참조다. `heap.null`이 만든 null도 원소가 될 수
   있으며 retain과 release는 null에 대해 아무것도 하지 않는다.
 - 배열 operation의 ownership 규칙은
   [typed ownership plan](#1-typed-ownership-and-rtti-plan), 해제는
@@ -242,11 +247,13 @@ release가 마지막일 수 있기 때문이다. Materialization은 owner의 exa
    **lower**한다.
 4. RC lowering pass가 retain/release를 inline code로 **lower**한다.
 
-Type erasure 전 RC planning은 검증된 모든
-[nominal 값 타입](tribute-dialects.md#nominal-값-타입)을 semantic type에 따라
-managed로 취급한다. `core.ptr`는 항상 unmanaged이며 cast, symbol, ABI spelling,
+Type erasure 전 RC planning은 `heap.box`, `tribute_rt.anyref`,
+`tribute_rt.intref`를 타입에 따라 managed로 취급한다.
+[Nominal 값 타입](tribute-dialects.md#nominal-값-타입)은 값이며, ownership 계획에
+닿기 전에 [표현 선택](abi-boundary.md#표현-선택)이 SSA 값으로 쪼개거나 box에 담았다.
+`core.ptr`는 항상 unmanaged이며 cast, symbol, ABI spelling,
 operand position 또는 pointer provenance로 managed 성질을 얻을 수 없다.
-`adt.ref_null`은 nominal managed reference type의 null 값이고, 생성된 retain과
+`heap.null`은 `heap.box`의 null 값이고, 생성된 retain과
 release는 이 값에 대해 no-op이어야 한다. Callable과 managed-reference validation은
 ownership plan 또는 IR mutation이 이 분류를 사용하기 전에 완료된다.
 
@@ -358,7 +365,7 @@ The RC implementation is divided into four stages:
 
 이 단계의 policy-neutral 사실 계산은 같은 경계의 fallible 분석이 소유한다.
 Module 범위 분석이 function 정의, 검증된 managed nominal layout,
-`adt.struct_set`이 쓰는 layout, closure 할당 layout(base와 capture layout)과 할당 순서의
+`heap.struct_set`이 쓰는 layout, closure 할당 layout(base와 capture layout)과 할당 순서의
 RTTI descriptor를, function 범위 분석이 flat CFG, managed 값,
 exact alias root, managed projection-owner 관계, 그중 borrow할 수 있는
 projection과 liveness 입력을 제공한다. 이 사실은 `NativeOwnershipPlanOptions`와
@@ -403,8 +410,8 @@ unit을 획득한다.
 위치로 돌려주면 첫 위치만 source의 unit을 받고, 나머지 위치마다 return 직전에 새
 unit을 획득한다. Borrowed source는 모든 위치에서 새 unit을 획득한다.
 
-Aggregate field로의 저장(`adt.struct_new`, `adt.variant_new`, `adt.struct_set`의
-값, `adt.array_of`와 `adt.array_splice`의 `elements`, `adt.array_set`의 값)과
+Aggregate field로의 저장(`heap.struct_new`, `heap.variant_new`, `heap.struct_set`의
+값, `heap.array_of`와 `heap.array_splice`의 `elements`, `heap.array_set`의 값)과
 ordinary call의 consumed 매개변수는 독립된 unit을 받는 자리다. 기준 동작은 그
 자리마다 직전에 새 unit을 획득하고 값의 unit은 값에 남긴다. Last-use move 정책을
 켜면 그 operation이 값의 마지막 사용일 때 값의 unit을 그 자리로 옮기고, 획득도 뒤따르는
@@ -413,20 +420,20 @@ final release도 두지 않는다. 마지막 사용은 final release 위치를 �
 operation이 값이나 값에서 파생된 borrow를 쓰지 않는다. 옮길 unit이 있어야 하므로
 값은 owned root여야 하며, 파생 borrow와 borrowed 매개변수는 옮기지 않는다. 또한 그
 operation이 값의 root에 닿는 모든 operand가 unit을 받는 자리여야 한다. Indirect
-call의 callee, `adt.struct_set`과 `adt.array_set`의 대상, borrowed·retained
-매개변수로의 argument, `adt.array_new`의 `initial`, `adt.array_splice`의 `source`,
+call의 callee, `heap.struct_set`과 `heap.array_set`의 대상, borrowed·retained
+매개변수로의 argument, `heap.array_new`의 `initial`, `heap.array_splice`의 `source`,
 값에서 파생된 borrow는 호출이나 저장 동안 caller의
 unit에 기대므로, 이런 operand가
 하나라도 있으면 모든 자리가 기준 동작대로 획득한다. 한 operation이 한 값을 여러
 자리에 넘기면 첫 자리만 unit을 받고 나머지는 획득한다.
 
-`adt.array_new`는 `initial`을, `adt.array_splice`는 `source`를 operation 동안
+`heap.array_new`는 `initial`을, `heap.array_splice`는 `source`를 operation 동안
 빌린다. `initial`을 담은 원소마다, 그리고 `source`에서 결과로 복사한 managed 원소마다
 operation 자신이 unit을 하나씩 획득한다. 이 원소의 수는 실행 때 정해지므로 plan은
 이 획득을 action으로 갖지 않으며, release 함수가 field를 release하는 것처럼
 operation의 lowering이 소유한다. 결과는 unit 하나를 갖는 새 owned 값이다.
 
-`adt.array_set`은 `adt.struct_set`과 같다. 대상 배열은 operation 동안 빌리고, 새
+`heap.array_set`은 `heap.struct_set`과 같다. 대상 배열은 operation 동안 빌리고, 새
 원소는 위의 저장 자리로 unit을 받으며, 바뀌기 전 원소의 unit은 replaced-field
 release로 release한다.
 
@@ -476,10 +483,12 @@ predecessor이며 어떤 값도 갖고 있지 않다. 일부 predecessor만 값�
 `scf_to_cf`는 multi-successor branch의 target마다 그 branch만 predecessor로 갖는
 block을 만들므로 이런 edge를 만들지 않는다.
 
-Nominal 값 타입은 type 자체로 managed다. Native RC-header allocation을 표현하는
-검증된 internal ADT/closure layout과 `tribute_rt.anyref`/`intref`도 각자의 typed
-contract로 분류한다. `adt.array`는 원소 타입과 관계없이 [array](#array) 객체에
-대한 managed 참조이며, [byte 배열](#bytes)도 여기에 든다.
+`heap.box`는 type 자체로 managed다. Struct, variant, closure, 배열 object가 모두
+그 box로 가리켜지며, [byte 배열](#bytes)의 box도 여기에 든다. `tribute_rt.anyref`/`intref`도
+각자의 typed contract로 분류한다. `adt` 타입을 가진 값은 ownership 계획에 닿지 않는다.
+Unboxed 값은 표현 선택이 leaf로 쪼갰으므로, 그 managed leaf는 다른 managed 값과 같은
+ownership unit이다. 한 unboxed 값을 두 번 쓰면 managed leaf마다 unit을 하나씩 더
+획득한다.
 Unmanaged linear array인 `core.array`는 RC 객체가 아니다.
 Function/code address, borrowed buffer, `core.ptr`는 unmanaged다. 변환 결과가
 pointer라는 사실은 이 분류에 참여하지 않는다.
@@ -553,15 +562,15 @@ into control flow and atomic operations by RC lowering.
 
   Borrowed 사용은 다음뿐이다.
 
-  - 매개변수를 읽기 대상으로 삼는 `adt.struct_get`, `adt.variant_get`,
-    `adt.variant_is`, `adt.ref_is_null`.
-  - `adt.ref_cast`와 unrealized conversion cast. Cast result의 모든 사용이 다시
+  - 매개변수를 읽기 대상으로 삼는 `heap.struct_get`, `heap.variant_get`,
+    `heap.variant_is`, `heap.is_null`.
+  - `heap.cast`와 unrealized conversion cast. Cast result의 모든 사용이 다시
     borrowed 사용일 때만 transparent하다.
   - Direct `func.call`의 argument. Callee의 대응 매개변수가 borrowed summary를
     가질 때만 해당한다.
 
   그 밖의 모든 사용은 escape이며 retained를 선택한다. 값으로서의 return과 저장,
-  `adt.struct_set`의 대상, branch와 block argument 전달, indirect call과 tail
+  `heap.struct_set`의 대상, branch와 block argument 전달, indirect call과 tail
   call, 다른 region에서의 사용, 알 수 없는 operation이 여기에 속한다. Closure,
   ability handler, continuation capture는 저장이므로 escape다.
 
@@ -585,8 +594,8 @@ into control flow and atomic operations by RC lowering.
   For a proven borrowed parameter, RC insertion omits both the entry `retain`
   and every parameter `release`; this keeps acquisition and release decisions
   under one ownership proof instead of matching generated releases afterward.
-- **Temporary field borrows:** Typed planning은 `adt.struct_get` 또는
-  `adt.variant_get`이 읽은 exact declared managed field와 `adt.array_get`이 읽은
+- **Temporary field borrows:** Typed planning은 `heap.struct_get` 또는
+  `heap.variant_get`이 읽은 exact declared managed field와 `heap.array_get`이 읽은
   managed 원소를 그 projection의 owner에서 파생된 temporary borrow로 분류할 수
   있다. Owner는 projection operand의 typed alias root이다. 변환된 `clif.load`
   result type, address provenance, `core.ptr` operand는 ownership evidence가
@@ -605,14 +614,14 @@ into control flow and atomic operations by RC lowering.
     transfer, aggregate field로의 저장, consumed 매개변수로의 ordinary call이 여기에
     해당한다. Retained 매개변수로의 ordinary call은 callee가 스스로 unit을 획득하고
     caller의 root가 호출 동안 살아 있으므로 caller-side 획득이 없다.
-  - Module 안의 어떤 `adt.struct_set`이든 쓰는 layout은 교체 가능한 layout이다.
+  - Module 안의 어떤 `heap.struct_set`이든 쓰는 layout은 교체 가능한 layout이다.
     교체 가능한 layout에서 읽은 projection은 borrow하지 않고 projection 직후 자신의
     unit을 획득한다. 교체는 이전 field 값의 unit을 release하므로, 이 unit 없이는
     같은 함수의 뒤따르는 쓰기나 호출된 함수의 쓰기가 파생 값을 해제할 수 있다. 쓰는
     쪽은 cast와 closure capture를 거쳐 같은 객체에 도달할 수 있으므로 판정은
     특정 SSA 값이 아니라 layout의 nominal identity로 한다.
-  - 배열도 같다. Module 안의 어떤 `adt.array_set`이든 쓰는 `adt.array` 타입은 교체
-    가능한 layout이며, 그 타입에서 `adt.array_get`이 읽은 managed 원소는 projection
+  - 배열도 같다. Module 안의 어떤 `heap.array_set`이든 쓰는 `adt.array` 타입은 교체
+    가능한 layout이며, 그 타입에서 `heap.array_get`이 읽은 managed 원소는 projection
     직후 자신의 unit을 획득한다. 그 밖의 배열 타입에서 읽은 원소는 borrow할 수 있는
     projection이다.
 
@@ -830,7 +839,7 @@ Native closure는 RC header, convention table 주소, capture를 담은 RC 객�
 ([closure 저장 layout](tribute-dialects.md#closure-저장-layout),
 [native 배치](cranelift-backend.md#메모리-관리-reference-counting)).
 
-- `closure.new`는 capture layout의 `adt.struct_new`가 되므로 각 capture는 aggregate
+- `closure.new`는 capture layout의 `heap.struct_new`가 되므로 각 capture는 aggregate
   field로의 저장이다. Capture 자리는 독립된 unit을 받으며, capture가 값의 마지막
   사용이면 [last-use move](#1-typed-ownership-and-rtti-plan) 규칙을 그대로 따른다.
   Capture 없는 closure는 base layout 할당이며 unit을 받는 필드가 없다.
@@ -894,14 +903,17 @@ managed 참조는 항상 그 저장보다 먼저 만들어진 object를 가리�
 
   Root `main`의 delimiter는 `Nil`을 답으로 받으므로 managed 참조를 쓰지 않는다.
   One-shot resumption이 소비 여부를 표시하는 쓰기는 unmanaged flag를 쓴다. 두 cell의
-  layout은 `adt.struct_set`이 쓰는 [교체 가능한 layout](#3-rc-optimization-pass)이므로
+  layout은 `heap.struct_set`이 쓰는 [교체 가능한 layout](#3-rc-optimization-pass)이므로
   그 projection은 borrow하지 않는다.
-- **배열도 만든 뒤 managed 원소가 바뀌지 않는다.** `adt.array_new`,
-  `adt.array_of`, `adt.array_splice`는 operand와 `source`의 원소로 새 배열을 채우므로
-  struct처럼 이미 있는 object만 담는다. Managed 원소를 덮어쓰는 `adt.array_set`을
+- **배열도 만든 뒤 managed 원소가 바뀌지 않는다.** `heap.array_new`,
+  `heap.array_of`, `heap.array_splice`는 operand와 `source`의 원소로 새 배열을 채우므로
+  struct처럼 이미 있는 object만 담는다. Managed 원소를 덮어쓰는 `heap.array_set`을
   내는 producer는 없다. 공유된 배열에 그 배열을 capture한 closure를 저장하면 순환이
   닫히므로, 그런 쓰기를 들이는 producer는 completion cell처럼 순환이 생기지 않는
-  근거를 이 절에 둔다. 원소를 바꾼 배열이 필요하면 `adt.array_splice`로 새로 만든다.
+  근거를 이 절에 둔다. 원소를 바꾼 배열이 필요하면 `heap.array_splice`로 새로 만든다.
+- **Inline 값은 간선을 더하지 않는다.** Object 안에 inline으로 놓인 값의 managed
+  leaf는 바깥 object가 직접 가진 필드이며, 만들 때 채우는 다른 필드처럼 이미 있는
+  object만 가리킨다. Unboxed 값은 object가 아니므로 참조의 대상이 되지 않는다.
 - **Closure는 자신을 capture하지 않는다.** Code 함수는 closure 자신을 environment
   입력으로 받는다([Closure captures](#closure-captures)). 지역 함수가 자기 자신을
   재귀 호출한다면 그 참조는 environment 입력으로 해결하며 capture로 만들지 않는다.
@@ -989,6 +1001,11 @@ Managed 판정을 받은 타입은 managed 참조나 동적 값이고, `Int`·`N
 | `4` | 부호 없는 정수 |
 | `5` | 부동소수 |
 | `6` | bool |
+| `7` | inline 값. 상위 24비트가 inline으로 놓인 struct descriptor의 RTTI index다 |
+
+Inline 값 필드가 가리키는 descriptor는 그 struct가 object로 할당되지 않더라도 index와
+레코드를 가진다. Release 함수는 inline 값의 managed leaf를 컴파일할 때 펼쳐 직접
+release하며, 이 분류를 읽어 재귀하지 않는다.
 
 Variant의 필드 이름은 선언 순서의 위치 번호(`"0"`, `"1"`, …)다. 예약 index의 값은
 `kind = 3`인 레코드를 가지며, payload가 하나인 boxing된 scalar는 그 scalar를 필드
@@ -1032,7 +1049,7 @@ RTTI index는 전체 프로그램 컴파일을 전제로 한 프로그램 내부
 
 - Compiler MAY reorder struct fields for optimal layout
 - Original field order preserved in `field_offsets` mapping
-- All access via `adt.struct_get(field_idx)` uses offset from mapping
+- All access via `heap.struct_get(field_idx)` uses offset from mapping
 
 **Example:**
 

@@ -59,9 +59,55 @@ pass — native ownership/RTTI 계획, target dialect lowering, backend 검증�
    lowering은 공유 value/control dialect 수준에서 수행하고 target dialect operation을
    직접 만들지 않는다.
 5. Closure storage layout 확정
-6. 경계 출구 검증
+6. [표현 선택](#표현-선택): `adt` 값을 SSA 값, inline 필드, `heap.box` 중 하나로 바꾼다.
+7. 경계 출구 검증
 
 지원되는 FFI/intrinsic bridge의 의미도 이 단계 안에서 완결한다.
+
+### 표현 선택
+
+[값의 표현은 의미에 드러나지 않으므로](runtime-types.md#표현은-의미에-드러나지-않는다)
+compiler가 값마다 표현을 고른다. 표현 선택은 값 의미론인 [`adt`](tribute-dialects.md#adt)
+값을 target에 공통인 저장 표현으로 바꾸는 단계이며, MLIR이 tensor 값을 buffer로
+바꾸는 bufferization과 같은 자리다. 두 target이 같은 규칙으로 고른다.
+
+- **표현은 타입마다 하나다.** Struct 타입(compiler가 만든 tuple layout 포함)마다
+  unboxed와 boxed 중 하나를 고르며, 한 타입의 값은 아래 강제 위치를 빼면 어디서나
+  같은 표현을 쓴다. 어느 쪽이든 layout은 그 타입의 layout 하나다
+  ([같은 소스 타입을 서로 다른 layout으로 표현하는 일은 없다](runtime-types.md#descriptor-단위)).
+- **Unboxed 값은 쪼개고 펼친다.** SSA에서는 필드마다 값 하나로 쪼갠다. 매개변수,
+  결과, block 인자, structured control의 결과가 모두 그렇다. 다른 object의 필드로 저장할
+  때는 그 object의 layout 안에 inline으로 놓는다. 그래서 출구 뒤에 aggregate 타입을 가진
+  SSA 값은 없다.
+- **Boxed 값은 `heap.box`에 담는다.** 생성은 `heap` 할당이 되고 필드 읽기는 box를
+  빌린 읽기가 된다.
+- **강제 위치에서는 언제나 box에 담는다.** Unboxed로 고른 타입도 이 위치를 지날 때는
+  필드 값으로 object를 할당하고, 거기서 나올 때는 필드를 읽는다.
+  - 배열의 원소. Target이 원소를 inline으로 저장하지 못하는 동안이다.
+  - `tribute_rt.anyref`로 지워지는 자리. Effect payload, 제네릭으로 지운 값, Cps
+    convention의 결과가 여기에 든다. Cps 결과는 continuation을 지나며 지워지므로, 결과를
+    쪼개는 일은 Direct와 EvidenceDirect callable에만 해당한다.
+- **언제나 boxed인 값.** Enum 값, 배열 값, closure 값, continuation frame, compiler가
+  소유하는 cell(`heap.struct_set`이 쓰는 layout)은 box에 담는다. 재귀하는 struct도
+  그렇다. 자기 필드를 통해 자기에게 닿는 layout은 크기가 정해지지 않기 때문이다.
+- **선택 정책.** 강제로 boxed가 아닌 struct 타입 중에서 다음을 모두 만족하는 타입을
+  unboxed로 고른다.
+  - 펼친 뒤의 managed leaf가 하나 이하다.
+  - 펼친 뒤의 크기가 compiler가 정한 상한 이하다.
+
+  Managed leaf가 하나 이하이므로 unboxed 값을 복사할 때의 retain 수는 box를 복사할
+  때와 같고, 할당만 사라진다. 상한의 값은 compiler 내부 상수이며 이 계약에 들지 않는다.
+  Compiler는 값이 대부분 강제 위치를 지나는 타입처럼 boxed가 나은 타입을 boxed로
+  남길 수 있다.
+- **할당 제거는 별도의 최적화다.** Boxed 타입이라도 함수 밖으로 나가지 않는 `heap`
+  할당은 표현 선택 뒤의 최적화가 필드 값으로 바꿀 수 있다. 이 최적화는 타입의 표현을
+  바꾸지 않으며, 그 할당이 만들 object가 관찰되지 않는다는 사실만 쓴다.
+- **Ownership 계획보다 앞선다.** 표현 선택은 경계 안에서 끝나므로 ownership 계획이
+  보는 managed 값은 `heap.box`, `tribute_rt.anyref`, `tribute_rt.intref`뿐이다.
+  Unboxed 값의 leaf는 다른 값과 같은 ownership unit이다.
+- **필드 타입 변환.** 표현 선택은 layout의 필드 타입을 저장 표현으로 바꾼다. Box에
+  담는 타입의 필드는 `heap.box`, unboxed 타입의 필드는 그 layout을 inline으로 둔다.
+  이 변환은 [nominal layout 변환](tribute-dialects.md#nominal-layout-변환)을 따른다.
 
 ### 출구에서 확정되는 물리 계약
 
@@ -89,6 +135,10 @@ pass — native ownership/RTTI 계획, target dialect lowering, backend 검증�
   경계가 module 내부 물리 callable의 모든 입력에 붙인다. Platform `abi`를 가진
   callable은 표시를 받지 않는다. 표시가 없는 managed 매개변수는 retained 계약을
   가진다.
+- **값의 표현:** 출구의 값은 scalar, `heap.box`, `tribute_rt.anyref`·`intref`, unmanaged
+  포인터 같은 기계 값 하나다. Aggregate 타입을 가진 SSA 값은 없다. Unboxed 값은
+  leaf마다 값 하나로 쪼개져 매개변수, 결과, block 인자에 나란히 놓이고, object의
+  필드로는 inline으로 놓인다. 결과를 쪼갠 callable은 결과를 여러 개 가진다.
 - **Closure/frame 저장:** Compiler가 소유하는 runtime layout은 명시적
   [runtime layout 식별자](ir.md#runtime-layout-식별자)로 구별한다. Struct 이름, field
   모양, `arrayref` 같은 erased heap 형상을 provenance로 쓰지 않는다.
@@ -120,12 +170,17 @@ pass — native ownership/RTTI 계획, target dialect lowering, backend 검증�
 - 의미적 호출 규약과 제어 metadata: `tribute.calling_convention`,
   `tribute.cps_continuation_frame_result`
 - 물리 계약으로 옮기지 않은 채 남은 handler/resume/prompt 정체성과 ability row
+- `adt` 타입을 가진 값과 `adt`의 값 operation. 출구 뒤에 값을 object에 담는 일이
+  생기면 ownership 계획이 보지 못한 managed 값이 생기므로, 표현 선택이 끝나지 않은
+  IR은 출구를 넘지 않는다. 결과가 `heap.box`인 literal operation은
+  [예외](tribute-dialects.md#위치)다.
 
 출구 이후에도 보존하는 것:
 
 - 기계 호출 규약, exact signature, 외부 바인딩(`abi`)
-- Typed managed layout, 명시적 layout 식별자, ownership/RTTI 입력(매개변수 속성
-  `tribute.ownership` 포함)과 `tribute.types` 같은 타입 식별 metadata
+- `heap.box`의 layout과 `heap` operation의 layout 속성, [nominal 선언](tribute-dialects.md#nominal-선언),
+  명시적 layout 식별자, ownership/RTTI 입력(매개변수 속성 `tribute.ownership` 포함)과
+  `tribute.types` 같은 타입 식별 metadata
 - Location과 선언 위치 속성 `tribute.definition` 같은 실행에 관여하지 않는
   source/debug 정보
 
@@ -140,7 +195,8 @@ arity, 빈 결과 목록에서 소실된 의미를 복원하지 않는다. 의�
 보존 중 하나로 분류된 뒤에만 출구를 넘을 수 있다. 입력과 결과 타입이 같은
 unrealized cast, scalar(`core.i32`·`core.i1`·`core.f64`, `tribute_rt.int`·`nat`·
 `bool`·`float`)와 `tribute_rt.anyref` 사이의 unrealized cast, 대상 함수의
-signature와 다른 타입의 `func.constant`도 위반으로 보고한다. 매개변수 ownership
+signature와 다른 타입의 `func.constant`, `adt` 타입을 가진 값과 `adt`의 값
+operation도 위반으로 보고한다. 매개변수 ownership
 계약도 검사한다. `call_conv = "tail"`인 signature의
 입력에 `tribute.ownership = "consumed"`가 없거나, `tribute.ownership` 값이
 `"consumed"`가 아니면 위반이다. Root `main`이 있으면 그것이 매개변수가 없고 결과가

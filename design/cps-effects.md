@@ -896,7 +896,7 @@ Evidence 배열 참조와 두 closure 입력은 canonical 타입 동일성을 �
 다른 배열 표기는 evidence 배열이 아니며, 일반 `wasm.structref`는 공통 closure
 layout이 아니다. Payload 슬롯만 [물리적 참조 할당 가능성](wasm-backend.md)을
 받아들인다. Payload packing의 `anyref` upcast가 no-op이면 concrete 참조가 남으므로,
-등록된 struct·array 참조, `adt.array` 표기, 소거된 ADT 표기가 `anyref` 슬롯을
+등록된 struct·array 참조, `heap.box` 표기, 소거된 ADT 표기가 `anyref` 슬롯을
 만족한다. 고정 ABI의 입력 개수와 순서, 그리고 `answer_type`에서 독립적으로
 구성되는 signature는 이 완화와 무관하게 유지한다.
 
@@ -1401,8 +1401,8 @@ struct 위의 `wasm.func`로 compile된다.
 Marker는 `outer: Slots(Marker)`로 자기 배열을 담으므로 그대로 쓰면 재귀 GC 타입이
 된다. Wasm target은 원소가 참조인 배열을 struct field에 `arrayref`로 저장하고 읽을
 때 구체 배열로 cast하며([GC 배열 표현][wasm-gc-arrays]), evidence 배열의 원소는
-`structref`로 저장한다. Evidence 값은 `adt` 연산이 모두 Wasm 연산으로 바뀔 때까지
-`adt.array` 타입을 유지하고, 그 뒤 한 번에 `wasm_gc.array<wasm.structref>`로
+`structref`로 저장한다. Evidence 값은 `heap` 연산이 모두 Wasm 연산으로 바뀔 때까지
+`heap.box<adt.array<..>>` 타입을 유지하고, 그 뒤 한 번에 `wasm_gc.array<wasm.structref>`로
 바뀐다.
 
 [wasm-gc-arrays]: wasm-backend.md#structural-gc-타입과-descriptor-필드
