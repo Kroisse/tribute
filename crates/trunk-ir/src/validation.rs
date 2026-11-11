@@ -382,7 +382,9 @@ pub fn validate_operation_verifiers(ctx: &IrContext, module: Module) -> Validati
 /// Check `root` and every operation nested in it against its declarative
 /// schema only.
 ///
-/// It also checks the placement the `Terminator` flag declares. Unlike
+/// It also checks terminator placement: an operation flagged `Terminator` is
+/// the last of its block, and every block ends in one unless its owner
+/// declares `NoTerminator`. Unlike
 /// [`validate_operation_verifiers`], this skips `#[verify]` hooks,
 /// the hand-written operation checks, and interface verification. It is the
 /// debug checkpoint run after each pipeline pass, where the IR must satisfy
@@ -400,8 +402,9 @@ pub fn validate_op_schemas(ctx: &IrContext, root: OpRef) -> ValidationResult {
     ValidationResult { errors }
 }
 
-/// Check that every operation under `root` flagged
-/// [`Terminator`] is the last of its block.
+/// Check terminator placement under `root`: every operation flagged
+/// [`Terminator`] is the last of its block, and every block ends in one unless
+/// its owner declares [`NoTerminator`].
 ///
 /// Backend boundaries run it on their target IR, which no other declarative
 /// check covers in release builds.

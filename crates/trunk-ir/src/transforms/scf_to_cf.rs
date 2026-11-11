@@ -209,11 +209,11 @@ fn remove_dead_exit(ctx: &mut IrContext, block: BlockRef, scf_op: OpRef) {
     let Some(position) = ops.iter().position(|&op| op == scf_op) else {
         return;
     };
-    let dead: Vec<OpRef> = ops[position + 1..].to_vec();
-    for op in dead {
-        ctx.detach_op(op);
-        ctx.remove_op(op);
-    }
+    let &[exit] = &ops[position + 1..] else {
+        panic!("a terminal structured operation is followed by exactly one callable exit");
+    };
+    ctx.detach_op(exit);
+    ctx.remove_op(exit);
 }
 
 /// Lower `scf.if` to cf.cond_br + then/else/merge blocks.
@@ -1316,6 +1316,7 @@ mod tests {
     default {
       func.tail_call_indirect %callee(%unit) attributes {test.marker = 2} : (core.nil) -> core.never
     }
+    func.unreachable
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -1362,6 +1363,7 @@ mod tests {
     default {
       func.return %second
     }
+    func.unreachable
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -1396,6 +1398,7 @@ mod tests {
     default {
       func.return %second
     }
+    func.unreachable
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -1428,10 +1431,12 @@ mod tests {
       default {
         func.return %second
       }
+      func.unreachable
     }
     default {
       func.return %third
     }
+    func.unreachable
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -1466,6 +1471,7 @@ mod tests {
     default {
       func.unreachable
     }
+    func.unreachable
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -1498,6 +1504,7 @@ mod tests {
     default {
       func.unreachable
     }
+    func.unreachable
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -1637,10 +1644,12 @@ mod tests {
       } else {
         func.tail_call_indirect %callee(%unit) attributes {test.marker = 2} : (core.nil) -> core.never
       }
+      func.unreachable
     }
     default {
       func.tail_call_indirect %callee(%unit) attributes {test.marker = 2} : (core.nil) -> core.never
     }
+    func.unreachable
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -1686,10 +1695,12 @@ mod tests {
       default {
         func.tail_call_indirect %callee(%unit) attributes {test.marker = 2} : (core.nil) -> core.never
       }
+      func.unreachable
     }
     default {
       func.tail_call_indirect %callee(%unit) attributes {test.marker = 2} : (core.nil) -> core.never
     }
+    func.unreachable
   }
 }"#;
         let mut ctx = IrContext::new();

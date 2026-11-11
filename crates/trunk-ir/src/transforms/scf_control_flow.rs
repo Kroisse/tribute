@@ -81,15 +81,15 @@ impl Analysis for StructuredControlAnalysis {
 /// Unproven terminal properties are ordinary results, never failures.
 impl InfallibleAnalysis for StructuredControlAnalysis {}
 
-/// Whether nothing but a callable exit follows `op` in its block: the
+/// Whether exactly one callable exit follows `op` in its block: the
 /// `func.unreachable` that terminates a block after an operation whose arms
-/// all leave the callable (`design/ir.md`, "Interface와 flag").
+/// all leave the callable (`design/ir.md`, "Interface와 flag"). A block never
+/// ends in such an operation itself.
 pub fn ends_its_block(ctx: &IrContext, op: OpRef) -> bool {
     let Some(block) = ctx.op(op).parent_block else {
         return false;
     };
     match ctx.block(block).ops.as_slice() {
-        [.., last] if *last == op => true,
         [.., before, last] if *before == op => DynCallableExit::prove(ctx, *last).is_ok(),
         _ => false,
     }
