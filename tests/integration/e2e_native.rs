@@ -2551,9 +2551,8 @@ fn main() ->{Io} Nil {
     );
 }
 
-/// A `Bytes` field is public, so a value may name a range outside its
-/// array; every read checks the range, so an out-of-range read or slice ends
-/// the execution instead of reading other memory.
+/// A read or slice past the end of a `Bytes`, or a reversed slice, ends the
+/// execution instead of reading other memory.
 #[test]
 fn test_native_bytes_out_of_range_reads_trap() {
     for (name, body) in [

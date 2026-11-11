@@ -54,8 +54,9 @@ Byte는 compiler 소유 불변 배열 [`std::runtime::ByteArray`](types.md#bytea
   소유권과 해제는 일반 struct와 배열의 규칙을 따른다([rc.md](rc.md#bytes)).
 - `start + len ≤ len(data)`는 `Bytes` 값의 불변식이다. `Bytes::impl`은 `std` 밖에서
   보이지 않으므로 값을 만들고 범위를 정하는 코드는 모두 `std` 안에 있고, 그 코드가
-  불변식을 지킨다. 범위가 배열 밖인 값이 생기더라도 byte 읽기는
-  `ByteArray::get`의 범위 검사가 trap으로 끝낸다.
+  불변식을 지킨다. 범위가 배열 밖인 값이 생기더라도 메모리 안전성은 유지된다.
+  `ByteArray::get`은 읽는 위치가 배열 밖일 때 trap하며, 범위 중 배열 안의 byte는
+  그대로 읽힌다.
 
 ### 리터럴
 
