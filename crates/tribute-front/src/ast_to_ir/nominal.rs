@@ -16,6 +16,12 @@ use crate::ast::{CtorId, RowVar, TypeKind, TypeScheme};
 
 use super::row_binders::RowBinders;
 
+/// The identity path of `std::Bytes::Repr`, the representation of `Bytes`
+/// (`design/string.md` § "내부 표현").
+pub(crate) fn bytes_repr_path() -> SymbolPath {
+    crate::resolve::PackageName::std().identity_path_of(&["Bytes", "Repr"])
+}
+
 /// The key component that tells nominal type origins apart.
 fn nominal_origin_key(origin: crate::ast::TypeOrigin) -> String {
     match origin {
@@ -23,6 +29,9 @@ fn nominal_origin_key(origin: crate::ast::TypeOrigin) -> String {
         crate::ast::TypeOrigin::Source { disambiguator } => format!("source{disambiguator}"),
         crate::ast::TypeOrigin::Builtin(crate::ast::BuiltinType::List) => "builtin_list".into(),
         crate::ast::TypeOrigin::Builtin(crate::ast::BuiltinType::Slots) => "builtin_slots".into(),
+        crate::ast::TypeOrigin::Builtin(crate::ast::BuiltinType::ByteArray) => {
+            "builtin_byte_array".into()
+        }
         crate::ast::TypeOrigin::Builtin(crate::ast::BuiltinType::Dispatch) => {
             "builtin_dispatch".into()
         }
@@ -239,6 +248,14 @@ impl<'db> NominalTypes<'db> {
         }
     }
 
+    /// The layout key of the nominal source type at the identity path `path`,
+    /// once it is declared.
+    fn nominal_key(&self, path: &SymbolPath) -> Option<TypeRef> {
+        let name = path.to_symbol();
+        self.get_type(&name)
+            .or_else(|| self.logical_nominal_declarations.get(&name).copied())
+    }
+
     /// Convert a source type at the source-logical `tribute_control` boundary.
     pub(crate) fn convert_logical_type(
         &self,
@@ -259,6 +276,9 @@ impl<'db> NominalTypes<'db> {
             TypeKind::Named { id, .. } if id.is_builtin_dispatch(self.db) => {
                 tribute_ir::runtime_layout::closure_base(ir)
             }
+            TypeKind::Named { id, .. } if id.is_builtin_byte_array(self.db) => {
+                tribute_ir::runtime_layout::byte_array(ir)
+            }
             TypeKind::Named { id, args, .. } if id.is_builtin_slots(self.db) => {
                 let [element] = args.as_slice() else {
                     panic!("Slots has one type argument, found {}", args.len());
@@ -269,11 +289,7 @@ impl<'db> NominalTypes<'db> {
                     .as_type_ref()
             }
             TypeKind::Named { id, row_args, .. }
-                if let Some(key) = self.get_type(&id.qualified(self.db)).or_else(|| {
-                    self.logical_nominal_declarations
-                        .get(&id.qualified(self.db))
-                        .copied()
-                }) =>
+                if let Some(key) = self.nominal_key(id.path(self.db)) =>
             {
                 let row_args: Vec<_> = row_args.iter().map(|row| self.ability_row(*row)).collect();
                 adt::value_type(ir, key, row_args)
@@ -523,9 +539,13 @@ impl<'db> NominalTypes<'db> {
         TypeDataBuilder::new("core.f64").intern(ir)
     }
 
-    /// Get the `core.bytes` type.
+    /// The type of a `Bytes` value: the value type of its representation
+    /// struct `std::Bytes::Repr` (`design/types.md` § "Primitive 타입의 표현").
     pub(crate) fn bytes_type(&self, ir: &mut IrContext) -> TypeRef {
-        core::Bytes::params().intern(ir).as_type_ref()
+        match self.nominal_key(&bytes_repr_path()) {
+            Some(key) => adt::value_type(ir, key, Vec::new()),
+            None => self.anyref_type(ir),
+        }
     }
 
     /// Get the `tribute_rt.anyref` type.
@@ -760,6 +780,7 @@ mod tests {
             TypeOrigin::Source { disambiguator: 1 },
             TypeOrigin::Builtin(BuiltinType::List),
             TypeOrigin::Builtin(BuiltinType::Slots),
+            TypeOrigin::Builtin(BuiltinType::ByteArray),
             TypeOrigin::Builtin(BuiltinType::Dispatch),
             TypeOrigin::Synthetic,
         ]
@@ -771,6 +792,7 @@ mod tests {
                 "source1",
                 "builtin_list",
                 "builtin_slots",
+                "builtin_byte_array",
                 "builtin_dispatch",
                 "synthetic"
             ]

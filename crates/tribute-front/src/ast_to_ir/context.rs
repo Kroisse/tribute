@@ -8,6 +8,7 @@ use rustc_hash::FxHashSet as HashSet;
 use std::ops::{Deref, DerefMut};
 
 use tribute_ir::dialect::tribute_control::{Row, RowBinder, RowUnion};
+use tribute_ir::trap::TrapCause;
 use trunk_ir::Symbol;
 use trunk_ir::SymbolPath;
 use trunk_ir::context::IrContext;
@@ -192,6 +193,17 @@ impl<'db> IrLoweringCtx<'db> {
 
     pub(crate) fn compiler_intrinsic(&self, declaration: NodeId) -> Option<Symbol> {
         self.compiler_intrinsics.get(&declaration).cloned()
+    }
+
+    /// The cause the function `name` traps with, when `name` is a registered
+    /// trap intrinsic.
+    pub(crate) fn trap_intrinsic(&self, name: &SymbolPath) -> Option<TrapCause> {
+        let identity = name.to_symbol();
+        let cause = identity.with_str(TrapCause::of_intrinsic)?;
+        self.compiler_intrinsics
+            .values()
+            .any(|registered| *registered == identity)
+            .then_some(cause)
     }
 
     /// The canonical path a runtime struct declaration is published under.
@@ -488,7 +500,7 @@ impl<'db> IrLoweringCtx<'db> {
         self.nominal.f64_type(ir)
     }
 
-    /// Get the `core.bytes` type.
+    /// The type of a `Bytes` value.
     pub fn bytes_type(&self, ir: &mut IrContext) -> TypeRef {
         self.nominal.bytes_type(ir)
     }

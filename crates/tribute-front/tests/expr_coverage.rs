@@ -28,14 +28,6 @@ fn greeting() -> String {
 "#,
         ),
         (
-            "bytes_literal",
-            r#"
-fn data() -> Bytes {
-    b"payload"
-}
-"#,
-        ),
-        (
             "float_literal",
             r#"
 fn pi() -> Float {

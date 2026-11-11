@@ -132,6 +132,15 @@ Operation flag는 동작 없이 operation 정의가 선언하는 예/아니오 �
 정의한 dialect만 그 operation의 flag를 정할 수 있다. 메서드가 없더라도 다른 crate가
 남의 operation에 붙여야 하는 성질은 flag가 아니라 interface로 정의한다.
 
+`Terminator` flag는 operation이 자기 block의 마지막 operation이어야 한다는
+성질이다(MLIR의 `IsTerminator`). Operation verifier는 flag가 있는 operation이
+block의 마지막이 아니면 거부하며, operation 이름을 나열하지 않는다. 이 flag는
+제어가 어디로 가는지 말하지 않는다. Callable을 떠나는지는
+[`CallableExit`](#선언적-operation-schema), block successor는 `Branch`, 부모 operation으로
+돌아가는지는 `RegionBranchTerminator`가 말한다. Flag를 선언한 dialect만 그
+operation을 이 규칙으로 검사받으므로, flag가 없다는 것은 terminator가 아니라는
+증거가 아니다.
+
 ## 선언적 operation schema
 
 Operation verifier의 로컬 계약은 `#[dialect]` operation 정의에서 선언적으로
@@ -321,7 +330,7 @@ continue after its enclosing structured region. It is not a generic
 terminator marker: `scf.yield`, `scf.break`, and `scf.continue` transfer within
 structured control flow and do not satisfy it. Dialects register only their
 verified callable exits, including ordinary `func.return`, proper tail
-transfers, and unreachable control flow. An arm of a result-producing
+transfers, traps, and unreachable control flow. An arm of a result-producing
 operation that selects one region may end with a verified `CallableExit`
 instead of `scf.yield`; such an arm produces no value and the operation's
 results come from its yielding arms. Source `become` ends a tail-position arm
@@ -1073,7 +1082,10 @@ Tribute 고수준 dialect의 규칙은 [tribute-dialects.md](tribute-dialects.md
 ## Mid-Level Dialects
 
 `func.*` represents function definitions, direct calls, indirect calls, function
-references, returns, tail calls, and unreachable control flow.
+references, returns, tail calls, traps, and unreachable control flow.
+`func.trap` is a defined end of the execution that a program may reach, and
+`func.unreachable` marks a point no execution reaches
+([tribute-dialects.md](tribute-dialects.md#trap)).
 `func.call_indirect`와 `func.tail_call_indirect`는 필수 `signature: TypeRef`
 attribute로 exact `func.func_sig` contract를 가지며, callee가 erased pointer나 table
 index로 바뀐 뒤에도 이 contract를 보존한다. 인자 목록과 `func.call_indirect`의 결과
@@ -1200,8 +1212,9 @@ Pipeline 단계의 불변 조건과 representation/ABI 경계 계약은
 
 Primitive scalar, address-width index, pointer, reference, array, tuple,
 function, and nil types are represented in TrunkIR. TrunkIR has no byte-string
-type: byte data is an `adt.array<core.i8>`, and `Bytes` is a prelude struct
-over it ([string.md](string.md#bytes)). Library data types such as
+type: byte data is an `adt.array<core.i8>`, and a `Bytes` value is a struct
+over it, the representation the prelude declares
+([string.md](string.md#bytes)). Library data types such as
 `Option`, `Result`, `String`, and `Bytes` lower through ADT and runtime/library
 conventions. `List` is an opaque nominal builtin whose shared construction and
 sequence-view observations use `list.*`; target-specific passes choose and

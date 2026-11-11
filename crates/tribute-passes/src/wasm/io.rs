@@ -17,7 +17,6 @@ use trunk_ir::rewrite::{
 };
 use trunk_ir::smallvec::smallvec;
 use trunk_ir::types::{Attribute, Location};
-use trunk_ir_wasm_backend::gc_types::{BYTES_ARRAY_IDX, BYTES_STRUCT_IDX};
 
 const IO_TO_WASM: &str = "io-to-wasm";
 const WRITE_HELPER: &str = "__tribute_wasi_write";
@@ -32,10 +31,6 @@ const PAGE_SIZE: i32 = 65_536;
 const IOVEC_OFFSET: i32 = 0;
 const NWRITTEN_OFFSET: i32 = IOVEC_OFFSET + 8;
 const SCRATCH_OFFSET: i32 = NWRITTEN_OFFSET + 4;
-
-const BYTES_DATA_FIELD: u32 = 0;
-const BYTES_OFFSET_FIELD: u32 = 1;
-const BYTES_LEN_FIELD: u32 = 2;
 
 fn has_write(ctx: &IrContext, module: Module) -> bool {
     module.body(ctx).is_some_and(|body| {
@@ -195,51 +190,78 @@ impl OpRewritePattern for WritePattern {
         rewriter: &mut PatternRewriter<'_>,
     ) -> Option<()> {
         let op = write.op_ref();
-        let call = func::Call::operands([write.bytes(ctx), write.newline(ctx)])
+        let loc = ctx.op(op).location;
+        // The helper reads the byte array as its GC array, which the array
+        // keeps once `adt` lowering is done, so the cast becomes an identity.
+        let array_ty = byte_array_gc_type(ctx);
+        let data = core::UnrealizedConversionCast::operands(write.data(ctx))
+            .results(array_ty)
+            .build(ctx, loc);
+        rewriter.insert_op(data.op_ref());
+        let args = [
+            data.result(ctx),
+            write.start(ctx),
+            write.len(ctx),
+            write.newline(ctx),
+        ];
+        // The range is `core.index`, which the Wasm type conversion makes the
+        // helper's `i32`.
+        let nil_ty = core::Nil::params().intern(ctx).as_type_ref();
+        let call = func::Call::operands(args)
             .callee(SymbolPath::new([WRITE_HELPER]))
-            .results([ctx.op_result_types(op)[0]])
-            .build(ctx, ctx.op(op).location);
-        rewriter.replace_op(call.op_ref());
+            .results([nil_ty])
+            .build(ctx, loc);
+        rewriter.insert_op(call.op_ref());
+        rewriter.erase_op(vec![]);
         Some(())
     }
 }
 
+/// The GC array of the byte array that `tribute_io.write` reads.
+fn byte_array_gc_type(ctx: &mut IrContext) -> TypeRef {
+    let array = tribute_ir::runtime_layout::byte_array(ctx);
+    super::type_converter::gc_array_type(ctx, array)
+}
+
 fn build_write_helper(ctx: &mut IrContext, loc: Location) -> OpRef {
     let i32_ty = core::I32::type_ref(ctx);
-    let bytes_ty = super::bytes::bytes_struct_type(ctx);
+    let array_ty = byte_array_gc_type(ctx);
     let nil_ty = core::Nil::params().intern(ctx).as_type_ref();
     let body = ctx.create_block(BlockData {
         location: loc,
-        args: vec![block_arg(bytes_ty), block_arg(i32_ty)],
+        args: vec![
+            block_arg(array_ty),
+            block_arg(i32_ty),
+            block_arg(i32_ty),
+            block_arg(i32_ty),
+        ],
         ops: smallvec![],
         parent_region: None,
     });
-    let bytes = ctx.block_arg(body, 0);
-    let newline = ctx.block_arg(body, 1);
+    let data = ctx.block_arg(body, 0);
+    let offset = ctx.block_arg(body, 1);
+    let len = ctx.block_arg(body, 2);
+    let newline = ctx.block_arg(body, 3);
 
-    let array_ref_ty = super::bytes::bytes_data_gc_type(ctx);
-    let data = wasm_dialect::StructGet::operands(bytes)
-        .type_idx(BYTES_STRUCT_IDX)
-        .field_idx(BYTES_DATA_FIELD)
-        .results(array_ref_ty)
-        .build(ctx, loc);
-    let offset = wasm_dialect::StructGet::operands(bytes)
-        .type_idx(BYTES_STRUCT_IDX)
-        .field_idx(BYTES_OFFSET_FIELD)
-        .results(i32_ty)
-        .build(ctx, loc);
-    let len = wasm_dialect::StructGet::operands(bytes)
-        .type_idx(BYTES_STRUCT_IDX)
-        .field_idx(BYTES_LEN_FIELD)
-        .results(i32_ty)
-        .build(ctx, loc);
-    for op in [data.op_ref(), offset.op_ref(), len.op_ref()] {
-        ctx.push_op(body, op);
-    }
+    // The range must not wrap and must lie within the array, even when it
+    // is empty and the copy reads nothing.
+    let range_end = wasm_dialect::I32Add::operands(offset, len).build(ctx, loc);
+    ctx.push_op(body, range_end.op_ref());
+    trap_if_less(ctx, body, loc, range_end.result(ctx), offset, i32_ty);
+    let array_len = wasm_dialect::ArrayLen::operands(data).build(ctx, loc);
+    ctx.push_op(body, array_len.op_ref());
+    trap_if_less(
+        ctx,
+        body,
+        loc,
+        array_len.result(ctx),
+        range_end.result(ctx),
+        i32_ty,
+    );
 
-    let total = wasm_dialect::I32Add::operands(len.result(ctx), newline).build(ctx, loc);
+    let total = wasm_dialect::I32Add::operands(len, newline).build(ctx, loc);
     ctx.push_op(body, total.op_ref());
-    trap_if_less(ctx, body, loc, total.result(ctx), len.result(ctx), i32_ty);
+    trap_if_less(ctx, body, loc, total.result(ctx), len, i32_ty);
 
     let scratch = i32_const(ctx, body, loc, i32_ty, SCRATCH_OFFSET);
     let end = wasm_dialect::I32Add::operands(scratch, total.result(ctx)).build(ctx, loc);
@@ -253,9 +275,10 @@ fn build_write_helper(ctx: &mut IrContext, loc: Location) -> OpRef {
         CopyLoopInput {
             loc,
             init: zero,
-            data: data.result(ctx),
-            offset: offset.result(ctx),
-            len: len.result(ctx),
+            data,
+            array_ty,
+            offset,
+            len,
             scratch,
             i32_ty,
             nil_ty,
@@ -263,7 +286,7 @@ fn build_write_helper(ctx: &mut IrContext, loc: Location) -> OpRef {
     );
     ctx.push_op(body, copy);
 
-    let newline_addr = wasm_dialect::I32Add::operands(scratch, len.result(ctx)).build(ctx, loc);
+    let newline_addr = wasm_dialect::I32Add::operands(scratch, len).build(ctx, loc);
     ctx.push_op(body, newline_addr.op_ref());
     let newline_region = region(ctx, loc, |ctx, block| {
         let lf = i32_const(ctx, block, loc, i32_ty, 10);
@@ -291,7 +314,7 @@ fn build_write_helper(ctx: &mut IrContext, loc: Location) -> OpRef {
         blocks: smallvec![body],
         parent_op: None,
     });
-    let fn_ty = func::func_sig(ctx, [bytes_ty, i32_ty], [nil_ty]).as_type_ref();
+    let fn_ty = func::func_sig(ctx, [array_ty, i32_ty, i32_ty, i32_ty], [nil_ty]).as_type_ref();
     func::Func::operands()
         .sym_name(WRITE_HELPER)
         .r#type(fn_ty)
@@ -363,6 +386,7 @@ struct CopyLoopInput {
     loc: Location,
     init: ValueRef,
     data: ValueRef,
+    array_ty: TypeRef,
     offset: ValueRef,
     len: ValueRef,
     scratch: ValueRef,
@@ -375,6 +399,7 @@ fn copy_loop(ctx: &mut IrContext, input: CopyLoopInput) -> OpRef {
         loc,
         init,
         data,
+        array_ty,
         offset,
         len,
         scratch,
@@ -398,8 +423,8 @@ fn copy_loop(ctx: &mut IrContext, input: CopyLoopInput) -> OpRef {
     ctx.push_op(loop_block, break_if_done.op_ref());
     let source = wasm_dialect::I32Add::operands(offset, index).build(ctx, loc);
     ctx.push_op(loop_block, source.op_ref());
-    let byte = wasm_dialect::ArrayGetU::operands(data, source.result(ctx))
-        .type_idx(BYTES_ARRAY_IDX)
+    let byte = trunk_ir::dialect::wasm_gc::ArrayGetU::operands(data, source.result(ctx))
+        .r#type(array_ty)
         .results(i32_ty)
         .build(ctx, loc);
     ctx.push_op(loop_block, byte.op_ref());
@@ -674,8 +699,8 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  func.func @main(%bytes: core.bytes, %newline: core.i1) -> core.nil {
-    %write = tribute_io.write %bytes, %newline : core.nil
+  func.func @main(%bytes: adt.array<core.i8>, %n: core.index, %newline: core.i1) -> core.nil {
+    tribute_io.write %bytes, %n, %n, %newline
     func.return
   }
 }"#,
@@ -705,8 +730,8 @@ mod tests {
             r#"core.module @test {
   wasm.import_func @fd_write from "wasi_snapshot_preview1" "fd_write" : (core.i32, core.i32, core.i32, core.i32) -> core.i32
   wasm.memory {min = 0, max = 0, shared = false, memory64 = false}
-  func.func @main(%bytes: core.bytes, %newline: core.i1) -> core.nil {
-    %write = tribute_io.write %bytes, %newline : core.nil
+  func.func @main(%bytes: adt.array<core.i8>, %n: core.index, %newline: core.i1) -> core.nil {
+    tribute_io.write %bytes, %n, %n, %newline
     func.return
   }
 }"#,
@@ -735,8 +760,8 @@ mod tests {
                 &format!(
                     r#"core.module @test {{
   {import}
-  func.func @main(%bytes: core.bytes, %newline: core.i1) -> core.nil {{
-    %write = tribute_io.write %bytes, %newline : core.nil
+  func.func @main(%bytes: adt.array<core.i8>, %n: core.index, %newline: core.i1) -> core.nil {{
+    tribute_io.write %bytes, %n, %n, %newline
     func.return
   }}
 }}"#
@@ -758,8 +783,8 @@ mod tests {
             format!(
                 r#"core.module @test {{
   wasm.memory {{min = 1, max = 2, shared = true, memory64 = {memory64}}}
-  func.func @main(%bytes: core.bytes, %newline: core.i1) -> core.nil {{
-    %write = tribute_io.write %bytes, %newline : core.nil
+  func.func @main(%bytes: adt.array<core.i8>, %n: core.index, %newline: core.i1) -> core.nil {{
+    tribute_io.write %bytes, %n, %n, %newline
     func.return
   }}
 }}"#

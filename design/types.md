@@ -483,9 +483,31 @@ byte 값은 `0`–`255`의 `Nat`이다.
 | `get(bytes: ByteArray, at: Nat) -> Nat` | `at`번째 byte를 부호 없이 넓힌 값 | `adt.array_get` |
 
 `get`은 `at < len`을 요구하며, target은 이를 어긴 실행을 trap으로 끝낸다. 새 byte
-배열은 byte literal(`adt.bytes_const`)과 runtime 함수가 만든다. 두 byte 배열을 이어
-붙이는 일처럼 새 byte를 만드는 연산은 runtime 함수이며, 배열과 범위를 받아
-새 배열을 돌려준다([rc.md](rc.md#bytes)).
+배열은 literal을 펼친 배열 상수(`adt.array_const`)와 runtime 함수가
+만든다. 두 byte 배열을 이어 붙이는 일처럼 새 byte를 만드는 연산은 runtime
+함수이며, 배열과 범위를 받아 새 배열을 돌려준다([rc.md](rc.md#bytes)).
+
+## Primitive 타입의 표현
+
+`Int`, `Nat`, `Bytes` 같은 primitive 타입은 언어가 정하는 타입이다. 타입 검사는 그
+표현을 모르며, 사용자 코드는 field나 생성자 없이 literal과 prelude 함수로만 값을
+다룬다. Primitive 타입의 연산은 prelude source가 그 타입의 companion 모듈에 정의한다.
+
+표현이 scalar 하나가 아닌 primitive 타입 `T`는 표현을 prelude source의 companion
+모듈 `T`에 struct `T::Repr`로 선언한다.
+
+- Compiler intrinsic `T::repr(value: T) -> Repr`와 `T::from_repr(repr: Repr) -> T`가
+  두 타입 사이를 오간다. IR에서 `T`의 타입은 `Repr`의 IR 타입이므로 두 intrinsic은
+  값을 그대로 넘긴다.
+- `Repr`, 그 field, `repr`은 `pub(pkg)`다. `std` 안의 코드는 `T::repr(value)`로 받은
+  `Repr`의 field를 직접 읽고, `Repr` 값을 만들거나 고쳐 쓸 수 있다. 사용자 패키지에서는
+  셋 다 보이지 않는다.
+- `from_repr`는 수식자 없이 모듈 `T` 안에서만 보인다. `Repr` 값이 `T`가 되는 곳은
+  여기뿐이므로 표현의 불변식은 모듈 `T`의 함수가 지킨다.
+- Compiler는 literal을 만들 때처럼 `Repr`의 field를 이름으로 찾는다. Layout은 다른
+  struct처럼 정해진다.
+
+`Bytes`의 표현은 [string.md](string.md#내부-표현)에 있다.
 
 ---
 
@@ -757,6 +779,18 @@ scrutinee가 `Never`이면 그 값 자체가 결과이고, 빈 enum이면 `core.
 출발하는 이 cast들은 실행되지 않는 경로에만 놓이며, target 표현 경계의 cast
 검증은 이를 일반 cast와 같이 다룬다. 남은 cast를 허용하도록 검증을 완화하지
 않는다.
+
+`Never` 타입의 표현식 가운데 lowering이 block을 callable exit로 끝내는 것이 있다.
+Source `become`과 [trap intrinsic](modules.md#trap-intrinsic)의 직접 호출이다.
+이런 표현식은 `core.never` 값을 만들지 않으며, lowering은 그 block에 더 이상
+operation을 넣지 않는다. 표현식이 어디에 놓였든 같다. 인자 자리에 있으면 남은
+인자와 그 호출을, `let`의 값이면 뒤따르는 문장과 block의 결과를 낮추지 않는다.
+`absurd(runtime::trap_out_of_range())`에서는 trap만 남고 `absurd`의 호출은 없다.
+그 block이 callable 본문이면 `return` 없이, `case` arm이나 `&&`/`||`의 우변이면
+`scf.yield` 없이 exit로 끝난다
+([trap](tribute-dialects.md#trap)). 그 밖의 `Never` 표현식(결과가 `Never`인
+일반 함수나 ability operation의 호출)은 위와 같이 `core.never` 값을 만들고,
+뒤따르는 code도 낮춘다.
 
 `case`는 arm마다 패턴 검사와 guard를 두는 `scf.if` 연쇄로 lowering한다. 정수
 리터럴로 고르는 `case`는 예외로, scrutinee를 판별값으로 하는 `scf.index_switch`

@@ -362,7 +362,7 @@ pub enum String {
 }
 
 pub mod String {
-    use super::{Nat, Bytes, __tribute_bytes_concat, __tribute_bytes_range_equal}
+    use super::{Nat, Bytes}
 
     // Internal depth-first traversal state used to compare rope leaves without
     // flattening. Chunk offsets and remaining lengths always describe a valid
@@ -401,7 +401,7 @@ pub mod String {
     pub fn to_bytes(s: String) -> Bytes {
         case s {
             .Leaf(bytes) -> bytes
-            .Branch(left, right, _) -> __tribute_bytes_concat(left.to_bytes(), right.to_bytes())
+            .Branch(left, right, _) -> Bytes::concat(left.to_bytes(), right.to_bytes())
         }
     }
 
@@ -462,7 +462,7 @@ pub mod String {
                         True -> left_remaining
                         False -> right_remaining
                     }
-                    case __tribute_bytes_range_equal(
+                    case Bytes::range_equal(
                         left_bytes,
                         left_offset,
                         right_bytes,
@@ -514,7 +514,7 @@ pub mod String {
         case len == right.len() {
             True -> case left {
                 .Leaf(left_bytes) -> case right {
-                    .Leaf(right_bytes) -> __tribute_bytes_range_equal(
+                    .Leaf(right_bytes) -> Bytes::range_equal(
                         left_bytes,
                         0,
                         right_bytes,
@@ -539,60 +539,107 @@ pub mod String {
 }
 
 // =============================================================================
-// Intrinsic declarations
-// =============================================================================
-// These functions are lowered to inline IR by compiler passes.
-// The `__` prefix marks them as internal/reserved.
-
-extern "intrinsic" fn __bytes_get_or_panic(bytes: Bytes, index: Nat) -> Nat
-
-// =============================================================================
 // Native extern "C" declarations
 // =============================================================================
-// These functions are provided by the tribute-runtime static library.
+// These functions are provided by the tribute-runtime static library. Each
+// borrows its byte arrays and reads the given ranges, ending the execution
+// when a range lies outside its array; a byte array result is a new array.
 
-extern "C" fn __tribute_bytes_len(bytes: Bytes) -> Nat
-extern "C" fn __tribute_bytes_concat(left: Bytes, right: Bytes) -> Bytes
-extern "C" fn __tribute_bytes_range_equal(
-    left: Bytes,
+extern "C" fn __tribute_byte_array_concat(
+    left: runtime::ByteArray,
     left_start: Nat,
-    right: Bytes,
+    left_len: Nat,
+    right: runtime::ByteArray,
+    right_start: Nat,
+    right_len: Nat,
+) -> runtime::ByteArray
+extern "C" fn __tribute_byte_array_range_equal(
+    left: runtime::ByteArray,
+    left_start: Nat,
+    right: runtime::ByteArray,
     right_start: Nat,
     len: Nat,
 ) -> Bool
-extern "C" fn __tribute_bytes_slice_or_panic(bytes: Bytes, start: Nat, end: Nat) -> Bytes
 
 // =============================================================================
-// Bytes module
+// Bytes
 // =============================================================================
 
 /// Bytes module with operations for byte sequences.
+///
+/// `Bytes` is a primitive type: an immutable view of the bytes
+/// `[start, start + len)` of a byte array. Slicing shares the array instead
+/// of copying it.
 pub mod Bytes {
-    use super::{Nat, Option, __bytes_get_or_panic, __tribute_bytes_len, __tribute_bytes_concat, __tribute_bytes_range_equal, __tribute_bytes_slice_or_panic}
+    use super::{Nat, Option, absurd, __tribute_byte_array_concat, __tribute_byte_array_range_equal}
+    use pkg::runtime::{ByteArray, trap_out_of_range}
+
+    /// The representation of `Bytes` (`design/string.md`).
+    pub(pkg) struct Repr { pub(pkg) data: ByteArray, pub(pkg) start: Nat, pub(pkg) len: Nat }
+
+    /// The representation of `bytes`.
+    pub(pkg) extern "intrinsic" fn repr(bytes: Bytes) -> Repr
+
+    // The one place a `Repr` becomes a `Bytes`: every caller keeps
+    // `start + len <= ByteArray::len(data)`. A read still goes through the
+    // array's own range check.
+    extern "intrinsic" fn from_repr(repr: Repr) -> Bytes
 
     /// Create an empty byte sequence.
     pub fn empty() -> Bytes { b"" }
 
-    /// Get the length of a byte sequence.
-    pub fn len(bytes: Bytes) -> Nat {
-        __tribute_bytes_len(bytes)
+    /// The number of bytes.
+    pub fn len(bytes: Bytes) -> Nat { repr(bytes).len() }
+
+    /// The byte sequence of all of `data`.
+    pub(pkg) fn from_array(data: ByteArray) -> Bytes {
+        from_repr(Repr { data: data, start: 0, len: ByteArray::len(data) })
     }
 
     /// Get the byte at the given index.
     /// Panics if index is out of bounds.
     pub fn get_or_panic(bytes: Bytes, index: Nat) -> Nat {
-        __bytes_get_or_panic(bytes, index)
+        let r = repr(bytes)
+        case index < r.len() {
+            True -> ByteArray::get(r.data, r.start + index)
+            False -> absurd(trap_out_of_range())
+        }
     }
 
     /// Create a slice of the byte sequence.
     /// Panics if start or end is out of bounds.
     pub fn slice_or_panic(bytes: Bytes, start: Nat, end: Nat) -> Bytes {
-        __tribute_bytes_slice_or_panic(bytes, start, end)
+        let r = repr(bytes)
+        case end > r.len() {
+            True -> absurd(trap_out_of_range())
+            False -> case start > end {
+                True -> absurd(trap_out_of_range())
+                False -> from_repr(Repr { ..r, start: r.start + start, len: end - start })
+            }
+        }
     }
 
     /// Concatenate two byte sequences.
     pub fn concat(left: Bytes, right: Bytes) -> Bytes {
-        __tribute_bytes_concat(left, right)
+        let l = repr(left)
+        let r = repr(right)
+        from_array(
+            __tribute_byte_array_concat(l.data, l.start, l.len(), r.data, r.start, r.len())
+        )
+    }
+
+    /// Whether `len` bytes of `left` from `left_start` equal those of
+    /// `right` from `right_start`.
+    pub(pkg) fn range_equal(
+        left: Bytes,
+        left_start: Nat,
+        right: Bytes,
+        right_start: Nat,
+        len: Nat,
+    ) -> Bool {
+        let l = repr(left)
+        let r = repr(right)
+        __tribute_byte_array_range_equal(l.data, l.start + left_start, r.data, r.start + right_start, len)
     }
 
     /// Concatenation operator for byte sequences.
@@ -604,7 +651,7 @@ pub mod Bytes {
     pub fn (==)(left: Bytes, right: Bytes) -> Bool {
         let len = left.len()
         case len == right.len() {
-            True -> __tribute_bytes_range_equal(left, 0, right, 0, len)
+            True -> range_equal(left, 0, right, 0, len)
             False -> False
         }
     }
@@ -682,7 +729,9 @@ pub mod collections {
 }
 
 pub mod io {
-    use super::{String, abilities}
+    use super::{String, Bytes, abilities}
+    use pkg::Bytes::Repr
+    use pkg::runtime::ByteArray
 
     /// Platform error details reported by an I/O operation.
     pub struct SystemError { pub code: Int, pub message: String }
@@ -697,29 +746,40 @@ pub mod io {
     // Private transport value used only between the embedded wrapper and
     // the compiler-owned, target-independent I/O boundary.
     enum ReadLineResult {
-        ReadLine(Bytes),
+        ReadLine(ByteArray),
         ReadEndOfFile,
         ReadInvalidEncoding,
-        ReadSystem(Int, Bytes),
+        ReadSystem(Int, ByteArray),
     }
 
-    extern "intrinsic" fn __tribute_io_write(bytes: Bytes, newline: Bool) -> Nil
+    // Writes `len` bytes of `data` from `start`, then a newline if `newline`.
+    extern "intrinsic" fn __tribute_io_write(
+        data: ByteArray,
+        start: Nat,
+        len: Nat,
+        newline: Bool,
+    ) -> Nil
     extern "intrinsic" fn __tribute_io_read_line() -> ReadLineResult
+
+    fn write_bytes(bytes: Bytes, newline: Bool) ->{pkg::io::Io} Nil {
+        let r = Bytes::repr(bytes)
+        __tribute_io_write(r.data, r.start, bytes.len(), newline)
+    }
 
     /// Print a string to standard output (no trailing newline).
     pub fn print(message: String) ->{pkg::io::Io} Nil {
-        __tribute_io_write(String::to_bytes(message), False)
+        write_bytes(String::to_bytes(message), False)
     }
 
     /// Print a line to standard output.
     pub fn print_line(message: String) ->{pkg::io::Io} Nil {
-        __tribute_io_write(String::to_bytes(message), True)
+        write_bytes(String::to_bytes(message), True)
     }
 
     /// Read one UTF-8 line from standard input.
     pub fn read_line() ->{pkg::io::Io, abilities::Throw(Error)} String {
         case __tribute_io_read_line() {
-            ReadLineResult::ReadLine(bytes) -> String::from_bytes(bytes)
+            ReadLineResult::ReadLine(data) -> String::from_bytes(Bytes::from_array(data))
             ReadLineResult::ReadEndOfFile -> abilities::Throw::throw(
                 Error::EndOfFile
             )
@@ -729,7 +789,7 @@ pub mod io {
             ReadLineResult::ReadSystem(code, message) -> abilities::Throw::throw(
                 Error::System(SystemError {
                     code: code,
-                    message: String::from_bytes(message),
+                    message: String::from_bytes(Bytes::from_array(message)),
                 })
             )
         }
@@ -758,6 +818,11 @@ pub mod prelude {
 // Runtime code the compiler's lowering relies on (`design/modules.md`).
 // Programs outside the package `std` cannot name it.
 pub(pkg) mod runtime {
+    // End the execution with a trap, one function per cause. A call never
+    // returns; `absurd` gives it the type of its position.
+    pub(pkg) extern "intrinsic" fn trap_out_of_range() ->{} Never
+    pub(pkg) extern "intrinsic" fn trap_missing_ability() ->{} Never
+
     // The operations of the compiler-owned fixed-size array `Slots(a)`.
     // `Slots` is immutable: `insert`, `remove`, and `replace` return a new
     // array and leave their argument as it was.
@@ -772,15 +837,24 @@ pub(pkg) mod runtime {
         pub(pkg) extern "intrinsic" fn replace(slots: Slots(a), at: Nat, value: a) -> Slots(a)
     }
 
+    // The operations of the compiler-owned immutable byte array that holds
+    // the bytes of a `Bytes`. `get` widens the byte to a `Nat`.
+    pub(pkg) mod ByteArray {
+        use super::ByteArray
+
+        pub(pkg) extern "intrinsic" fn len(bytes: ByteArray) -> Nat
+        pub(pkg) extern "intrinsic" fn get(bytes: ByteArray, at: Nat) -> Nat
+    }
+
     // The evidence runtime both targets call by canonical path
     // (`design/cps-effects.md`). Evidence is `Slots(Marker)` sorted by
     // `ability_id`, one slot per ability holding its top marker. Every
     // operation builds a new evidence and leaves its arguments as they were.
     // A missing ability is a compiler bug; reading it ends the execution with
-    // the trap of a `Slots` position past the end.
+    // `trap_missing_ability`.
     pub(pkg) mod evidence {
-        use pkg::{Int, Nat, Option}
-        use super::{Slots, Dispatch}
+        use pkg::{Int, Nat, Option, absurd}
+        use super::{Slots, Dispatch, trap_missing_ability}
 
         pub(pkg) struct Marker {
             ability_id: Int,
@@ -818,18 +892,12 @@ pub(pkg) mod runtime {
             }
         }
 
-        // Always traps: it reads the position past the end of `ev`. It stands
-        // where a missing ability's marker would be, which is a compiler bug.
-        fn trap_missing_ability(ev: Slots(Marker)) ->{} Marker {
-            ev.get(ev.len)
-        }
-
         // The top marker of `ability_id`.
         fn top(ev: Slots(Marker), ability_id: Int) ->{} Marker {
             let at = ev.find(ability_id)
             case ev.holds(at, ability_id) {
                 True -> ev.get(at)
-                False -> ev.trap_missing_ability
+                False -> absurd(trap_missing_ability())
             }
         }
 
@@ -868,7 +936,7 @@ pub(pkg) mod runtime {
         pub(pkg) fn lookup_tr(ev: Slots(Marker), ability_id: Int) ->{} Dispatch {
             case ev.top(ability_id).tr_dispatch_fn {
                 .Some(dispatch) -> dispatch
-                .None -> ev.remove(ev.len).lookup_tr(ability_id)
+                .None -> absurd(trap_missing_ability())
             }
         }
 
@@ -889,7 +957,7 @@ pub(pkg) mod runtime {
                     .Some(below) -> ev.replace(at, below)
                     .None -> ev.remove(at)
                 }
-                False -> ev.replace(at, ev.trap_missing_ability)
+                False -> absurd(trap_missing_ability())
             }
         }
 

@@ -428,6 +428,7 @@ fn inject_runtime_bindings<'db>(db: &'db dyn salsa::Database, env: &mut PackageE
     let pkg = vec![Symbol::new("pkg")];
     for id in [
         TypeDefId::builtin_slots(db),
+        TypeDefId::builtin_byte_array(db),
         TypeDefId::builtin_dispatch(db),
     ] {
         let name = id.name(db);
@@ -439,7 +440,8 @@ fn inject_runtime_bindings<'db>(db: &'db dyn salsa::Database, env: &mut PackageE
         };
         let binding = Binding::TypeDef { id };
         env.restrict(binding.clone(), restriction);
-        // The intrinsics' module `Slots` keeps its namespace; the name is the type.
+        // The intrinsics' modules `Slots` and `ByteArray` keep their
+        // namespaces; the name is the type.
         if matches!(
             env.lookup_qualified(&runtime, &name),
             None | Some(Binding::Module { .. })

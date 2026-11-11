@@ -36,6 +36,7 @@ use std::sync::LazyLock;
 
 use tribute_core::diagnostic::{CompilationPhase, DiagnosticSeverity, SpanDiagnostic};
 use tribute_ir::dialect::tribute_control::CompilerIntrinsicDeclaration;
+use tribute_ir::trap::TrapCause;
 use trunk_ir::context::IrContext;
 use trunk_ir::rewrite::Module as IrModule;
 use trunk_ir::{Symbol, SymbolPath};
@@ -89,12 +90,14 @@ static SUPPORTED_COMPILER_INTRINSICS: LazyLock<HashSet<Symbol>> = LazyLock::new(
         "std::Float::<=",
         "std::Float::>",
         "std::Float::>=",
-        "std::__bytes_get_or_panic",
         "std::io::__tribute_io_write",
         "std::io::__tribute_io_read_line",
     ]
     .into_iter()
     .chain(tribute_ir::runtime_items::SLOTS_INTRINSICS)
+    .chain(tribute_ir::runtime_items::BYTE_ARRAY_INTRINSICS)
+    .chain(tribute_ir::runtime_items::REPRESENTATION_INTRINSICS)
+    .chain(TrapCause::ALL.map(TrapCause::intrinsic))
     .map(Symbol::new)
     .collect()
 });
@@ -372,6 +375,12 @@ mod tests {
         )));
         assert!(is_supported_compiler_intrinsic(&Symbol::new(
             "std::io::__tribute_io_read_line"
+        )));
+        assert!(is_supported_compiler_intrinsic(&Symbol::new(
+            "std::runtime::trap_out_of_range"
+        )));
+        assert!(is_supported_compiler_intrinsic(&Symbol::new(
+            "std::runtime::trap_missing_ability"
         )));
         assert!(!is_supported_compiler_intrinsic(&Symbol::new(
             "user_intrinsic"

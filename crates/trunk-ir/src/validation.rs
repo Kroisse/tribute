@@ -25,7 +25,7 @@ use super::analysis::AnalysisCache;
 use super::context::IrContext;
 use super::dialect::core;
 use super::op_def::OpDef;
-use super::op_flag::{IsolatedFromAbove, OpFlag};
+use super::op_flag::{IsolatedFromAbove, OpFlag, Terminator};
 use super::op_interface::{
     DynBranch, DynCallableExit, DynCallableOwner, DynRegionBranch, DynRegionBranchTerminator,
     RegionBranchPoint, RegionSuccessor, RegionValueTransfer,
@@ -366,6 +366,7 @@ pub fn validate_operation_verifiers(ctx: &IrContext, module: Module) -> Validati
         }
         let error_count = errors.len();
         validate_scf_if_structure(ctx, op, &mut errors);
+        validate_terminator_position(ctx, op, &mut errors);
         validate_func_shapes(ctx, op, &mut errors);
         if errors.len() == error_count {
             validate_branch_interface(ctx, op, &mut errors);
@@ -463,6 +464,23 @@ fn validate_type_shapes(ctx: &IrContext, errors: &mut Vec<ValidationError>) {
     }
 }
 
+/// Reject an operation flagged `Terminator` that is not the last of its
+/// block, as MLIR's `IsTerminator` verifier does.
+fn validate_terminator_position(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
+    if Terminator::is_set(ctx, op)
+        && ctx
+            .op(op)
+            .parent_block
+            .is_none_or(|b| ctx.block(b).ops.last() != Some(&op))
+    {
+        errors.push(operation_verifier_error(
+            ctx,
+            op,
+            "must terminate its block",
+        ));
+    }
+}
+
 fn validate_func_shapes(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
     use crate::dialect::func;
     use crate::ops::DialectOp;
@@ -497,20 +515,6 @@ fn validate_func_shapes(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationE
                 ));
             }
         }
-    }
-    if (func::Return::matches(ctx, op)
-        || func::TailCall::matches(ctx, op)
-        || func::TailCallIndirect::matches(ctx, op))
-        && ctx
-            .op(op)
-            .parent_block
-            .is_none_or(|b| ctx.block(b).ops.last() != Some(&op))
-    {
-        errors.push(operation_verifier_error(
-            ctx,
-            op,
-            "must terminate its block",
-        ));
     }
 }
 
@@ -1059,6 +1063,7 @@ pub fn is_proper_tail_terminator(ctx: &IrContext, op: OpRef) -> bool {
     func::TailCall::matches(ctx, op)
         || func::TailCallIndirect::matches(ctx, op)
         || func::Unreachable::matches(ctx, op)
+        || func::Trap::matches(ctx, op)
         || (name.dialect(ctx) == "ability"
             && matches!(
                 name.strip_dialect(ctx),
@@ -2446,6 +2451,42 @@ mod tests {
     }
 
     #[test]
+    fn an_operation_flagged_terminator_must_end_its_block() {
+        let input = r#"core.module @test {
+  func.func @trap_first() -> core.nil {
+    func.trap "out_of_range"
+    func.unreachable
+  }
+  func.func @unreachable_first() -> core.nil {
+    func.unreachable
+    func.trap "out_of_range"
+  }
+  func.func @branch_first() -> core.nil {
+      cf.br [^done]
+      cf.br [^done]
+    ^done:
+      func.trap "out_of_range"
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(&mut ctx, input);
+        let result = validate_operation_verifiers(&ctx, module);
+        let misplaced: Vec<_> = result
+            .errors
+            .iter()
+            .map(ToString::to_string)
+            .filter(|error| error.contains("must terminate its block"))
+            .collect();
+        assert_eq!(misplaced.len(), 3, "{result}");
+        for (error, name) in misplaced
+            .iter()
+            .zip(["func.trap", "func.unreachable", "cf.br"])
+        {
+            assert!(error.contains(&format!("for {name} (")), "{error}");
+        }
+    }
+
+    #[test]
     fn scf_never_regions_accept_every_proper_tail_surface() {
         let input = r#"core.module @test {
   func.func @main(%cond: core.i1) -> core.never {
@@ -3292,7 +3333,9 @@ mod tests {
         let validation = validate_operation_verifiers(&ctx, module);
         let messages = operation_error_messages(&validation).join("\n");
         for expected in [
-            "Branch operation must be the final operation in its block",
+            // `cf.br` is a `Terminator`, so the generic check reports it
+            // before the `Branch` interface check runs.
+            "cf.br (op1): must terminate its block",
             "contains an empty block",
             "has no complete owning RegionBranch mapping",
         ] {

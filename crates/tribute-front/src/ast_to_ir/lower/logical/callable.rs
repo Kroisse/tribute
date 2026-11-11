@@ -4,6 +4,7 @@
 use tribute_ir::dialect::tribute_control;
 use tribute_ir::dialect::tribute_control::{OperationDeclaration, Row, RowBinder};
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, OperationDataBuilder, RegionData};
+use trunk_ir::op_interface::DynCallableExit;
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{BlockRef, OpRef, TypeRef, ValueRef};
 use trunk_ir::types::{Attribute, Location};
@@ -21,13 +22,14 @@ use super::nominal::{expr_type, expr_type_for_id, function_signature};
 use super::values::{bind_pattern, lower_expr, lower_local_reference};
 use super::{local_callables, op, result};
 
-/// Whether lowering ended `block` with a source `become`. Such a block has
-/// already left its callable and takes no `return` or `yield`.
-pub(super) fn ends_with_tail_call(ir: &IrContext, block: BlockRef) -> bool {
-    ir.block(block).ops.last().is_some_and(|&op| {
-        tribute_control::TailCall::matches(ir, op)
-            || tribute_control::TailCallIndirect::matches(ir, op)
-    })
+/// Whether lowering ended `block` with a callable exit: a source `become` or
+/// a trap. Such a block has already left its callable; it takes no `return`
+/// or `yield`, and no operation after the exit.
+pub(super) fn ends_with_exit(ir: &IrContext, block: BlockRef) -> bool {
+    ir.block(block)
+        .ops
+        .last()
+        .is_some_and(|&op| DynCallableExit::prove(ir, op).is_ok())
 }
 
 /// Attach the typechecked evidence selection of the source node `node`.
@@ -396,7 +398,7 @@ pub(super) fn lower_function<'db>(
             function.body,
             declarations,
         );
-        if value.is_some() || !ends_with_tail_call(ir, entry) {
+        if !ends_with_exit(ir, entry) {
             let value = value.expect("typechecked source expression failed logical IR lowering");
             let value = IrBuilder::new(&mut scope, ir, entry).cast_if_needed(
                 location,
@@ -805,6 +807,15 @@ pub(super) fn lower_call<'db>(
             }
             ResolvedRef::Function { id } => {
                 let name = id.path(builder.ctx.db);
+                if let Some(cause) = builder.ctx.trap_intrinsic(name) {
+                    // The trap ends the block: the caller lowers nothing
+                    // after it.
+                    let trap = tribute_control::Trap::operands()
+                        .cause(cause)
+                        .build(builder.ir, location);
+                    builder.ir.push_op(builder.block, trap.op_ref());
+                    return None;
+                }
                 let (declared, args, _) = named_signature
                     .as_ref()
                     .expect("a named callee has a signature");
@@ -950,7 +961,7 @@ pub(super) fn lower_lambda<'db>(
             body,
             declarations,
         );
-        if value.is_some() || !ends_with_tail_call(builder.ir, entry) {
+        if !ends_with_exit(builder.ir, entry) {
             let value = IrBuilder::new(&mut scope, builder.ir, entry).cast_if_needed(
                 location,
                 value?,

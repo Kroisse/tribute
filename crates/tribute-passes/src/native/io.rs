@@ -81,13 +81,18 @@ fn ensure_runtime_declarations(ctx: &mut IrContext, module: Module) {
         return;
     };
     let loc = ctx.op(module.op()).location;
-    let bytes_ty = core::Bytes::params().intern(ctx).as_type_ref();
+    let array_ty = tribute_ir::runtime_layout::byte_array(ctx);
+    let index_ty = core::Index::type_ref(ctx);
     let bool_ty = core::I1::type_ref(ctx);
     let ptr_ty = core::Ptr::params().intern(ctx).as_type_ref();
     let nil_ty = core::Nil::params().intern(ctx).as_type_ref();
 
     for (name, params, result) in [
-        (WRITE_FN, vec![bytes_ty, bool_ty], nil_ty),
+        (
+            WRITE_FN,
+            vec![array_ty, index_ty, index_ty, bool_ty],
+            nil_ty,
+        ),
         (READ_LINE_FN, vec![], ptr_ty),
         (DEALLOC_RESULT_FN, vec![ptr_ty], nil_ty),
     ] {
@@ -125,12 +130,19 @@ impl OpRewritePattern for NativeWritePattern {
     ) -> Option<()> {
         let op = write.op_ref();
         let loc = ctx.op(op).location;
-        let result_ty = ctx.op_result_types(op)[0];
-        let call = func::Call::operands([write.bytes(ctx), write.newline(ctx)])
+        let args = [
+            write.data(ctx),
+            write.start(ctx),
+            write.len(ctx),
+            write.newline(ctx),
+        ];
+        let nil_ty = core::Nil::params().intern(ctx).as_type_ref();
+        let call = func::Call::operands(args)
             .callee(SymbolPath::new([WRITE_FN]))
-            .results([result_ty])
+            .results([nil_ty])
             .build(ctx, loc);
-        rewriter.replace_op(call.op_ref());
+        rewriter.insert_op(call.op_ref());
+        rewriter.erase_op(vec![]);
         Some(())
     }
 }
@@ -155,7 +167,7 @@ impl OpRewritePattern for NativeReadLinePattern {
         let loc = ctx.op(op).location;
         let result_ty = ctx.op_result_types(op)[0];
         let ptr_ty = core::Ptr::params().intern(ctx).as_type_ref();
-        let bytes_ty = core::Bytes::params().intern(ctx).as_type_ref();
+        let bytes_ty = tribute_ir::runtime_layout::byte_array(ctx);
         let i32_ty = core::I32::type_ref(ctx);
         let nil_ty = core::Nil::params().intern(ctx).as_type_ref();
 
@@ -172,7 +184,7 @@ impl OpRewritePattern for NativeReadLinePattern {
             .offset(CODE_OFFSET)
             .results(i32_ty)
             .build(ctx, loc);
-        // The descriptor's Bytes fields are runtime pointers that the
+        // The descriptor's byte array fields are runtime pointers that the
         // descriptor transfers to the caller; load them as pointers and take
         // over the unit of each.
         let bytes_ptr = mem::Load::operands(descriptor_value)
@@ -355,12 +367,12 @@ mod tests {
             &mut ctx,
             r#"
             core.module @test {
-                !"std::io::ReadLineResult" = adt.enum<"std::io::ReadLineResult", [(core.bytes), (), (), (core.i32, core.bytes)]>
+                !"std::io::ReadLineResult" = adt.enum<"std::io::ReadLineResult", [(adt.array<core.i8>), (), (), (core.i32, adt.array<core.i8>)]>
                 adt.enum_decl "std::io::ReadLineResult" !"std::io::ReadLineResult" ["ReadLine", "ReadEndOfFile", "ReadInvalidEncoding", "ReadSystem"]
 
-                func.func @caller(%0: core.bytes, %1: core.i1) -> tribute_rt.anyref {
+                func.func @caller(%0: adt.array<core.i8>, %s: core.index, %n: core.index, %1: core.i1) -> tribute_rt.anyref {
                 ^bb0:
-                    %2 = tribute_io.write %0, %1 : core.nil
+                    tribute_io.write %0, %s, %n, %1
                     %3 = tribute_io.read_line : tribute_rt.anyref
                     func.return %3
                 }

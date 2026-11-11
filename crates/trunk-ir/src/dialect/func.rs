@@ -1,7 +1,7 @@
 //! Arena-based func dialect.
 
 use crate::attr_kind::SymbolRef;
-use crate::op_flag::{IsolatedFromAbove, Pure};
+use crate::op_flag::{IsolatedFromAbove, Pure, Terminator};
 use crate::op_interface::{
     self, CallableExit, CallableOwner, ControlFlowInterfaceError, IndirectCallLike,
 };
@@ -72,12 +72,14 @@ mod func {
     /// ```text
     /// func.tail_call @f(%a) : (core.i32) -> ()
     /// ```
+    #[flags(Terminator)]
     #[implements(CallableExit, op_interface::CallLike)]
     #[asm_format(callee "(" args ")" attr_dict ":" functional_type(args))]
     fn tail_call(callee: Attr<SymbolRef>, args: Variadic<_>) {}
 
     #[verify]
     #[asm_format(callee "(" args ")" attr_dict ":" signature(signature))]
+    #[flags(Terminator)]
     #[implements(CallableExit, IndirectCallLike)]
     fn tail_call_indirect<S: FuncSig>(
         signature: Attr<TypeOf<S>>,
@@ -86,6 +88,7 @@ mod func {
     ) {
     }
 
+    #[flags(Terminator)]
     #[implements(CallableExit)]
     #[asm_format(values attr_dict_bare)]
     fn r#return(values: Variadic<_>) {}
@@ -94,9 +97,33 @@ mod func {
     #[asm_format(value attr_dict ":" signature(result))]
     fn constant<S: FuncSig>(value: Attr<SymbolRef>) -> Value<S> {}
 
+    #[flags(Terminator)]
     #[implements(CallableExit)]
     #[asm_format(attr_dict_bare)]
     fn unreachable() {}
+
+    /// Ends the execution with the trap `code` names.
+    ///
+    /// ```text
+    /// func.trap "out_of_range"
+    /// ```
+    ///
+    /// - **Shape:** the attribute `code`, and no operand, result, region, or
+    ///   successor. A `Terminator`, registered as a `CallableExit`.
+    /// - **Meaning:** a defined end of the execution: a program may reach it,
+    ///   and reaching it always traps. `func.unreachable` instead marks a
+    ///   point no execution reaches. `code` names the cause for a reader of
+    ///   the IR and for a target whose trap can carry one; it does not
+    ///   change what the operation does.
+    /// - **Placement:** it ends its block. In place of `scf.yield` it may end
+    ///   an arm of an operation that selects one region, in any position;
+    ///   the operation's results come from its other arms.
+    /// - **Lowering:** a target lowers it to its trap instruction, keeping
+    ///   `code` where that instruction has one.
+    #[flags(Terminator)]
+    #[implements(CallableExit)]
+    #[asm_format(code attr_dict_bare)]
+    fn trap(code: Attr<String>) {}
 }
 
 /// Signature attribute recording the machine calling convention.
@@ -810,6 +837,8 @@ impl CallableExit for Unreachable {
         }
     }
 }
+
+impl CallableExit for Trap {}
 
 impl op_interface::CallLike for Call {
     fn direct_callee<'a>(&self, ctx: &'a IrContext) -> &'a SymbolPath {

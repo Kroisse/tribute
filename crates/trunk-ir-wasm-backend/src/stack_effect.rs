@@ -50,8 +50,9 @@ pub(crate) fn is_structured(ctx: &IrContext, op: OpRef) -> bool {
 /// empty when the block type is empty.
 ///
 /// Each result is one Wasm value, except that a single `core.nil` result
-/// leaves nothing. A `wasm.if` has results only when its then region passes
-/// values.
+/// leaves nothing. A `wasm.if` has results only when one of its regions
+/// passes values. The other may end the function instead, as an arm ending
+/// in a trap does.
 pub(crate) fn structured_result_types(ctx: &IrContext, op: OpRef) -> SmallVec<[TypeRef; 2]> {
     let types = ctx.op_result_types(op);
     let leaves_nothing = match types {
@@ -61,9 +62,9 @@ pub(crate) fn structured_result_types(ctx: &IrContext, op: OpRef) -> SmallVec<[T
     };
     if leaves_nothing
         || (wasm::If::matches(ctx, op)
-            && ctx
-                .op_region(op, 0)
-                .is_none_or(|then_region| region_result_values(ctx, then_region).is_empty()))
+            && !ctx
+                .op_regions(op)
+                .any(|region| !region_result_values(ctx, region).is_empty()))
     {
         return SmallVec::new();
     }

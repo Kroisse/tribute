@@ -140,69 +140,77 @@ pub extern "C" fn __tribute_print_float(value: f64) {
 }
 
 // =============================================================================
-// Bytes support
+// Byte array support
 // =============================================================================
 
-/// Bytes payload layout: `[ptr] [len] [owner] [cap] [bytes...]`.
-///
-/// `ptr` and `len` are the range this value reads. `cap` bytes are stored
-/// right after these fields, and `owner` is the `Bytes` that stores the range
-/// when this value does not. See `design/rc.md` (Bytes).
-///
-/// Compiler passes emit code that stores this layout after the RC header.
-/// Runtime functions receive a pointer to this payload area (not the raw allocation).
+/// The reserved RTTI index of the byte array, the one descriptor number the
+/// runtime shares with compiled code (`design/rc.md` § "RTTI Table").
+pub const BYTE_ARRAY_RTTI_IDX: u32 = 0;
+
+/// The payload of a byte array `adt.array<core.i8>`: its length, followed by
+/// that many bytes (`design/rc.md` § "Array"). Runtime functions receive a
+/// pointer to this payload, not to the raw allocation.
 #[repr(C)]
-pub struct TributeBytes {
-    pub ptr: *const u8,
+pub struct ByteArray {
     pub len: u64,
-    pub owner: *const TributeBytes,
-    pub cap: u64,
 }
 
-/// Allocate a `Bytes` that stores `cap` uninitialized bytes and reads all of
-/// them. Returns the value and the address of its bytes.
-fn allocate_storing_bytes(cap: u64) -> (*mut TributeBytes, *mut u8) {
-    let fixed = core::mem::size_of::<tribute_rc::RcBox<TributeBytes>>() as u64;
-    let Some(size) = fixed.checked_add(cap) else {
+impl ByteArray {
+    /// The `len` bytes of the array from `start`, ending the execution when
+    /// the range is not inside the array.
+    ///
+    /// # Safety
+    ///
+    /// `self` must be the payload of a live byte array.
+    unsafe fn range(&self, start: impl Into<u64>, len: impl Into<u64>) -> &[u8] {
+        let (start, len) = (start.into(), len.into());
+        match start.checked_add(len) {
+            Some(end) if end <= self.len => {}
+            _ => bounds_check_abort(),
+        }
+        if len == 0 {
+            return &[];
+        }
+        let elements = (self as *const Self).wrapping_add(1).cast::<u8>();
+        unsafe { core::slice::from_raw_parts(elements.add(start as usize), len as usize) }
+    }
+}
+
+/// Allocate a byte array of `len` uninitialized bytes with one unit. Returns
+/// its payload and the address of its bytes.
+fn allocate_byte_array(len: u64) -> (*mut ByteArray, *mut u8) {
+    let fixed = core::mem::size_of::<tribute_rc::RcBox<ByteArray>>() as u64;
+    let Some(size) = fixed.checked_add(len) else {
         oom_abort();
     };
     let raw = unsafe { __tribute_alloc(size) };
-    let rc_box = unsafe { tribute_rc::RcBox::<TributeBytes>::init(raw, 0) };
-    let data = if cap == 0 {
-        core::ptr::null_mut()
-    } else {
-        unsafe { raw.add(fixed as usize) }
-    };
+    let rc_box = unsafe { tribute_rc::RcBox::<ByteArray>::init(raw, BYTE_ARRAY_RTTI_IDX) };
     unsafe {
-        (*rc_box).payload = TributeBytes {
-            ptr: data,
-            len: cap,
-            owner: core::ptr::null(),
-            cap,
-        };
-        (&raw mut (*rc_box).payload, data)
+        (*rc_box).payload = ByteArray { len };
+        (&raw mut (*rc_box).payload, raw.add(fixed as usize))
     }
 }
 
-/// Allocate a `Bytes` that reads `len` bytes at `ptr`, which `owner` stores.
-/// The caller hands over one unit of a non-null `owner`.
-fn allocate_sharing_bytes(
-    ptr: *const u8,
-    len: u64,
-    owner: *const TributeBytes,
-) -> *mut TributeBytes {
-    let size = core::mem::size_of::<tribute_rc::RcBox<TributeBytes>>() as u64;
-    let raw = unsafe { __tribute_alloc(size) };
-    let rc_box = unsafe { tribute_rc::RcBox::<TributeBytes>::init(raw, 0) };
-    unsafe {
-        (*rc_box).payload = TributeBytes {
-            ptr,
-            len,
-            owner,
-            cap: 0,
-        };
-        &raw mut (*rc_box).payload
+/// A new byte array holding `bytes`.
+fn byte_array_of(bytes: &[u8]) -> *mut ByteArray {
+    let (array, data) = allocate_byte_array(bytes.len() as u64);
+    if !bytes.is_empty() {
+        unsafe { core::ptr::copy_nonoverlapping(bytes.as_ptr(), data, bytes.len()) };
     }
+    array
+}
+
+/// Copy `len` bytes at `data` into a new byte array, as a byte literal does.
+///
+/// # Safety
+///
+/// `data` must be readable for `len` bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __tribute_byte_array_from(data: *const u8, len: u64) -> *mut ByteArray {
+    if len == 0 {
+        return byte_array_of(&[]);
+    }
+    byte_array_of(unsafe { core::slice::from_raw_parts(data, len as usize) })
 }
 
 fn write_stdout_all(bytes: &[u8]) {
@@ -255,8 +263,8 @@ pub const IO_READ_SYSTEM: u32 = 3;
 pub struct NativeReadLineResult {
     pub tag: u32,
     pub code: i32,
-    pub bytes: *mut TributeBytes,
-    pub message: *mut TributeBytes,
+    pub bytes: *mut ByteArray,
+    pub message: *mut ByteArray,
 }
 
 enum ReadByte {
@@ -311,16 +319,23 @@ impl StdinBuffer {
     }
 }
 
-/// Write a flattened `Bytes` payload, optionally followed by one newline.
+/// Write `len` bytes of a byte array from `start`, optionally followed by one
+/// newline. Ends the execution when the range is not inside the array.
 ///
 /// # Safety
 ///
-/// `bytes` must point to a valid [`TributeBytes`] payload.
+/// `data` must point to the payload of a live byte array.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn __tribute_io_write(bytes: *const TributeBytes, newline: u32) {
-    let b = unsafe { &*bytes };
-    if b.len > 0 && !b.ptr.is_null() {
-        write_stdout_all(unsafe { core::slice::from_raw_parts(b.ptr, b.len as usize) });
+pub unsafe extern "C" fn __tribute_io_write(
+    data: *const ByteArray,
+    start: usize,
+    len: usize,
+    newline: u32,
+) {
+    // `usize` is at most 64 bits wide on every supported target.
+    let bytes = unsafe { (*data).range(start as u64, len as u64) };
+    if !bytes.is_empty() {
+        write_stdout_all(bytes);
     }
     if newline == 1 {
         write_stdout_all(b"\n");
@@ -355,7 +370,7 @@ pub extern "C" fn __tribute_io_read_line() -> *mut NativeReadLineResult {
 
 /// Release a descriptor returned by [`__tribute_io_read_line`].
 ///
-/// The RC-managed `bytes` and `message` payloads, if any, have already been
+/// The RC-managed `bytes` and `message` byte arrays, if any, have already been
 /// transferred to the compiler-created result ADT and are not released here.
 ///
 /// # Safety
@@ -397,7 +412,7 @@ fn read_line_with(mut read_byte: impl FnMut() -> ReadByte) -> *mut NativeReadLin
                     tag: IO_READ_SYSTEM,
                     code,
                     bytes: core::ptr::null_mut(),
-                    message: allocate_bytes(b"stdin read failed"),
+                    message: byte_array_of(b"stdin read failed"),
                 });
             }
         }
@@ -417,7 +432,7 @@ fn line_result(bytes: Vec<u8>) -> *mut NativeReadLineResult {
     allocate_read_result(NativeReadLineResult {
         tag: IO_READ_LINE,
         code: 0,
-        bytes: allocate_bytes(&bytes),
+        bytes: byte_array_of(&bytes),
         message: core::ptr::null_mut(),
     })
 }
@@ -427,14 +442,6 @@ fn allocate_read_result(result: NativeReadLineResult) -> *mut NativeReadLineResu
     let raw = unsafe { __tribute_alloc(size) }.cast::<NativeReadLineResult>();
     unsafe { raw.write(result) };
     raw
-}
-
-fn allocate_bytes(bytes: &[u8]) -> *mut TributeBytes {
-    let (result, data) = allocate_storing_bytes(bytes.len() as u64);
-    if !bytes.is_empty() {
-        unsafe { core::ptr::copy_nonoverlapping(bytes.as_ptr(), data, bytes.len()) };
-    }
-    result
 }
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
@@ -454,164 +461,55 @@ fn last_errno() -> i32 {
     unsafe { *libc::__error() }
 }
 
-/// Return the byte length of a Bytes value.
+/// Compare `len` bytes of two byte arrays, from `left_start` and
+/// `right_start`.
 ///
-/// Signature: `(bytes: ptr) -> u32`
-///
-/// # Safety
-///
-/// `bytes` must be a valid pointer to a `TributeBytes` payload.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn __tribute_bytes_len(bytes: *const TributeBytes) -> u32 {
-    let b = unsafe { &*bytes };
-    b.len as u32
-}
-
-/// Compare equal-length ranges in two Bytes values.
-///
-/// Returns `1` when the ranges contain the same bytes and `0` otherwise.
-/// This is the native target primitive used by rope String equality: callers
-/// select contiguous spans from the current pair of leaves, so no flattening
-/// or temporary byte buffer is required.
+/// Returns `1` when the ranges contain the same bytes and `0` otherwise. This
+/// is the native primitive behind `Bytes` and rope `String` equality: callers
+/// select contiguous spans, so no flattening or temporary buffer is required.
+/// Ends the execution when a range is not inside its array.
 ///
 /// # Safety
 ///
-/// `left` and `right` must be valid pointers to `TributeBytes` payloads.
+/// `left` and `right` must point to the payloads of live byte arrays.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn __tribute_bytes_range_equal(
-    left: *const TributeBytes,
+pub unsafe extern "C" fn __tribute_byte_array_range_equal(
+    left: *const ByteArray,
     left_start: u32,
-    right: *const TributeBytes,
+    right: *const ByteArray,
     right_start: u32,
     len: u32,
 ) -> u32 {
-    let left = unsafe { &*left };
-    let right = unsafe { &*right };
-    let left_start = u64::from(left_start);
-    let right_start = u64::from(right_start);
-    let len = u64::from(len);
-
-    let Some(left_end) = left_start.checked_add(len) else {
-        return 0;
-    };
-    let Some(right_end) = right_start.checked_add(len) else {
-        return 0;
-    };
-    if left_end > left.len || right_end > right.len {
-        return 0;
-    }
-    if len == 0 {
-        return 1;
-    }
-
-    let left_ptr = unsafe { left.ptr.add(left_start as usize) };
-    let right_ptr = unsafe { right.ptr.add(right_start as usize) };
-    u32::from(unsafe { libc::memcmp(left_ptr.cast(), right_ptr.cast(), len as usize) == 0 })
+    let left = unsafe { (*left).range(left_start, len) };
+    let right = unsafe { (*right).range(right_start, len) };
+    u32::from(left == right)
 }
 
-/// Read one byte of a Bytes value, zero-extended.
-///
-/// Aborts if `index` is out of range.
-///
-/// Signature: `(bytes: ptr, index: u32) -> u32`
+/// Concatenate `left_len` bytes of `left` from `left_start` and `right_len`
+/// bytes of `right` from `right_start` into a new byte array. Ends the
+/// execution when a range is not inside its array.
 ///
 /// # Safety
 ///
-/// `bytes` must be a valid pointer to a `TributeBytes` payload.
+/// `left` and `right` must point to the payloads of live byte arrays.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn __tribute_bytes_get_or_panic(
-    bytes: *const TributeBytes,
-    index: u32,
-) -> u32 {
-    let b = unsafe { &*bytes };
-    if u64::from(index) >= b.len {
-        bounds_check_abort();
-    }
-    u32::from(unsafe { *b.ptr.add(index as usize) })
-}
-
-/// Concatenate two Bytes values, returning a new RC-managed Bytes that
-/// stores the result.
-///
-/// Signature: `(a: ptr, b: ptr) -> ptr`
-///
-/// # Safety
-///
-/// Both `a` and `b` must be valid pointers to `TributeBytes` payloads.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn __tribute_bytes_concat(
-    a: *const TributeBytes,
-    b: *const TributeBytes,
-) -> *mut TributeBytes {
-    let a_ref = unsafe { &*a };
-    let b_ref = unsafe { &*b };
-
-    let Some(total_len) = a_ref.len.checked_add(b_ref.len) else {
-        oom_abort();
-    };
-
-    let (result, data) = allocate_storing_bytes(total_len);
-    if a_ref.len > 0 && !a_ref.ptr.is_null() {
-        unsafe {
-            core::ptr::copy_nonoverlapping(a_ref.ptr, data, a_ref.len as usize);
-        }
-    }
-    if b_ref.len > 0 && !b_ref.ptr.is_null() {
-        unsafe {
-            core::ptr::copy_nonoverlapping(
-                b_ref.ptr,
-                data.add(a_ref.len as usize),
-                b_ref.len as usize,
-            );
-        }
+pub unsafe extern "C" fn __tribute_byte_array_concat(
+    left: *const ByteArray,
+    left_start: u32,
+    left_len: u32,
+    right: *const ByteArray,
+    right_start: u32,
+    right_len: u32,
+) -> *mut ByteArray {
+    let left = unsafe { (*left).range(left_start, left_len) };
+    let right = unsafe { (*right).range(right_start, right_len) };
+    let total = left.len() as u64 + right.len() as u64;
+    let (result, data) = allocate_byte_array(total);
+    unsafe {
+        core::ptr::copy_nonoverlapping(left.as_ptr(), data, left.len());
+        core::ptr::copy_nonoverlapping(right.as_ptr(), data.add(left.len()), right.len());
     }
     result
-}
-
-/// Slice a Bytes value, returning a new RC-managed Bytes that reads part of
-/// the original's bytes (zero-copy).
-///
-/// The slice retains the `Bytes` that stores the bytes: the original's
-/// `owner` if it has one, the original itself if it stores bytes, and nothing
-/// for static bytes. Releasing the slice releases that owner.
-///
-/// Panics (aborts) if `start > end` or `end > bytes.len`.
-///
-/// Signature: `(bytes: ptr, start: u32, end: u32) -> ptr`
-///
-/// # Safety
-///
-/// `bytes` must be a valid pointer to a `TributeBytes` payload.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn __tribute_bytes_slice_or_panic(
-    bytes: *const TributeBytes,
-    start: u32,
-    end: u32,
-) -> *mut TributeBytes {
-    let b = unsafe { &*bytes };
-    let s = start as u64;
-    let e = end as u64;
-
-    // Bounds check
-    if s > e || e > b.len {
-        bounds_check_abort();
-    }
-
-    let new_len = e - s;
-    if new_len == 0 || b.ptr.is_null() {
-        return allocate_sharing_bytes(core::ptr::null(), 0, core::ptr::null());
-    }
-    let owner = if !b.owner.is_null() {
-        b.owner
-    } else if b.cap != 0 {
-        bytes
-    } else {
-        core::ptr::null()
-    };
-    if !owner.is_null() {
-        unsafe { (*tribute_rc::RcBox::from_payload_ptr(owner)).retain() };
-    }
-    allocate_sharing_bytes(unsafe { b.ptr.add(s as usize) }, new_len, owner)
 }
 
 fn bounds_check_abort() -> ! {
@@ -700,28 +598,24 @@ mod tests {
         read_line_with(|| events.next().expect("read script exhausted"))
     }
 
-    unsafe fn bytes_contents(bytes: *const TributeBytes) -> Vec<u8> {
+    unsafe fn bytes_contents(bytes: *const ByteArray) -> Vec<u8> {
         if bytes.is_null() {
             return Vec::new();
         }
         let bytes = unsafe { &*bytes };
-        if bytes.len == 0 {
-            return Vec::new();
-        }
-        unsafe { core::slice::from_raw_parts(bytes.ptr, bytes.len as usize) }.to_vec()
+        unsafe { bytes.range(0u64, bytes.len) }.to_vec()
     }
 
-    unsafe fn dealloc_test_bytes(bytes: *mut TributeBytes) {
+    unsafe fn dealloc_test_bytes(bytes: *mut ByteArray) {
         if bytes.is_null() {
             return;
         }
-        let payload = unsafe { &*bytes };
-        assert!(payload.owner.is_null(), "test bytes store their own bytes");
+        let len = unsafe { (*bytes).len };
         let raw = unsafe { tribute_rc::RcBox::from_payload_ptr_mut(bytes) }.cast();
         unsafe {
             __tribute_dealloc(
                 raw,
-                core::mem::size_of::<tribute_rc::RcBox<TributeBytes>>() as u64 + payload.cap,
+                core::mem::size_of::<tribute_rc::RcBox<ByteArray>>() as u64 + len,
             )
         };
     }
@@ -780,119 +674,90 @@ mod tests {
         assert_eq!(core::mem::offset_of!(NativeReadLineResult, message), 16);
         assert_eq!(core::mem::size_of::<NativeReadLineResult>(), 24);
 
-        let _: unsafe extern "C" fn(*const TributeBytes, u32) = __tribute_io_write;
+        let _: unsafe extern "C" fn(*const ByteArray, usize, usize, u32) = __tribute_io_write;
         let _: extern "C" fn() -> *mut NativeReadLineResult = __tribute_io_read_line;
         let _: unsafe extern "C" fn(*mut NativeReadLineResult) =
             __tribute_io_read_line_result_dealloc;
+        let _: unsafe extern "C" fn(*const ByteArray, u32, *const ByteArray, u32, u32) -> u32 =
+            __tribute_byte_array_range_equal;
         let _: unsafe extern "C" fn(
-            *const TributeBytes,
-            u32,
-            *const TributeBytes,
+            *const ByteArray,
             u32,
             u32,
-        ) -> u32 = __tribute_bytes_range_equal;
+            *const ByteArray,
+            u32,
+            u32,
+        ) -> *mut ByteArray = __tribute_byte_array_concat;
+        let _: unsafe extern "C" fn(*const u8, u64) -> *mut ByteArray = __tribute_byte_array_from;
     }
 
-    fn bytes_view(data: &[u8]) -> TributeBytes {
-        // Empty runtime payloads carry a null pointer.
-        TributeBytes {
-            ptr: if data.is_empty() {
-                core::ptr::null()
-            } else {
-                data.as_ptr()
-            },
-            len: data.len() as u64,
-            owner: core::ptr::null(),
-            cap: 0,
-        }
-    }
-
-    fn refcount(bytes: *const TributeBytes) -> u32 {
-        let rc_box = unsafe { &*tribute_rc::RcBox::from_payload_ptr(bytes) };
-        rc_box.refcount.load(Ordering::Relaxed)
+    fn header(array: *const ByteArray) -> &'static tribute_rc::RcBox<ByteArray> {
+        unsafe { &*tribute_rc::RcBox::from_payload_ptr(array) }
     }
 
     #[test]
-    fn concat_stores_its_bytes_in_the_result() {
-        let (left, right) = (bytes_view(b"ab"), bytes_view(b"cde"));
-        let joined = unsafe { __tribute_bytes_concat(&left, &right) };
-        let payload = unsafe { &*joined };
+    fn byte_arrays_use_the_array_layout_and_reserved_descriptor() {
+        let array = unsafe { __tribute_byte_array_from(b"abc".as_ptr(), 3) };
+        assert_eq!(unsafe { bytes_contents(array) }, b"abc");
+        assert_eq!(unsafe { (*array).len }, 3);
+        // The bytes follow the 8-byte length, as an `adt.array` element does.
+        assert_eq!(
+            unsafe { *array.cast::<u8>().add(8 + 2) },
+            b'c',
+            "the third byte"
+        );
+        assert_eq!(header(array).rtti_idx, BYTE_ARRAY_RTTI_IDX);
+        assert_eq!(header(array).refcount.load(Ordering::Relaxed), 1);
+        unsafe { dealloc_test_bytes(array) };
+
+        let empty = unsafe { __tribute_byte_array_from(core::ptr::null(), 0) };
+        assert_eq!(unsafe { (*empty).len }, 0);
+        unsafe { dealloc_test_bytes(empty) };
+    }
+
+    #[test]
+    fn concat_copies_both_ranges_into_a_new_array() {
+        let left = byte_array_of(b"xabx");
+        let right = byte_array_of(b"cde");
+        let joined = unsafe { __tribute_byte_array_concat(left, 1, 2, right, 0, 3) };
         assert_eq!(unsafe { bytes_contents(joined) }, b"abcde");
-        assert_eq!(payload.cap, 5);
-        assert!(payload.owner.is_null());
-        assert_eq!(
-            payload.ptr,
-            unsafe { joined.add(1) }.cast::<u8>().cast_const()
-        );
-        assert_eq!(
-            unsafe { __tribute_bytes_get_or_panic(joined, 4) },
-            u32::from(b'e')
-        );
-        unsafe { dealloc_test_bytes(joined) };
-    }
-
-    #[test]
-    fn slice_retains_the_bytes_that_store_its_range() {
-        let (left, right) = (bytes_view(b"ab"), bytes_view(b"cde"));
-        let stored = unsafe { __tribute_bytes_concat(&left, &right) };
-        let outer = unsafe { __tribute_bytes_slice_or_panic(stored, 1, 5) };
-        let inner = unsafe { __tribute_bytes_slice_or_panic(outer, 1, 3) };
-        assert_eq!(unsafe { bytes_contents(inner) }, b"cd");
-        // Both slices hold the storing value, not one another.
-        assert_eq!(unsafe { (*outer).owner }, stored.cast_const());
-        assert_eq!(unsafe { (*inner).owner }, stored.cast_const());
-        assert_eq!(refcount(stored), 3);
-        assert_eq!(refcount(outer), 1);
-        assert_eq!(unsafe { ((*inner).cap, (*outer).cap) }, (0, 0));
-
-        // A slice of static bytes, and an empty slice, hold nothing.
-        let literal = bytes_view(b"xyz");
-        let of_literal = unsafe { __tribute_bytes_slice_or_panic(&literal, 1, 3) };
-        let empty = unsafe { __tribute_bytes_slice_or_panic(stored, 2, 2) };
-        assert_eq!(unsafe { bytes_contents(of_literal) }, b"yz");
-        assert!(unsafe { (*of_literal).owner }.is_null());
-        assert!(unsafe { (*empty).owner }.is_null());
-        assert_eq!(refcount(stored), 3);
-
-        let fixed = core::mem::size_of::<tribute_rc::RcBox<TributeBytes>>() as u64;
-        for slice in [outer, inner, of_literal, empty] {
-            let raw = unsafe { tribute_rc::RcBox::from_payload_ptr_mut(slice) }.cast();
-            unsafe { __tribute_dealloc(raw, fixed) };
+        // The arguments are borrowed and keep their one unit.
+        assert_eq!(header(left).refcount.load(Ordering::Relaxed), 1);
+        for array in [left, right, joined] {
+            unsafe { dealloc_test_bytes(array) };
         }
-        unsafe { dealloc_test_bytes(stored) };
-    }
-
-    /// Range starts and lengths: mostly in bounds, sometimes near `u32::MAX`
-    /// so that the end computation would overflow 32 bits.
-    fn range_bound() -> impl Strategy<Value = u32> {
-        prop_oneof![9 => 0u32..14, 1 => (u32::MAX - 14)..=u32::MAX]
     }
 
     proptest! {
-        /// A range comparison is `1` exactly when both ranges lie within
-        /// their payloads and hold the same bytes, and `0` otherwise.
+        /// A comparison of in-bounds ranges is `1` exactly when they hold the
+        /// same bytes.
         #[test]
-        fn prop_bytes_range_equal_matches_slices(
+        fn prop_byte_array_range_equal_matches_slices(
             left in prop::collection::vec(0u8..2, 0..12),
             right in prop::collection::vec(0u8..2, 0..12),
-            left_start in range_bound(),
-            right_start in range_bound(),
-            len in range_bound(),
+            left_start in any::<Index>(),
+            right_start in any::<Index>(),
+            len in any::<Index>(),
         ) {
-            let range = |data: &[u8], start: u32| {
-                let start = start as usize;
-                let end = start.checked_add(len as usize)?;
-                data.get(start..end).map(<[u8]>::to_vec)
-            };
-            let expected = match (range(&left, left_start), range(&right, right_start)) {
-                (Some(l), Some(r)) => u32::from(l == r),
-                _ => 0,
-            };
-            let left_bytes = bytes_view(&left);
-            let right_bytes = bytes_view(&right);
+            let left_start = left_start.index(left.len() + 1);
+            let right_start = right_start.index(right.len() + 1);
+            let len = len.index((left.len() - left_start).min(right.len() - right_start) + 1);
+            let expected =
+                u32::from(left[left_start..left_start + len] == right[right_start..right_start + len]);
+            let (left_array, right_array) = (byte_array_of(&left), byte_array_of(&right));
             let actual = unsafe {
-                __tribute_bytes_range_equal(&left_bytes, left_start, &right_bytes, right_start, len)
+                __tribute_byte_array_range_equal(
+                    left_array,
+                    left_start as u32,
+                    right_array,
+                    right_start as u32,
+                    len as u32,
+                )
             };
+            unsafe {
+                dealloc_test_bytes(left_array);
+                dealloc_test_bytes(right_array);
+            }
             prop_assert_eq!(actual, expected);
         }
     }

@@ -67,6 +67,7 @@ fn adt_to_clif_target() -> ConversionTarget {
         .legal_op("adt.variant_new")
         .legal_op("adt.string_const")
         .legal_op("adt.bytes_const")
+        .legal_op("adt.array_const")
 }
 
 /// The converted result type of a comparison-like op, if it can hold the `i8`

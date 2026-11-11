@@ -1753,6 +1753,68 @@ mod tests {
     }
 
     #[test]
+    fn an_if_whose_arm_traps_keeps_the_result_of_its_other_arm() {
+        let input = r#"core.module @test {
+  func.func @main(%cond: core.i1, %choice: core.i32) -> core.i32 {
+    %outer = scf.if %cond -> (core.i32) {
+      func.trap "out_of_range"
+    } else {
+      %inner = scf.if %cond -> (core.i32) {
+        func.trap "out_of_range"
+      } else {
+        scf.yield %choice
+      }
+      scf.yield %inner
+    }
+    func.return %outer
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, input);
+        lower(
+            &mut ctx,
+            module,
+            TypeConverter::new(),
+            &mut Default::default(),
+        )
+        .unwrap();
+        let printed = module.op().display(&ctx).to_string();
+        let mut results = Vec::new();
+        let _ = trunk_ir::walk::walk_op::<()>(&ctx, module.op(), &mut |op| {
+            if wasm_dialect::If::matches(&ctx, op) {
+                results.push(ctx.op_results(op).len());
+            }
+            std::ops::ControlFlow::Continue(trunk_ir::walk::WalkAction::Advance)
+        });
+        assert_eq!(results, [1, 1], "{printed}");
+
+        // The emitted `if`s keep their result, so the value of the arm that
+        // does not trap reaches the caller.
+        crate::passes::func_to_wasm::lower(&mut ctx, module, TypeConverter::new());
+        let bytes = crate::emit_module_to_wasm(&mut ctx, module)
+            .expect("module emits")
+            .bytes;
+        let file = tempfile::NamedTempFile::new().expect("temporary Wasm file");
+        std::fs::write(file.path(), bytes).expect("write Wasm module");
+        let run = |cond: &str| {
+            std::process::Command::new("wasmtime")
+                .args(["-W", "gc=y", "--invoke", "main"])
+                .arg(file.path())
+                .args([cond, "42"])
+                .output()
+                .expect("Wasmtime CLI is required")
+        };
+        let kept = run("0");
+        assert!(
+            kept.status.success(),
+            "{}",
+            String::from_utf8_lossy(&kept.stderr)
+        );
+        assert_eq!(String::from_utf8_lossy(&kept.stdout), "42\n");
+        assert!(!run("1").status.success());
+    }
+
+    #[test]
     fn terminal_never_controls_have_no_target_results() {
         use trunk_ir::dialect::wasm::{Block, If, Loop};
         let controls_named = [If::NAME, Block::NAME, Loop::NAME];

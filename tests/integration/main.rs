@@ -46,6 +46,7 @@ mod package_identity;
 mod query_reuse;
 mod row_var_collision;
 mod runtime_slots;
+mod runtime_traps;
 mod salsa_integration;
 mod sanitizer_access_checks;
 mod wasm_compilation;

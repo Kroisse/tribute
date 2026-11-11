@@ -314,8 +314,8 @@ fn logical_scalar_tuple_preserves_all_element_types(db: &salsa::DatabaseImpl) {
         db,
         "logical_scalar_tuple.trb",
         r#"
-fn scalars() -> #(Float, Bytes, Rune, Nil) {
-    #(3.25, b"x", ?x, Nil)
+fn scalars() -> #(Float, Bool, Rune, Nil) {
+    #(3.25, True, ?x, Nil)
 }
 "#,
     );
@@ -325,7 +325,7 @@ fn scalars() -> #(Float, Bytes, Rune, Nil) {
     assert!(
         scalars.contains("adt.struct_new")
             && scalars.contains("core.f64")
-            && scalars.contains("core.bytes")
+            && scalars.contains("core.i1")
             && scalars.contains("arith.constant 120 :")
             && scalars.contains("core.nil"),
         "scalar tuple layout must preserve each source value type:\n{scalars}"

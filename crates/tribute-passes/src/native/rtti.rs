@@ -12,7 +12,7 @@
 //!
 //! | Index | Type | Release |
 //! |-------|------|---------|
-//! | 0 | `Bytes` | releases `owner`, frees the fixed part plus `cap` |
+//! | 0 | byte array `adt.array<core.i8>` | frees the header, `len`, and `len` bytes |
 //! | 1 | Bool | fixed 12-byte release |
 //! | 2 | Nat | fixed 12-byte release |
 //! | 3 | Int | fixed 12-byte release |
@@ -21,7 +21,7 @@
 //!
 //! Indices are private to one compiled program: the table and
 //! `__tribute_deep_release` interpret them within the module. Only the index
-//! of the object the runtime allocates (`Bytes`, 0) is shared with it, so
+//! of the object the runtime allocates (the byte array, 0) is shared with it, so
 //! growing the reserved range otherwise needs no compatibility step; user
 //! indices simply start after it.
 //!
@@ -81,9 +81,9 @@ impl ClifTypes {
     }
 }
 
-/// Reserved RTTI indices. The runtime allocates `Bytes` (index 0) itself, so
-/// it shares that number.
-pub const RTTI_NIL: u32 = 0;
+/// Reserved RTTI indices. The runtime allocates the byte array (index 0)
+/// itself, so it shares that number.
+pub const RTTI_BYTE_ARRAY: u32 = 0;
 pub const RTTI_BOOL: u32 = 1;
 pub const RTTI_NAT: u32 = 2;
 pub const RTTI_INT: u32 = 3;
@@ -93,12 +93,10 @@ pub const RTTI_FLOAT: u32 = 4;
 /// reserved index.
 pub const RTTI_USER_START: u32 = RTTI_FLOAT + 1;
 
-/// The RC header and the fixed `Bytes` payload `[ptr] [len] [owner] [cap]`.
-const BYTES_FIXED_ALLOC_SIZE: u64 = 40;
-/// Payload offset of the `Bytes` that stores the bytes, or null.
-const BYTES_OWNER_OFFSET: i32 = 16;
-/// Payload offset of the count of bytes stored after the fixed payload.
-const BYTES_CAP_OFFSET: i32 = 24;
+/// The RC header and the byte array's `len`, which its bytes follow.
+const BYTE_ARRAY_FIXED_ALLOC_SIZE: u64 = 16;
+/// Payload offset of the byte array's `len`.
+const BYTE_ARRAY_LEN_OFFSET: i32 = 0;
 
 /// The size of an allocation, including the RC header.
 #[derive(Clone, Copy)]
@@ -225,20 +223,21 @@ pub(crate) fn generate_rtti(
     // release action carries a dynamic-size signal, resolved by the header
     // RTTI index before deallocation. Used primitive slots must therefore own
     // exact release functions instead of falling through with zero.
-    // A `Bytes` object may come from the runtime, so its entry always exists.
-    let bytes_release = generate_release_function(
+    // A byte array may come from the runtime, so its entry always exists. Its
+    // bytes are no references, so the release frees it alone.
+    let byte_array_release = generate_release_function(
         ctx,
-        RTTI_NIL,
-        &[BYTES_OWNER_OFFSET],
+        RTTI_BYTE_ARRAY,
+        &[],
         AllocSize::Trailing {
-            fixed: BYTES_FIXED_ALLOC_SIZE,
-            count_offset: BYTES_CAP_OFFSET,
+            fixed: BYTE_ARRAY_FIXED_ALLOC_SIZE,
+            count_offset: BYTE_ARRAY_LEN_OFFSET,
             stride: 1,
         },
         loc,
     );
-    ctx.push_op(module_block, bytes_release);
-    release_fns.insert(RTTI_NIL, release_fn_symbol(RTTI_NIL));
+    ctx.push_op(module_block, byte_array_release);
+    release_fns.insert(RTTI_BYTE_ARRAY, release_fn_symbol(RTTI_BYTE_ARRAY));
     for (rtti_idx, alloc_size) in primitive_releases {
         let func_op = generate_fixed_release_function(ctx, rtti_idx, alloc_size, loc);
         ctx.push_op(module_block, func_op);
