@@ -176,8 +176,8 @@ structured control 뒤의 `wasm.unreachable`은 탈출 block에 이르지 않는
 
 ### Terminal structured-control 결과
 
-`scf_to_wasm`은 결과가 정확히 하나의 `core.never`이고 사용되지 않으며 블록의
-마지막 operation인 `scf.if`, `scf.loop`, `scf.index_switch`를 zero-result Wasm
+`scf_to_wasm`은 결과가 정확히 하나의 `core.never`이고 사용되지 않으며 뒤에
+`func.unreachable`만 오는 `scf.if`, `scf.loop`, `scf.index_switch`를 zero-result Wasm
 제어 연산으로 낮춘다. 모든 진입 successor의 region은 단일 블록이고, 마지막 operation이
 검증된 `CallableExit` 또는 같은 terminal 판정을 만족하는 중첩 if/loop/switch여야
 한다. Native structured-to-CFG lowering과 같은 `RegionBranch`/`CallableExit`
@@ -185,13 +185,13 @@ structured control 뒤의 `wasm.unreachable`은 탈출 block에 이르지 않는
 아니다. Loop의 continue 순환이나 임의의 다중 블록 CFG는 분석하지 않는다.
 
 Terminal if는 결과 없는 `wasm.if`, terminal loop는 결과 없는 `wasm.block`과
-`wasm.loop`가 된다. Resultless switch도 블록 마지막에 있고 explicit default를
-포함한 모든 arm이 terminal이면 결과 없는 Wasm 분기 구조를 만든다. Source
+`wasm.loop`가 된다. Resultless switch도 뒤에 `func.unreachable`만 오고 explicit
+default를 포함한 모든 arm이 terminal이면 결과 없는 Wasm 분기 구조를 만든다. Source
 switch에 결과를 추가하지 않으며 일반 fallthrough switch의 계약은 유지한다.
 Wasm 검증기는 각 structured block의 `end` 뒤에 branch 내부의 도달 불가능성을
-전파하지 않는다. 따라서 terminal로 증명된 zero-result if/loop/switch 뒤에는
-명시적인 `wasm.unreachable`을 둔다. 결과가 처음부터 없는 terminal 제어 연산에도
-같은 규칙을 적용하며, 정상 successor가 있는 제어 연산에는 적용하지 않는다.
+전파하지 않는다. Shared IR은 모든 block이 terminator로 끝나야 하므로 terminal
+제어 연산 뒤에 이미 `func.unreachable`을 두며, 이것이 `wasm.unreachable`로 낮아져
+그 자리를 채운다. `scf_to_wasm`이 따로 `wasm.unreachable`을 넣지 않는다.
 
 중첩 pattern이 source operation을 바꾸기 전에 공통 `StructuredControlAnalysis`를
 조회한다. Wasm 소비자는 switch 지원 조건과 `Never` 결과의 적법성을 검사하고,

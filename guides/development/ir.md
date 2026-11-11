@@ -559,6 +559,13 @@ boundaries reject a flagged operation that some operation follows, so test
 whether an operation ends its block with `Terminator::is_set` rather than a
 list of names.
 
+The same checks require every block to end in a `Terminator`, unless the
+operation that owns its region declares `NoTerminator`, as MLIR's
+`NoTerminator` does: `core.module`, `ability.decl`, `clif.data`, `wasm.elem`,
+and the Wasm structured operations. A pass that builds a structured
+operation whose every arm leaves the callable puts `func.unreachable` after
+it.
+
 ### Type Interfaces
 
 A type interface is the same mechanism for types, declared with

@@ -141,10 +141,19 @@ successor는 `Branch`, 부모 operation으로 돌아가는지는 `RegionBranchTe
 (`wasm.br_if`, `clif.trapnz`)과 다음 operation에 값을 넘기는 표시
 (`wasm.yield`)는 아니다.
 
+MLIR처럼 모든 block은 `Terminator`로 끝난다. 빈 block도 허용하지 않는다.
+Region이 제어 흐름이 아니라 선언을 담는 operation은 `NoTerminator` flag(MLIR의
+`NoTerminator`)를 선언해 이 규칙에서 빠진다. `core.module`, `ability.decl`,
+`clif.data`, `wasm.elem`이 그렇다. Wasm의 `wasm.if`, `wasm.block`, `wasm.loop`도
+`NoTerminator`다. Stack machine의 region은 마지막 명령어 뒤에서 암묵적으로 끝나고,
+`wasm.yield`는 뒤따르는 `wasm.br`에 값을 넘기는 표시이므로 terminator가 아니다.
+등록되지 않은 operation은 정의를 읽을 수 없으므로 어느 쪽으로도 검사하지 않는다.
+
 Flag는 operation 정의의 선언이므로 이름을 나열하지 않고 검사한다. Operation
 verifier, 각 pass 뒤의 debug schema 검사, native와 Wasm backend 경계의 검증이
-flag가 있는 operation이 block의 마지막이 아니면 거부한다. Pass가 terminator 뒤에
-operation을 두면 그 pass의 오류다.
+flag가 있는 operation이 block의 마지막이 아니거나, `NoTerminator`가 아닌
+operation의 block이 `Terminator`로 끝나지 않으면 거부한다. Pass가 이 규칙을 어긴
+IR을 남기면 그 pass의 오류다.
 
 ## 선언적 operation schema
 
@@ -343,6 +352,12 @@ this way. The typed model and its dynamic query are fallible. An unregistered
 operation, malformed registered operation, or query error is never evidence
 that a region is terminal.
 
+A structured operation whose every arm leaves the callable is not itself a
+terminator. As in MLIR, the block that holds it still ends in a
+`Terminator`: a producer puts `func.unreachable` after it, so code that
+reads where control goes never has to prove that the operation does not
+return. A `core.never` result of such an operation stays unused.
+
 Structured-to-CFG lowering may use `CallableExit` only after preserving its
 own structural rules: the region must have one block, the exit must be that
 block's final operation, and a nested structured operation must expose every
@@ -359,8 +374,9 @@ region과 SCF operation의 증명 결과를 저장한다. 부모 판정은 저�
 정상적인 분석 결과이며, interface 오류도 terminal 증거로 사용하지 않는다.
 Wasm switch의 지원 타입이나 target conversion 진단은 분석의 책임이 아니다.
 중첩 `scf.if`와 `scf.loop`는 결과가 없거나 미사용 `core.never` 결과 하나만
-가지고, 모든 진입 successor region이 terminal이면 enclosing region의 종료를
-증명한다. Loop 본문 자체가 종료되는 경우만 포함하며 `continue` 순환은 증명하지
+가지고, 모든 진입 successor region이 terminal이면 그 operation 자체가 terminal이다.
+그 뒤에는 `func.unreachable`이 오므로, region의 종료는 마지막 operation인 그
+`CallableExit`가 증명한다. Loop 본문 자체가 종료되는 경우만 포함하며 `continue` 순환은 증명하지
 않는다.
 
 Native와 Wasm lowering은 phase 범위의 `AnalysisCache`에서 분석을 조회하고,
