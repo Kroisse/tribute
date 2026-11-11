@@ -588,11 +588,8 @@ pub mod Bytes {
     /// Create an empty byte sequence.
     pub fn empty() -> Bytes { b"" }
 
-    // `Repr::len` is named by path below: the function `len` of this module
-    // takes the scope's precedence in method calls.
-
     /// The number of bytes.
-    pub fn len(bytes: Bytes) -> Nat { Repr::len(repr(bytes)) }
+    pub fn len(bytes: Bytes) -> Nat { repr(bytes).len() }
 
     /// The byte sequence of all of `data`.
     pub(pkg) fn from_array(data: ByteArray) -> Bytes {
@@ -603,7 +600,7 @@ pub mod Bytes {
     /// Panics if index is out of bounds.
     pub fn get_or_panic(bytes: Bytes, index: Nat) -> Nat {
         let r = repr(bytes)
-        case index < Repr::len(r) {
+        case index < r.len() {
             True -> ByteArray::get(r.data, r.start + index)
             False -> trap_out_of_range(r.data)
         }
@@ -624,7 +621,7 @@ pub mod Bytes {
     /// Panics if start or end is out of bounds.
     pub fn slice_or_panic(bytes: Bytes, start: Nat, end: Nat) -> Bytes {
         let r = repr(bytes)
-        case end > Repr::len(r) {
+        case end > r.len() {
             True -> trap_slice(bytes)
             False -> case start > end {
                 True -> trap_slice(bytes)
@@ -638,7 +635,7 @@ pub mod Bytes {
         let l = repr(left)
         let r = repr(right)
         from_array(
-            __tribute_byte_array_concat(l.data, l.start, Repr::len(l), r.data, r.start, Repr::len(r))
+            __tribute_byte_array_concat(l.data, l.start, l.len(), r.data, r.start, r.len())
         )
     }
 
@@ -663,8 +660,8 @@ pub mod Bytes {
 
     /// Compare byte sequences by their contents.
     pub fn (==)(left: Bytes, right: Bytes) -> Bool {
-        let len = Bytes::len(left)
-        case len == Bytes::len(right) {
+        let len = left.len()
+        case len == right.len() {
             True -> range_equal(left, 0, right, 0, len)
             False -> False
         }
