@@ -339,9 +339,10 @@ pub(super) fn validate_callable_body(
         .block(block)
         .ops
         .last()
-        .is_some_and(|&last| is_tail_call(ctx, last))
+        .is_some_and(|&last| is_tail_call(ctx, last) || Trap::matches(ctx, last))
     {
-        // The tail call checks its own result against this callable.
+        // The tail call checks its own result against this callable, and a
+        // trap has none.
         return;
     }
     if let Some(ret) = terminator(ctx, owner, block, Return::DEF, errors)

@@ -171,4 +171,5 @@ fn is_native_terminator(ctx: &IrContext, op: OpRef) -> bool {
         || func::TailCall::matches(ctx, op)
         || func::TailCallIndirect::matches(ctx, op)
         || func::Unreachable::matches(ctx, op)
+        || func::Trap::matches(ctx, op)
 }

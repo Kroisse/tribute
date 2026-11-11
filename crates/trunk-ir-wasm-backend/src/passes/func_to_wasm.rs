@@ -8,6 +8,7 @@
 //! - `func.tail_call` -> `wasm.return_call`
 //! - `func.tail_call_indirect` -> `wasm.return_call_indirect`
 //! - `func.unreachable` -> `wasm.unreachable`
+//! - `func.trap` -> `wasm.unreachable`
 //! - `func.constant` -> `wasm.i32_const` (function table index)
 //!
 //! For closures, this pass also:
@@ -55,6 +56,7 @@ pub fn lower(ctx: &mut IrContext, module: Module, type_converter: TypeConverter)
             .add_pattern(FuncTailCallPattern)
             .add_pattern(FuncTailCallIndirectPattern)
             .add_pattern(FuncUnreachablePattern)
+            .add_pattern(FuncTrapPattern)
             .add_pattern(FuncConstantPattern {
                 table_indices: HashMap::default(),
             });
@@ -83,6 +85,7 @@ pub fn lower(ctx: &mut IrContext, module: Module, type_converter: TypeConverter)
         .add_pattern(FuncTailCallPattern)
         .add_pattern(FuncTailCallIndirectPattern)
         .add_pattern(FuncUnreachablePattern)
+        .add_pattern(FuncTrapPattern)
         .add_pattern(FuncConstantPattern { table_indices });
     applicator.apply_partial(ctx, module);
 
@@ -642,6 +645,26 @@ impl OpRewritePattern for FuncUnreachablePattern {
     }
 }
 
+/// Pattern for `func.trap` -> `wasm.unreachable`. The Wasm instruction has
+/// no operand, so the trap's code ends here.
+struct FuncTrapPattern;
+
+impl OpRewritePattern for FuncTrapPattern {
+    type Op = func::Trap;
+
+    fn match_and_rewrite(
+        &self,
+        ctx: &mut IrContext,
+        trap: Self::Op,
+        rewriter: &mut PatternRewriter<'_>,
+    ) -> Option<()> {
+        let loc = ctx.op(trap.op_ref()).location;
+        let new_op = wasm_dialect::Unreachable::operands().build(ctx, loc);
+        rewriter.replace_op(new_op.op_ref());
+        Some(())
+    }
+}
+
 /// Pattern for `func.constant` -> `wasm.i32_const` (i32 table index)
 ///
 /// Transforms function constant references to i32 table indices.
@@ -725,6 +748,36 @@ mod tests {
             ctx.op_attrs(lowered).get("custom"),
             Some(&Attribute::Int(7))
         );
+    }
+
+    #[test]
+    fn a_trap_becomes_unreachable_without_its_code() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @checked(%ok: core.i1, %value: core.i32) -> core.i32 {
+    %found = scf.if %ok -> (core.i32) {
+      scf.yield %value
+    } else {
+      func.trap {code = "out_of_range"}
+    }
+    func.return %found
+  }
+}"#,
+        );
+
+        lower(&mut ctx, module, TypeConverter::new());
+
+        let printed = module.op().display(&ctx).to_string();
+        let lines: Vec<_> = printed.lines().map(str::trim).collect();
+        let trap = lines
+            .iter()
+            .position(|line| *line == "wasm.unreachable")
+            .unwrap_or_else(|| panic!("{printed}"));
+        assert_eq!(lines[trap - 1], "} else {", "{printed}");
+        assert_eq!(lines[trap + 1], "}", "{printed}");
+        assert!(!printed.contains("out_of_range"), "{printed}");
     }
 
     #[test]

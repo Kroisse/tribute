@@ -190,6 +190,22 @@ pub(crate) fn validate_tail_call(ctx: &IrContext, op: OpRef, errors: &mut Vec<Va
     }
 }
 
+pub(crate) fn validate_trap(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
+    validate_return_or_yield_shape(ctx, op, errors);
+    let valid_owner = parent_op(ctx, op).is_some_and(|owner| {
+        DynSourceCallable::is_implemented(ctx, owner)
+            || DynRegionBranch::selects_one_region(ctx, owner)
+    });
+    if !valid_owner {
+        push_op_error(
+            ctx,
+            op,
+            errors,
+            "must end a callable body or an arm of an operation that selects one region",
+        );
+    }
+}
+
 pub(super) fn validate_handle(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
     let mut regions = ctx.op_regions(op);
     let (Some(body_region), Some(completion_region)) = (regions.next(), regions.next()) else {

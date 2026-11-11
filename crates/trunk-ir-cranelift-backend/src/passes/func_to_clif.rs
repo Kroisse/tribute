@@ -8,6 +8,7 @@
 //! - `func.tail_call_indirect` -> `clif.return_call_indirect`
 //! - `func.return` -> `clif.return`
 //! - `func.unreachable` -> `clif.trap`
+//! - `func.trap` -> `clif.trap`
 //! - `func.constant` -> `clif.symbol_addr`
 
 use rustc_hash::FxHashMap as HashMap;
@@ -44,6 +45,7 @@ pub fn lower(
         .add_pattern(FuncTailCallPattern)
         .add_pattern(FuncTailCallIndirectPattern)
         .add_pattern(FuncUnreachablePattern)
+        .add_pattern(FuncTrapPattern)
         .add_pattern(FuncConstantPattern { symbols, functions })
         .with_target(func_to_clif_target());
     applicator.apply_partial_conversion(ctx, module, "func-to-clif")?;
@@ -441,6 +443,27 @@ impl OpRewritePattern for FuncUnreachablePattern {
     }
 }
 
+/// Pattern: `func.trap` -> `clif.trap` with the same code
+struct FuncTrapPattern;
+
+impl OpRewritePattern for FuncTrapPattern {
+    type Op = func::Trap;
+
+    fn match_and_rewrite(
+        &self,
+        ctx: &mut IrContext,
+        trap: Self::Op,
+        rewriter: &mut PatternRewriter<'_>,
+    ) -> Option<()> {
+        let loc = ctx.op(trap.op_ref()).location;
+        let new_op = clif::Trap::operands()
+            .code(trap.code_ref(ctx))
+            .build(ctx, loc);
+        rewriter.replace_op(new_op.op_ref());
+        Some(())
+    }
+}
+
 /// Each `func.func` symbol with its exact signature, captured before lowering
 /// converts it.
 fn function_signatures(ctx: &IrContext, symbols: &SymbolTable) -> HashMap<OpRef, TypeRef> {
@@ -562,6 +585,38 @@ mod tests {
 }"#,
         );
         insta::assert_snapshot!(result);
+    }
+
+    #[test]
+    fn a_trap_keeps_its_code() {
+        let result = run_pass(
+            r#"core.module @test {
+  func.func @range() -> core.i32 {
+    func.trap {code = "out_of_range"}
+  }
+  func.func @ability() -> core.i32 {
+    func.trap {code = "missing_ability"}
+  }
+  func.func @never() -> core.i32 {
+    func.unreachable
+  }
+}"#,
+        );
+        let traps: Vec<_> = result
+            .lines()
+            .map(str::trim)
+            .filter(|line| line.starts_with("clif.trap"))
+            .collect();
+        assert_eq!(
+            traps,
+            [
+                r#"clif.trap {code = "out_of_range"}"#,
+                r#"clif.trap {code = "missing_ability"}"#,
+                r#"clif.trap {code = "unreachable"}"#,
+            ],
+            "{result}"
+        );
+        assert!(!result.contains("func.trap"), "{result}");
     }
 
     #[test]

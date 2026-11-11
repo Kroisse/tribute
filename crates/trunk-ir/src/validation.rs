@@ -509,7 +509,8 @@ fn validate_func_shapes(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationE
     }
     if (func::Return::matches(ctx, op)
         || func::TailCall::matches(ctx, op)
-        || func::TailCallIndirect::matches(ctx, op))
+        || func::TailCallIndirect::matches(ctx, op)
+        || func::Trap::matches(ctx, op))
         && ctx
             .op(op)
             .parent_block
@@ -1075,6 +1076,7 @@ pub fn is_proper_tail_terminator(ctx: &IrContext, op: OpRef) -> bool {
     func::TailCall::matches(ctx, op)
         || func::TailCallIndirect::matches(ctx, op)
         || func::Unreachable::matches(ctx, op)
+        || func::Trap::matches(ctx, op)
         || (name.dialect(ctx) == "ability"
             && matches!(
                 name.strip_dialect(ctx),

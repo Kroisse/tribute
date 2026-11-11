@@ -15,6 +15,7 @@ use crate::calling_convention::{
     CALLING_CONVENTION_ATTR, CallingConvention, DynPhysicalCallableType,
 };
 use crate::dialect::{adt, tribute_cps};
+use crate::trap::TrapCause;
 use itertools::Itertools;
 use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::dialect::core;
@@ -870,6 +871,39 @@ mod tribute_control {
     #[implements(LocalValidation)]
     #[asm_format(value attr_dict_bare)]
     fn r#yield(value: Value<_>) {}
+
+    /// Ends the execution with a trap, from a direct call of a trap
+    /// intrinsic (`design/modules.md`, "Trap intrinsic").
+    ///
+    /// ```text
+    /// tribute_control.trap out_of_range
+    /// ```
+    ///
+    /// - **Shape:** the attribute `cause`, a `TrapCause` keyword, and no
+    ///   operand, result, or region. A terminator, registered as a
+    ///   `CallableExit`.
+    /// - **Placement:** it is the last operation of its block. It may end
+    ///   the body of a `tribute_control.func` or `lambda`, and in place of
+    ///   `scf.yield` it may end an arm of an operation that selects one
+    ///   region (`DynRegionBranch::selects_one_region`), in any position.
+    ///   Only the arms that end in `scf.yield` produce that operation's
+    ///   results. It does not end a body, completion, or arm of
+    ///   `tribute_control.handle`, which end in `tribute_control.yield`;
+    ///   inside one it ends an arm of a nested operation.
+    /// - **Meaning:** the execution ends here, whatever the convention of
+    ///   the enclosing callable. No handler observes it, and nothing after
+    ///   it in the callable runs. A program may reach it; it is not a
+    ///   statement that the point is unreachable.
+    /// - **Verification:** the schema checks the cause keyword, and the
+    ///   local verifier checks the placement rule.
+    /// - **Ownership and value flow:** it uses and defines no value. The
+    ///   values live at the trap are not released.
+    /// - **Lowering:** shared legalization replaces it with `func.trap`
+    ///   whose `code` is the cause keyword.
+    /// - **Location:** the source span of the intrinsic call.
+    #[implements(CallableExit, LocalValidation)]
+    #[asm_format(cause attr_dict)]
+    fn trap(cause: Attr<TrapCause>) {}
 }
 
 /// Read the exact input and answer types carried by a resume token.

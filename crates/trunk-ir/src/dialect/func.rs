@@ -97,6 +97,28 @@ mod func {
     #[implements(CallableExit)]
     #[asm_format(attr_dict_bare)]
     fn unreachable() {}
+
+    /// Ends the execution with the trap `code` names.
+    ///
+    /// ```text
+    /// func.trap {code = "out_of_range"}
+    /// ```
+    ///
+    /// - **Shape:** the attribute `code`, and no operand, result, region, or
+    ///   successor. A terminator, registered as a `CallableExit`.
+    /// - **Meaning:** a defined end of the execution: a program may reach it,
+    ///   and reaching it always traps. `func.unreachable` instead marks a
+    ///   point no execution reaches. `code` names the cause for a reader of
+    ///   the IR and for a target whose trap can carry one; it does not
+    ///   change what the operation does.
+    /// - **Placement:** it ends its block. In place of `scf.yield` it may end
+    ///   an arm of an operation that selects one region, in any position;
+    ///   the operation's results come from its other arms.
+    /// - **Lowering:** a target lowers it to its trap instruction, keeping
+    ///   `code` where that instruction has one.
+    #[implements(CallableExit)]
+    #[asm_format(attr_dict_bare)]
+    fn trap(code: Attr<String>) {}
 }
 
 /// Signature attribute recording the machine calling convention.
@@ -816,6 +838,8 @@ impl CallableExit for Unreachable {
         }
     }
 }
+
+impl CallableExit for Trap {}
 
 impl op_interface::CallLike for Call {
     fn direct_callee<'a>(&self, ctx: &'a IrContext) -> &'a SymbolPath {

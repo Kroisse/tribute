@@ -188,3 +188,12 @@ impl OperationDeclarationUse for Handle {
 // A source `become` ends its callable: the callee's result is the caller's.
 impl CallableExit for TailCall {}
 impl CallableExit for TailCallIndirect {}
+
+// A trap ends the execution, and with it the callable.
+impl CallableExit for Trap {}
+
+impl LocalValidation for Trap {
+    fn validate(&self, ctx: &IrContext, errors: &mut Vec<ValidationError>) {
+        validate_trap(ctx, self.op_ref(), errors);
+    }
+}
