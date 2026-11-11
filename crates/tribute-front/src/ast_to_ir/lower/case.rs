@@ -630,10 +630,13 @@ fn emit_literal_check<'db>(
         }
         LiteralPattern::Bytes(bytes) => {
             let equality = builder.ctx.literal_equalities().bytes;
-            // The literal is a value of the scrutinee's `Bytes` type.
-            let bytes_ty = builder.ir.value_ty(scrutinee);
-            let literal =
-                super::logical::emit_bytes_literal(builder, location, bytes.clone(), bytes_ty);
+            let bytes_ty = builder.ctx.bytes_type(builder.ir);
+            let literal = adt::BytesConst::operands()
+                .value(bytes.clone().into())
+                .results(bytes_ty)
+                .build(builder.ir, location);
+            builder.ir.push_op(builder.block, literal.op_ref());
+            let literal = literal.result(builder.ir);
             Some(emit_equality_call(
                 builder, location, equality, "Bytes", scrutinee, literal,
             ))

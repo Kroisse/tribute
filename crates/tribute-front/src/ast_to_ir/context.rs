@@ -488,6 +488,11 @@ impl<'db> IrLoweringCtx<'db> {
         self.nominal.f64_type(ir)
     }
 
+    /// The type of a `Bytes` value.
+    pub fn bytes_type(&self, ir: &mut IrContext) -> TypeRef {
+        self.nominal.bytes_type(ir)
+    }
+
     /// Get the `tribute_rt.anyref` type.
     pub fn anyref_type(&self, ir: &mut IrContext) -> TypeRef {
         self.nominal.anyref_type(ir)

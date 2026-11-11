@@ -16,13 +16,13 @@ use crate::ast::{CtorId, RowVar, TypeKind, TypeScheme};
 
 use super::row_binders::RowBinders;
 
-/// The key component that tells nominal type origins apart.
 /// The identity path of `std::Bytes::Repr`, the representation of `Bytes`
 /// (`design/string.md` § "내부 표현").
 pub(crate) fn bytes_repr_path() -> SymbolPath {
     crate::resolve::PackageName::std().identity_path_of(&["Bytes", "Repr"])
 }
 
+/// The key component that tells nominal type origins apart.
 fn nominal_origin_key(origin: crate::ast::TypeOrigin) -> String {
     match origin {
         crate::ast::TypeOrigin::Source { disambiguator: 0 } => "source".into(),
@@ -266,12 +266,7 @@ impl<'db> NominalTypes<'db> {
             TypeKind::Int | TypeKind::Nat | TypeKind::Rune => self.i32_type(ir),
             TypeKind::Float => self.f64_type(ir),
             TypeKind::Bool => self.bool_type(ir),
-            // A value of `Bytes` is a value of its representation struct
-            // (`design/types.md` § "Primitive 타입의 표현").
-            TypeKind::Bytes => match self.nominal_key(&bytes_repr_path()) {
-                Some(key) => adt::value_type(ir, key, Vec::new()),
-                None => self.anyref_type(ir),
-            },
+            TypeKind::Bytes => self.bytes_type(ir),
             TypeKind::Nil | TypeKind::Error => self.nil_type(ir),
             TypeKind::Never => core::Never::params().intern(ir).as_type_ref(),
             TypeKind::BoundVar { .. }
@@ -542,6 +537,15 @@ impl<'db> NominalTypes<'db> {
     /// Get the `core.f64` type.
     pub(crate) fn f64_type(&self, ir: &mut IrContext) -> TypeRef {
         TypeDataBuilder::new("core.f64").intern(ir)
+    }
+
+    /// The type of a `Bytes` value: the value type of its representation
+    /// struct `std::Bytes::Repr` (`design/types.md` § "Primitive 타입의 표현").
+    pub(crate) fn bytes_type(&self, ir: &mut IrContext) -> TypeRef {
+        match self.nominal_key(&bytes_repr_path()) {
+            Some(key) => adt::value_type(ir, key, Vec::new()),
+            None => self.anyref_type(ir),
+        }
     }
 
     /// Get the `tribute_rt.anyref` type.

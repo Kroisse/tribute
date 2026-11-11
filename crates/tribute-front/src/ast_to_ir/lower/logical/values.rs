@@ -24,23 +24,6 @@ use super::callable::{
 use super::declarations::Declarations;
 use super::nominal::expr_type_for_id;
 
-/// A `bytes_ty` value, a `Bytes`, viewing all of `bytes`: one
-/// `adt.bytes_const` that target constant lowering expands
-/// (`design/string.md` § "Constant lowering").
-pub(in crate::ast_to_ir::lower) fn emit_bytes_literal(
-    builder: &mut IrBuilder<'_, '_>,
-    location: Location,
-    bytes: Vec<u8>,
-    bytes_ty: TypeRef,
-) -> ValueRef {
-    let value = adt::BytesConst::operands()
-        .value(bytes.into())
-        .results(bytes_ty)
-        .build(builder.ir, location);
-    builder.ir.push_op(builder.block, value.op_ref());
-    value.result(builder.ir)
-}
-
 pub(super) fn lower_expr<'db>(
     builder: &mut IrBuilder<'_, 'db>,
     expr: Expr<TypedRef<'db>>,
@@ -95,8 +78,13 @@ pub(super) fn lower_expr<'db>(
             Some(value.result(builder.ir))
         }
         ExprKind::BytesLit(value) => {
-            let ty = expr_type_for_id(builder, expr.id);
-            Some(emit_bytes_literal(builder, location, value, ty))
+            let ty = builder.ctx.bytes_type(builder.ir);
+            let value = adt::BytesConst::operands()
+                .value(value.into())
+                .results(ty)
+                .build(builder.ir, location);
+            builder.ir.push_op(builder.block, value.op_ref());
+            Some(value.result(builder.ir))
         }
         ExprKind::StringLit(value) => {
             let ty = expr_type_for_id(builder, expr.id);

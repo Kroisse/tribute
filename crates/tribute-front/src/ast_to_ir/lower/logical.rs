@@ -29,7 +29,6 @@ mod nominal;
 mod values;
 
 pub(super) use callable::emit_named_call;
-pub(super) use values::emit_bytes_literal;
 
 fn op(
     ir: &mut IrContext,
