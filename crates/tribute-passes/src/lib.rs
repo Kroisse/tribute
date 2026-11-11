@@ -31,6 +31,7 @@ pub mod native;
 pub mod resolve_evidence;
 pub mod slots_intrinsics;
 pub mod specialize_convention_classes;
+mod string_literal;
 pub mod target_abi;
 #[cfg(test)]
 mod test_support;

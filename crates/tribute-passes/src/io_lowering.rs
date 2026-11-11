@@ -2,7 +2,7 @@
 
 use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::{core, func};
+use trunk_ir::dialect::{arith, core, func};
 use trunk_ir::pass::{Pass, PassRunResult};
 use trunk_ir::rewrite::{
     Module, OpRewritePattern, PatternApplicator, PatternRewriter, TypeConverter,
@@ -53,14 +53,32 @@ impl OpRewritePattern for IoCallPattern {
         let result_ty = ctx.op_result_types(op).first().copied();
 
         let replacement = if callee == [WRITE_INTRINSIC] {
-            let (Some(result_ty), [bytes, newline]) = (result_ty, ctx.op_operands(op)) else {
+            let &[data, start, len, newline] = ctx.op_operands(op) else {
                 return None;
             };
-            let (bytes, newline) = (*bytes, *newline);
-            tribute_io::Write::operands(bytes, newline)
-                .results(result_ty)
-                .build(ctx, loc)
-                .op_ref()
+            // `write` takes its range as `core.index` and has no result: the
+            // stub's `Nil` result is a nil value (`design/io.md`
+            // § "Runtime Boundary").
+            let index_ty = core::Index::type_ref(ctx);
+            let [start, len] = [start, len].map(|position| {
+                let cast = arith::IndexCastui::operands(position)
+                    .results(index_ty)
+                    .build(ctx, loc);
+                rewriter.insert_op(cast.op_ref());
+                cast.result(ctx)
+            });
+            let write = tribute_io::Write::operands(data, start, len, newline).build(ctx, loc);
+            rewriter.insert_op(write.op_ref());
+            let results = match result_ty {
+                Some(_) => {
+                    let nil = core::NilValue::operands().build(ctx, loc);
+                    rewriter.insert_op(nil.op_ref());
+                    vec![nil.result(ctx)]
+                }
+                None => vec![],
+            };
+            rewriter.erase_op(results);
+            return Some(());
         } else if callee == [READ_LINE_INTRINSIC] {
             let (Some(result_ty), []) = (result_ty, ctx.op_operands(op)) else {
                 return None;
@@ -113,7 +131,7 @@ mod tests {
             &mut ctx,
             r#"
             core.module @test {
-                func.func @"std::io::__tribute_io_write"(%0: core.ptr, %1: core.i1) -> core.ptr
+                func.func @"std::io::__tribute_io_write"(%0: adt.array<core.i8>, %s: core.i32, %n: core.i32, %1: core.i1) -> core.nil
                     attributes {abi = "intrinsic"} {
                 ^bb0:
                     func.unreachable
@@ -123,9 +141,13 @@ mod tests {
                 ^bb0:
                     func.unreachable
                 }
-                func.func @caller(%0: core.ptr, %1: core.i1) -> core.ptr {
+                func.func @write(%0: adt.array<core.i8>, %s: core.i32, %n: core.i32, %1: core.i1) -> core.nil {
                 ^bb0:
-                    %2 = func.call @"std::io::__tribute_io_write"(%0, %1) : (core.ptr, core.i1) -> core.ptr
+                    %2 = func.call @"std::io::__tribute_io_write"(%0, %s, %n, %1) : (adt.array<core.i8>, core.i32, core.i32, core.i1) -> core.nil
+                    func.return %2
+                }
+                func.func @read() -> core.ptr {
+                ^bb0:
                     %3 = func.call @"std::io::__tribute_io_read_line"() : () -> core.ptr
                     func.return %3
                 }
@@ -139,7 +161,13 @@ mod tests {
             .unwrap();
 
         let output = module.op().display(&ctx).to_string();
+        let result = trunk_ir::validation::validate_op_schemas(&ctx, module.op());
+        assert!(result.is_ok(), "{result}\n{output}");
+        // The range widens to `core.index`, and a nil value stands for the
+        // stub's result.
+        assert_eq!(output.matches("arith.index_castui").count(), 2, "{output}");
         assert!(output.contains("tribute_io.write"), "{output}");
+        assert!(output.contains("core.nil_value"), "{output}");
         assert!(output.contains("tribute_io.read_line"), "{output}");
         assert!(!output.contains("__tribute_io_"), "{output}");
     }

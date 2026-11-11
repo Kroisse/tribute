@@ -388,6 +388,58 @@ impl AttrKind for Bytes {
     }
 }
 
+/// `Attr<Dense>`: a packed payload, the bytes of a constant's elements in
+/// little-endian order, stored as [`Attribute::Bytes`]. A declarative
+/// format writes it as MLIR's hexadecimal dense literal, `dense<"0x0102">`.
+pub struct Dense;
+
+impl AttrKind for Dense {
+    const KIND: AttributeKind = AttributeKind::Bytes;
+    type Out<'ctx> = &'ctx [u8];
+    type In = SmallVec<[u8; 16]>;
+
+    fn read<'ctx>(_: &'ctx IrContext, attr: &'ctx Attribute) -> &'ctx [u8] {
+        match attr {
+            Attribute::Bytes(bytes) => bytes,
+            _ => panic!("expected Bytes attribute"),
+        }
+    }
+
+    fn write(_: &mut IrContext, value: SmallVec<[u8; 16]>) -> Attribute {
+        Attribute::Bytes(value)
+    }
+
+    fn print_text(p: &mut AsmPrinter<'_>, attr: &Attribute) -> fmt::Result {
+        let Attribute::Bytes(bytes) = attr else {
+            return p.print_attribute(attr);
+        };
+        use fmt::Write as _;
+        p.write_str("dense<\"0x")?;
+        for byte in bytes {
+            write!(p, "{byte:02X}")?;
+        }
+        p.write_str("\">")
+    }
+
+    fn parse_text(p: &mut AsmParser<'_>) -> ParseResult<Attribute> {
+        p.parse_keyword("dense")?;
+        p.parse_punct("<")?;
+        let text = p.parse_string()?;
+        let bytes = text
+            .strip_prefix("0x")
+            .filter(|digits| digits.len() % 2 == 0)
+            .and_then(|digits| {
+                (0..digits.len())
+                    .step_by(2)
+                    .map(|at| u8::from_str_radix(digits.get(at..at + 2)?, 16).ok())
+                    .collect::<Option<SmallVec<[u8; 16]>>>()
+            })
+            .ok_or_else(|| p.error("expected an even number of hexadecimal digits after `0x`"))?;
+        p.parse_punct(">")?;
+        Ok(Attribute::Bytes(bytes))
+    }
+}
+
 fn list_items(attr: &Attribute) -> &[Attribute] {
     match attr {
         Attribute::List(items) => items,

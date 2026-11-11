@@ -12,12 +12,12 @@ help: the trait `AttrKind` is not implemented for `NotAKind`
   = help: the following other types implement trait `AttrKind`:
             CmpfPredicate
             CmpiPredicate
+            Dense
             FloatCond
             IntCond
             [K]
             bool
             f32
-            f64
           and $N others
   = note: this error originates in the attribute macro `trunk_ir::dialect` (in Nightly builds, run with -Z macro-backtrace for more info)
 
@@ -35,10 +35,10 @@ help: the trait `AttrKind` is not implemented for `NotAKind`
   = help: the following other types implement trait `AttrKind`:
             CmpfPredicate
             CmpiPredicate
+            Dense
             FloatCond
             IntCond
             [K]
             bool
             f32
-            f64
           and $N others

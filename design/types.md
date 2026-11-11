@@ -483,9 +483,31 @@ byte 값은 `0`–`255`의 `Nat`이다.
 | `get(bytes: ByteArray, at: Nat) -> Nat` | `at`번째 byte를 부호 없이 넓힌 값 | `adt.array_get` |
 
 `get`은 `at < len`을 요구하며, target은 이를 어긴 실행을 trap으로 끝낸다. 새 byte
-배열은 byte literal(`adt.bytes_const`)과 runtime 함수가 만든다. 두 byte 배열을 이어
-붙이는 일처럼 새 byte를 만드는 연산은 runtime 함수이며, 배열과 범위를 받아
-새 배열을 돌려준다([rc.md](rc.md#bytes)).
+배열은 literal을 펼친 배열 상수(`adt.array_const`)와 runtime 함수가
+만든다. 두 byte 배열을 이어 붙이는 일처럼 새 byte를 만드는 연산은 runtime
+함수이며, 배열과 범위를 받아 새 배열을 돌려준다([rc.md](rc.md#bytes)).
+
+## Primitive 타입의 표현
+
+`Int`, `Nat`, `Bytes` 같은 primitive 타입은 언어가 정하는 타입이다. 타입 검사는 그
+표현을 모르며, 사용자 코드는 field나 생성자 없이 literal과 prelude 함수로만 값을
+다룬다. Primitive 타입의 연산은 prelude source가 그 타입의 companion 모듈에 정의한다.
+
+표현이 scalar 하나가 아닌 primitive 타입 `T`는 표현을 prelude source의 companion
+모듈 `T`에 struct `T::Repr`로 선언한다.
+
+- Compiler intrinsic `T::repr(value: T) -> Repr`와 `T::from_repr(repr: Repr) -> T`가
+  두 타입 사이를 오간다. IR에서 `T`의 타입은 `Repr`의 IR 타입이므로 두 intrinsic은
+  값을 그대로 넘긴다.
+- `Repr`, 그 field, `repr`은 `pub(pkg)`다. `std` 안의 코드는 `T::repr(value)`로 받은
+  `Repr`의 field를 직접 읽고, `Repr` 값을 만들거나 고쳐 쓸 수 있다. 사용자 패키지에서는
+  셋 다 보이지 않는다.
+- `from_repr`는 수식자 없이 모듈 `T` 안에서만 보인다. `Repr` 값이 `T`가 되는 곳은
+  여기뿐이므로 표현의 불변식은 모듈 `T`의 함수가 지킨다.
+- Compiler는 literal을 만들 때처럼 `Repr`의 field를 이름으로 찾는다. Layout은 다른
+  struct처럼 정해진다.
+
+`Bytes`의 표현은 [string.md](string.md#내부-표현)에 있다.
 
 ---
 
