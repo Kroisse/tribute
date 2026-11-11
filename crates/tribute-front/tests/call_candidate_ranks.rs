@@ -9,6 +9,8 @@ use self::common::{TdnrCall, TdnrSummary, ast_pipeline_error_messages, tdnr_func
 use salsa_test_macros::salsa_test;
 use tribute_front::SourceCst;
 
+/// A body whose calls each take one argument and select `targets`, in
+/// order; a target outside `std` is in package `pkg`.
 fn selected(targets: &[&str]) -> TdnrSummary {
     TdnrSummary::selected(targets.iter().map(|target| {
         if target.starts_with("std::") {

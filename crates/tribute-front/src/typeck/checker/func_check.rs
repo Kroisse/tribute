@@ -42,6 +42,7 @@ enum Settling {
 }
 
 impl Settling {
+    /// The step that takes more types as final, or `None` after the last.
     fn next(self) -> Option<Self> {
         match self {
             Self::Open => Some(Self::Independent),

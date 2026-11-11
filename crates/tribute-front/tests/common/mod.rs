@@ -137,6 +137,7 @@ impl TdnrSummary {
     }
 }
 
+/// A call of one function: its qualified name and the number of arguments.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct TdnrCall {
     pub target: String,
@@ -144,6 +145,7 @@ pub struct TdnrCall {
 }
 
 impl TdnrCall {
+    /// A call of `target` with `arg_count` arguments.
     pub fn new(target: &str, arg_count: usize) -> Self {
         Self {
             target: target.to_owned(),
