@@ -587,8 +587,9 @@ mod tests {
         insta::assert_snapshot!(result);
     }
 
+    /// The code reaches `clif.trap` in the IR; emission does not encode it.
     #[test]
-    fn a_trap_keeps_its_code() {
+    fn a_trap_keeps_its_code_in_the_ir() {
         let result = run_pass(
             r#"core.module @test {
   func.func @range() -> core.i32 {
