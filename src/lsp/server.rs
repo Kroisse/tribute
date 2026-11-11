@@ -678,8 +678,17 @@ impl LspServer {
         // Extract prefix from current position (for filtering)
         let prefix = extract_completion_prefix(&rope, offset);
 
+        // After a typed `r#`, completions replace it too and are spelled raw;
+        // otherwise names that are keywords complete to their raw spelling.
+        let prefix_start = offset - prefix.len();
+        let raw_start = prefix_start.checked_sub(2).filter(|&start| {
+            rope.get_byte_slice(start..prefix_start)
+                .is_some_and(|t| t == "r#")
+        });
+
+        // The dot, if any, comes before the `r#` marker.
         let dot = source_cst.tree(&self.db).map_or(DotContext::Other, |tree| {
-            dot_context(&rope, tree, offset - prefix.len())
+            dot_context(&rope, tree, raw_start.unwrap_or(prefix_start))
         });
         let items = self.db.attach(|db| {
             let mut completions = Vec::new();
@@ -702,6 +711,15 @@ impl LspServer {
                 // Offer what the cursor's module names, filtered by prefix
                 let in_scope: Vec<_> = completions_in(all_items, &module).cloned().collect();
                 completions.extend(filter_completions(&in_scope, &prefix).cloned());
+
+                // A method call may read a field the module sees.
+                if matches!(dot, DotContext::Method | DotContext::Either) {
+                    completions.extend(
+                        filter_completions(completion_index::field_items(db, unit), &prefix)
+                            .filter(|item| item.module.as_ref().is_none_or(|own| *own == module))
+                            .cloned(),
+                    );
+                }
 
                 // A line-leading `.` either continues the line before it or
                 // starts an implicit constructor.
@@ -727,13 +745,6 @@ impl LspServer {
             Some(completions)
         })?;
 
-        // After a typed `r#`, completions replace it too and are spelled raw;
-        // otherwise names that are keywords complete to their raw spelling.
-        let prefix_start = offset - prefix.len();
-        let raw_start = prefix_start.checked_sub(2).filter(|&start| {
-            rope.get_byte_slice(start..prefix_start)
-                .is_some_and(|t| t == "r#")
-        });
         let raw_range = raw_start.map(|start| {
             let (start_line, start_char) = position_from_offset(&rope, start);
             let (end_line, end_char) = position_from_offset(&rope, offset);
@@ -1337,9 +1348,10 @@ fn span_to_range(rope: &Rope, span: trunk_ir::Span) -> lsp_types::Range {
 /// What a `.` right before a name being completed starts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DotContext {
-    /// No `.`, or one that continues the expression right before it (a
-    /// method call) or another `.` (a spread).
+    /// No `.`, or one that continues another `.` (a spread).
     Other,
+    /// A `.` that continues the expression right before it: a method call.
+    Method,
     /// An implicit constructor (`.Some`): no expression ends before the `.`.
     ImplicitConstructor,
     /// A line-leading `.`, which continues the line before it as a method
@@ -1393,7 +1405,7 @@ fn dot_context(rope: &Rope, tree: &tree_sitter::Tree, start: usize) -> DotContex
         return if EXPRESSION_KEYWORDS.contains(&token.kind()) {
             DotContext::ImplicitConstructor
         } else if ends_expression(token) {
-            DotContext::Other
+            DotContext::Method
         } else {
             DotContext::ImplicitConstructor
         };
@@ -1808,21 +1820,21 @@ mod tests {
         assert_eq!(at("xs\n    .|"), DotContext::Either);
         assert_eq!(at("case x {\n    .|"), DotContext::Either);
         // Right after an expression, `.` continues a method call.
-        assert_eq!(at("xs.|"), DotContext::Other);
-        assert_eq!(at("outlet.|"), DotContext::Other);
-        assert_eq!(at("r#let.|"), DotContext::Other);
+        assert_eq!(at("xs.|"), DotContext::Method);
+        assert_eq!(at("outlet.|"), DotContext::Method);
+        assert_eq!(at("r#let.|"), DotContext::Method);
         // Hash-delimited literals end an expression too.
-        assert_eq!(at("r#\"text\"#.|"), DotContext::Other);
-        assert_eq!(at("#\"text\"#.|"), DotContext::Other);
-        assert_eq!(at("?a.|"), DotContext::Other);
+        assert_eq!(at("r#\"text\"#.|"), DotContext::Method);
+        assert_eq!(at("#\"text\"#.|"), DotContext::Method);
+        assert_eq!(at("?a.|"), DotContext::Method);
         // Block comments before the `.` are skipped.
-        assert_eq!(at("xs /* why */ .|"), DotContext::Other);
-        assert_eq!(at("xs /* a /* nested */ b */.|"), DotContext::Other);
+        assert_eq!(at("xs /* why */ .|"), DotContext::Method);
+        assert_eq!(at("xs /* a /* nested */ b */.|"), DotContext::Method);
         assert_eq!(at("f(a, /* first */ .|"), DotContext::ImplicitConstructor);
         assert_eq!(at("xs\n    /* note */ .|"), DotContext::Either);
         assert_eq!(at("xs /* note\n    begun */ .|"), DotContext::Either);
-        assert_eq!(at("f(x).|"), DotContext::Other);
-        assert_eq!(at("\"s\".|"), DotContext::Other);
+        assert_eq!(at("f(x).|"), DotContext::Method);
+        assert_eq!(at("\"s\".|"), DotContext::Method);
         // `..` is a spread, and no `.` is no constructor.
         assert_eq!(at("User { ..|"), DotContext::Other);
         assert_eq!(at("let x = |"), DotContext::Other);
@@ -3179,6 +3191,80 @@ mod tests {
         };
         let labels: Vec<_> = list.items.iter().map(|item| item.label.as_str()).collect();
         assert_eq!(labels, ["Rect"]);
+    }
+
+    #[test]
+    fn test_completion_after_a_method_dot_offers_visible_fields() {
+        let mut harness = TestHarness::new();
+        let uri = test_uri("completion_fields");
+        let source = "mod m {\n    pub struct Window { pub label: String, data: Nat }\n}\nuse m::Window\nfn read(window: Window) -> String {\n    window.\n}";
+
+        harness.open_document(&uri, source);
+
+        let params = CompletionParams {
+            text_document_position: TextDocumentPositionParams {
+                text_document: lsp_types::TextDocumentIdentifier { uri },
+                position: lsp_types::Position {
+                    line: 5,
+                    character: 11, // After `window.`
+                },
+            },
+            work_done_progress_params: Default::default(),
+            partial_result_params: Default::default(),
+            context: None,
+        };
+
+        let result: Option<lsp_types::CompletionResponse> = harness.request::<Completion>(params);
+        let Some(lsp_types::CompletionResponse::List(list)) = result else {
+            panic!("Should return a completion list");
+        };
+        let kind_of = |label: &str| {
+            list.items
+                .iter()
+                .find(|item| item.label == label)
+                .and_then(|item| item.kind)
+        };
+        assert_eq!(kind_of("label"), Some(lsp_types::CompletionItemKind::FIELD));
+        assert_eq!(kind_of("data"), None, "a private field is hidden here");
+        assert_eq!(
+            kind_of("read"),
+            Some(lsp_types::CompletionItemKind::FUNCTION),
+            "functions the module names remain method candidates"
+        );
+    }
+
+    #[test]
+    fn test_completion_after_a_method_dot_and_raw_prefix_offers_fields() {
+        let mut harness = TestHarness::new();
+        let uri = test_uri("completion_raw_field");
+        let source =
+            "struct Window { r#type: Nat }\nfn read(window: Window) -> Nat {\n    window.r#t\n}";
+
+        harness.open_document(&uri, source);
+
+        let params = CompletionParams {
+            text_document_position: TextDocumentPositionParams {
+                text_document: lsp_types::TextDocumentIdentifier { uri },
+                position: lsp_types::Position {
+                    line: 2,
+                    character: 14, // After `window.r#t`
+                },
+            },
+            work_done_progress_params: Default::default(),
+            partial_result_params: Default::default(),
+            context: None,
+        };
+
+        let result: Option<lsp_types::CompletionResponse> = harness.request::<Completion>(params);
+        let Some(lsp_types::CompletionResponse::List(list)) = result else {
+            panic!("Should return a completion list");
+        };
+        let item = list
+            .items
+            .iter()
+            .find(|item| item.kind == Some(lsp_types::CompletionItemKind::FIELD))
+            .expect("Should suggest the raw-named field");
+        assert_eq!(item.label, "r#type");
     }
 
     #[test]

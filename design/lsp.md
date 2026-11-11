@@ -55,6 +55,11 @@ Language server는 오류가 있는 분석의 부분 결과도 사용한다. 진
 파일의 문서에 게시한다. 다른 패키지의 파일, 매니페스트, 같은 패키지의 다른 파일에
 위치한 진단도 그 파일의 문서로 게시하며, 분석한 문서의 위치로 옮기지 않는다.
 
+메서드 호출의 `.` 뒤 completion은 커서가 있는 모듈이 이름으로 가리키는 함수와 함께,
+그 모듈이 선언하거나 가져온 struct와 prelude의 struct의 field를 제안한다. 이름 해석이
+getter `T::f`를 `x.f`의 후보로 삼는 범위와 같으며, 그 모듈에서 보이지 않는
+[field](modules.md#가시성-visibility)는 제안하지 않는다.
+
 Import된 compiler 소유 binding(virtual export)은 completion과 hover에 보인다. 이동할
 source 선언이 없으므로 go-to-definition과 rename 대상은 제공하지 않는다
 ([compiler 소유 binding](modules.md#compiler-owned-builtin-bindings)).
