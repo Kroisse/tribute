@@ -292,6 +292,30 @@ fn type_to_field_type(
     })
 }
 
+/// The storage of an array element of type `ty`: 8- and 16-bit integers are
+/// packed, as `array.get_s` and `array.get_u` require, and every other
+/// element is its value type.
+fn array_element_type(
+    ctx: &IrContext,
+    ty: TypeRef,
+    type_idx_by_type: &HashMap<TypeRef, u32>,
+) -> CompilationResult<FieldType> {
+    let packed = if trunk_ir::dialect::core::I8::matches(ctx, ty) {
+        Some(StorageType::I8)
+    } else if trunk_ir::dialect::core::I16::matches(ctx, ty) {
+        Some(StorageType::I16)
+    } else {
+        None
+    };
+    match packed {
+        Some(element_type) => Ok(FieldType {
+            element_type,
+            mutable: true,
+        }),
+        None => type_to_field_type(ctx, ty, type_idx_by_type),
+    }
+}
+
 /// Create the physical WasmGC struct supertype `structref`.
 fn intern_wasm_structref(ctx: &mut IrContext) -> TypeRef {
     wasm_dialect::Structref::params().intern(ctx).as_type_ref()
@@ -595,11 +619,15 @@ pub(crate) fn collect_gc_types(
                     let ty = helpers::value_type(ctx, first_operand);
                     register_type(ctx, &mut type_idx_by_type, type_idx, ty);
                 }
-                // Record element type from result type
-                // Note: type variables should be resolved to concrete types before emit
-                let result_types = ctx.op_result_types(op).to_vec();
-                if let Some(&result_ty) = result_types.first() {
-                    record_array_elem(type_idx, builder, result_ty)?;
+                // The array's declared type names the element: a packed
+                // element reads into a wider `i32`. Otherwise the result's
+                // type is the element.
+                let element_ty = operands
+                    .first()
+                    .and_then(|&array| declared_array_element(ctx, helpers::value_type(ctx, array)))
+                    .or_else(|| ctx.op_result_types(op).first().copied());
+                if let Some(ty) = element_ty {
+                    record_array_elem(type_idx, builder, ty)?;
                 }
             }
         } else if wasm_dialect::ArraySet::matches(ctx, op) {
@@ -665,7 +693,7 @@ pub(crate) fn collect_gc_types(
         match builder.kind {
             GcKind::Array => {
                 let elem = match builder.array_elem {
-                    Some(ty) => type_to_field_type(ctx, ty, &type_idx_by_type)?,
+                    Some(ty) => array_element_type(ctx, ty, &type_idx_by_type)?,
                     None => FieldType {
                         element_type: StorageType::Val(ValType::I32),
                         mutable: false,

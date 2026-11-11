@@ -1239,35 +1239,57 @@ mod tests {
 
     #[test]
     fn lower_to_wasm_keeps_scalar_arrays_typed() {
-        let mut ctx = IrContext::new();
-        let module = parse_test_module(
-            &mut ctx,
-            r#"core.module @test {
-  !Bytes = adt.array<core.i8>
-  !Holder = adt.struct<"Holder", (!Bytes, core.i32)>
-  func.func @first(%holder: !Holder) -> core.i32 {
-    %data = adt.struct_get %holder {field = 0, type = !Holder} : !Bytes
+        // Packed elements are stored narrow and read with `array.get_u`.
+        for element in ["core.i8", "core.i16"] {
+            let mut ctx = IrContext::new();
+            let module = parse_test_module(
+                &mut ctx,
+                &format!(
+                    r#"core.module @test {{
+  !Narrow = adt.array<{element}>
+  !Holder = adt.struct<"Holder", (!Narrow, core.i32)>
+  func.func @first(%holder: !Holder) -> core.i32 {{
+    %data = adt.struct_get %holder {{field = 0, type = !Holder}} : !Narrow
     %zero = arith.constant 0 : core.index
-    %byte = adt.array_get %data, %zero : core.i8
-    %wide = arith.extui %byte : core.i8 to core.i32
+    %item = adt.array_get %data, %zero : {element}
+    %wide = arith.extui %item : {element} to core.i32
     func.return %wide
-  }
-  func.func @wrap(%data: !Bytes) -> !Holder {
+  }}
+  func.func @wrap(%data: !Narrow) -> !Holder {{
     %len = arith.constant 1 : core.i32
-    %holder = adt.struct_new(%data, %len) : (!Bytes, core.i32) -> !Holder
+    %holder = adt.struct_new(%data, %len) : (!Narrow, core.i32) -> !Holder
     func.return %holder
-  }
-}"#,
-        );
+  }}
+}}"#
+                ),
+            );
 
-        lower_to_wasm(&mut ctx, module, &mut Default::default())
-            .expect("scalar arrays should lower to wasm");
+            lower_to_wasm(&mut ctx, module, &mut Default::default())
+                .expect("scalar arrays should lower to wasm");
 
-        let output = module.op().display(&ctx).to_string();
-        assert!(output.contains("wasm_gc.array<core.i8>"), "{output}");
-        assert!(!output.contains("wasm.arrayref"), "{output}");
-        assert!(!output.contains("ref_cast"), "{output}");
-        assert!(!output.contains("adt.array"), "{output}");
+            let output = module.op().display(&ctx).to_string();
+            assert!(
+                output.contains(&format!("wasm_gc.array<{element}>")),
+                "{output}"
+            );
+            assert!(!output.contains("wasm.arrayref"), "{output}");
+            assert!(!output.contains("ref_cast"), "{output}");
+            assert!(!output.contains("adt.array"), "{output}");
+
+            let root = core::Module::from_op(&ctx, module.op()).expect("core.module");
+            let mut pm = trunk_ir::pass::PassManager::new();
+            pm.add_pass(LegalizeUnrealizedCasts)
+                .add_pass(trunk_ir::conversion::ReconcileUnrealizedCasts)
+                .add_pass(FinalizeWasmGcTypes);
+            pm.run(&mut ctx, root, &mut Default::default())
+                .expect("scalar arrays should finalize");
+            let bytes = trunk_ir_wasm_backend::emit_module_to_wasm(&mut ctx, module)
+                .expect("emit")
+                .bytes;
+            wasmparser::Validator::new()
+                .validate_all(&bytes)
+                .unwrap_or_else(|error| panic!("{element} array module: {error}"));
+        }
         assert_eq!(ConvertTypedArrays.name(), "convert-typed-arrays");
     }
 
