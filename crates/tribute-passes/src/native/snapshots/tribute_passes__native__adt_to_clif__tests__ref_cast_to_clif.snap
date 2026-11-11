@@ -3,8 +3,9 @@ source: crates/tribute-passes/src/native/adt_to_clif.rs
 expression: result
 ---
 core.module @test {
-  func.func @test_fn() -> core.ptr {
-      %0 = clif.iconst 100 : core.ptr
+  !S = adt.struct<"S", (core.i32)>
+
+  func.func @test_fn(%0: tribute_rt.anyref) -> !S {
       func.return %0
   }
 }

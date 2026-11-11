@@ -81,7 +81,6 @@ fn push_one_shot_resume(
         // Dynamic effect values recover nominal references only through
         // their declared type, preserving the typed ownership boundary.
         let recovered = adt::RefCast::operands(args[2])
-            .r#type(input_type)
             .results(input_type)
             .build(ctx, location);
         ctx.push_op(wrapper_block, recovered.op_ref());

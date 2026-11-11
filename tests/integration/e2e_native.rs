@@ -187,11 +187,11 @@ fn test_native_extern_c_in_module_links_by_declared_name() {
 use std::io::{Io, print_line}
 
 mod ffi {
-    pub extern "C" fn __tribute_bytes_len(bytes: Bytes) -> Nat
+    pub extern "C" fn __tribute_print_float(value: Float) -> Nil
 }
 
 fn main() ->{Io} Nil {
-    print_line(ffi::__tribute_bytes_len(b"1234567").to_string)
+    ffi::__tribute_print_float(7.5)
 }
 "#,
     );
@@ -200,7 +200,7 @@ fn main() ->{Io} Nil {
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "7");
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "7.5");
 }
 
 #[test]
@@ -312,11 +312,11 @@ fn test_native_generic_specializations_distinguish_same_spelled_source_types() {
 use std::io::{Io, print_line}
 
 pub mod A {
-    pub struct Thing { value: Nat }
+    pub struct Thing { pub value: Nat }
 }
 
 pub mod B {
-    pub struct Thing { value: Nat }
+    pub struct Thing { pub value: Nat }
 }
 
 fn keep(value: a) -> a {
@@ -1921,7 +1921,7 @@ fn test_string_equality_prelude_uses_direct_leaf_and_cursor_spans() {
         .expect("end of String module");
     let equality = &prelude[equality_start..equality_end];
 
-    assert!(equality.contains("__tribute_bytes_range_equal"));
+    assert!(equality.contains("Bytes::range_equal"));
     assert!(!equality.contains("bytes_equal_at"));
     assert!(!equality.contains(".get_or_panic("));
     assert!(!equality.contains(".to_bytes()"));
@@ -1937,11 +1937,9 @@ fn test_string_equality_prelude_uses_direct_leaf_and_cursor_spans() {
     assert!(operator.contains("Leaf(left_bytes)"));
     assert!(operator.contains("Leaf(right_bytes)"));
     let compact_operator: String = operator.chars().filter(|c| !c.is_whitespace()).collect();
-    assert!(
-        compact_operator.contains("__tribute_bytes_range_equal(left_bytes,0,right_bytes,0,len)")
-    );
+    assert!(compact_operator.contains("Bytes::range_equal(left_bytes,0,right_bytes,0,len)"));
     assert_eq!(
-        operator.matches("__tribute_bytes_range_equal").count(),
+        operator.matches("Bytes::range_equal").count(),
         1,
         "Leaf/Leaf should make exactly one full-span comparison"
     );
@@ -2551,6 +2549,45 @@ fn main() ->{Io} Nil {
 "#,
         "hello",
     );
+}
+
+/// A read or slice past the end of a `Bytes`, or a reversed slice, ends the
+/// execution instead of reading other memory.
+#[test]
+fn test_native_bytes_out_of_range_reads_trap() {
+    for (name, body) in [
+        ("get_past_end", "print_line(bs.get_or_panic(5).to_string)"),
+        (
+            "slice_past_end",
+            "print_line(String::from_bytes(bs.slice_or_panic(1, 6)))",
+        ),
+        (
+            "slice_reversed",
+            "print_line(String::from_bytes(bs.slice_or_panic(3, 2)))",
+        ),
+    ] {
+        let source = format!(
+            r#"
+use std::io::{{Io, print_line}}
+
+fn main() ->{{Io}} Nil {{
+    let bs = b"hello"
+    {body}
+}}
+"#
+        );
+        for output in [
+            compile_and_run_native(&format!("bytes_{name}.trb"), &source),
+            compile_and_run_native_asan(&format!("bytes_{name}_asan.trb"), &source),
+        ] {
+            assert!(
+                !output.status.success(),
+                "{name} must trap, stdout: {}",
+                String::from_utf8_lossy(&output.stdout)
+            );
+            assert!(output.stdout.is_empty(), "{name} printed a byte");
+        }
+    }
 }
 
 #[test]

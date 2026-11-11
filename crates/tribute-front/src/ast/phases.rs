@@ -165,6 +165,8 @@ pub enum BuiltinType {
     List,
     /// The runtime module's fixed-size immutable array `Slots(a)`.
     Slots,
+    /// The runtime module's fixed-size immutable byte array `ByteArray`.
+    ByteArray,
     /// The runtime module's handler dispatch closure `Dispatch`.
     Dispatch,
 }
@@ -231,6 +233,14 @@ impl<'db> TypeDefId<'db> {
         )
     }
 
+    pub fn builtin_byte_array(db: &'db dyn salsa::Database) -> Self {
+        Self::new(
+            db,
+            TypeOrigin::Builtin(BuiltinType::ByteArray),
+            PackageName::std().identity_path_of(&["runtime", "ByteArray"]),
+        )
+    }
+
     pub fn builtin_dispatch(db: &'db dyn salsa::Database) -> Self {
         Self::new(
             db,
@@ -255,6 +265,10 @@ impl<'db> TypeDefId<'db> {
 
     pub fn is_builtin_slots(self, db: &'db dyn salsa::Database) -> bool {
         *self.origin(db) == TypeOrigin::Builtin(BuiltinType::Slots)
+    }
+
+    pub fn is_builtin_byte_array(self, db: &'db dyn salsa::Database) -> bool {
+        *self.origin(db) == TypeOrigin::Builtin(BuiltinType::ByteArray)
     }
 
     pub fn is_builtin_dispatch(self, db: &'db dyn salsa::Database) -> bool {

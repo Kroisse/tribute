@@ -116,16 +116,42 @@ fn function_body<'db>(
         .expect("function should exist")
 }
 
+/// The calls of a function body after type checking.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub struct TdnrSummary {
-    pub method_calls: Vec<String>,
+    /// The names of calls whose callee still names several functions:
+    /// type checking selected none of them.
+    pub unselected_calls: Vec<String>,
+    /// The calls of one function, selected or named directly.
     pub calls: Vec<TdnrCall>,
 }
 
+impl TdnrSummary {
+    /// A body whose every call names one function: `calls`, in the order
+    /// the summary visits them.
+    pub fn selected(calls: impl IntoIterator<Item = TdnrCall>) -> Self {
+        Self {
+            unselected_calls: Vec::new(),
+            calls: calls.into_iter().collect(),
+        }
+    }
+}
+
+/// A call of one function: its qualified name and the number of arguments.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct TdnrCall {
     pub target: String,
     pub arg_count: usize,
+}
+
+impl TdnrCall {
+    /// A call of `target` with `arg_count` arguments.
+    pub fn new(target: &str, arg_count: usize) -> Self {
+        Self {
+            target: target.to_owned(),
+            arg_count,
+        }
+    }
 }
 
 fn collect_tdnr_summary<'db>(
@@ -150,7 +176,7 @@ fn collect_tdnr_summary<'db>(
                 collect_tdnr_summary(db, arg, summary);
             }
         }
-        ExprKind::Functions { name, .. } => summary.method_calls.push(name.to_string()),
+        ExprKind::Functions { name, .. } => summary.unselected_calls.push(name.to_string()),
         ExprKind::Record { fields, spread, .. } => {
             for field in fields {
                 collect_tdnr_summary(db, &field.value, summary);

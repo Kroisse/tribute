@@ -20,3 +20,4 @@ trunk-ir-wasm-backend.workspace = true
 
 [dev-dependencies]
 insta.workspace = true
+wasmparser.workspace = true

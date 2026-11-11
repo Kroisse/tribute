@@ -91,7 +91,7 @@ use std::io::{Io, print_line}
 struct Box(a) { value: a }
 
 mod inner {
-    pub struct Cell(a) { item: a }
+    pub struct Cell(a) { pub item: a }
 }
 
 fn get(b: Box(a)) -> a { b.value }
@@ -157,8 +157,8 @@ use std::io::{Io, print_line}
 use geometry::Line
 
 mod geometry {
-    pub struct Point { x: Int, y: Int }
-    pub struct Line { start: Point, label: String }
+    pub struct Point { pub x: Int, pub y: Int }
+    pub struct Line { pub start: Point, pub label: String }
 
     pub mod Line {
         pub fn describe(line: Line) -> String { line.label }
@@ -522,7 +522,7 @@ fn diag_ambiguous_getter_path(db: &salsa::DatabaseImpl) {
         db,
         r#"
 mod model {
-    pub struct User { name: String }
+    pub struct User { pub name: String }
 }
 
 mod audit {

@@ -73,8 +73,8 @@ Descriptor는 runtime에 할당되는 값의 종류마다 하나다.
   descriptor를 가리킨다.
 - Compiler가 할당하는 값마다 하나. Boxing된 `Bool`, `Nat`, `Int`, `Float`,
   compiler 소유 layout(closure 등)이 여기에 속한다. RC 객체로 할당하지 않는
-  unmanaged 값은 descriptor를 갖지 않는다. `Bytes`는 prelude가 선언한 struct이므로
-  다른 소스 struct처럼 descriptor를 받는다.
+  unmanaged 값은 descriptor를 갖지 않는다. `Bytes`의 값은 표현 struct
+  `Bytes::Repr`의 값이므로 다른 소스 struct처럼 descriptor를 받는다.
 - Native closure는
   [closure 저장 layout](tribute-dialects.md#closure-저장-layout)마다 하나다.
   Capture 타입 목록이 같은 closure는 layout과 descriptor를 공유하고, capture 없는

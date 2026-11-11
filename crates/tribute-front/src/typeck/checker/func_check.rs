@@ -25,6 +25,33 @@ use super::diagnostics::{format_solve_error, solve_error_context};
 use super::finalize::{Finalize, Substitution};
 use super::{FunctionCheck, Mode, TypeChecker};
 
+/// How far the selection of a function's deferred calls takes the types
+/// determined so far to be final. Types still undetermined rule no
+/// candidate out, so a call that takes them as final selects by rank.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Settling {
+    /// A selection may still determine more types.
+    Open,
+    /// No call can be selected with the types determined so far. A call
+    /// whose argument is the undetermined result of another deferred call
+    /// or implicit constructor still waits, since selecting that one types
+    /// the argument.
+    Independent,
+    /// The calls that waited for each other's results select too.
+    All,
+}
+
+impl Settling {
+    /// The step that takes more types as final, or `None` after the last.
+    fn next(self) -> Option<Self> {
+        match self {
+            Self::Open => Some(Self::Independent),
+            Self::Independent => Some(Self::All),
+            Self::All => None,
+        }
+    }
+}
+
 /// What resolving a function's deferred calls and implicit constructors
 /// after solving selected.
 struct DeferredSelections<'db> {
@@ -615,16 +642,32 @@ impl<'db> TypeChecker<'db> {
         let mut resolved_constructors = HashMap::default();
         // Errors of relations that waited for a call, not of the call.
         let mut waiting_errors = Vec::new();
-        // Once no call can be selected with the types determined so far,
-        // the types still undetermined rule no candidate out.
-        let mut settled = false;
+        let mut settling = Settling::Open;
         loop {
             let mut new_constraints = ConstraintSet::new();
             let mut remaining = Vec::new();
+            let settled = settling != Settling::Open;
+            let waiting_results: Vec<_> = if settling == Settling::Independent {
+                deferred
+                    .iter()
+                    .map(|mc| (mc.node_id, mc.result_ty))
+                    .chain(constructors.iter().map(|c| (c.node_id, c.result_ty)))
+                    .map(|(node, result)| (node, solver.type_subst().apply(self.db(), result)))
+                    .filter(|(_, result)| matches!(result.kind(self.db()), TypeKind::UniVar { .. }))
+                    .collect()
+            } else {
+                Vec::new()
+            };
 
             for mc in std::mem::take(&mut deferred) {
+                let awaits_argument = mc.arg_types.iter().any(|arg| {
+                    let arg = solver.type_subst().apply(self.db(), *arg);
+                    waiting_results
+                        .iter()
+                        .any(|(node, result)| *node != mc.node_id && *result == arg)
+                });
                 if let super::expr::MethodSelection::One(entry) =
-                    self.select_deferred_method(solver, &mc, settled)
+                    self.select_deferred_method(solver, &mc, settled && !awaits_argument)
                 {
                     // Method found — instantiate the TypeScheme to get fresh types
                     let func_ty = if let Some((scheme, origin)) =
@@ -688,8 +731,10 @@ impl<'db> TypeChecker<'db> {
             }
 
             if new_constraints.is_empty() {
-                if !settled && !(remaining.is_empty() && remaining_constructors.is_empty()) {
-                    settled = true;
+                if let Some(next) = settling.next()
+                    && !(remaining.is_empty() && remaining_constructors.is_empty())
+                {
+                    settling = next;
                     deferred = remaining;
                     constructors = remaining_constructors;
                     continue;
@@ -729,7 +774,7 @@ impl<'db> TypeChecker<'db> {
             }
             deferred = remaining;
             constructors = remaining_constructors;
-            settled = false;
+            settling = Settling::Open;
         }
         DeferredSelections {
             functions: resolved,

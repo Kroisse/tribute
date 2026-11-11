@@ -51,7 +51,7 @@
 //! - `adt.ref_is_null` -> `wasm.ref_is_null`
 //! - `adt.ref_cast` -> `wasm.ref_cast`
 //!
-//! Note: `adt.string_const` and `adt.bytes_const` are handled by WasmLowerer
+//! Note: `adt.string_const`, `adt.bytes_const`, and `adt.array_const` are handled by WasmLowerer
 //! because they require data segment allocation.
 //!
 //! GC operations first lower to `wasm_gc`, which identifies GC types by
@@ -138,6 +138,16 @@ fn descriptor_operand(
     Some(constant.result(ctx))
 }
 
+/// Lower `adt.ref_null`, `adt.ref_is_null`, and `adt.ref_cast` to their
+/// Wasm operations, the `adt-references-to-wasm` pass.
+pub(crate) fn lower_references(ctx: &mut IrContext, module: Module) {
+    PatternApplicator::new(TypeConverter::new())
+        .add_pattern(RefNullPattern)
+        .add_pattern(RefIsNullPattern)
+        .add_pattern(RefCastPattern)
+        .apply_partial(ctx, module);
+}
+
 /// Lower adt dialect to wasm dialect using arena IR.
 ///
 /// The `type_converter` parameter allows language-specific backends to provide
@@ -164,9 +174,6 @@ pub(crate) fn lower(ctx: &mut IrContext, module: Module, type_converter: TypeCon
         .add_pattern(ArrayGetPattern)
         .add_pattern(ArraySetPattern)
         .add_pattern(ArrayLenPattern)
-        .add_pattern(RefNullPattern)
-        .add_pattern(RefIsNullPattern)
-        .add_pattern(RefCastPattern)
         .add_pattern(adt::EraseNominalDecls);
     applicator.apply_partial(ctx, module);
     for layout in tribute_rtti::Layout::declared(ctx, module) {
@@ -981,10 +988,8 @@ impl OpRewritePattern for RefNullPattern {
         let loc = ctx.op(op).location;
         let result_ty = ref_null.result_ty(ctx);
 
-        let adt_type = ref_null.r#type(ctx);
-
         let new_op = wasm_gc_dialect::RefNull::operands()
-            .target_type(adt_type)
+            .target_type(result_ty)
             .results(result_ty)
             .build(ctx, loc);
         rewriter.replace_op(new_op.op_ref());
@@ -1034,11 +1039,8 @@ impl OpRewritePattern for RefCastPattern {
         let ref_val = ref_cast.r#ref(ctx);
         let result_ty = ref_cast.result_ty(ctx);
 
-        // Get the target type from the adt type attribute
-        let adt_type = ref_cast.r#type(ctx);
-
         let new_op = wasm_gc_dialect::RefCast::operands(ref_val)
-            .target_type(adt_type)
+            .target_type(result_ty)
             .results(result_ty)
             .build(ctx, loc);
         rewriter.replace_op(new_op.op_ref());
@@ -1213,14 +1215,15 @@ mod tests {
     adt.array_set %array, %at, %element
     %length = adt.array_len %filled : core.index
 
-    %null = adt.ref_null {type = !S} : !S
-    %is_null = adt.ref_is_null %null : core.i32
-    %ref = adt.ref_cast %null {type = !S} : !S
+    %null = adt.ref_null : !S
+    %is_null = adt.ref_is_null %null : !S
+    %ref = adt.ref_cast %null : !S to !S
     wasm.return
   }
 }"#,
         );
 
+        lower_references(&mut ctx, module);
         lower(&mut ctx, module, TypeConverter::new());
 
         let func = module.ops(&ctx)[0];

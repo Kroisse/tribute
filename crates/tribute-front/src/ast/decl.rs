@@ -223,8 +223,9 @@ pub struct FieldDecl {
     pub id: NodeId,
     /// Node ID whose span is the field name (same as `id` for positional fields).
     pub name_id: NodeId,
-    /// Whether this field is public (for struct fields).
-    pub is_pub: bool,
+    /// The field's own visibility. Only a named struct field may have a
+    /// marker; the resolver rejects one on an enum variant field.
+    pub visibility: Visibility,
     /// Field name (None for positional fields in tuple-like variants).
     pub name: Option<Symbol>,
     /// Field type.

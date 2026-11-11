@@ -49,6 +49,16 @@ pub fn closure_base(ctx: &mut IrContext) -> TypeRef {
     closure_base_layout(ctx, entries)
 }
 
+/// The byte array `adt.array<core.i8>` that holds the bytes of a `Bytes`
+/// (`design/types.md` § "ByteArray"). It is an ordinary array and carries no
+/// layout identifier; the runtime allocates it with a reserved descriptor.
+pub fn byte_array(ctx: &mut IrContext) -> TypeRef {
+    let i8_ty = trunk_ir::dialect::core::I8::type_ref(ctx);
+    crate::dialect::adt::Array::params(i8_ty)
+        .intern(ctx)
+        .as_type_ref()
+}
+
 /// Whether `ty` carries the runtime layout identifier `layout`.
 pub fn has_runtime_layout(ctx: &IrContext, ty: TypeRef, layout: &str) -> bool {
     ctx.type_attrs(ty).get_str(LAYOUT_ATTR) == Some(layout)

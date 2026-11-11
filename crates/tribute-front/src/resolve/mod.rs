@@ -428,6 +428,7 @@ fn inject_runtime_bindings<'db>(db: &'db dyn salsa::Database, env: &mut PackageE
     let pkg = vec![Symbol::new("pkg")];
     for id in [
         TypeDefId::builtin_slots(db),
+        TypeDefId::builtin_byte_array(db),
         TypeDefId::builtin_dispatch(db),
     ] {
         let name = id.name(db);
@@ -439,7 +440,8 @@ fn inject_runtime_bindings<'db>(db: &'db dyn salsa::Database, env: &mut PackageE
         };
         let binding = Binding::TypeDef { id };
         env.restrict(binding.clone(), restriction);
-        // The intrinsics' module `Slots` keeps its namespace; the name is the type.
+        // The intrinsics' modules `Slots` and `ByteArray` keep their
+        // namespaces; the name is the type.
         if matches!(
             env.lookup_qualified(&runtime, &name),
             None | Some(Binding::Module { .. })
@@ -570,21 +572,32 @@ fn collect_definition<'db>(
             env.add_type(s.name.clone(), type_def_id);
             env.add_constructor(s.name.clone(), ctor_id, None, s.fields.len());
             restrict(env, Binding::TypeDef { id: type_def_id });
-            restrict(
-                env,
-                Binding::Constructor {
-                    id: ctor_id,
-                    tag: None,
-                    arity: s.fields.len(),
-                },
-            );
 
             // Register field accessors in struct's namespace
             // e.g., struct Point { x: Int, y: Int } → Point::x, Point::y functions
             ids.push(s.name.clone());
+            // A field is visible where both its own visibility and the
+            // struct's allow. The constructor writes every field, so it is
+            // visible only where all of them are.
+            let mut ctor_restriction = restriction.clone();
             for field in &s.fields {
                 if let Some(field_name) = field.name.clone() {
                     let field_qualified = ids.child(field_name.clone());
+                    let field_restriction = scope
+                        .restriction(prefix, field_qualified.clone(), &field.visibility)
+                        .map(|own| own.within_module(restriction.as_ref()))
+                        .or_else(|| restriction.clone());
+                    if let Some(field_restriction) = &field_restriction {
+                        ctor_restriction = Some(match ctor_restriction {
+                            Some(ctor) => ctor.within_module(Some(field_restriction)),
+                            None => field_restriction.clone(),
+                        });
+                    }
+                    let restrict = |env: &mut PackageEnv<'db>, binding: Binding<'db>| {
+                        if let Some(field_restriction) = &field_restriction {
+                            env.restrict(binding, field_restriction.clone());
+                        }
+                    };
                     let func_id = FuncDefId::new(db, field_qualified);
                     let binding = Binding::Function { id: func_id };
                     restrict(env, binding.clone());
@@ -608,6 +621,19 @@ fn collect_definition<'db>(
                 }
             }
             ids.pop();
+            restrict(
+                env,
+                Binding::Constructor {
+                    id: ctor_id,
+                    tag: None,
+                    arity: s.fields.len(),
+                },
+            );
+            if let Some(ctor_restriction) = ctor_restriction
+                && Some(&ctor_restriction) != restriction.as_ref()
+            {
+                env.restrict_construction(ctor_id, ctor_restriction);
+            }
         }
 
         Decl::Enum(e) => {
@@ -993,7 +1019,7 @@ mod tests {
             fields: vec![FieldDecl {
                 id: fresh_node_id(),
                 name_id: fresh_node_id(),
-                is_pub: false,
+                visibility: Visibility::Private,
                 name: Some(Symbol::new("value")),
                 ty: TypeAnnotation {
                     id: fresh_node_id(),
@@ -1297,7 +1323,7 @@ mod tests {
                     FieldDecl {
                         id: fresh_node_id(),
                         name_id: fresh_node_id(),
-                        is_pub: false,
+                        visibility: Visibility::Private,
                         name: Some(Symbol::new("x")),
                         ty: TypeAnnotation {
                             id: fresh_node_id(),
@@ -1307,7 +1333,7 @@ mod tests {
                     FieldDecl {
                         id: fresh_node_id(),
                         name_id: fresh_node_id(),
-                        is_pub: false,
+                        visibility: Visibility::Private,
                         name: Some(Symbol::new("y")),
                         ty: TypeAnnotation {
                             id: fresh_node_id(),

@@ -442,7 +442,7 @@ fn main() ->{Io} Nil {
             "spelled.trb",
             r#"
 mod shapes {
-    pub struct Thing { n: Nat }
+    pub struct Thing { pub n: Nat }
     pub struct Wrap(a) { value: a }
     pub fn wrap(thing: Thing) -> Wrap(Thing) { Wrap { value: thing } }
     pub fn count(wrapped: Wrap(Thing)) -> Nat { wrapped.value.n }

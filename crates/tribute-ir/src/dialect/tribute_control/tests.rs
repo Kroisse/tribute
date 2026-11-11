@@ -1880,8 +1880,8 @@ fn managed_defined_boundaries_null_and_compatible_cast_are_valid() {
   !S = adt.struct<"S", ()>
   !R = adt.struct<"S">
   tribute_control.func @managed(%value: !R) -> !R {
-    %null = adt.ref_null {type = !R} : !R
-    %cast = adt.ref_cast %null {type = !R} : !R
+    %null = adt.ref_null : !R
+    %cast = adt.ref_cast %null : !R to !R
     tribute_control.return %cast
   }
 }"#,
@@ -1951,7 +1951,7 @@ fn ref_cast_rejects_distinct_nominal_managed_references() {
   !RS = adt.struct<"S">
   !RT = adt.struct<"T">
   tribute_control.func @incompatible(%value: !RS) -> !RT {
-    %cast = adt.ref_cast %value {type = !RT} : !RT
+    %cast = adt.ref_cast %value : !RS to !RT
     tribute_control.return %cast
   }
 }"#,

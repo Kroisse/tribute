@@ -4,9 +4,11 @@ use crate::dialect::tribute_control::{
     DynRowParameterized, ROW_ARGS_ATTR, ROW_PARAMS_ATTR, Row, RowParameterized,
     display_layout_binders, parse_layout_binders,
 };
-use crate::dialect::tribute_rtti::{DescriptorFieldsError, DescriptorLayoutType, ManagedRefType};
+use crate::dialect::tribute_rtti::{
+    DescriptorFieldsError, DescriptorLayoutType, ManagedRef, ManagedRefType,
+};
 use trunk_ir::asm_format::TypeAliasHint;
-use trunk_ir::dialect::core::Index;
+use trunk_ir::dialect::core::{I1, I8, Index};
 use trunk_ir::op_flag::Pure;
 
 #[trunk_ir::dialect]
@@ -311,23 +313,41 @@ mod adt {
     #[asm_format(r#ref attr_dict_bare ":" type(result))]
     fn array_len(r#ref: Value<impl Array>) -> Value<Index> {}
 
-    /// The null inhabitant of exactly the nominal value type `type` (a
-    /// layout key or a row instance), which is also the result type. Retaining or releasing it is a no-op.
+    /// The null inhabitant of exactly its result type, a managed reference
+    /// type such as a nominal value type (a layout key or a row instance).
+    /// Retaining or releasing it is a no-op.
+    ///
+    /// ```text
+    /// %n = adt.ref_null : !"pkg::Node"
+    /// ```
     #[flags(Pure)]
     #[asm_format(attr_dict_bare ":" type(result))]
-    fn ref_null(r#type: Attr<Type>) -> Value<_> {}
+    fn ref_null() -> Value<impl ManagedRef> {}
 
+    /// Whether the managed reference `ref` is the null inhabitant of its
+    /// type. The text writes the operand's type, as `adt.ref_cast` does; the
+    /// result is a `core.i1`.
+    ///
+    /// ```text
+    /// %empty = adt.ref_is_null %list : tribute_rt.anyref
+    /// ```
     #[flags(Pure)]
-    #[asm_format(r#ref attr_dict_bare ":" type(result))]
-    fn ref_is_null(r#ref: Value<_>) -> Value<_> {}
+    #[asm_format(r#ref attr_dict_bare ":" type(r#ref))]
+    fn ref_is_null(r#ref: Value<impl ManagedRef>) -> Value<I1> {}
 
-    /// `ref` as the nominal value type `type` (a layout key or a row
-    /// instance), which is also the result type. It is allowed only between managed references whose nominal identity has been
-    /// established to be the same.
+    /// `ref` as its result type, a managed reference type such as a nominal
+    /// value type (a layout key or a row instance). It is allowed only
+    /// between managed references whose nominal identity has been
+    /// established to be the same. The text writes both types, as
+    /// `core.unrealized_conversion_cast` does.
+    ///
+    /// ```text
+    /// %c = adt.ref_cast %v : tribute_rt.anyref to !"pkg::Node"
+    /// ```
     #[implements(Fold)]
     #[flags(Pure)]
-    #[asm_format(r#ref attr_dict_bare ":" type(result))]
-    fn ref_cast(r#type: Attr<Type>, r#ref: Value<_>) -> Value<_> {}
+    #[asm_format(r#ref attr_dict_bare ":" type(r#ref) "to" type(result))]
+    fn ref_cast(r#ref: Value<impl ManagedRef>) -> Value<impl ManagedRef> {}
 
     /// A string constant: a value of the canonical String type holding
     /// `value`, written as `arith.constant` writes its value.
@@ -339,20 +359,37 @@ mod adt {
     #[asm_format(value attr_dict_bare ":" type(result))]
     fn string_const(value: Attr<String>) -> Value<_> {}
 
-    /// A byte array holding `value`: its result is an
-    /// `adt.array<core.i8>` whose elements are the bytes of `value`, owned
-    /// with one unit like a new allocation. The frontend wraps it in the
-    /// prelude `Bytes` struct. A native target may produce one static object
-    /// per constant and retain it on each evaluation (`design/rc.md` § "정적
-    /// 객체"); Wasm builds a new array from a passive data segment
-    /// (`design/string.md` § "Constant lowering").
+    /// A byte sequence constant: a value of `Bytes`, whose IR type is the
+    /// representation struct `std::Bytes::Repr`, viewing all of
+    /// `value`. Target constant lowering expands it to that struct over an
+    /// `adt.array_const` of the bytes, placing the fields by their declared
+    /// names (`design/string.md` § "Constant lowering").
     ///
     /// ```text
-    /// %b = adt.bytes_const b"\x01\x02" : adt.array<core.i8>
+    /// %b = adt.bytes_const b"\x01\x02" : !"std::Bytes::Repr"
     /// ```
     #[flags(Pure)]
     #[asm_format(value attr_dict_bare ":" type(result))]
     fn bytes_const(value: Attr<Bytes>) -> Value<_> {}
+
+    /// An array constant of its result type whose elements are `value`, the
+    /// elements' bytes in little-endian order. Its result is owned with one
+    /// unit like a new allocation. Whether two evaluations produce the same
+    /// object is not specified: a native target may produce one static
+    /// object per constant and retain it on each evaluation (`design/rc.md`
+    /// § "정적 객체"), and Wasm builds a new array from a passive data
+    /// segment on each evaluation (`design/string.md` § "Constant
+    /// lowering"). Constant lowering builds it while expanding
+    /// `adt.bytes_const` and `adt.string_const`.
+    ///
+    /// The element type is `core.i8`, so `value` holds one byte per element.
+    ///
+    /// ```text
+    /// %b = adt.array_const dense<"0x0102"> : adt.array<core.i8>
+    /// ```
+    #[flags(Pure)]
+    #[asm_format(value attr_dict_bare ":" type(result))]
+    fn array_const<A: Array<Element = I8>>(value: Attr<Dense>) -> Value<A> {}
 }
 
 // A value of a nominal layout type points to an allocation of that layout.
@@ -605,24 +642,21 @@ impl OpRewritePattern for ForwardStructGet {
     }
 }
 
-/// `adt.ref_cast {type = T} (%x : T)` → `%x`.
+/// `adt.ref_cast %x : T to T` → `%x`.
 ///
 /// The cast is the identity when its operand already has the result type.
 impl Fold for RefCast {
     fn fold(&self, ctx: &IrContext) -> Option<FoldResult> {
-        let op = self.op_ref();
-        let cast = self;
-        let operand = cast.r#ref(ctx);
-        let [result_ty] = ctx.op_result_types(op).as_array()?;
-        (ctx.value_ty(operand) == *result_ty && cast.r#type(ctx) == *result_ty)
-            .then_some(FoldResult::Forward(operand))
+        let operand = self.r#ref(ctx);
+        let [result_ty] = ctx.op_result_types(self.op_ref()).as_array()?;
+        (ctx.value_ty(operand) == *result_ty).then_some(FoldResult::Forward(operand))
     }
 }
 
 // === Nominal struct layout type ===
 
 use rustc_hash::FxHashMap as HashMap;
-use trunk_ir::attr_kind::{Bytes, Type};
+use trunk_ir::attr_kind::{Bytes, Dense, Type};
 use trunk_ir::context::IrContext;
 use trunk_ir::ops::DialectType;
 use trunk_ir::types::{
@@ -880,6 +914,13 @@ impl NominalDecls {
     pub fn variant_position(&self, ctx: &IrContext, layout: Enum, variant: &str) -> Option<u32> {
         self.of_enum(layout)?.position_of(ctx, variant)
     }
+
+    /// The position of the field the declaration of `layout` names `field`,
+    /// for a pass that builds a value of a compiler-owned struct by its
+    /// source field names.
+    pub fn field_position(&self, ctx: &IrContext, layout: Struct, field: &str) -> Option<u32> {
+        self.of_struct(layout)?.position_of(ctx, field)
+    }
 }
 
 /// A nominal declaration that does not fit its layout.
@@ -916,6 +957,14 @@ impl trunk_ir::ops::Verify for EnumDecl {
             return Err(NominalDeclError::CountMismatch { names, positions }.into());
         }
         Ok(())
+    }
+}
+
+impl StructDecl {
+    /// The position of the field this declaration names `field`.
+    pub fn position_of(self, ctx: &IrContext, field: &str) -> Option<u32> {
+        let position = self.fields(ctx).position(|name| name == field)?;
+        Some(u32::try_from(position).expect("a struct has fewer than 2^32 fields"))
     }
 }
 
@@ -2141,6 +2190,36 @@ mod tests {
     }
 
     #[test]
+    fn array_constants_spell_their_payload_as_a_dense_literal() {
+        let text = "core.module @test {\n  func.func @f() -> core.nil {\n    %b = adt.array_const dense<\"0x00FF7A\"> : adt.array<core.i8>\n    func.return\n  }\n}";
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, text);
+        assert!(trunk_ir::validation::validate_op_schemas(&ctx, module.op()).is_ok());
+        let printed = module.op().display(&ctx).to_string();
+        assert!(printed.contains("dense<\"0x00FF7A\">"), "{printed}");
+        let mut found = None;
+        let _ = trunk_ir::walk::walk_op::<()>(&ctx, module.op(), &mut |op| {
+            found = found.or(ArrayConst::from_op(&ctx, op).ok());
+            std::ops::ControlFlow::Continue(trunk_ir::walk::WalkAction::Advance)
+        });
+        let constant = found.expect("the constant");
+        assert_eq!(constant.value(&ctx), [0x00, 0xFF, 0x7A]);
+
+        // Only byte elements are accepted, and the digits come in pairs.
+        assert!(!array_schema_ok(
+            "%b = adt.array_const dense<\"0x00\"> : !A"
+        ));
+        let mut ctx = IrContext::new();
+        assert!(
+            trunk_ir::parser::parse_module(
+                &mut ctx,
+                "core.module @test {\n  %b = adt.array_const dense<\"0x0\"> : adt.array<core.i8>\n}"
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
     fn array_operations_reject_the_unmanaged_core_array() {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
@@ -2925,8 +3004,8 @@ mod canonicalize_tests {
   !pair = adt.struct<"Pair", (core.i32, core.i64)>
   func.func @f(%x: core.i32, %y: core.i64, %z: core.i64) -> core.i64 {
     %p = adt.struct_new(%x, %y) : (core.i32, core.i64) -> !pair
-    %any = adt.ref_cast %p {type = tribute_rt.anyref} : tribute_rt.anyref
-    %alias = adt.ref_cast %any {type = !pair} : !pair
+    %any = adt.ref_cast %p : !pair to tribute_rt.anyref
+    %alias = adt.ref_cast %any : tribute_rt.anyref to !pair
     adt.struct_set %alias, %z {type = !pair, field = 1}
     %r = adt.struct_get %p {type = !pair, field = 1} : core.i64
     func.return %r
@@ -2997,7 +3076,7 @@ mod canonicalize_tests {
             r#"core.module @test {
   !pair = adt.struct<"Pair", (core.i32, core.i64)>
   func.func @f(%p: !pair) -> !pair {
-    %r = adt.ref_cast %p {type = !pair} : !pair
+    %r = adt.ref_cast %p : !pair to !pair
     func.return %r
   }
 }"#,
@@ -3012,7 +3091,7 @@ mod canonicalize_tests {
             r#"core.module @test {
   !pair = adt.struct<"Pair", (core.i32, core.i64)>
   func.func @f(%p: !pair) -> tribute_rt.anyref {
-    %r = adt.ref_cast %p {type = tribute_rt.anyref} : tribute_rt.anyref
+    %r = adt.ref_cast %p : !pair to tribute_rt.anyref
     func.return %r
   }
 }"#,

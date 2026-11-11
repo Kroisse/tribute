@@ -40,8 +40,8 @@ pub ability Io {
 }
 
 pub struct SystemError {
-    code: Int
-    message: String
+    pub code: Int
+    pub message: String
 }
 
 pub enum Error {

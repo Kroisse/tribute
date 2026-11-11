@@ -562,14 +562,14 @@ mod tests {
 
     const RUNTIME_BINDINGS: &str = r#"core.module @test {
   func.func @__tribute_next_tag() -> core.i32 attributes {abi = "C"}
-  func.func @__tribute_bytes_len(%bytes: core.bytes) -> core.i32 attributes {abi = "C"}
-  func.func @__tribute_unbound_helper(%bytes: core.bytes) -> core.nil attributes {abi = "C"}
+  func.func @__tribute_byte_array_range_equal(%left: adt.array<core.i8>, %ls: core.i32, %right: adt.array<core.i8>, %rs: core.i32, %len: core.i32) -> core.i32 attributes {abi = "C"}
+  func.func @__tribute_unbound_helper(%bytes: adt.array<core.i8>) -> core.nil attributes {abi = "C"}
   func.func @user_bridge(%value: core.i32) -> core.i32 attributes {abi = "C"}
   func.func @unused_bridge(%value: core.i32) -> core.i32 attributes {abi = "C"}
-  func.func @worker(%ev: core.ptr, %bytes: core.bytes) -> core.i32 {
-    %printed = func.call @__tribute_unbound_helper(%bytes) : (core.bytes) -> core.nil
-    %len = func.call @__tribute_bytes_len(%bytes) : (core.bytes) -> core.i32
-    %id = func.call @user_bridge(%len) : (core.i32) -> core.i32
+  func.func @worker(%ev: core.ptr, %bytes: adt.array<core.i8>, %n: core.i32) -> core.i32 {
+    %printed = func.call @__tribute_unbound_helper(%bytes) : (adt.array<core.i8>) -> core.nil
+    %same = func.call @__tribute_byte_array_range_equal(%bytes, %n, %bytes, %n, %n) : (adt.array<core.i8>, core.i32, adt.array<core.i8>, core.i32, core.i32) -> core.i32
+    %id = func.call @user_bridge(%same) : (core.i32) -> core.i32
     %tag = func.call @__tribute_next_tag() : () -> core.i32
     func.return %tag
   }

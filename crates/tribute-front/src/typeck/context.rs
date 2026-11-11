@@ -274,6 +274,20 @@ impl<'db> ModuleTypeEnv<'db> {
             list_scheme,
         );
         type_defs.insert(slots_id.path(db).clone(), slots_scheme);
+        let byte_array_id = TypeDefId::builtin_byte_array(db);
+        let byte_array_ty = Type::new(
+            db,
+            TypeKind::Named {
+                id: byte_array_id,
+                name: Symbol::new("ByteArray"),
+                row_args: Vec::new(),
+                args: Vec::new(),
+            },
+        );
+        type_defs.insert(
+            byte_array_id.path(db).clone(),
+            TypeScheme::mono(db, byte_array_ty),
+        );
         let dispatch_id = TypeDefId::builtin_dispatch(db);
         let dispatch_ty = Type::new(
             db,
@@ -1151,12 +1165,13 @@ mod tests {
         let exported = env.export_type_defs();
 
         // Should be sorted alphabetically by name
-        let expected: [&[&str]; 7] = [
+        let expected: [&[&str]; 8] = [
             &["Alpha"],
             &["List"],
             &["Middle"],
             &["Zebra"],
             &["std", "collections", "List"],
+            &["std", "runtime", "ByteArray"],
             &["std", "runtime", "Dispatch"],
             &["std", "runtime", "Slots"],
         ];

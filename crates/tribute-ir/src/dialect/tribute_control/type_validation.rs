@@ -214,29 +214,21 @@ pub(super) fn validate_managed_reference_boundaries(
     walk_region_ops(ctx, body, &mut |op| {
         let data = ctx.op(op);
         if data.name.is(ctx, "adt.ref_null") {
-            let ([], [result], Some(declared)) = (
-                ctx.op_operands(op),
-                ctx.op_result_types(op),
-                ctx.op_attrs(op).get_type("type"),
-            ) else {
+            let ([], [result]) = (ctx.op_operands(op), ctx.op_result_types(op)) else {
                 push_op_error(ctx, op, errors, "adt.ref_null requires one typed result");
                 return;
             };
-            if *result != declared || !adt::is_nominal_value(ctx, *result) {
+            if !adt::is_nominal_value(ctx, *result) {
                 push_op_error(
                     ctx,
                     op,
                     errors,
-                    "adt.ref_null result and type attribute must be the same managed nominal value type",
+                    "adt.ref_null result must be a managed nominal value type",
                 );
             }
         }
         if data.name.is(ctx, "adt.ref_cast") {
-            let ([operand], [result], Some(declared)) = (
-                ctx.op_operands(op),
-                ctx.op_result_types(op),
-                ctx.op_attrs(op).get_type("type"),
-            ) else {
+            let ([operand], [result]) = (ctx.op_operands(op), ctx.op_result_types(op)) else {
                 push_op_error(
                     ctx,
                     op,
@@ -248,8 +240,7 @@ pub(super) fn validate_managed_reference_boundaries(
             let operand_type = ctx.value_ty(*operand);
             let source = nominal_identity(ctx, operand_type);
             let target = nominal_identity(ctx, *result);
-            if declared != *result
-                || !adt::is_nominal_value(ctx, operand_type)
+            if !adt::is_nominal_value(ctx, operand_type)
                 || !adt::is_nominal_value(ctx, *result)
                 || source.is_none()
                 || source != target

@@ -491,7 +491,7 @@ mod tests {
     func.return %id
   }
   func.func @"std::runtime::evidence::lookup_tr"(%ev: !Evidence, %id: core.i32) -> !Closure {
-    %f = adt.ref_null {type = !Closure} : !Closure
+    %f = adt.ref_null : !Closure
     func.return %f
   }
   func.func @"std::runtime::evidence::extend"(%ev: !Evidence, %id: core.i32, %prompt: core.i32, %tr: !OptionRef, %outer: !Evidence) -> !Evidence {
