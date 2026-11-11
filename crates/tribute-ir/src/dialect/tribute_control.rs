@@ -615,8 +615,10 @@ mod tribute_control {
     /// ```
     ///
     /// - **Shape:** takes one source-logical result and has no results,
-    ///   attributes, or regions. It is the terminator of a
-    ///   `tribute_control.func` or `lambda` body and is invalid anywhere else.
+    ///   attributes, or regions. A `Terminator`, registered as a
+    ///   `CallableExit`. It ends a `tribute_control.func` or `lambda` body and
+    ///   is invalid anywhere else, including an arm of a structured
+    ///   operation, where `CallableExit` alone would allow it.
     /// - **Meaning:** returns the enclosing callable's logical result.
     /// - **Local verification:** matches the operand type against the
     ///   enclosing callable's result.
@@ -624,7 +626,7 @@ mod tribute_control {
     /// - **Location:** the span of the source return or of the implicit
     ///   body-result expression.
     #[flags(Terminator)]
-    #[implements(LocalValidation)]
+    #[implements(CallableExit, LocalValidation)]
     #[asm_format(value attr_dict_bare)]
     fn r#return(value: Value<_>) {}
 

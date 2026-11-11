@@ -189,6 +189,9 @@ impl OperationDeclarationUse for Handle {
 impl CallableExit for TailCall {}
 impl CallableExit for TailCallIndirect {}
 
+// A `return` ends its callable with the callable's result.
+impl CallableExit for Return {}
+
 // A trap ends the execution, and with it the callable.
 impl CallableExit for Trap {}
 
