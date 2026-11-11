@@ -544,8 +544,8 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !Repr = adt.struct<"std::Bytes::impl::Repr", (core.i32, adt.array<core.i8>, core.i32)>
-  adt.struct_decl "std::Bytes::impl::Repr" !Repr ["len", "data", "start"]
+  !Repr = adt.struct<"std::Bytes::Repr", (core.i32, adt.array<core.i8>, core.i32)>
+  adt.struct_decl "std::Bytes::Repr" !Repr ["len", "data", "start"]
   wasm.func @main() -> core.nil {
     %bytes = adt.bytes_const b"hello" : !Repr
     wasm.return

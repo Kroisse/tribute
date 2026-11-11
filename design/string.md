@@ -25,26 +25,20 @@ Tribute는 텍스트와 바이트 데이터를 명확히 구분한다.
 `Bytes`는 `Int`, `Nat`처럼 언어가 정한 primitive 타입이다. Field가 없으므로 레코드
 생성, spread, 레코드 패턴의 대상이 아니며, 값은 literal과 prelude 함수로만 만든다.
 표현은 [primitive 타입의 표현](types.md#primitive-타입의-표현) 규칙에 따라 prelude
-source의 `Bytes::impl`이 정한다.
+source의 `Bytes::Repr`이 정한다.
 
 ```rust
 pub mod Bytes {
-    pub(pkg) mod impl {
-        struct Repr { data: ByteArray, start: Nat, len: Nat }
+    pub(pkg) struct Repr { pub(pkg) data: ByteArray, pub(pkg) start: Nat, pub(pkg) len: Nat }
 
-        extern "intrinsic" fn repr(bytes: Bytes) -> Repr
-        extern "intrinsic" fn from_repr(repr: Repr) -> Bytes
-
-        pub(pkg) fn data(bytes: Bytes) -> ByteArray { repr(bytes).data }
-        pub(pkg) fn start(bytes: Bytes) -> Nat { repr(bytes).start }
-        pub(pkg) fn len(bytes: Bytes) -> Nat { repr(bytes).len }
-        pub(pkg) fn new(data: ByteArray, start: Nat, len: Nat) -> Bytes { .. }
-    }
+    pub(pkg) extern "intrinsic" fn repr(bytes: Bytes) -> Repr
+    extern "intrinsic" fn from_repr(repr: Repr) -> Bytes
 }
 ```
 
-`std` 안의 다른 코드는 `bytes.impl::len()`처럼 `Bytes::impl`의 함수로 표현을 읽고
-만든다. `Repr`과 두 intrinsic은 `Bytes::impl` 밖에서 보이지 않는다.
+`std` 안의 코드는 `Bytes::repr(bytes)`로 받은 `Repr`의 field를 읽는다. `Repr`과
+`repr`은 사용자 패키지에서 보이지 않고, `from_repr`는 모듈 `Bytes` 밖에서 보이지
+않는다.
 
 Byte는 compiler 소유 불변 배열 [`std::runtime::ByteArray`](types.md#bytearray)(IR에서
 `adt.array<core.i8>`)에 담기고, 값은 그중 `[start, start + len)`을 본다.
@@ -52,11 +46,10 @@ Byte는 compiler 소유 불변 배열 [`std::runtime::ByteArray`](types.md#bytea
 
 - 잘라내기는 같은 `data`를 담은 새 `Bytes`를 만들며 byte를 복사하지 않는다.
   소유권과 해제는 일반 struct와 배열의 규칙을 따른다([rc.md](rc.md#bytes)).
-- `start + len ≤ len(data)`는 `Bytes` 값의 불변식이다. `Bytes::impl`은 `std` 밖에서
-  보이지 않으므로 값을 만들고 범위를 정하는 코드는 모두 `std` 안에 있고, 그 코드가
-  불변식을 지킨다. 범위가 배열 밖인 값이 생기더라도 메모리 안전성은 유지된다.
-  `ByteArray::get`은 읽는 위치가 배열 밖일 때 trap하며, 범위 중 배열 안의 byte는
-  그대로 읽힌다.
+- `start + len ≤ len(data)`는 `Bytes` 값의 불변식이다. `Repr` 값이 `Bytes`가 되는
+  곳은 모듈 `Bytes` 안의 `from_repr` 호출뿐이므로 그 모듈의 함수가 불변식을 지킨다.
+  범위가 배열 밖인 값이 생기더라도 메모리 안전성은 유지된다. `ByteArray::get`은
+  읽는 위치가 배열 밖일 때 trap하며, 범위 중 배열 안의 byte는 그대로 읽힌다.
 
 ### 리터럴
 
@@ -397,7 +390,7 @@ ability Display {
 ;; ByteArray는 원소가 i8인 일반 GC 배열이다. 예약 GC 타입 index를 받지 않는다.
 (type $byte_array (array (mut i8)))
 
-;; Bytes는 표현 struct Bytes::impl::Repr의 GC 타입이며, 다른 사용자 struct와
+;; Bytes는 표현 struct Bytes::Repr의 GC 타입이며, 다른 사용자 struct와
 ;; 같은 structural GC 타입이다.
 (type $bytes (sub $described (struct
   (field $descriptor i32)
@@ -483,7 +476,7 @@ Native와 Wasm 모두 이 의미적 경계를 공유한다. Public I/O wrapper�
 | 타입 이름 | `String` (보편적인 이름 원칙) |
 | String 인코딩 | UTF-8 |
 | String 구조 | Rope |
-| Bytes 표현 | primitive 타입, 표현은 byte 배열 위의 `Bytes::impl::Repr { data, start, len }` |
+| Bytes 표현 | primitive 타입, 표현은 byte 배열 위의 `Bytes::Repr { data, start, len }` |
 | Bytes 리터럴 | native는 정적 byte 배열 객체, Wasm은 평가마다 `array.new_data` |
 | Rune 표현 | u32 |
 | 인코딩 변환 | 명시적 |

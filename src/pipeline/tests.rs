@@ -1266,7 +1266,7 @@ fn main() -> Nil {
 
     // The frontend writes one operation; target constant lowering expands it.
     assert!(
-        output.contains(r#"adt.bytes_const b"payload" : !"std::Bytes::impl::Repr""#),
+        output.contains(r#"adt.bytes_const b"payload" : !"std::Bytes::Repr""#),
         "{output}"
     );
     assert!(!output.contains("adt.array_const"), "{output}");

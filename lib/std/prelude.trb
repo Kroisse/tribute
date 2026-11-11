@@ -574,47 +574,38 @@ pub mod Bytes {
     use super::{Nat, Option, __tribute_byte_array_concat, __tribute_byte_array_range_equal}
     use pkg::runtime::ByteArray
 
-    // The representation of `Bytes` (`design/string.md`). Every value keeps
-    // `start + len <= ByteArray::len(data)`; a read still goes through the
+    /// The representation of `Bytes` (`design/string.md`).
+    pub(pkg) struct Repr { pub(pkg) data: ByteArray, pub(pkg) start: Nat, pub(pkg) len: Nat }
+
+    /// The representation of `bytes`.
+    pub(pkg) extern "intrinsic" fn repr(bytes: Bytes) -> Repr
+
+    // The one place a `Repr` becomes a `Bytes`: every caller keeps
+    // `start + len <= ByteArray::len(data)`. A read still goes through the
     // array's own range check.
-    pub(pkg) mod impl {
-        use pkg::Nat
-        use pkg::runtime::ByteArray
-
-        struct Repr { data: ByteArray, start: Nat, len: Nat }
-
-        extern "intrinsic" fn repr(bytes: Bytes) -> Repr
-        extern "intrinsic" fn from_repr(repr: Repr) -> Bytes
-
-        // The field getters are named by path: these functions share their
-        // names and take the precedence of the scope in method calls.
-        pub(pkg) fn data(bytes: Bytes) -> ByteArray { Repr::data(repr(bytes)) }
-        pub(pkg) fn start(bytes: Bytes) -> Nat { Repr::start(repr(bytes)) }
-        pub(pkg) fn len(bytes: Bytes) -> Nat { Repr::len(repr(bytes)) }
-
-        // The caller keeps `start + len <= ByteArray::len(data)`.
-        pub(pkg) fn new(data: ByteArray, start: Nat, len: Nat) -> Bytes {
-            from_repr(Repr { data: data, start: start, len: len })
-        }
-    }
+    extern "intrinsic" fn from_repr(repr: Repr) -> Bytes
 
     /// Create an empty byte sequence.
     pub fn empty() -> Bytes { b"" }
 
+    // `Repr::len` is named by path below: the function `len` of this module
+    // takes the scope's precedence in method calls.
+
     /// The number of bytes.
-    pub fn len(bytes: Bytes) -> Nat { bytes.impl::len() }
+    pub fn len(bytes: Bytes) -> Nat { Repr::len(repr(bytes)) }
 
     /// The byte sequence of all of `data`.
     pub(pkg) fn from_array(data: ByteArray) -> Bytes {
-        impl::new(data, 0, ByteArray::len(data))
+        from_repr(Repr { data: data, start: 0, len: ByteArray::len(data) })
     }
 
     /// Get the byte at the given index.
     /// Panics if index is out of bounds.
     pub fn get_or_panic(bytes: Bytes, index: Nat) -> Nat {
-        case index < bytes.len() {
-            True -> ByteArray::get(bytes.impl::data(), bytes.impl::start() + index)
-            False -> trap_out_of_range(bytes.impl::data())
+        let r = repr(bytes)
+        case index < Repr::len(r) {
+            True -> ByteArray::get(r.data, r.start + index)
+            False -> trap_out_of_range(r.data)
         }
     }
 
@@ -625,33 +616,29 @@ pub mod Bytes {
 
     // Always traps, as `trap_out_of_range` does, before building its result.
     fn trap_slice(bytes: Bytes) -> Bytes {
-        let data = bytes.impl::data()
-        impl::new(data, trap_out_of_range(data), 0)
+        let data = repr(bytes).data
+        from_repr(Repr { data: data, start: trap_out_of_range(data), len: 0 })
     }
 
     /// Create a slice of the byte sequence.
     /// Panics if start or end is out of bounds.
     pub fn slice_or_panic(bytes: Bytes, start: Nat, end: Nat) -> Bytes {
-        case end > bytes.len() {
+        let r = repr(bytes)
+        case end > Repr::len(r) {
             True -> trap_slice(bytes)
             False -> case start > end {
                 True -> trap_slice(bytes)
-                False -> impl::new(bytes.impl::data(), bytes.impl::start() + start, end - start)
+                False -> from_repr(Repr { ..r, start: r.start + start, len: end - start })
             }
         }
     }
 
     /// Concatenate two byte sequences.
     pub fn concat(left: Bytes, right: Bytes) -> Bytes {
+        let l = repr(left)
+        let r = repr(right)
         from_array(
-            __tribute_byte_array_concat(
-                left.impl::data(),
-                left.impl::start(),
-                left.len(),
-                right.impl::data(),
-                right.impl::start(),
-                right.len()
-            )
+            __tribute_byte_array_concat(l.data, l.start, Repr::len(l), r.data, r.start, Repr::len(r))
         )
     }
 
@@ -664,13 +651,9 @@ pub mod Bytes {
         right_start: Nat,
         len: Nat,
     ) -> Bool {
-        __tribute_byte_array_range_equal(
-            left.impl::data(),
-            left.impl::start() + left_start,
-            right.impl::data(),
-            right.impl::start() + right_start,
-            len
-        )
+        let l = repr(left)
+        let r = repr(right)
+        __tribute_byte_array_range_equal(l.data, l.start + left_start, r.data, r.start + right_start, len)
     }
 
     /// Concatenation operator for byte sequences.
@@ -761,6 +744,7 @@ pub mod collections {
 
 pub mod io {
     use super::{String, Bytes, abilities}
+    use pkg::Bytes::Repr
     use pkg::runtime::ByteArray
 
     /// Platform error details reported by an I/O operation.
@@ -792,7 +776,8 @@ pub mod io {
     extern "intrinsic" fn __tribute_io_read_line() -> ReadLineResult
 
     fn write_bytes(bytes: Bytes, newline: Bool) ->{pkg::io::Io} Nil {
-        __tribute_io_write(bytes.impl::data(), bytes.impl::start(), bytes.len(), newline)
+        let r = Bytes::repr(bytes)
+        __tribute_io_write(r.data, r.start, bytes.len(), newline)
     }
 
     /// Print a string to standard output (no trailing newline).

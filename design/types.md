@@ -493,15 +493,17 @@ byte 값은 `0`–`255`의 `Nat`이다.
 표현을 모르며, 사용자 코드는 field나 생성자 없이 literal과 prelude 함수로만 값을
 다룬다. Primitive 타입의 연산은 prelude source가 그 타입의 companion 모듈에 정의한다.
 
-표현이 scalar 하나가 아닌 primitive 타입 `T`는 표현을 prelude source의
-`pub(pkg) mod T::impl`에 struct `Repr`로 선언한다.
+표현이 scalar 하나가 아닌 primitive 타입 `T`는 표현을 prelude source의 companion
+모듈 `T`에 struct `T::Repr`로 선언한다.
 
-- `T::impl`의 compiler intrinsic `repr(value: T) -> Repr`와
-  `from_repr(repr: Repr) -> T`가 두 타입 사이를 오간다. IR에서 `T`의 타입은 `Repr`의
-  IR 타입이므로 두 intrinsic은 값을 그대로 넘긴다.
-- `Repr`과 두 intrinsic은 `T::impl` 밖에서 보이지 않는다. `T::impl`은 표현을 읽고
-  만드는 `pub(pkg)` 함수를 두고, `std`의 다른 코드는 `value.impl::f()`처럼 그 함수를
-  쓴다. 그래서 표현의 불변식은 `T::impl`과 그 함수를 쓰는 `std` 코드가 지킨다.
+- Compiler intrinsic `T::repr(value: T) -> Repr`와 `T::from_repr(repr: Repr) -> T`가
+  두 타입 사이를 오간다. IR에서 `T`의 타입은 `Repr`의 IR 타입이므로 두 intrinsic은
+  값을 그대로 넘긴다.
+- `Repr`, 그 field, `repr`은 `pub(pkg)`다. `std` 안의 코드는 `T::repr(value)`로 받은
+  `Repr`의 field를 직접 읽고, `Repr` 값을 만들거나 고쳐 쓸 수 있다. 사용자 패키지에서는
+  셋 다 보이지 않는다.
+- `from_repr`는 수식자 없이 모듈 `T` 안에서만 보인다. `Repr` 값이 `T`가 되는 곳은
+  여기뿐이므로 표현의 불변식은 모듈 `T`의 함수가 지킨다.
 - Compiler는 literal을 만들 때처럼 `Repr`의 field를 이름으로 찾는다. Layout은 다른
   struct처럼 정해진다.
 

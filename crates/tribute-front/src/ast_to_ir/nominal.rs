@@ -17,10 +17,10 @@ use crate::ast::{CtorId, RowVar, TypeKind, TypeScheme};
 use super::row_binders::RowBinders;
 
 /// The key component that tells nominal type origins apart.
-/// The identity path of `std::Bytes::impl::Repr`, the representation of
-/// `Bytes` (`design/string.md` § "내부 표현").
+/// The identity path of `std::Bytes::Repr`, the representation of `Bytes`
+/// (`design/string.md` § "내부 표현").
 pub(crate) fn bytes_repr_path() -> SymbolPath {
-    crate::resolve::PackageName::std().identity_path_of(&["Bytes", "impl", "Repr"])
+    crate::resolve::PackageName::std().identity_path_of(&["Bytes", "Repr"])
 }
 
 fn nominal_origin_key(origin: crate::ast::TypeOrigin) -> String {

@@ -97,7 +97,7 @@ impl WellKnownTypes {
 }
 
 /// The representation of `Bytes` that a byte constant builds: the struct
-/// `std::Bytes::impl::Repr` and the positions of its fields
+/// `std::Bytes::Repr` and the positions of its fields
 /// (`design/string.md` § "Constant lowering").
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BytesRepr {

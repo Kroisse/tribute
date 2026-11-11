@@ -388,16 +388,19 @@ fn main() -> Nil {
     assert_eq!(errors.len(), 5, "{errors:#?}");
 }
 
-/// `Bytes` is a primitive type: outside `std` its representation module is
-/// hidden, and it has no fields or constructor.
+/// `Bytes` is a primitive type: outside `std` its representation is hidden,
+/// and it has no fields or constructor.
 #[salsa_test]
 fn bytes_shows_no_representation(db: &salsa::DatabaseImpl) {
     let errors = errors(
         db,
         r#"
 fn reads(bytes: Bytes) -> Nat {
-    bytes.impl::len() + Bytes::impl::len(bytes) + bytes.len()
+    let _ = Bytes::repr(bytes)
+    bytes.len()
 }
+
+fn builds(r: Bytes::Repr) -> Bytes { Bytes::from_repr(r) }
 
 fn spreads(bytes: Bytes) -> Bytes { Bytes { ..bytes } }
 "#,
@@ -405,8 +408,9 @@ fn spreads(bytes: Bytes) -> Bytes { Bytes { ..bytes } }
     assert_eq!(
         errors,
         [
-            "`impl::len` is not visible here: `std::Bytes::impl::len` is declared `pub(pkg)`",
-            "`Bytes::impl::len` is not visible here: `std::Bytes::impl::len` is declared `pub(pkg)`",
+            "`Bytes::repr` is not visible here: `std::Bytes::repr` is declared `pub(pkg)`",
+            "`std::Bytes::Repr` is not visible here: `std::Bytes::Repr` is declared `pub(pkg)`",
+            "`Bytes::from_repr` is not visible here: `std::Bytes::from_repr` is private",
             "expected a constructor, found module `std::Bytes`",
         ]
     );

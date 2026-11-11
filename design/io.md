@@ -144,7 +144,7 @@ ReadLineResult =
 ```
 
 Embedded `std::io` source는 `String::to_bytes`로 rope를 flatten한 뒤 그 `Bytes`의
-배열과 범위(`Bytes::impl`의 `data`, `start`, `len`)로 `write`를 호출한다.
+배열과 범위(`Bytes::Repr`의 `data`, `start`, `len`)로 `write`를 호출한다.
 `write`는 `data`를 빌리며, 범위가 배열 밖이면 실행을 끝낸다. `read_line`의 `Line`
 payload와 `System` message는 boundary가 유효한 UTF-8임을 보장하므로 source
 wrapper가 배열 전체를 보는 `Bytes`를 만들어

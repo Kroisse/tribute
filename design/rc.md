@@ -92,13 +92,13 @@ Boxed primitives are the simplest heap objects — just the raw value:
 
 ### Bytes
 
-`Bytes`의 IR 타입은 표현 struct `Bytes::impl::Repr`의 타입이며
+`Bytes`의 IR 타입은 표현 struct `Bytes::Repr`의 타입이며
 ([primitive 타입의 표현](types.md#primitive-타입의-표현)), 그 값은 일반 struct다. Byte는
 [byte 배열](types.md#bytearray)에 담긴다. Byte 배열은 원소가 `core.i8`인 일반
 [배열](#array) 객체다.
 
 ```text
-std::Bytes::impl::Repr:   struct { data: ByteArray, start: Nat, len: Nat }
+std::Bytes::Repr:         struct { data: ByteArray, start: Nat, len: Nat }
 std::runtime::ByteArray:  adt.array<core.i8>  →  [len: i64] [bytes...]
 ```
 

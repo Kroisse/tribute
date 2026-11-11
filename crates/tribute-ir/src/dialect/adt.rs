@@ -360,13 +360,13 @@ mod adt {
     fn string_const(value: Attr<String>) -> Value<_> {}
 
     /// A byte sequence constant: a value of `Bytes`, whose IR type is the
-    /// representation struct `std::Bytes::impl::Repr`, viewing all of
+    /// representation struct `std::Bytes::Repr`, viewing all of
     /// `value`. Target constant lowering expands it to that struct over an
     /// `adt.array_const` of the bytes, placing the fields by their declared
     /// names (`design/string.md` § "Constant lowering").
     ///
     /// ```text
-    /// %b = adt.bytes_const b"\x01\x02" : !"std::Bytes::impl::Repr"
+    /// %b = adt.bytes_const b"\x01\x02" : !"std::Bytes::Repr"
     /// ```
     #[flags(Pure)]
     #[asm_format(value attr_dict_bare ":" type(result))]
