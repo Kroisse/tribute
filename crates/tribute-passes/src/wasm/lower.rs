@@ -73,9 +73,10 @@ pub fn add_lowering_passes(pm: &mut PassManager) {
         // Convert all adt operations, including String::Leaf from const lowering,
         // after declaring the runtime type descriptors they store.
         .add_pass(AdtToWasm)
-        // Replace the evidence type with its GC array once no `adt` operation
-        // reads it, which leaves the casts `adt` lowering made to it as identities.
-        .add_pass(ConvertEvidenceArrays)
+        // Replace the evidence type and scalar arrays with their GC arrays once
+        // no `adt` operation reads them, which leaves the casts `adt` lowering
+        // made to them as identities.
+        .add_pass(ConvertTypedArrays)
         // Fold the round trips that array operands of parameters took through
         // their `adt.array` type while signature conversion ran ahead of `adt`
         // lowering.
@@ -393,13 +394,13 @@ impl Pass for AdtToWasm {
     }
 }
 
-struct ConvertEvidenceArrays;
+struct ConvertTypedArrays;
 
-impl Pass for ConvertEvidenceArrays {
+impl Pass for ConvertTypedArrays {
     type Target = core::Module;
 
     fn name(&self) -> &'static str {
-        "convert-evidence-arrays"
+        "convert-typed-arrays"
     }
 
     fn run(
@@ -408,7 +409,7 @@ impl Pass for ConvertEvidenceArrays {
         target: core::Module,
         _analyses: &mut AnalysisCache,
     ) -> PassRunResult {
-        super::type_converter::convert_evidence_arrays(ctx, target.into());
+        super::type_converter::convert_typed_arrays(ctx, target.into());
         Ok(())
     }
 }
@@ -798,7 +799,7 @@ mod tests {
         let tc = wasm_type_converter(&mut ctx, module);
         crate::wasm::descriptors::declare(&mut ctx, module);
         crate::wasm::adt_to_wasm::lower(&mut ctx, module, tc);
-        crate::wasm::type_converter::convert_evidence_arrays(&mut ctx, module);
+        crate::wasm::type_converter::convert_typed_arrays(&mut ctx, module);
 
         let func = module.ops(&ctx)[0];
         let body = ctx.op_region(func, 0).unwrap();
@@ -822,7 +823,7 @@ mod tests {
         // Converting the evidence field gives the layout a new key.
         assert_eq!(
             ctx.type_attrs(struct_get.r#type(&ctx)).get_str("name"),
-            Some("Env$evidence")
+            Some("Env$arrays")
         );
 
         finalize_wasm_gc_types(&mut ctx, module)
@@ -1234,6 +1235,171 @@ mod tests {
             "{error}"
         );
         assert_eq!(module.op().display(&ctx).to_string(), before);
+    }
+
+    #[test]
+    fn scalar_array_elements_take_their_wasm_representation() {
+        // An array that only passes through a signature still becomes a
+        // concrete GC array, so its elements must be Wasm storage types.
+        for element in ["core.index", "tribute_rt.int", "tribute_rt.bool"] {
+            let mut ctx = IrContext::new();
+            let module = parse_test_module(
+                &mut ctx,
+                &format!(
+                    r#"core.module @test {{
+  func.func @pass(%items: adt.array<{element}>) -> adt.array<{element}> {{
+    func.return %items
+  }}
+}}"#
+                ),
+            );
+
+            lower_to_wasm(&mut ctx, module, &mut Default::default())
+                .unwrap_or_else(|error| panic!("{element}: {error:?}"));
+            let root = core::Module::from_op(&ctx, module.op()).expect("core.module");
+            let mut pm = trunk_ir::pass::PassManager::new();
+            pm.add_pass(LegalizeUnrealizedCasts)
+                .add_pass(trunk_ir::conversion::ReconcileUnrealizedCasts)
+                .add_pass(FinalizeWasmGcTypes);
+            pm.run(&mut ctx, root, &mut Default::default())
+                .unwrap_or_else(|error| panic!("{element}: {error:?}"));
+            let bytes = trunk_ir_wasm_backend::emit_module_to_wasm(&mut ctx, module)
+                .unwrap_or_else(|error| panic!("{element}: {error:?}"))
+                .bytes;
+            wasmparser::Validator::new()
+                .validate_all(&bytes)
+                .unwrap_or_else(|error| panic!("{element} array module: {error}"));
+        }
+    }
+
+    #[test]
+    fn lower_to_wasm_keeps_scalar_arrays_typed() {
+        // Packed elements are stored narrow and read with `array.get_u`.
+        for element in ["core.i8", "core.i16"] {
+            let mut ctx = IrContext::new();
+            let module = parse_test_module(
+                &mut ctx,
+                &format!(
+                    r#"core.module @test {{
+  !Narrow = adt.array<{element}>
+  !Holder = adt.struct<"Holder", (!Narrow, core.i32)>
+  func.func @first(%holder: !Holder) -> core.i32 {{
+    %data = adt.struct_get %holder {{field = 0, type = !Holder}} : !Narrow
+    %zero = arith.constant 0 : core.index
+    %item = adt.array_get %data, %zero : {element}
+    %wide = arith.extui %item : {element} to core.i32
+    func.return %wide
+  }}
+  func.func @wrap(%data: !Narrow) -> !Holder {{
+    %len = arith.constant 1 : core.i32
+    %holder = adt.struct_new(%data, %len) : (!Narrow, core.i32) -> !Holder
+    func.return %holder
+  }}
+}}"#
+                ),
+            );
+
+            lower_to_wasm(&mut ctx, module, &mut Default::default())
+                .expect("scalar arrays should lower to wasm");
+
+            let output = module.op().display(&ctx).to_string();
+            assert!(
+                output.contains(&format!("wasm_gc.array<{element}>")),
+                "{output}"
+            );
+            assert!(!output.contains("wasm.arrayref"), "{output}");
+            assert!(!output.contains("ref_cast"), "{output}");
+            assert!(!output.contains("adt.array"), "{output}");
+
+            let root = core::Module::from_op(&ctx, module.op()).expect("core.module");
+            let mut pm = trunk_ir::pass::PassManager::new();
+            pm.add_pass(LegalizeUnrealizedCasts)
+                .add_pass(trunk_ir::conversion::ReconcileUnrealizedCasts)
+                .add_pass(FinalizeWasmGcTypes);
+            pm.run(&mut ctx, root, &mut Default::default())
+                .expect("scalar arrays should finalize");
+            let bytes = trunk_ir_wasm_backend::emit_module_to_wasm(&mut ctx, module)
+                .expect("emit")
+                .bytes;
+            wasmparser::Validator::new()
+                .validate_all(&bytes)
+                .unwrap_or_else(|error| panic!("{element} array module: {error}"));
+        }
+        assert_eq!(ConvertTypedArrays.name(), "convert-typed-arrays");
+    }
+
+    #[test]
+    fn variant_payloads_keep_scalar_arrays_typed() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  !Ints = adt.array<core.i32>
+  !E = adt.enum<"E", [(!Ints)]>
+  !ERef = adt.enum<"E">
+  adt.enum_decl "E" !E ["Wrap"]
+  func.func @wrap(%ints: !Ints) -> !ERef {
+    %e = adt.variant_new 0(%ints) : (!Ints) -> !ERef
+    func.return %e
+  }
+  func.func @unwrap(%e: !ERef) -> !Ints {
+    %ints = adt.variant_get %e {type = !E, tag = 0, field = 0} : !Ints
+    func.return %ints
+  }
+}"#,
+        );
+
+        let root = core::Module::from_op(&ctx, module.op()).expect("core.module");
+        let mut pm = trunk_ir::pass::PassManager::new();
+        add_lowering_passes(&mut pm);
+        pm.add_pass(LegalizeUnrealizedCasts)
+            .add_pass(trunk_ir::conversion::ReconcileUnrealizedCasts)
+            .add_pass(FinalizeWasmGcTypes);
+        pm.run(&mut ctx, root, &mut Default::default())
+            .expect("a variant of a scalar array should lower and finalize");
+        let bytes = trunk_ir_wasm_backend::emit_module_to_wasm(&mut ctx, module)
+            .expect("emit")
+            .bytes;
+
+        // The variant's field is the array itself, so reading it needs no
+        // cast from an abstract array reference; the one cast left narrows
+        // the enum reference to the variant.
+        let output = module.op().display(&ctx).to_string();
+        assert!(!output.contains("wasm.arrayref"), "{output}");
+        assert_eq!(output.matches("wasm.ref_cast").count(), 1, "{output}");
+        assert!(
+            output.contains("wasm_gc.struct<core.i32, !Ints"),
+            "{output}"
+        );
+        assert!(!bytes.is_empty());
+    }
+
+    #[test]
+    fn lower_to_wasm_recovers_a_scalar_array_from_an_erased_value() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @len(%erased: tribute_rt.anyref) -> core.index {
+    %ints = core.unrealized_conversion_cast %erased : tribute_rt.anyref to adt.array<core.i32>
+    %len = adt.array_len %ints : core.index
+    func.return %len
+  }
+}"#,
+        );
+
+        let root = core::Module::from_op(&ctx, module.op()).expect("core.module");
+        let mut pm = trunk_ir::pass::PassManager::new();
+        add_lowering_passes(&mut pm);
+        pm.add_pass(LegalizeUnrealizedCasts)
+            .add_pass(trunk_ir::conversion::ReconcileUnrealizedCasts)
+            .add_pass(FinalizeWasmGcTypes);
+        pm.run(&mut ctx, root, &mut Default::default())
+            .expect("a recovered scalar array should lower and finalize");
+
+        let output = module.op().display(&ctx).to_string();
+        assert!(!output.contains("unrealized_conversion_cast"), "{output}");
+        assert!(output.contains("wasm.ref_cast"), "{output}");
     }
 
     #[test]

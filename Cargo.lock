@@ -1969,6 +1969,7 @@ dependencies = [
  "trunk-ir",
  "trunk-ir-cranelift-backend",
  "trunk-ir-wasm-backend",
+ "wasmparser",
 ]
 
 [[package]]

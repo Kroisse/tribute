@@ -37,7 +37,8 @@ struct TypeCollector {
 
 impl TypeCollector {
     /// Add `ty` after its supertype, which the type section must define
-    /// first, then every structural struct among its fields.
+    /// first, then every structural struct or GC array among its fields or
+    /// its element.
     fn push_type(&mut self, ctx: &IrContext, ty: TypeRef) {
         if !self.considered.insert(ty) || wasm::is_abstract_heap_type(ctx, ty) {
             return;
@@ -52,15 +53,20 @@ impl TypeCollector {
                 self.push_structural(ctx, field);
             }
         }
+        if let Some(array) = wasm_gc::Array::from_type_ref(ctx, ty) {
+            self.push_structural(ctx, array.element(ctx));
+        }
     }
 
-    /// Add every structural struct `ty` mentions. Each one receives an
-    /// index, so the value types that name it have a concrete GC type.
+    /// Add every structural struct and GC array `ty` mentions. Each one
+    /// receives an index, so the value types that name it, such as a field
+    /// or a signature that no array operation reads, have a concrete GC
+    /// type.
     fn push_structural(&mut self, ctx: &IrContext, ty: TypeRef) {
         if !self.searched.insert(ty) {
             return;
         }
-        if wasm_gc::Struct::matches(ctx, ty) {
+        if wasm_gc::Struct::matches(ctx, ty) || wasm_gc::Array::matches(ctx, ty) {
             self.push_type(ctx, ty);
             return;
         }

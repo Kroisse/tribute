@@ -16,6 +16,8 @@
 //! | `tribute_rt.intref` | `wasm.i31ref`   | Boxed integer reference             |
 //! | `tribute_rt.anyref` | `wasm.anyref`   | Any reference type                  |
 //! | nominal value type  | `wasm.structref`| Generic struct reference            |
+//! | scalar `adt.array`  | `wasm_gc.array` | After `adt` lowering                |
+//! | other `adt.array`   | `wasm.arrayref` | Evidence keeps its GC array         |
 //!
 //! ## Materializations
 //!
@@ -78,13 +80,42 @@ pub fn evidence_wasm_type(ctx: &mut IrContext) -> TypeRef {
         .intern(ctx)
 }
 
-/// Replace the evidence type with its GC array everywhere in `module`, once
-/// no `adt` operation reads it.
-pub(crate) fn convert_evidence_arrays(ctx: &mut IrContext, module: trunk_ir::rewrite::Module) {
+/// Replace the evidence type and every [scalar array](is_scalar_array) with
+/// its GC array everywhere in `module`, once no `adt` operation reads them.
+pub(crate) fn convert_typed_arrays(ctx: &mut IrContext, module: trunk_ir::rewrite::Module) {
     let evidence = evidence_wasm_type(ctx);
-    crate::closure_lower::substitute_module_types(ctx, module, "evidence", |ctx, ty| {
-        is_evidence_type(ctx, module, ty).then_some(evidence)
+    crate::closure_lower::substitute_module_types(ctx, module, "arrays", |ctx, ty| {
+        if is_evidence_type(ctx, module, ty) {
+            Some(evidence)
+        } else if is_scalar_array(ctx, ty) {
+            Some(gc_array_type(ctx, ty))
+        } else {
+            None
+        }
     });
+}
+
+/// Whether `ty` is an `adt.array` of scalar elements without a runtime
+/// [`layout`](tribute_ir::runtime_layout::LAYOUT_ATTR). Its elements refer
+/// to no other type, so it cannot close a recursive GC type, and it keeps its
+/// own GC array in values, fields, and signatures instead of becoming an
+/// erased `wasm.arrayref` (`design/wasm-backend.md` § "Structural GC 타입과
+/// descriptor 필드").
+pub(crate) fn is_scalar_array(ctx: &IrContext, ty: TypeRef) -> bool {
+    use tribute_ir::dialect::tribute_rt;
+
+    let Some(array) = adt::Array::from_type_ref(ctx, ty) else {
+        return false;
+    };
+    if !ctx.get_type(ty).attrs.is_empty() {
+        return false;
+    }
+    let element = array.element(ctx);
+    core::NumericLike::matches(ctx, element)
+        || tribute_rt::Int::matches(ctx, element)
+        || tribute_rt::Nat::matches(ctx, element)
+        || tribute_rt::Bool::matches(ctx, element)
+        || tribute_rt::Float::matches(ctx, element)
 }
 
 /// The GC array type that Wasm operations use for `ty`: an `adt.array`
@@ -102,6 +133,11 @@ pub fn gc_array_type(ctx: &mut IrContext, ty: TypeRef) -> TypeRef {
     // is, since it may hold the array; evidence is such an array.
     if adt::is_nominal_value(ctx, element) {
         element = wasm_dialect::Structref::params().intern(ctx).as_type_ref();
+    }
+    // Later conversions do not reach inside a GC array, so an index element
+    // takes its Wasm width here, as the type converter gives it elsewhere.
+    if core::Index::matches(ctx, element) {
+        element = core::I32::type_ref(ctx);
     }
     let layout = ctx.type_attrs(ty).get_string_ref(LAYOUT_ATTR);
     let mut builder =
@@ -297,8 +333,9 @@ pub fn wasm_type_converter(
         module,
         tribute_ir::runtime_items::evidence::MARKER,
     );
-    let is_evidence =
-        move |ctx: &IrContext, ty| marker.is_some_and(|marker| is_evidence_of(ctx, marker, ty));
+    let is_typed_array = move |ctx: &IrContext, ty| {
+        marker.is_some_and(|marker| is_evidence_of(ctx, marker, ty)) || is_scalar_array(ctx, ty)
+    };
     // Pre-compute commonly used types (TypeRef is Copy)
     let i32_ty = core::I32::type_ref(ctx);
     let f64_ty = core::F64::type_ref(ctx);
@@ -424,11 +461,11 @@ pub fn wasm_type_converter(
         }
     });
 
-    // Evidence keeps its `adt.array` type until `adt` lowering has consumed
-    // every operation that reads it as one; `convert-evidence-arrays` then
-    // replaces it with its GC array everywhere, as `convert-struct-layouts`
-    // does for user structs.
-    tc.add_conversion(move |ctx, ty| is_evidence(ctx, ty).then_some(ty));
+    // Evidence and scalar arrays keep their `adt.array` type until `adt`
+    // lowering has consumed every operation that reads them as one;
+    // `convert-typed-arrays` then replaces each with its GC array everywhere,
+    // as `convert-struct-layouts` does for user structs.
+    tc.add_conversion(move |ctx, ty| is_typed_array(ctx, ty).then_some(ty));
 
     // The bytes backing array keeps its layout identifier rather than
     // becoming an erased `wasm.arrayref`.
@@ -599,7 +636,19 @@ pub fn wasm_type_converter(
 
         let from_is_any = trunk_ir::dialect::wasm::Anyref::matches(ctx, from_ty)
             || tribute_ir::dialect::tribute_rt::Anyref::matches(ctx, from_ty);
-        if from_is_any && is_evidence(ctx, to_ty) {
+        if from_is_any && is_typed_array(ctx, to_ty) {
+            let cast_op = wasm_gc_dialect::RefCast::operands(value)
+                .target_type(to_ty)
+                .results(to_ty)
+                .build(ctx, location);
+            return Some(MaterializeResult {
+                value: cast_op.result(ctx),
+                ops: vec![cast_op.op_ref()],
+            });
+        }
+        // A scalar array or evidence that `convert-typed-arrays` already
+        // replaced with its GC array is recovered the same way.
+        if from_is_any && trunk_ir::dialect::wasm_gc::Array::matches(ctx, to_ty) {
             let cast_op = wasm_gc_dialect::RefCast::operands(value)
                 .target_type(to_ty)
                 .results(to_ty)
@@ -769,6 +818,39 @@ mod tests {
             tc.materialize(&mut ctx, location, value, anyref, ptr)
                 .is_none()
         );
+    }
+
+    #[test]
+    fn scalar_arrays_are_recovered_from_anyref_before_and_after_conversion() {
+        let mut ctx = IrContext::new();
+        let path = ctx.intern_path("test.trb");
+        let location = Location::new(path, trunk_ir::location::Span::new(0, 0));
+        let module = empty_module(&mut ctx);
+        let tc = wasm_type_converter(&mut ctx, module);
+        let anyref = wasm_dialect::Anyref::params()
+            .intern(&mut ctx)
+            .as_type_ref();
+        let i32_ty = core::I32::type_ref(&mut ctx);
+        let array = adt::Array::params(i32_ty).intern(&mut ctx).as_type_ref();
+        let gc_array = gc_array_type(&mut ctx, array);
+        let source_data = trunk_ir::OperationDataBuilder::new(location, "test.source")
+            .result(anyref)
+            .build(&mut ctx);
+        let source = ctx.create_op(source_data);
+        let value = ctx.op_result(source, 0);
+
+        // A scalar array keeps its `adt.array` type until `adt` lowering is
+        // done and its GC array after; either is recovered with a cast.
+        for target in [array, gc_array] {
+            let result = tc
+                .materialize(&mut ctx, location, value, anyref, target)
+                .expect("a recovery cast");
+            let [cast] = result.ops[..] else {
+                panic!("one cast to {target:?}");
+            };
+            assert!(wasm_gc_dialect::RefCast::matches(&ctx, cast));
+            assert_eq!(ctx.value_ty(result.value), target);
+        }
     }
 
     #[test]
