@@ -454,7 +454,9 @@ LLVM WebAssembly backend의 RegStackify처럼 어떤 값이 local을 거치지 �
   정의된 값, block argument, 또는 바깥 region에서 정의된 값의 local뿐이다.
 - `wasm.yield`는 값을 넘길 때 그 값들의 사용자이다. Loop로 가는 분기 앞의 yield는 loop의
   block argument가 하나일 때만 stack의 값을 그 local에 바로 쓴다. Block argument가
-  여럿이면 각 값을 자기 local에서 읽어 순서대로 대응하는 argument의 local에 쓴다.
+  여럿이면 넘기는 값을 모두 자기 local에서 읽어 stack에 올린 뒤, 역순으로 대응하는
+  argument의 local에 쓴다. 쓰기 전에 모든 값을 읽으므로 이 대입은 병렬 대입이며,
+  `scf.continue %b, %a`처럼 argument끼리 값을 바꾸는 backedge도 옛 값을 잃지 않는다.
 - Stack에 값을 남기지만 사용이 없는 결과는 local에 쓰지 않고 `wasm.drop`으로 버린다.
   Yield 없이 마지막 operation의 결과를 region 결과로 넘기는 경우는 예외로, 그 결과는
   local에 둔다.
