@@ -571,8 +571,8 @@ extern "C" fn __tribute_byte_array_range_equal(
 /// `[start, start + len)` of a byte array. Slicing shares the array instead
 /// of copying it.
 pub mod Bytes {
-    use super::{Nat, Option, __tribute_byte_array_concat, __tribute_byte_array_range_equal}
-    use pkg::runtime::ByteArray
+    use super::{Nat, Option, absurd, __tribute_byte_array_concat, __tribute_byte_array_range_equal}
+    use pkg::runtime::{ByteArray, trap_out_of_range}
 
     /// The representation of `Bytes` (`design/string.md`).
     pub(pkg) struct Repr { pub(pkg) data: ByteArray, pub(pkg) start: Nat, pub(pkg) len: Nat }
@@ -602,19 +602,8 @@ pub mod Bytes {
         let r = repr(bytes)
         case index < r.len() {
             True -> ByteArray::get(r.data, r.start + index)
-            False -> trap_out_of_range(r.data)
+            False -> absurd(trap_out_of_range())
         }
-    }
-
-    // Always traps: it reads the position past the end of `data`.
-    fn trap_out_of_range(data: ByteArray) -> Nat {
-        ByteArray::get(data, ByteArray::len(data))
-    }
-
-    // Always traps, as `trap_out_of_range` does, before building its result.
-    fn trap_slice(bytes: Bytes) -> Bytes {
-        let data = repr(bytes).data
-        from_repr(Repr { data: data, start: trap_out_of_range(data), len: 0 })
     }
 
     /// Create a slice of the byte sequence.
@@ -622,9 +611,9 @@ pub mod Bytes {
     pub fn slice_or_panic(bytes: Bytes, start: Nat, end: Nat) -> Bytes {
         let r = repr(bytes)
         case end > r.len() {
-            True -> trap_slice(bytes)
+            True -> absurd(trap_out_of_range())
             False -> case start > end {
-                True -> trap_slice(bytes)
+                True -> absurd(trap_out_of_range())
                 False -> from_repr(Repr { ..r, start: r.start + start, len: end - start })
             }
         }
