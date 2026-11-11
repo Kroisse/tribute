@@ -592,10 +592,10 @@ mod tests {
         let result = run_pass(
             r#"core.module @test {
   func.func @range() -> core.i32 {
-    func.trap {code = "out_of_range"}
+    func.trap "out_of_range"
   }
   func.func @ability() -> core.i32 {
-    func.trap {code = "missing_ability"}
+    func.trap "missing_ability"
   }
   func.func @never() -> core.i32 {
     func.unreachable

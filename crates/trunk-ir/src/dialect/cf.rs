@@ -2,6 +2,7 @@
 
 #[trunk_ir::dialect]
 mod cf {
+    #[flags(Terminator)]
     #[implements(Branch)]
     #[asm_format(args "[" successor(dest) "]" attr_dict_bare)]
     fn br(args: Variadic<_>) {
@@ -9,6 +10,7 @@ mod cf {
         {}
     }
 
+    #[flags(Terminator)]
     #[implements(Branch)]
     #[asm_format(cond "[" successor(then_dest) "," successor(else_dest) "]" attr_dict_bare)]
     fn cond_br(cond: Value<_>) {
@@ -29,6 +31,7 @@ mod cf {
     /// cf.switch %flag : core.i32, [default: ^bb1, 42: ^bb2, -1: ^bb3]
     /// ```
     #[verify]
+    #[flags(Terminator)]
     #[implements(Branch)]
     #[asm_format(discriminant ":" type(discriminant) "," "[" custom(SwitchCases(default, cases, targets)) "]" attr_dict)]
     fn switch(cases: Attr<[i64]>, discriminant: Value<impl IntegerLike>) {
@@ -40,6 +43,7 @@ mod cf {
 }
 
 use crate::dialect::core::IntegerLike;
+use crate::op_flag::Terminator;
 use crate::op_interface::{Branch, BranchSuccessor, BranchSuccessors, ControlFlowInterfaceError};
 use crate::{Attribute, BlockRef, IrContext};
 

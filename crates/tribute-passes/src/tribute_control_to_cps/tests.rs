@@ -2565,9 +2565,9 @@ fn a_trap_keeps_its_cause_under_every_convention() {
     assert_eq!(
         traps.iter().map(|(_, line)| **line).collect::<Vec<_>>(),
         [
-            r#"func.trap {code = "out_of_range"}"#,
-            r#"func.trap {code = "out_of_range"}"#,
-            r#"func.trap {code = "missing_ability"}"#,
+            r#"func.trap "out_of_range""#,
+            r#"func.trap "out_of_range""#,
+            r#"func.trap "missing_ability""#,
         ],
         "{printed}"
     );

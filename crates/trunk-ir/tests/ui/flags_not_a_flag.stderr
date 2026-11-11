@@ -18,4 +18,7 @@ help: the following other types implement trait `OpFlag`
 ...
   | #[op_flag]
   | ^^^^^^^^^^ `IsolatedFromAbove`
+...
+  | #[op_flag]
+  | ^^^^^^^^^^ `trunk_ir::op_flag::Terminator`
   = note: this error originates in the attribute macro `op_flag` (in Nightly builds, run with -Z macro-backtrace for more info)

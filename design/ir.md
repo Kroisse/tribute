@@ -132,6 +132,15 @@ Operation flag는 동작 없이 operation 정의가 선언하는 예/아니오 �
 정의한 dialect만 그 operation의 flag를 정할 수 있다. 메서드가 없더라도 다른 crate가
 남의 operation에 붙여야 하는 성질은 flag가 아니라 interface로 정의한다.
 
+`Terminator` flag는 operation이 자기 block의 마지막 operation이어야 한다는
+성질이다(MLIR의 `IsTerminator`). Operation verifier는 flag가 있는 operation이
+block의 마지막이 아니면 거부하며, operation 이름을 나열하지 않는다. 이 flag는
+제어가 어디로 가는지 말하지 않는다. Callable을 떠나는지는
+[`CallableExit`](#interface와-flag), block successor는 `Branch`, 부모 operation으로
+돌아가는지는 `RegionBranchTerminator`가 말한다. Flag를 선언한 dialect만 그
+operation을 이 규칙으로 검사받으므로, flag가 없다는 것은 terminator가 아니라는
+증거가 아니다.
+
 ## 선언적 operation schema
 
 Operation verifier의 로컬 계약은 `#[dialect]` operation 정의에서 선언적으로

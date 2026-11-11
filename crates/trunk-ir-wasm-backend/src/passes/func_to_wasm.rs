@@ -760,7 +760,7 @@ mod tests {
     %found = scf.if %ok -> (core.i32) {
       scf.yield %value
     } else {
-      func.trap {code = "out_of_range"}
+      func.trap "out_of_range"
     }
     func.return %found
   }
