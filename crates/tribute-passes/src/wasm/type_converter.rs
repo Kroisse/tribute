@@ -134,6 +134,11 @@ pub fn gc_array_type(ctx: &mut IrContext, ty: TypeRef) -> TypeRef {
     if adt::is_nominal_value(ctx, element) {
         element = wasm_dialect::Structref::params().intern(ctx).as_type_ref();
     }
+    // Later conversions do not reach inside a GC array, so an index element
+    // takes its Wasm width here, as the type converter gives it elsewhere.
+    if core::Index::matches(ctx, element) {
+        element = core::I32::type_ref(ctx);
+    }
     let layout = ctx.type_attrs(ty).get_string_ref(LAYOUT_ATTR);
     let mut builder =
         trunk_ir::types::TypeDataBuilder::new(trunk_ir::dialect::wasm_gc::Array::NAME)

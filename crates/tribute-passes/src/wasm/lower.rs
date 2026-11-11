@@ -1238,6 +1238,41 @@ mod tests {
     }
 
     #[test]
+    fn scalar_array_elements_take_their_wasm_representation() {
+        // An array that only passes through a signature still becomes a
+        // concrete GC array, so its elements must be Wasm storage types.
+        for element in ["core.index", "tribute_rt.int", "tribute_rt.bool"] {
+            let mut ctx = IrContext::new();
+            let module = parse_test_module(
+                &mut ctx,
+                &format!(
+                    r#"core.module @test {{
+  func.func @pass(%items: adt.array<{element}>) -> adt.array<{element}> {{
+    func.return %items
+  }}
+}}"#
+                ),
+            );
+
+            lower_to_wasm(&mut ctx, module, &mut Default::default())
+                .unwrap_or_else(|error| panic!("{element}: {error:?}"));
+            let root = core::Module::from_op(&ctx, module.op()).expect("core.module");
+            let mut pm = trunk_ir::pass::PassManager::new();
+            pm.add_pass(LegalizeUnrealizedCasts)
+                .add_pass(trunk_ir::conversion::ReconcileUnrealizedCasts)
+                .add_pass(FinalizeWasmGcTypes);
+            pm.run(&mut ctx, root, &mut Default::default())
+                .unwrap_or_else(|error| panic!("{element}: {error:?}"));
+            let bytes = trunk_ir_wasm_backend::emit_module_to_wasm(&mut ctx, module)
+                .unwrap_or_else(|error| panic!("{element}: {error:?}"))
+                .bytes;
+            wasmparser::Validator::new()
+                .validate_all(&bytes)
+                .unwrap_or_else(|error| panic!("{element} array module: {error}"));
+        }
+    }
+
+    #[test]
     fn lower_to_wasm_keeps_scalar_arrays_typed() {
         // Packed elements are stored narrow and read with `array.get_u`.
         for element in ["core.i8", "core.i16"] {
