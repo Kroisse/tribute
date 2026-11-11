@@ -421,8 +421,9 @@ Pass를 거친 IR은 다음 stack 계약을 만족한다.
   남아도 된다. 그 밖의 block 끝에서 stack은 비어 있다.
 
 Stack에 값을 남기는지는 backend 표현 규칙이 정한다. Call과 indirect call의
-`core.nil` 결과 slot, 결과가 `core.nil`인 structured control, 그리고 then region이
-값을 넘기지 않는 `wasm.if`의 결과는 stack에 값을 남기지 않는다. `wasm.nop`은 결과
+`core.nil` 결과 slot, 결과가 `core.nil`인 structured control, 그리고 어느 region도
+값을 넘기지 않는 `wasm.if`의 결과는 stack에 값을 남기지 않는다. 한 region이 값을
+넘기면 다른 region은 trap이나 return으로 끝나도 되며, 그 `wasm.if`는 결과를 가진다. `wasm.nop`은 결과
 타입이 `wasm.func_sig`, `wasm.funcref`, `wasm.anyref`, `wasm.structref`,
 `core.nil`일 때만 그 `ref.null`을 남기고, 다른 타입이면 값을 남기지 않는다. 이런
 결과를 읽는 곳은 대입되지 않은 그 결과의 local, 즉 local의 기본값을 읽는다.
@@ -492,8 +493,8 @@ user-defined type은 그 뒤에 배치된다:
 verifier는 closure 1, described 2, user-defined type 3+를 정확히
 사용하며 CPS control carrier나 trampoline placeholder index를 예약하지 않는다.
 Index 0은 `"boxed_f64"`, index 1과 2는 `"closure"`, `"described"`
-[runtime layout 식별자](ir.md#runtime-layout-식별자)로만 정해진다. `Bytes`는
-prelude struct이므로 다른 사용자 struct와 같은 GC 타입을 받고, 그 byte 배열
+[runtime layout 식별자](ir.md#runtime-layout-식별자)로만 정해진다. `Bytes`의
+값은 표현 struct이므로 다른 사용자 struct와 같은 GC 타입을 받고, 그 byte 배열
 `adt.array<core.i8>`은 다른 배열과 같은 GC 배열이다([string.md](string.md#bytes-1)).
 Wasm lowering의 첫 단계는 `tribute_rt` primitive 타입을 Wasm 표현으로 바꾼다. 이
 변환은 alias, 연산 속성, 결과와 block 인자뿐 아니라 ADT field, variant payload,

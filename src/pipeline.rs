@@ -460,9 +460,9 @@ fn add_native_lowering_passes(pm: &mut PassManager, native: NativeLowering) {
     } = native;
 
     pm.add_pass(GenerateNativeEntrypoint { sanitize })
-        // Declare a clif.data object per string/bytes payload, then lower
-        // adt.string_const to adt.variant_new + bytes alloc and
-        // adt.bytes_const to a clif alloc + data reference.
+        // Declare a clif.data object per string/bytes payload, expand
+        // adt.string_const and adt.bytes_const over an adt.array_const, and
+        // lower adt.array_const to a clif alloc + data reference.
         .add_pass(ConstToNative)
         // Lower target-independent I/O to the native runtime ABI.
         .add_pass(IoToNative)

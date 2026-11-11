@@ -52,16 +52,20 @@ pub(crate) fn is_structured(ctx: &IrContext, op: OpRef) -> bool {
 /// The result type of a structured operation's Wasm block type, or `None`
 /// when the block type is empty.
 ///
-/// A `wasm.if` has a result only when its then region passes one.
+/// A `wasm.if` has a result only when one of its regions passes one. The
+/// other may end the function instead, as an arm ending in a trap does.
 pub(crate) fn structured_result_type(ctx: &IrContext, op: OpRef) -> Option<TypeRef> {
     let ty = ctx
         .op_result_types(op)
         .first()
         .copied()
         .filter(|&ty| !is_nil_type(ctx, ty))?;
-    if wasm::If::matches(ctx, op) {
-        let then_region = ctx.op_region(op, 0)?;
-        region_result_value(ctx, then_region)?;
+    if wasm::If::matches(ctx, op)
+        && !ctx
+            .op_regions(op)
+            .any(|region| region_result_value(ctx, region).is_some())
+    {
+        return None;
     }
     Some(ty)
 }

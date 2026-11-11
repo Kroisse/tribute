@@ -51,7 +51,7 @@
 //! - `adt.ref_is_null` -> `wasm.ref_is_null`
 //! - `adt.ref_cast` -> `wasm.ref_cast`
 //!
-//! Note: `adt.string_const` and `adt.bytes_const` are handled by WasmLowerer
+//! Note: `adt.string_const`, `adt.bytes_const`, and `adt.array_const` are handled by WasmLowerer
 //! because they require data segment allocation.
 //!
 //! GC operations first lower to `wasm_gc`, which identifies GC types by
