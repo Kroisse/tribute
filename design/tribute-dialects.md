@@ -849,8 +849,10 @@ reachable IR을 바꾸기 전에 검사한다.
 
 값이 지워지는 자리(effect payload, 제네릭으로 지운 값 등)에서 nominal 값 타입과
 `tribute_rt.anyref` 사이의 명시적인 `core.unrealized_conversion_cast`는 generic
-cleanup에서 no-op으로 소거하지 않는다. 표현 선택이 이 cast를 값을 object에 담는
-일(또는 담긴 값을 꺼내는 일)과 `heap.box`와 `anyref` 사이의 cast로 바꾸며, 정확한
+cleanup에서 no-op으로 소거하지 않는다. 표현 선택은 이 cast를, 값을 object에 담는
+일(또는 담긴 값을 꺼내는 일)과 `heap.box`와 `anyref` 사이의 명시적
+`core.unrealized_conversion_cast`로 바꾼다. 이 cast는 참조의 타입만 바꾸므로 출구를
+지날 수 있다. 출구 검증이 거부하는 것은 scalar와 `anyref` 사이의 cast뿐이다. 정확한
 결과 타입은 target 변환까지 보존한다. Native는 이를 pointer 표현으로 물리화하고
 Wasm은 concrete `ref.cast`를 생성한다.
 
@@ -1194,10 +1196,12 @@ object를 다룬다. 두 target이 같은 dialect를 쓰며, target이 object를
 - 쓰기: `heap.struct_set`, `heap.array_set`. Object를 제자리에서 바꾼다. 소스 값은
   바뀌지 않으므로 compiler가 소유하는 cell만 쓰며, 순환 제약은
   [rc.md](rc.md#비순환-object-그래프)가 정한다.
+- Literal: `heap.bytes_const`, `heap.string_const`. 같은 이름의 `adt` literal이 만드는
+  값을 담은 object의 box를 낸다.
 - 참조: `heap.null`, `heap.is_null`, `heap.cast`. `heap.cast`는 nominal identity가
   같다고 확립된 box 사이와, closure capture layout의 box와 closure base의 box 사이에
-  쓴다. `heap.box`와 `tribute_rt.anyref` 사이의 이동은 [`adt`](#adt)의 erasure cast
-  규칙을 따른다.
+  쓴다. `heap.box`와 `tribute_rt.anyref` 사이의 이동은 `heap.cast`가 아니라 명시적인
+  `core.unrealized_conversion_cast`이며, [`adt`](#adt)의 erasure cast 규칙을 따른다.
 
 ### 위치
 
@@ -1210,9 +1214,10 @@ object를 다룬다. 두 target이 같은 dialect를 쓰며, target이 object를
   없다. `adt` layout은 `heap.box`의 매개변수, `heap` operation의 layout 속성,
   [nominal 선언](#nominal-선언) 안에만 남는다. Object 접근은 모두 `heap` operation이며
   target lowering이 이를 내린다.
-- 예외는 literal operation(`adt.bytes_const`, `adt.string_const`)이다. 결과가 배열이나
-  enum이라 언제나 boxed이므로, 표현 선택은 결과 타입만 `heap.box`로 바꾸고 operation은
-  target의 상수 lowering까지 남긴다. 그 결과는 다른 할당처럼 unit 하나를 가진 object다.
+- Literal operation(`adt.bytes_const`, `adt.string_const`)의 결과는 배열이나 enum이라
+  언제나 boxed다. 표현 선택은 이를 같은 literal을 담은 object의 box를 내는
+  `heap.bytes_const`, `heap.string_const`로 바꾸고, target의 상수 lowering이 이를 내린다.
+  그 결과는 다른 할당처럼 unit 하나를 가진 object다.
 
 ## `list`
 

@@ -59,7 +59,7 @@ graph TD
 String constant lowering reads the exact prelude `String` `TypeRef` from the
 `std::String` entry of the root module's `tribute.types` metadata. It does not
 search interned ADT types by `String`, `Leaf`/`Branch`, or representation
-layout. Missing metadata is a lowering error whenever `adt.string_const` is
+layout. Missing metadata is a lowering error whenever `heap.string_const` is
 present; this keeps hand-written or text-round-tripped IR from silently
 selecting a user lookalike.
 

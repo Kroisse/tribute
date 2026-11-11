@@ -172,8 +172,8 @@ compiler가 값마다 표현을 고른다. 표현 선택은 값 의미론인 [`a
 - 물리 계약으로 옮기지 않은 채 남은 handler/resume/prompt 정체성과 ability row
 - `adt` 타입을 가진 값과 `adt`의 값 operation. 출구 뒤에 값을 object에 담는 일이
   생기면 ownership 계획이 보지 못한 managed 값이 생기므로, 표현 선택이 끝나지 않은
-  IR은 출구를 넘지 않는다. 결과가 `heap.box`인 literal operation은
-  [예외](tribute-dialects.md#위치)다.
+  IR은 출구를 넘지 않는다. Literal operation도 표현 선택이
+  [`heap` literal](tribute-dialects.md#위치)로 바꾼다.
 
 출구 이후에도 보존하는 것:
 

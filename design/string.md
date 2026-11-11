@@ -445,9 +445,11 @@ target의 선택은 서로 달라도 된다. Target은 배열 상수를 다음�
 - Wasm은 평가할 때마다 passive data segment에서 `array.new_data`로 새 배열을
   만든다. `array.new_data`는 상수식이 아니므로 global 초기화식으로 쓸 수 없다.
 
-`Bytes` 표현 struct는 두 target 모두 평가마다 일반 할당이다. Wasm에서 모든
-`adt.array_const`는 같은 passive data-segment index 공간을 사용하며, 동일한
-payload는 `String`과 `Bytes` 리터럴 사이에서도 data segment를
+`Bytes` 표현 struct 값의 표현은 두 target 모두
+[표현 선택](abi-boundary.md#표현-선택)이 정하며, box에 담길 때만 평가마다
+할당한다. 배열 상수는 배열이므로 표현 선택이 `heap.array_const`로 바꾼다.
+Wasm에서 모든 `heap.array_const`는 같은 passive data-segment index 공간을
+사용하며, 동일한 payload는 `String`과 `Bytes` 리터럴 사이에서도 data segment를
 재사용할 수 있다. Constant lowering은 자신이 참조하는 data segment를 같은 단계에서 모듈에
 선언한다([모듈 수준 자원의 선언][wasm-resources]). `String::Leaf` 생성은 target의
 일반 enum/variant lowering보다 먼저 일어나고, 그 이후에는 source에서 작성한
