@@ -10,20 +10,13 @@ use salsa_test_macros::salsa_test;
 use tribute_front::SourceCst;
 
 fn selected(targets: &[&str]) -> TdnrSummary {
-    TdnrSummary {
-        method_calls: vec![],
-        calls: targets
-            .iter()
-            .map(|target| TdnrCall {
-                target: if target.starts_with("std::") {
-                    (*target).to_owned()
-                } else {
-                    format!("pkg::{target}")
-                },
-                arg_count: 1,
-            })
-            .collect(),
-    }
+    TdnrSummary::selected(targets.iter().map(|target| {
+        if target.starts_with("std::") {
+            TdnrCall::new(target, 1)
+        } else {
+            TdnrCall::new(&format!("pkg::{target}"), 1)
+        }
+    }))
 }
 
 /// A user `Option` hides the prelude's short name but not its methods: on a
@@ -49,13 +42,7 @@ fn test(x: std::Option(Nat)) -> std::Option(Nat) {
 
     assert_eq!(
         tdnr_function_summary(db, source, "test"),
-        TdnrSummary {
-            method_calls: vec![],
-            calls: vec![TdnrCall {
-                target: "std::Option::map".to_owned(),
-                arg_count: 2,
-            }],
-        }
+        TdnrSummary::selected([TdnrCall::new("std::Option::map", 2)])
     );
     let errors = ast_pipeline_error_messages(db, source);
     assert!(errors.is_empty(), "{errors:#?}");
@@ -112,7 +99,7 @@ fn test(name: Name) -> String {{ name.text }}
     assert_eq!(
         tdnr_function_summary(db, source, "test"),
         TdnrSummary {
-            method_calls: vec!["text".to_owned()],
+            unselected_calls: vec!["text".to_owned()],
             calls: vec![],
         }
     );
@@ -259,13 +246,7 @@ mod inner {
 "#,
     );
 
-    let map = |target: &str| TdnrSummary {
-        method_calls: vec![],
-        calls: vec![TdnrCall {
-            target: target.to_owned(),
-            arg_count: 2,
-        }],
-    };
+    let map = |target: &str| TdnrSummary::selected([TdnrCall::new(target, 2)]);
     assert_eq!(
         tdnr_function_summary(db, prelude, "test"),
         map("std::Option::map")
@@ -313,22 +294,10 @@ pub mod Buffer {
     assert!(errors.is_empty(), "{errors:#?}");
     assert_eq!(
         tdnr_function_summary(db, source, "=="),
-        TdnrSummary {
-            method_calls: vec![],
-            calls: vec![
-                TdnrCall {
-                    target: "pkg::Buffer::len".to_owned(),
-                    arg_count: 1,
-                },
-                TdnrCall {
-                    target: "std::Nat::==".to_owned(),
-                    arg_count: 2,
-                },
-                TdnrCall {
-                    target: "pkg::Buffer::len".to_owned(),
-                    arg_count: 1,
-                },
-            ],
-        }
+        TdnrSummary::selected([
+            TdnrCall::new("pkg::Buffer::len", 1),
+            TdnrCall::new("std::Nat::==", 2),
+            TdnrCall::new("pkg::Buffer::len", 1),
+        ])
     );
 }
