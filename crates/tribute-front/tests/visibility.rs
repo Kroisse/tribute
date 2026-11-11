@@ -388,6 +388,30 @@ fn main() -> Nil {
     assert_eq!(errors.len(), 5, "{errors:#?}");
 }
 
+/// `Bytes` is a primitive type: outside `std` its representation module is
+/// hidden, and it has no fields or constructor.
+#[salsa_test]
+fn bytes_shows_no_representation(db: &salsa::DatabaseImpl) {
+    let errors = errors(
+        db,
+        r#"
+fn reads(bytes: Bytes) -> Nat {
+    bytes.impl::len() + Bytes::impl::len(bytes) + bytes.len()
+}
+
+fn spreads(bytes: Bytes) -> Bytes { Bytes { ..bytes } }
+"#,
+    );
+    assert_eq!(
+        errors,
+        [
+            "`impl::len` is not visible here: `std::Bytes::impl::len` is declared `pub(pkg)`",
+            "`Bytes::impl::len` is not visible here: `std::Bytes::impl::len` is declared `pub(pkg)`",
+            "expected a constructor, found module `std::Bytes`",
+        ]
+    );
+}
+
 /// An implicit constructor does not reach a hidden constructor through the
 /// type its context gives.
 #[salsa_test]

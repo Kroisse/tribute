@@ -1242,8 +1242,8 @@ fn main() -> Nil {
     }
 }
 
-/// A byte literal is a byte array constant wrapped in the prelude `Bytes`
-/// that views all of it (`design/string.md` § "Constant lowering").
+/// A byte literal is a byte array constant wrapped in the representation of
+/// `Bytes` that views all of it (`design/string.md` § "Constant lowering").
 #[salsa_test]
 fn bytes_literal_wraps_a_byte_array_constant(db: &salsa::DatabaseImpl) {
     let source = source_from_str(
@@ -1269,7 +1269,7 @@ fn main() -> Nil {
         "{output}"
     );
     assert!(
-        output.contains(r#"-> !"std::Bytes""#) && output.contains("adt.struct_new"),
+        output.contains(r#"-> !"std::Bytes::impl::Repr""#) && output.contains("adt.struct_new"),
         "{output}"
     );
     assert!(!output.contains("core.bytes"), "{output}");
@@ -2865,8 +2865,8 @@ fn library_names_are_the_prelude_short_names(db: &crate::TributeDatabaseImpl) {
     assert_eq!(
         names,
         [
-            "ctor Bytes",
             "fn absurd",
+            "mod Bytes",
             "mod Float",
             "mod Int",
             "mod Nat",

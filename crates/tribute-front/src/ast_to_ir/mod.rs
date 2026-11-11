@@ -95,6 +95,7 @@ static SUPPORTED_COMPILER_INTRINSICS: LazyLock<HashSet<Symbol>> = LazyLock::new(
     .into_iter()
     .chain(tribute_ir::runtime_items::SLOTS_INTRINSICS)
     .chain(tribute_ir::runtime_items::BYTE_ARRAY_INTRINSICS)
+    .chain(tribute_ir::runtime_items::REPRESENTATION_INTRINSICS)
     .map(Symbol::new)
     .collect()
 });

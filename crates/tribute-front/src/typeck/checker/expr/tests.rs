@@ -347,6 +347,7 @@ fn test_annotation_primitive_types(db: &dyn salsa::Database) {
         ("Nat", TypeKind::Nat),
         ("Float", TypeKind::Float),
         ("Bool", TypeKind::Bool),
+        ("Bytes", TypeKind::Bytes),
         ("Rune", TypeKind::Rune),
         ("Nil", TypeKind::Nil),
     ];

@@ -51,9 +51,7 @@ use crate::resolve::{NameDisplay, PackageName};
 use std::sync::Arc;
 
 use super::context::{ModuleTypeEnv, TypeEnvData};
-use super::{
-    BytesType, PackageExports, StringType, WellKnownType, WellKnownTypeKey, WellKnownTypes,
-};
+use super::{PackageExports, StringType, WellKnownType, WellKnownTypeKey, WellKnownTypes};
 
 /// Result of module type checking.
 pub struct ModuleCheckResult<'db> {
@@ -216,7 +214,6 @@ impl<'db> TypeChecker<'db> {
         module: &DeclTable<ResolvedRef<'db>>,
     ) -> WellKnownTypes<'db> {
         let string = self.prelude_well_known_type(module, StringType);
-        let bytes = self.prelude_well_known_type(module, BytesType);
         // `==` of a prelude type is the function of that name in the type's
         // module.
         let root = PackageName::std().identity_path(&[]);
@@ -226,9 +223,8 @@ impl<'db> TypeChecker<'db> {
         };
         WellKnownTypes {
             string,
-            bytes,
             string_equality: string.and_then(|_| equality("String")),
-            bytes_equality: bytes.and_then(|_| equality("Bytes")),
+            bytes_equality: equality("Bytes"),
         }
     }
 

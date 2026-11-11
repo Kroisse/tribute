@@ -97,6 +97,12 @@ pub const BYTE_ARRAY_INTRINSICS: [&str; 2] = [
     "std::runtime::ByteArray::get",
 ];
 
+/// The compiler intrinsic identities that convert a primitive value to its
+/// representation and back (`design/types.md`, "Primitive 타입의 표현").
+/// The two share one IR type, so each call is its argument.
+pub const REPRESENTATION_INTRINSICS: [&str; 2] =
+    ["std::Bytes::impl::repr", "std::Bytes::impl::from_repr"];
+
 /// The IR symbol of the root-module definition at `path`.
 ///
 /// This is the one place that turns a runtime item's path into a symbol.

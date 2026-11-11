@@ -118,16 +118,18 @@ pub(crate) enum Prim {
     Nat,
     Float,
     Bool,
+    Bytes,
     Rune,
     Nil,
     Never,
 }
 
-const PRIMS: [Prim; 7] = [
+const PRIMS: [Prim; 8] = [
     Prim::Int,
     Prim::Nat,
     Prim::Float,
     Prim::Bool,
+    Prim::Bytes,
     Prim::Rune,
     Prim::Nil,
     Prim::Never,
@@ -180,6 +182,7 @@ impl TypeShape {
                 Prim::Nat => TypeKind::Nat,
                 Prim::Float => TypeKind::Float,
                 Prim::Bool => TypeKind::Bool,
+                Prim::Bytes => TypeKind::Bytes,
                 Prim::Rune => TypeKind::Rune,
                 Prim::Nil => TypeKind::Nil,
                 Prim::Never => TypeKind::Never,

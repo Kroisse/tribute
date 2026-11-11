@@ -17,6 +17,12 @@ use crate::ast::{CtorId, RowVar, TypeKind, TypeScheme};
 use super::row_binders::RowBinders;
 
 /// The key component that tells nominal type origins apart.
+/// The identity path of `std::Bytes::impl::Repr`, the representation of
+/// `Bytes` (`design/string.md` § "내부 표현").
+pub(crate) fn bytes_repr_path() -> SymbolPath {
+    crate::resolve::PackageName::std().identity_path_of(&["Bytes", "impl", "Repr"])
+}
+
 fn nominal_origin_key(origin: crate::ast::TypeOrigin) -> String {
     match origin {
         crate::ast::TypeOrigin::Source { disambiguator: 0 } => "source".into(),
@@ -242,6 +248,14 @@ impl<'db> NominalTypes<'db> {
         }
     }
 
+    /// The layout key of the nominal source type at the identity path `path`,
+    /// once it is declared.
+    fn nominal_key(&self, path: &SymbolPath) -> Option<TypeRef> {
+        let name = path.to_symbol();
+        self.get_type(&name)
+            .or_else(|| self.logical_nominal_declarations.get(&name).copied())
+    }
+
     /// Convert a source type at the source-logical `tribute_control` boundary.
     pub(crate) fn convert_logical_type(
         &self,
@@ -252,6 +266,12 @@ impl<'db> NominalTypes<'db> {
             TypeKind::Int | TypeKind::Nat | TypeKind::Rune => self.i32_type(ir),
             TypeKind::Float => self.f64_type(ir),
             TypeKind::Bool => self.bool_type(ir),
+            // A value of `Bytes` is a value of its representation struct
+            // (`design/types.md` § "Primitive 타입의 표현").
+            TypeKind::Bytes => match self.nominal_key(&bytes_repr_path()) {
+                Some(key) => adt::value_type(ir, key, Vec::new()),
+                None => self.anyref_type(ir),
+            },
             TypeKind::Nil | TypeKind::Error => self.nil_type(ir),
             TypeKind::Never => core::Never::params().intern(ir).as_type_ref(),
             TypeKind::BoundVar { .. }
@@ -274,11 +294,7 @@ impl<'db> NominalTypes<'db> {
                     .as_type_ref()
             }
             TypeKind::Named { id, row_args, .. }
-                if let Some(key) = self.get_type(&id.qualified(self.db)).or_else(|| {
-                    self.logical_nominal_declarations
-                        .get(&id.qualified(self.db))
-                        .copied()
-                }) =>
+                if let Some(key) = self.nominal_key(id.path(self.db)) =>
             {
                 let row_args: Vec<_> = row_args.iter().map(|row| self.ability_row(*row)).collect();
                 adt::value_type(ir, key, row_args)
@@ -322,6 +338,7 @@ impl<'db> NominalTypes<'db> {
             TypeKind::Nat => "nat".into(),
             TypeKind::Float => "float".into(),
             TypeKind::Bool => "bool".into(),
+            TypeKind::Bytes => "bytes".into(),
             TypeKind::Rune => "rune".into(),
             TypeKind::Nil => "nil".into(),
             TypeKind::Never => "never".into(),

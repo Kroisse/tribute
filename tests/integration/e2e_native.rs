@@ -2566,10 +2566,6 @@ fn test_native_bytes_out_of_range_reads_trap() {
             "slice_reversed",
             "print_line(String::from_bytes(bs.slice_or_panic(3, 2)))",
         ),
-        (
-            "forged_len",
-            "print_line(Bytes { ..bs, len: 100 }.get_or_panic(50).to_string)",
-        ),
     ] {
         let source = format!(
             r#"

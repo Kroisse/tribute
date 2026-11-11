@@ -845,12 +845,9 @@ impl<'db> ModuleTypeEnv<'db> {
             .unwrap_or_else(|| Type::new(self.db, TypeKind::string(self.db)))
     }
 
-    /// Create the Bytes type (prelude-defined struct).
+    /// Create the Bytes type.
     pub fn bytes_type(&self) -> Type<'db> {
-        self.well_known_types()
-            .bytes
-            .map(|bytes| bytes.ty)
-            .unwrap_or_else(|| Type::new(self.db, TypeKind::bytes(self.db)))
+        Type::new(self.db, TypeKind::Bytes)
     }
 
     /// Create the Rune type (Unicode code point).

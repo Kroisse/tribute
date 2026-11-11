@@ -144,7 +144,6 @@ pub struct WellKnownType<'db> {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct WellKnownTypes<'db> {
     pub string: Option<WellKnownType<'db>>,
-    pub bytes: Option<WellKnownType<'db>>,
     /// The `==` that `String` literal patterns compare with.
     pub string_equality: Option<FuncDefId<'db>>,
     /// The `==` that `Bytes` literal patterns compare with.
@@ -166,21 +165,10 @@ impl WellKnownTypeKey for StringType {
     }
 }
 
-/// Key for the prelude-defined `Bytes` type.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct BytesType;
-
-impl WellKnownTypeKey for BytesType {
-    fn name(self) -> Symbol {
-        Symbol::new("Bytes")
-    }
-}
-
 impl WellKnownTypes<'_> {
     pub const fn empty() -> Self {
         Self {
             string: None,
-            bytes: None,
             string_equality: None,
             bytes_equality: None,
         }
@@ -190,7 +178,6 @@ impl WellKnownTypes<'_> {
     pub fn or(self, other: Self) -> Self {
         Self {
             string: self.string.or(other.string),
-            bytes: self.bytes.or(other.bytes),
             string_equality: self.string_equality.or(other.string_equality),
             bytes_equality: self.bytes_equality.or(other.bytes_equality),
         }

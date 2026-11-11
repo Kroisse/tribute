@@ -37,6 +37,7 @@ fn examples(db: &dyn salsa::Database) -> Vec<(Type<'_>, &'static str)> {
         (TypeKind::Nat, "Nat"),
         (TypeKind::Float, "Float"),
         (TypeKind::Bool, "Bool"),
+        (TypeKind::Bytes, "Bytes"),
         (TypeKind::Rune, "Rune"),
         (TypeKind::Nil, "Nil"),
         (TypeKind::Never, "Never"),

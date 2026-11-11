@@ -24,10 +24,10 @@ use super::callable::{
 use super::declarations::Declarations;
 use super::nominal::expr_type_for_id;
 
-/// A `bytes_ty` value, the prelude `Bytes`, that views all of `bytes`: the
-/// byte array constant with `start` 0 and `len` its length
-/// (`design/string.md` § "Constant lowering"). Fields are placed by their
-/// declared names.
+/// A `bytes_ty` value, the representation of `Bytes`, that views all of
+/// `bytes`: the byte array constant with `start` 0 and `len` its length
+/// (`design/string.md` § "Constant lowering"). Fields are placed by the
+/// names `Bytes::impl::Repr` declares.
 pub(in crate::ast_to_ir::lower) fn emit_bytes_literal(
     builder: &mut IrBuilder<'_, '_>,
     location: Location,
@@ -53,20 +53,17 @@ pub(in crate::ast_to_ir::lower) fn emit_bytes_literal(
     };
     let start = nat(builder, 0);
     let len = nat(builder, len);
-    let ctor = crate::ast::CtorId::new(
-        builder.db(),
-        crate::resolve::PackageName::std().identity_path_of(&["Bytes"]),
-    );
+    let ctor = crate::ast::CtorId::new(builder.db(), crate::ast_to_ir::nominal::bytes_repr_path());
     let fields = builder
         .ctx
         .struct_field_names(ctor)
-        .unwrap_or_else(|| panic!("a bytes literal needs the prelude `Bytes` struct"))
+        .unwrap_or_else(|| panic!("a bytes literal needs the prelude `Bytes::impl::Repr`"))
         .iter()
         .map(|name| match name.as_str() {
             "data" => data,
             "start" => start,
             "len" => len,
-            other => panic!("the prelude `Bytes` has an unexpected field `{other}`"),
+            other => panic!("`Bytes::impl::Repr` has an unexpected field `{other}`"),
         })
         .collect::<Vec<_>>();
     let record = adt::StructNew::operands(fields)
