@@ -18,7 +18,7 @@ use crate::ast_to_ir::context::IrLoweringCtx;
 use crate::ast_to_ir::lower::IrBuilder;
 
 use super::callable::{
-    CallPosition, RowArguments, attach_evidence_plan, ends_with_tail_call, lower_alias_reference,
+    CallPosition, RowArguments, attach_evidence_plan, ends_with_exit, lower_alias_reference,
     lower_become, lower_call, lower_function_ref, lower_handle, lower_lambda,
 };
 use super::declarations::Declarations;
@@ -124,6 +124,11 @@ pub(super) fn lower_expr<'db>(
             let mut inner = IrBuilder::new(&mut scope, builder.ir, builder.block);
             for statement in stmts {
                 lower_statement(&mut inner, statement, declarations);
+                // A statement that left the callable ends the block; the
+                // statements after it never run.
+                if ends_with_exit(inner.ir, inner.block) {
+                    return None;
+                }
             }
             lower_expr(&mut inner, value, declarations)
         }
@@ -143,19 +148,18 @@ pub(super) fn lower_expr<'db>(
             let then_value = {
                 let mut inner = IrBuilder::new(builder.ctx, builder.ir, then_block);
                 match binop {
-                    crate::ast::BinOpKind::And => {
-                        lower_expr(&mut inner, rhs.clone(), declarations)?
-                    }
-                    crate::ast::BinOpKind::Or => emit_bool(&mut inner, location, true),
+                    crate::ast::BinOpKind::And => lower_expr(&mut inner, rhs.clone(), declarations),
+                    crate::ast::BinOpKind::Or => Some(emit_bool(&mut inner, location, true)),
                 }
             };
-            let then_yield = scf::Yield::operands([then_value]).build(builder.ir, location);
-            builder.ir.push_op(then_block, then_yield.op_ref());
-            let then_region = builder.ir.create_region(RegionData {
+            let then_region = finish_case_region(
+                builder.ctx,
+                builder.ir,
                 location,
-                blocks: trunk_ir::smallvec::smallvec![then_block],
-                parent_op: None,
-            });
+                then_block,
+                then_value,
+                bool_ty,
+            )?;
             let else_block = builder.ir.create_block(BlockData {
                 location,
                 args: vec![],
@@ -165,17 +169,18 @@ pub(super) fn lower_expr<'db>(
             let else_value = {
                 let mut inner = IrBuilder::new(builder.ctx, builder.ir, else_block);
                 match binop {
-                    crate::ast::BinOpKind::And => emit_bool(&mut inner, location, false),
-                    crate::ast::BinOpKind::Or => lower_expr(&mut inner, rhs, declarations)?,
+                    crate::ast::BinOpKind::And => Some(emit_bool(&mut inner, location, false)),
+                    crate::ast::BinOpKind::Or => lower_expr(&mut inner, rhs, declarations),
                 }
             };
-            let else_yield = scf::Yield::operands([else_value]).build(builder.ir, location);
-            builder.ir.push_op(else_block, else_yield.op_ref());
-            let else_region = builder.ir.create_region(RegionData {
+            let else_region = finish_case_region(
+                builder.ctx,
+                builder.ir,
                 location,
-                blocks: trunk_ir::smallvec::smallvec![else_block],
-                parent_op: None,
-            });
+                else_block,
+                else_value,
+                bool_ty,
+            )?;
             let branch = scf::If::operands(lhs)
                 .results(bool_ty)
                 .regions(then_region, else_region)
@@ -858,7 +863,7 @@ pub(super) fn build_case_arm_region<'db>(
 }
 
 /// End a structured case region with its value, or leave it ended by a
-/// source `become`.
+/// callable exit.
 pub(super) fn finish_case_region(
     ctx: &mut IrLoweringCtx<'_>,
     ir: &mut IrContext,
@@ -867,7 +872,7 @@ pub(super) fn finish_case_region(
     value: Option<ValueRef>,
     result_ty: TypeRef,
 ) -> Option<trunk_ir::refs::RegionRef> {
-    if value.is_some() || !ends_with_tail_call(ir, block) {
+    if !ends_with_exit(ir, block) {
         let value = IrBuilder::new(ctx, ir, block).cast_if_needed(location, value?, result_ty);
         let yield_op = scf::Yield::operands([value]).build(ir, location);
         ir.push_op(block, yield_op.op_ref());

@@ -471,9 +471,9 @@ fn test_execute_bytes_slice_or_panic_traps_out_of_range(db: &salsa::DatabaseImpl
         let output = run_wasm(binary);
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(!output.status.success(), "{name} must trap");
-        // The prelude traps by reading past the end of the byte array.
+        // The prelude traps through `trap_out_of_range`, before any access.
         assert!(
-            stderr.contains("out of bounds array access"),
+            stderr.contains("wasm `unreachable` instruction executed"),
             "{name}: {stderr}"
         );
     }

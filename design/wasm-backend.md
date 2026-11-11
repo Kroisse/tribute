@@ -280,6 +280,15 @@ operand로 ABI를 재추론하지 않고 이 고정 시그니처를 `wasm.call_i
 Nil result slot은 기존 ABI에서 생략하므로 stack에 값을 남기지 않는다. 이 구분은 Nil을 인자나
 필드로 전달하는 것과 zero-result call을 모두 보존한다.
 
+### Trap
+
+`func_to_wasm`은 [`func.trap`](tribute-dialects.md#trap)과 `func.unreachable`을
+모두 `wasm.unreachable`로 낮춘다. Wasm의 `unreachable` 명령은 operand가 없으므로
+`func.trap`의 `code`는 Wasm module에 남지 않는다. Module은 원인을 알리는 host
+import를 부르지 않으며, host는 trap이 일어났다는 사실만 본다. 값을 내는
+`wasm.if`의 arm이 `wasm.unreachable`로 끝나면 그 arm은 결과를 남기지 않는다.
+`unreachable` 뒤의 stack은 어떤 결과 타입과도 맞는다.
+
 ### 올바른 꼬리 호출 계약
 
 [WebAssembly 3.0 validation](https://webassembly.github.io/spec/core/valid/instructions.html#valid-return-call-indirect)은
@@ -410,8 +419,9 @@ Pass를 거친 IR은 다음 stack 계약을 만족한다.
   남아도 된다. 그 밖의 block 끝에서 stack은 비어 있다.
 
 Stack에 값을 남기는지는 backend 표현 규칙이 정한다. Call과 indirect call의
-`core.nil` 결과 slot, 결과가 `core.nil`인 structured control, 그리고 then region이
-값을 넘기지 않는 `wasm.if`의 결과는 stack에 값을 남기지 않는다. `wasm.nop`은 결과
+`core.nil` 결과 slot, 결과가 `core.nil`인 structured control, 그리고 어느 region도
+값을 넘기지 않는 `wasm.if`의 결과는 stack에 값을 남기지 않는다. 한 region이 값을
+넘기면 다른 region은 trap이나 return으로 끝나도 되며, 그 `wasm.if`는 결과를 가진다. `wasm.nop`은 결과
 타입이 `wasm.func_sig`, `wasm.funcref`, `wasm.anyref`, `wasm.structref`,
 `core.nil`일 때만 그 `ref.null`을 남기고, 다른 타입이면 값을 남기지 않는다. 이런
 결과를 읽는 곳은 대입되지 않은 그 결과의 local, 즉 local의 기본값을 읽는다.

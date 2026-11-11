@@ -67,6 +67,7 @@ attribute로 바꾼다. 이 type과 convention의 전체 규칙은
 | `tribute_control.handle` | 직접형 computation, completion arm, handler arm의 경계를 설정. 각 arm은 처리하는 operation의 binding과 짝을 이루는 region이다 |
 | `tribute_control.resume` | resumptive general handler arm에 바인딩된 affine resumption을 소비 |
 | `tribute_control.yield` | 실행 가능한 `tribute_control` region을 logical value로 종료 |
+| `tribute_control.trap` | [trap intrinsic](modules.md#trap-intrinsic)의 직접 호출. 원인을 가지고 실행을 끝내는 terminator |
 
 Class 특수화가 만드는 `tribute_cps` operation은 다음과 같다. `func`,
 `call_indirect`, `tail_call_indirect`는 같은 이름의 `tribute_control`
@@ -94,7 +95,8 @@ operation에 걸친 규칙만 다룬다.
 `func.constant`, `func.unreachable`의 logical 복제는 없다. Named function
 value는 `func_ref`가 표현한다. `func.constant`는 후속 physical closure lowering이
 만든다. `func.unreachable`은 reject adapter 같은 compiler helper 안에서만
-legalization 뒤에 사용한다.
+legalization 뒤에 사용한다. `func.trap`의 source-logical 짝은
+[`tribute_control.trap`](#trap)이다.
 
 Source [`become`](syntax.md#tail-call-become)은
 `tribute_control.tail_call`/`tail_call_indirect`로 나타난다. 이 두 operation이
@@ -109,6 +111,38 @@ Legalization은 알려진 target에 `func.tail_call`, closure, continuation과
 만들지 않는다는 규칙은
 [`resume_token`과 `perform`의 선언](../crates/tribute-ir/src/dialect/tribute_control.rs)이
 정한다.
+
+### Trap
+
+`tribute_control.trap`은 [trap intrinsic](modules.md#trap-intrinsic)의 직접
+호출이며, 원인(`cause`)을 가지고 실행을 끝낸다. Convention에 따라 뜻이 달라지지
+않으므로 evidence와 continuation을 받지 않고, legalization은 어느 convention의
+callable 안에서든 cause keyword를 `code`로 가진 `func.trap`으로 바꾼다. 두
+operation의 계약은 각자의 선언
+([`tribute_control.trap`](../crates/tribute-ir/src/dialect/tribute_control.rs),
+[`func.trap`](../crates/trunk-ir/src/dialect/func.rs))이 정한다.
+
+- **Terminator.** 두 operation 모두 [`CallableExit`](ir.md#선언적-operation-schema)다.
+  Block의 마지막 operation이며 결과가 없다. Callable 본문을 끝내거나,
+  `scf.yield` 대신 region 하나를 고르는 operation(`scf.if`,
+  `scf.index_switch`)의 arm을 끝낸다. 그 operation이 tail position일 필요는
+  없다. Operation의 결과는 `scf.yield`로 끝나는 arm에서만 오므로, trap은 자리의
+  타입에 맞는 값을 만들지 않는다. Trap으로 끝난 arm을 가려내는 일은
+  `CallableExit`와 `RegionBranch` 조회가 하며 operation 이름을 검사하지 않는다.
+- **`handle`의 region.** `tribute_control.handle`의 body, completion, arm은
+  `tribute_control.yield`로 끝나므로 trap이 직접 끝낼 수 없다. 그 안에서는 중첩된
+  `scf` operation의 arm을 끝낸다.
+- **도달할 수 있는 종료.** `func.unreachable`은 실행이 도달하지 않는 지점의
+  표시이고, `func.trap`은 프로그램이 도달할 수 있으며 도달하면 반드시 trap하는
+  정의된 종료다. 범위 검사 실패처럼 올바른 compiler가 만든 프로그램도 도달하는
+  trap을 `func.unreachable`로 쓰지 않는다. 최적화는 `func.trap`에 이르는 경로를
+  실행되지 않는 경로로 가정해 지우지 않는다.
+- **원인의 전달.** Cause keyword는 `tribute_control.trap`의 `cause`에서
+  `func.trap`의 `code`로, native에서는 `clif.trap`의 `code`로 그대로 내려간다.
+  Wasm의 `unreachable` 명령은 operand가 없으므로 `func.trap`을 `wasm.unreachable`로
+  낮출 때 원인은 사라진다. 두 target 모두 실행 중에 원인을 출력하지 않는다.
+  Native의 기계어 trap도 원인을 구별하지 않으며, 원인은 target dialect까지의 IR을
+  읽는 쪽에게만 보인다.
 
 ## Ability row
 

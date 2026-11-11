@@ -295,6 +295,15 @@ impl<'a> Converter<'a> {
                 continue;
             }
 
+            if let Ok(trap) = tribute_control::Trap::from_op(self.ctx, source) {
+                // A trap ends the execution under every convention, so it
+                // takes neither the evidence nor the continuation.
+                let code = trap.cause(self.ctx).keyword();
+                let trap = func::Trap::operands().code(code).build(self.ctx, location);
+                self.ctx.push_op(block, trap.op_ref());
+                return Ok(());
+            }
+
             if flow.convention != CallingConvention::Cps && self.needs_cps_control(source) {
                 let answer = self.delimit(source, block, mapping, flow)?;
                 mapping.insert(self.ctx.op_result(source, 0), answer);

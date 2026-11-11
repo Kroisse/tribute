@@ -188,3 +188,25 @@ impl OperationDeclarationUse for Handle {
 // A source `become` ends its callable: the callee's result is the caller's.
 impl CallableExit for TailCall {}
 impl CallableExit for TailCallIndirect {}
+
+// A trap ends the execution, and with it the callable.
+impl CallableExit for Trap {}
+
+impl LocalValidation for Trap {
+    fn validate(&self, ctx: &IrContext, errors: &mut Vec<ValidationError>) {
+        let op = self.op_ref();
+        validate_return_or_yield_shape(ctx, op, errors);
+        let valid_owner = parent_op(ctx, op).is_some_and(|owner| {
+            DynSourceCallable::is_implemented(ctx, owner)
+                || DynRegionBranch::selects_one_region(ctx, owner)
+        });
+        if !valid_owner {
+            push_op_error(
+                ctx,
+                op,
+                errors,
+                "must end a callable body or an arm of an operation that selects one region",
+            );
+        }
+    }
+}

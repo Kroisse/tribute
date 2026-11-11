@@ -548,6 +548,12 @@ it by address and its `OpFlag` impl:
 pub struct Pure;
 ```
 
+`Terminator` marks an operation that must be the last of its block, as
+MLIR's `IsTerminator` does; the operation verifier checks it for every
+flagged operation. It says nothing about where control goes, which
+`CallableExit`, `Branch`, and `RegionBranchTerminator` describe. The `func`
+and `cf` terminators carry it.
+
 ### Type Interfaces
 
 A type interface is the same mechanism for types, declared with

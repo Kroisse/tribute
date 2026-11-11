@@ -2,9 +2,8 @@ use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
 
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::func;
+use trunk_ir::op_flag::{OpFlag, Terminator};
 use trunk_ir::op_interface::DynBranch;
-use trunk_ir::ops::DialectOp;
 use trunk_ir::{BlockList, BlockRef, OpRef, RegionRef, ValueRef};
 
 use super::OwnershipPlanError;
@@ -166,9 +165,5 @@ impl ValidatedFlatCfg {
 }
 
 fn is_native_terminator(ctx: &IrContext, op: OpRef) -> bool {
-    DynBranch::is_implemented(ctx, op)
-        || func::Return::matches(ctx, op)
-        || func::TailCall::matches(ctx, op)
-        || func::TailCallIndirect::matches(ctx, op)
-        || func::Unreachable::matches(ctx, op)
+    DynBranch::is_implemented(ctx, op) || Terminator::is_set(ctx, op)
 }

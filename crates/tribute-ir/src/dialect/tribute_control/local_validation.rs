@@ -90,10 +90,6 @@ pub(super) fn validate_return(ctx: &IrContext, op: OpRef, errors: &mut Vec<Valid
     }
 }
 
-pub(super) fn is_tail_call(ctx: &IrContext, op: OpRef) -> bool {
-    TailCall::matches(ctx, op) || SourceTailCallIndirect::is_set(ctx, op)
-}
-
 /// The callable whose body contains `op` and its source signature, or an
 /// error when `op` is not in its tail position or a handle lies between
 /// them.

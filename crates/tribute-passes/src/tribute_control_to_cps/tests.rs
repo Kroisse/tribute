@@ -2529,6 +2529,55 @@ fn textual_scf_switch_arm_may_end_with_a_tail_call() {
 }
 
 #[test]
+fn a_trap_keeps_its_cause_under_every_convention() {
+    let input = r#"core.module @test {
+  tribute_cps.func @always() -> core.i32 convention(direct) {
+    tribute_control.trap out_of_range
+  }
+  tribute_cps.func @checked(%ok: core.i1, %value: core.i32) -> core.i32 convention(direct) {
+    %found = scf.if %ok -> (core.i32) {
+      scf.yield %value
+    } else {
+      tribute_control.trap out_of_range
+    }
+    %next = arith.addi %found, %value : core.i32
+    tribute_control.return %next
+  }
+  tribute_cps.func @effectful(%ok: core.i1, %value: core.i32) -> core.i32 convention(cps) {
+    %found = scf.if %ok -> (core.i32) {
+      %got = tribute_control.perform op @State @get(%value) : (core.i32) -> core.i32
+      scf.yield %got
+    } else {
+      tribute_control.trap missing_ability
+    }
+    tribute_control.return %found
+  }
+}"#;
+    let (mut ctx, module) = parse(input);
+    let (_, printed) = convert_state_fixture(&mut ctx, module);
+    assert!(!printed.contains("tribute_control."), "{printed}");
+    let lines: Vec<_> = printed.lines().map(str::trim).collect();
+    let traps: Vec<_> = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| line.starts_with("func.trap"))
+        .collect();
+    assert_eq!(
+        traps.iter().map(|(_, line)| **line).collect::<Vec<_>>(),
+        [
+            r#"func.trap "out_of_range""#,
+            r#"func.trap "out_of_range""#,
+            r#"func.trap "missing_ability""#,
+        ],
+        "{printed}"
+    );
+    // Each trap is the last operation of its region.
+    for (index, _) in traps {
+        assert_eq!(lines[index + 1], "}", "{printed}");
+    }
+}
+
+#[test]
 fn multi_result_effectful_scf_switch_is_rejected_inside_a_cps_callable() {
     let input = r#"core.module @test {
   tribute_cps.func @broken(%input: core.i32) -> core.i32 convention(cps) {

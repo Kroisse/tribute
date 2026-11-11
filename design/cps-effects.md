@@ -1292,9 +1292,8 @@ marker를 두고, `tail`은 그 칸의 `outer`를, 칸이 없으면 `ev` 자신�
 칸은 `ability_id`에 대한 이진 탐색으로 찾으며, 탐색은 tail position의 재귀다.
 없는 ability를 `lookup`, `lookup_tr`, `mask`, `dup`, `outer`, `push`하거나 dispatch
 closure가 없는 marker에 `lookup_tr`하는 것은 compiler bug이며, runtime code는 그
-실행을 trap으로 끝낸다. Runtime code는 별도 trap primitive 없이 evidence의 범위 밖
-칸을 `Slots::get`이나 `Slots::remove`로 접근해 [target trap](types.md#slots)을
-일으킨다.
+실행을 [trap intrinsic](modules.md#trap-intrinsic) `trap_missing_ability`로
+끝낸다. 범위 밖 칸을 읽어 trap을 일으키지 않는다.
 
 ### `ability.handle_dispatch`
 

@@ -58,3 +58,13 @@ pub struct Pure;
 /// - `closure.new` - closure creation
 #[op_flag]
 pub struct IsolatedFromAbove;
+
+/// Operations that must be the last operation of their block, as MLIR's
+/// `IsTerminator` is.
+///
+/// The operation verifier rejects a flagged operation that some operation
+/// follows. The flag says nothing about where control goes: `CallableExit`,
+/// `Branch`, and `RegionBranchTerminator` describe that. An operation without
+/// the flag may still end its block.
+#[op_flag]
+pub struct Terminator;

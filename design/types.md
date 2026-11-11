@@ -780,6 +780,18 @@ scrutinee가 `Never`이면 그 값 자체가 결과이고, 빈 enum이면 `core.
 검증은 이를 일반 cast와 같이 다룬다. 남은 cast를 허용하도록 검증을 완화하지
 않는다.
 
+`Never` 타입의 표현식 가운데 lowering이 block을 callable exit로 끝내는 것이 있다.
+Source `become`과 [trap intrinsic](modules.md#trap-intrinsic)의 직접 호출이다.
+이런 표현식은 `core.never` 값을 만들지 않으며, lowering은 그 block에 더 이상
+operation을 넣지 않는다. 표현식이 어디에 놓였든 같다. 인자 자리에 있으면 남은
+인자와 그 호출을, `let`의 값이면 뒤따르는 문장과 block의 결과를 낮추지 않는다.
+`absurd(runtime::trap_out_of_range())`에서는 trap만 남고 `absurd`의 호출은 없다.
+그 block이 callable 본문이면 `return` 없이, `case` arm이나 `&&`/`||`의 우변이면
+`scf.yield` 없이 exit로 끝난다
+([trap](tribute-dialects.md#trap)). 그 밖의 `Never` 표현식(결과가 `Never`인
+일반 함수나 ability operation의 호출)은 위와 같이 `core.never` 값을 만들고,
+뒤따르는 code도 낮춘다.
+
 `case`는 arm마다 패턴 검사와 guard를 두는 `scf.if` 연쇄로 lowering한다. 정수
 리터럴로 고르는 `case`는 예외로, scrutinee를 판별값으로 하는 `scf.index_switch`
 하나로 lowering한다. 마지막을 뺀 모든 arm이 guard 없는 `Nat`, `Int`, `Rune`
