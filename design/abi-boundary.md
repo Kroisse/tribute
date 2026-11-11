@@ -78,7 +78,8 @@ compiler가 값마다 표현을 고른다. 표현 선택은 값 의미론인 [`a
 - **Unboxed 값은 쪼개고 펼친다.** SSA에서는 필드마다 값 하나로 쪼갠다. 매개변수,
   결과, block 인자, structured control의 결과가 모두 그렇다. 다른 object의 필드로 저장할
   때는 그 object의 layout 안에 inline으로 놓는다. 그래서 출구 뒤에 aggregate 타입을 가진
-  SSA 값은 없다.
+  SSA 값은 없다. `core.nil` 필드는 값이 하나뿐이므로 leaf를 만들지 않는다. 그래서
+  값을 쪼갠 결과 목록에는 `core.nil`이 없다.
 - **Boxed 값은 `heap.box`에 담는다.** 생성은 `heap` 할당이 되고 필드 읽기는 box를
   빌린 읽기가 된다.
 - **강제 위치에서는 언제나 box에 담는다.** Unboxed로 고른 타입도 이 위치를 지날 때는

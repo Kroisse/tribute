@@ -399,6 +399,11 @@ ability Display {
   (field $len i32))))
 ```
 
+위의 `$bytes`는 `Bytes` 값이 box에 담길 때의 GC 타입이다.
+[표현 선택](abi-boundary.md#표현-선택)이 `Bytes`를 unboxed로 고르면 `Bytes` 값은
+`data`, `start`, `len` 세 값으로 쪼개지고, 다른 struct의 필드로는 그 세 필드가 바깥
+GC struct에 inline으로 놓인다. 아래 `String`의 `Leaf`도 그렇다.
+
 원소가 scalar인 배열은 erased `arrayref`가 되지 않으므로
 ([GC 타입 표현](wasm-backend.md#structural-gc-타입과-descriptor-필드)) byte를
 읽는 곳은 cast 없이 `array.get_u`로 읽는다.
@@ -411,7 +416,9 @@ ability Display {
 ;; reserved builtin indices.
 (type $string (sub (struct)))
 
-;; Leaf: UTF-8 bytes
+;; Leaf: UTF-8 bytes. Shown with Bytes boxed; when Bytes is unboxed, the
+;; Leaf holds (field $data (ref $byte_array)) (field $start i32)
+;; (field $len i32) inline instead of a reference to $bytes.
 (type $string_leaf (sub $string (struct
   (field $bytes (ref $bytes)))))
 

@@ -172,8 +172,10 @@ EnterTarget         value integrity check, global DCE (runtime functions
                     physicalization (physical signatures, root entry bridge,
                     value delimiters), closure lowering, target evidence
                     lowering
-ExitBoundary        closure storage layout, representation selection
-                    (adt values to SSA leaves, inline fields, or heap.box),
+ExitBoundary        closure storage layout, literal expansion (Bytes and
+                    String literals to adt values over adt.array_const),
+                    representation selection (adt values to SSA leaves,
+                    inline fields, or heap.box),
                     value integrity check, global DCE, canonicalization,
                     boundary exit verification
 ── target dialect lowering ──

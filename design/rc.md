@@ -597,7 +597,10 @@ into control flow and atomic operations by RC lowering.
 - **Temporary field borrows:** Typed planning은 `heap.struct_get` 또는
   `heap.variant_get`이 읽은 exact declared managed field와 `heap.array_get`이 읽은
   managed 원소를 그 projection의 owner에서 파생된 temporary borrow로 분류할 수
-  있다. Owner는 projection operand의 typed alias root이다. 변환된 `clif.load`
+  있다. Inline으로 놓인 값의 managed leaf도 바깥 object의 declared managed field이며,
+  그 projection의 field 경로는 바깥 object에서 inline 필드를 거쳐 leaf에 이른다. 교체
+  가능한 layout인지는 바깥 object의 layout으로 판정한다. Owner는 projection operand의
+  typed alias root이다. 변환된 `clif.load`
   result type, address provenance, `core.ptr` operand는 ownership evidence가
   아니다.
 
@@ -1004,7 +1007,9 @@ Managed 판정을 받은 타입은 managed 참조나 동적 값이고, `Int`·`N
 | `7` | inline 값. 상위 24비트가 inline으로 놓인 struct descriptor의 RTTI index다 |
 
 Inline 값 필드가 가리키는 descriptor는 그 struct가 object로 할당되지 않더라도 index와
-레코드를 가진다. Release 함수는 inline 값의 managed leaf를 컴파일할 때 펼쳐 직접
+레코드를 가진다. Ownership 계획은 할당 layout을 모을 때 inline 값 필드의 layout도 함께
+모으며, 그런 descriptor의 번호도 할당 descriptor와 같은 순서 규칙으로, 처음 나타나는
+순서대로 예약 범위 다음에서 정한다. Release 함수는 inline 값의 managed leaf를 컴파일할 때 펼쳐 직접
 release하며, 이 분류를 읽어 재귀하지 않는다.
 
 Variant의 필드 이름은 선언 순서의 위치 번호(`"0"`, `"1"`, …)다. 예약 index의 값은
