@@ -14,9 +14,12 @@ use std::borrow::Cow;
 use crate::collections::{HashMap, HashSet};
 use std::fmt;
 
+use crate::string_literal::{ExpandBytesConst, ExpandStringConst, LiteralLayouts};
 use tribute_ir::dialect::adt;
+use tribute_ir::metadata::StringLeaf;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::wasm as wasm_dialect;
+use trunk_ir::dialect::wasm_gc;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{OpRef, RegionRef};
 use trunk_ir::rewrite::{
@@ -50,9 +53,8 @@ impl std::error::Error for ConstValidationError {}
 pub struct ConstAnalysis {
     /// Distinct string/bytes payloads, in first-occurrence order.
     pub contents: Vec<Vec<u8>>,
-    /// Canonical prelude String enum type and the position of its `Leaf`,
-    /// when string constants are present.
-    pub(crate) string_leaf: Option<(trunk_ir::TypeRef, u32)>,
+    /// The layouts the byte and string constants build.
+    pub(crate) layouts: LiteralLayouts,
 }
 
 /// Context for collecting const payloads during analysis.
@@ -87,7 +89,7 @@ impl ConstCollector {
                     self.has_string_consts = true;
                     self.collect_content(s.as_bytes());
                 }
-            } else if adt::BytesConst::matches(ctx, op)
+            } else if (adt::BytesConst::matches(ctx, op) || adt::ArrayConst::matches(ctx, op))
                 && let Some(Attribute::Bytes(b)) = ctx.op_attrs(op).get("value")
             {
                 self.collect_content(b);
@@ -125,10 +127,7 @@ pub(crate) fn analyze_consts(ctx: &IrContext, module: Module) -> ConstAnalysis {
 
     ConstAnalysis {
         contents: collector.contents,
-        string_leaf: collector
-            .has_string_consts
-            .then(|| tribute_ir::metadata::string_leaf(ctx, module))
-            .flatten(),
+        layouts: LiteralLayouts::collect(ctx, module, collector.has_string_consts),
     }
 }
 
@@ -149,7 +148,10 @@ pub(crate) fn validate_for_wasm(
         if result.is_err() || adt::StringConst::from_op(ctx, op).is_err() {
             return;
         }
-        let Some((string_ty, _)) = analysis.string_leaf else {
+        let Some(StringLeaf {
+            string: string_ty, ..
+        }) = analysis.layouts.string_leaf()
+        else {
             result = Err(ConstValidationError::MissingCanonicalStringType);
             return;
         };
@@ -177,9 +179,25 @@ pub(crate) fn validate_for_wasm(
 pub(crate) fn lower(ctx: &mut IrContext, module: Module, analysis: &ConstAnalysis) {
     let segments = declare_data_segments(ctx, module, &analysis.contents);
 
+    let nat = |ctx: &mut IrContext, ty, value: i64, location| {
+        let constant = wasm_dialect::I32Const::operands()
+            .value(i32::try_from(value).expect("a constant fits Wasm memory"))
+            .results(ty)
+            .build(ctx, location);
+        (constant.op_ref(), constant.result(ctx))
+    };
     let applicator = PatternApplicator::new(TypeConverter::new())
-        .add_pattern(StringConstPattern::new(&segments, analysis.string_leaf))
-        .add_pattern(BytesConstPattern::new(&segments));
+        .add_pattern(ExpandStringConst {
+            layouts: &analysis.layouts,
+            nat: &nat,
+            // The string's value is the leaf itself, of the String enum's type.
+            cast_to_result: false,
+        })
+        .add_pattern(ExpandBytesConst {
+            layouts: &analysis.layouts,
+            nat: &nat,
+        })
+        .add_pattern(ArrayConstPattern::new(&segments));
     applicator.apply_partial(ctx, module);
 }
 
@@ -238,103 +256,62 @@ fn lookup_segment(segments: &DataSegments, content: &[u8]) -> Option<(u32, u32)>
         .map(|&data_idx| (data_idx, content.len() as u32))
 }
 
-/// Pattern for `adt.string_const` -> `String::Leaf(wasm.bytes_from_data)`.
-struct StringConstPattern<'a> {
-    segments: &'a DataSegments,
-    string_leaf: Option<(trunk_ir::TypeRef, u32)>,
-}
-
-impl<'a> StringConstPattern<'a> {
-    fn new(segments: &'a DataSegments, string_leaf: Option<(trunk_ir::TypeRef, u32)>) -> Self {
-        Self {
-            segments,
-            string_leaf,
-        }
-    }
-}
-
-impl OpRewritePattern for StringConstPattern<'_> {
-    type Op = adt::StringConst;
-
-    fn match_and_rewrite(
-        &self,
-        ctx: &mut IrContext,
-        string_const: Self::Op,
-        rewriter: &mut PatternRewriter<'_>,
-    ) -> Option<()> {
-        let op = string_const.op_ref();
-        let content = string_const.value(ctx).as_bytes();
-        let (data_idx, len) = lookup_segment(self.segments, content)?;
-        let (string_enum_ty, leaf_tag) =
-            rewriter.require(self.string_leaf, "canonical String enum type not found")?;
-
-        let location = ctx.op(op).location;
-        let bytes_ty = super::bytes::bytes_struct_type(ctx);
-        let bytes = wasm_dialect::BytesFromData::operands()
-            .data_idx(data_idx)
-            .offset(0)
-            .len(len)
-            .results(bytes_ty)
-            .build(ctx, location);
-        // The string's value is the leaf itself, of the String enum's type.
-        let leaf = adt::VariantNew::operands([bytes.result(ctx)])
-            .tag(u64::from(leaf_tag))
-            .results(string_enum_ty)
-            .build(ctx, location);
-
-        rewriter.insert_op(bytes.op_ref());
-        rewriter.replace_op(leaf.op_ref());
-        Some(())
-    }
-
-    fn name(&self) -> &'static str {
-        "StringConstPattern"
-    }
-}
-
-/// Pattern for `adt.bytes_const` -> `wasm.bytes_from_data`
-struct BytesConstPattern<'a> {
+/// Pattern for `adt.array_const` -> `wasm_gc.array_new_data` of its passive
+/// data segment, a new array on each evaluation.
+struct ArrayConstPattern<'a> {
     segments: &'a DataSegments,
 }
 
-impl<'a> BytesConstPattern<'a> {
+impl<'a> ArrayConstPattern<'a> {
     fn new(segments: &'a DataSegments) -> Self {
         Self { segments }
     }
 }
 
-impl OpRewritePattern for BytesConstPattern<'_> {
-    type Op = adt::BytesConst;
+impl OpRewritePattern for ArrayConstPattern<'_> {
+    type Op = adt::ArrayConst;
 
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        bytes_const: Self::Op,
+        array_const: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> Option<()> {
-        let op = bytes_const.op_ref();
-        let b = bytes_const.value(ctx);
-        let content: Vec<u8> = b.to_vec();
+        let op = array_const.op_ref();
+        let content: Vec<u8> = array_const.value(ctx).to_vec();
 
         let (data_idx, len) = lookup_segment(self.segments, &content)?;
 
         let location = ctx.op(op).location;
-        let bytes_ty = super::bytes::bytes_struct_type(ctx);
-
-        // Create wasm.bytes_from_data operation
-        let new_op = wasm_dialect::BytesFromData::operands()
+        let result_ty = ctx.op_result_types(op)[0];
+        let array_ty = super::type_converter::gc_array_type(ctx, result_ty);
+        let i32_ty = trunk_ir::dialect::core::I32::type_ref(ctx);
+        let constant = |ctx: &mut IrContext, value: u32| {
+            wasm_dialect::I32Const::operands()
+                .value(value as i32)
+                .results(i32_ty)
+                .build(ctx, location)
+        };
+        let offset = constant(ctx, 0);
+        let size = constant(ctx, len);
+        let array = wasm_gc::ArrayNewData::operands(offset.result(ctx), size.result(ctx))
+            .r#type(array_ty)
             .data_idx(data_idx)
-            .offset(0)
-            .len(len)
-            .results(bytes_ty)
             .build(ctx, location);
-
-        rewriter.replace_op(new_op.op_ref());
+        // The byte array keeps its `adt.array` type until `adt` lowering is
+        // done, which then makes this cast an identity.
+        let cast = trunk_ir::dialect::core::UnrealizedConversionCast::operands(array.result(ctx))
+            .results(result_ty)
+            .build(ctx, location);
+        for inserted in [offset.op_ref(), size.op_ref(), array.op_ref()] {
+            rewriter.insert_op(inserted);
+        }
+        rewriter.replace_op(cast.op_ref());
         Some(())
     }
 
     fn name(&self) -> &'static str {
-        "BytesConstPattern"
+        "ArrayConstPattern"
     }
 }
 
@@ -342,7 +319,6 @@ impl OpRewritePattern for BytesConstPattern<'_> {
 mod tests {
     use super::*;
     use trunk_ir::parser::parse_test_module;
-    use trunk_ir::types::TypeDataBuilder;
 
     fn type_alias(ctx: &IrContext, name: &str) -> trunk_ir::TypeRef {
         ctx.type_aliases()
@@ -407,7 +383,7 @@ mod tests {
             r#"core.module @test {
   wasm.func @main() -> core.nil {
     %string = adt.string_const "shared" : tribute_rt.anyref
-    %bytes = adt.bytes_const b"shared" : core.bytes
+    %bytes = adt.array_const dense<"0x736861726564"> : adt.array<core.i8>
     wasm.return
   }
 }"#,
@@ -424,7 +400,9 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !String = adt.enum<"String", [(wasm.anyref, wasm.anyref, core.i32), (core.bytes)]>
+  !Bytes = adt.struct<"std::Bytes", (adt.array<core.i8>, core.i32, core.i32)>
+  !String = adt.enum<"String", [(wasm.anyref, wasm.anyref, core.i32), (!Bytes)]>
+  adt.struct_decl "std::Bytes" !Bytes ["data", "start", "len"]
   adt.enum_decl "String" !String ["Branch", "Leaf"]
   wasm.func @main() -> core.nil {
     %string = adt.string_const "hello" : !String
@@ -441,7 +419,8 @@ mod tests {
 
         let output = module.op().display(&ctx).to_string();
         assert!(!output.contains("adt.string_const"), "{output}");
-        assert!(output.contains("wasm.bytes_from_data"), "{output}");
+        assert!(output.contains("wasm_gc.array_new_data"), "{output}");
+        assert!(output.contains("adt.struct_new"), "{output}");
         assert!(output.contains("adt.variant_new"), "{output}");
         // The declaration, not a fixed position, locates `Leaf`.
         assert!(output.contains("adt.variant_new 1("), "{output}");
@@ -473,8 +452,10 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !PreludeString = adt.enum<"String", [(core.bytes), (wasm.anyref, wasm.anyref, core.i32)]>
-  !UserString = adt.enum<"user::String", [(core.bytes), (wasm.anyref, wasm.anyref, core.i32)]>
+  !Bytes = adt.struct<"std::Bytes", (adt.array<core.i8>, core.i32, core.i32)>
+  !PreludeString = adt.enum<"String", [(!Bytes), (wasm.anyref, wasm.anyref, core.i32)]>
+  !UserString = adt.enum<"user::String", [(!Bytes), (wasm.anyref, wasm.anyref, core.i32)]>
+  adt.struct_decl "std::Bytes" !Bytes ["data", "start", "len"]
   adt.enum_decl "String" !PreludeString ["Leaf", "Branch"]
   adt.enum_decl "user::String" !UserString ["Leaf", "Branch"]
   wasm.func @main() -> core.nil {
@@ -484,13 +465,15 @@ mod tests {
 }"#,
         );
         let prelude_string = type_alias(&ctx, "PreludeString");
-        let user_string = type_alias(&ctx, "UserString");
         attach_string_type(&mut ctx, module, prelude_string);
 
         let analysis = analyze_consts(&ctx, module);
 
-        assert_eq!(analysis.string_leaf, Some((prelude_string, 0)));
-        assert_ne!(analysis.string_leaf, Some((user_string, 0)));
+        let leaf = analysis
+            .layouts
+            .string_leaf()
+            .expect("the prelude String's leaf");
+        assert_eq!((leaf.string, leaf.leaf), (prelude_string, 0));
     }
 
     #[test]
@@ -499,7 +482,9 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !String = adt.enum<"String", [(core.bytes), (wasm.anyref, wasm.anyref, core.i32)]>
+  !Bytes = adt.struct<"std::Bytes", (adt.array<core.i8>, core.i32, core.i32)>
+  !String = adt.enum<"String", [(!Bytes), (wasm.anyref, wasm.anyref, core.i32)]>
+  adt.struct_decl "std::Bytes" !Bytes ["data", "start", "len"]
   adt.enum_decl "String" !String ["Leaf", "Branch"]
   wasm.func @main() -> core.nil {
     %string = adt.string_const "hello" : !String
@@ -516,7 +501,10 @@ mod tests {
         let analysis = analyze_consts(&reparsed_ctx, reparsed);
 
         assert_eq!(
-            analysis.string_leaf,
+            analysis
+                .layouts
+                .string_leaf()
+                .map(|leaf| (leaf.string, leaf.leaf)),
             Some((type_alias(&reparsed_ctx, "String"), 0))
         );
         assert_eq!(
@@ -527,22 +515,6 @@ mod tests {
 
     #[test]
     fn string_lowering_preserves_constants_when_analysis_is_incomplete() {
-        let mut missing_data_ctx = IrContext::new();
-        let missing_data_module = string_module(&mut missing_data_ctx, &["hello"]);
-        let placeholder_ty = TypeDataBuilder::new("adt.enum").intern(&mut missing_data_ctx);
-        lower(
-            &mut missing_data_ctx,
-            missing_data_module,
-            &ConstAnalysis {
-                contents: Vec::new(),
-                string_leaf: Some((placeholder_ty, 0)),
-            },
-        );
-        assert_eq!(
-            string_const_count(&missing_data_ctx, missing_data_module),
-            1
-        );
-
         let mut missing_type_ctx = IrContext::new();
         let missing_type_module = string_module(&mut missing_type_ctx, &["hello"]);
         lower(
@@ -550,7 +522,7 @@ mod tests {
             missing_type_module,
             &ConstAnalysis {
                 contents: vec![b"hello".to_vec()],
-                string_leaf: None,
+                layouts: LiteralLayouts::default(),
             },
         );
         assert_eq!(
@@ -559,18 +531,70 @@ mod tests {
         );
 
         assert_eq!(
-            trunk_ir::rewrite::RewritePattern::name(&StringConstPattern::new(
-                &DataSegments::default(),
-                None
-            )),
-            "StringConstPattern"
-        );
-        assert_eq!(
-            trunk_ir::rewrite::RewritePattern::name(&BytesConstPattern::new(
+            trunk_ir::rewrite::RewritePattern::name(&ArrayConstPattern::new(
                 &DataSegments::default()
             )),
-            "BytesConstPattern"
+            "ArrayConstPattern"
         );
+    }
+
+    #[test]
+    fn bytes_lowering_builds_its_representation_by_field_names() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  !Repr = adt.struct<"std::Bytes::Repr", (core.i32, adt.array<core.i8>, core.i32)>
+  adt.struct_decl "std::Bytes::Repr" !Repr ["len", "data", "start"]
+  wasm.func @main() -> core.nil {
+    %bytes = adt.bytes_const b"hello" : !Repr
+    wasm.return
+  }
+}"#,
+        );
+        let analysis = analyze_consts(&ctx, module);
+
+        lower(&mut ctx, module, &analysis);
+
+        let output = module.op().display(&ctx).to_string();
+        assert!(!output.contains("adt.bytes_const"), "{output}");
+        assert!(!output.contains("adt.array_const"), "{output}");
+        assert_eq!(bytes_from_data(&ctx, module), [(0, 5)], "{output}");
+        // `len`, `data`, and `start` are placed by their declared names.
+        let constant = |value| {
+            let trunk_ir::refs::ValueDef::OpResult(def, _) = ctx.value_def(value) else {
+                return None;
+            };
+            wasm_dialect::I32Const::from_op(&ctx, def)
+                .ok()
+                .map(|constant| constant.value(&ctx))
+        };
+        let fields = module_body_ops(&ctx, module)
+            .into_iter()
+            .find_map(|op| adt::StructNew::from_op(&ctx, op).ok())
+            .map(|record| ctx.op_operands(record.op_ref()).to_vec())
+            .expect("the representation is built");
+        assert_eq!(
+            [
+                constant(fields[0]),
+                constant(fields[1]),
+                constant(fields[2])
+            ],
+            [Some(5), None, Some(0)],
+            "{output}"
+        );
+    }
+
+    fn module_body_ops(ctx: &IrContext, module: Module) -> Vec<OpRef> {
+        let func = module
+            .ops(ctx)
+            .iter()
+            .copied()
+            .find(|&op| wasm_dialect::Func::from_op(ctx, op).is_ok())
+            .expect("wasm.func");
+        let body = ctx.op_region(func, 0).unwrap();
+        let block = ctx.region(body).blocks[0];
+        ctx.block(block).ops.to_vec()
     }
     #[test]
     fn lowering_declares_one_passive_segment_per_payload() {
@@ -579,9 +603,9 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   wasm.func @main() -> core.nil {
-    %first = adt.bytes_const b"first" : core.bytes
-    %second = adt.bytes_const b"second" : core.bytes
-    %again = adt.bytes_const b"first" : core.bytes
+    %first = adt.array_const dense<"0x6669727374"> : adt.array<core.i8>
+    %second = adt.array_const dense<"0x7365636F6E64"> : adt.array<core.i8>
+    %again = adt.array_const dense<"0x6669727374"> : adt.array<core.i8>
     wasm.return
   }
 }"#,
@@ -611,9 +635,9 @@ mod tests {
   wasm.data(b"active") offset 0
   wasm.data(b"kept") offset 0 passive
   wasm.func @main() -> core.nil {
-    %new = adt.bytes_const b"new" : core.bytes
-    %kept = adt.bytes_const b"kept" : core.bytes
-    %active = adt.bytes_const b"active" : core.bytes
+    %new = adt.array_const dense<"0x6E6577"> : adt.array<core.i8>
+    %kept = adt.array_const dense<"0x6B657074"> : adt.array<core.i8>
+    %active = adt.array_const dense<"0x616374697665"> : adt.array<core.i8>
     wasm.return
   }
 }"#,
@@ -662,8 +686,16 @@ mod tests {
         ctx.block(block)
             .ops
             .iter()
-            .filter_map(|&op| wasm_dialect::BytesFromData::from_op(ctx, op).ok())
-            .map(|bytes| (bytes.data_idx(ctx), bytes.len(ctx)))
+            .filter_map(|&op| wasm_gc::ArrayNewData::from_op(ctx, op).ok())
+            .map(|array| {
+                let trunk_ir::refs::ValueDef::OpResult(def, _) = ctx.value_def(array.size(ctx))
+                else {
+                    panic!("the size is a constant");
+                };
+                let size =
+                    wasm_dialect::I32Const::from_op(ctx, def).expect("the size is a constant");
+                (array.data_idx(ctx), size.value(ctx) as u32)
+            })
             .collect()
     }
 }

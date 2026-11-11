@@ -90,6 +90,18 @@ pub const SLOTS_INTRINSICS: [&str; 6] = [
     "std::runtime::Slots::replace",
 ];
 
+/// The compiler intrinsic identities of the runtime byte array `ByteArray`
+/// (`design/types.md`, "ByteArray").
+pub const BYTE_ARRAY_INTRINSICS: [&str; 2] = [
+    "std::runtime::ByteArray::len",
+    "std::runtime::ByteArray::get",
+];
+
+/// The compiler intrinsic identities that convert a primitive value to its
+/// representation and back (`design/types.md`, "Primitive 타입의 표현").
+/// The two share one IR type, so each call is its argument.
+pub const REPRESENTATION_INTRINSICS: [&str; 2] = ["std::Bytes::repr", "std::Bytes::from_repr"];
+
 /// The IR symbol of the root-module definition at `path`.
 ///
 /// This is the one place that turns a runtime item's path into a symbol.

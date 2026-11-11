@@ -360,7 +360,10 @@ fn the_prelude_shows_only_its_public_items(db: &salsa::DatabaseImpl) {
         r#"
 use std::io::ReadLineResult
 
-fn raw(bytes: Bytes) -> Nat { __tribute_bytes_len(bytes) + std::__tribute_bytes_len(bytes) }
+fn raw() -> Nil {
+    let _ = __tribute_byte_array_range_equal
+    let _ = std::__tribute_byte_array_range_equal
+}
 
 fn cursor(c: String::Cursor) -> Nat { 0 }
 
@@ -375,14 +378,42 @@ fn main() -> Nil {
     for expected in [
         "`std::io::ReadLineResult` is not visible here: `std::io::ReadLineResult` is private",
         // Not an item of `std::prelude::v0`, so not a short name.
-        "unresolved name `__tribute_bytes_len`",
-        "`std::__tribute_bytes_len` is not visible here: `std::__tribute_bytes_len` is private",
+        "unresolved name `__tribute_byte_array_range_equal`",
+        "`std::__tribute_byte_array_range_equal` is not visible here: `std::__tribute_byte_array_range_equal` is private",
         "`std::String::Cursor` is not visible here: `std::String::Cursor` is private",
         "`rope_equal` is not visible here: `std::String::rope_equal` is private",
     ] {
         assert_hidden(&errors, expected);
     }
     assert_eq!(errors.len(), 5, "{errors:#?}");
+}
+
+/// `Bytes` is a primitive type: outside `std` its representation is hidden,
+/// and it has no fields or constructor.
+#[salsa_test]
+fn bytes_shows_no_representation(db: &salsa::DatabaseImpl) {
+    let errors = errors(
+        db,
+        r#"
+fn reads(bytes: Bytes) -> Nat {
+    let _ = Bytes::repr(bytes)
+    bytes.len()
+}
+
+fn builds(r: Bytes::Repr) -> Bytes { Bytes::from_repr(r) }
+
+fn spreads(bytes: Bytes) -> Bytes { Bytes { ..bytes } }
+"#,
+    );
+    assert_eq!(
+        errors,
+        [
+            "`Bytes::repr` is not visible here: `std::Bytes::repr` is declared `pub(pkg)`",
+            "`std::Bytes::Repr` is not visible here: `std::Bytes::Repr` is declared `pub(pkg)`",
+            "`Bytes::from_repr` is not visible here: `std::Bytes::from_repr` is private",
+            "expected a constructor, found module `std::Bytes`",
+        ]
+    );
 }
 
 /// An implicit constructor does not reach a hidden constructor through the

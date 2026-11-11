@@ -127,24 +127,32 @@ EOF는 runtime failure와 같은 `Throw(Error)` 채널을 사용하므로 반환
 ## Runtime Boundary
 
 Public API는 `extern "C"`, WASI import, `__print_line` 같은 target detail을
-노출하지 않는다. Shared lowering은 동적 `Bytes`를 읽고 쓸 수 있는
-target-independent I/O boundary를 생성한다.
+노출하지 않는다. Shared lowering은 동적 byte를 읽고 쓸 수 있는
+target-independent I/O boundary를 생성한다. Boundary는 `Bytes` 값이 아니라
+[byte 배열](types.md#bytearray)과 범위를 주고받으므로, target은 `Bytes`의 layout을
+알 필요가 없다.
 
 ```text
-tribute_io.write(bytes: Bytes, newline: Bool) -> Nil
+tribute_io.write(data: ByteArray, start: Nat, len: Nat, newline: Bool)
 tribute_io.read_line() -> ReadLineResult
 
 ReadLineResult =
-    Line(valid_utf8: Bytes)
+    Line(valid_utf8: ByteArray)
   | EndOfFile
   | InvalidEncoding
-  | System(code: Int, message_utf8: Bytes)
+  | System(code: Int, message_utf8: ByteArray)
 ```
 
-Embedded `std::io` source는 `String::to_bytes`로 rope를 flatten한 뒤 `write`를
-호출한다. `read_line`의 `Line` payload와 `System` message는 boundary가 유효한 UTF-8임을
-보장하므로 source wrapper가 `String::from_bytes`로 감싼다. 나머지 status는
-`std::io::Error`로 변환하여 `Throw(Error)` operation을 호출한다.
+Embedded `std::io` source는 `String::to_bytes`로 rope를 flatten한 뒤 그 `Bytes`의
+배열과 범위(`Bytes::Repr`의 `data`, `start`, `len`)로 `write`를 호출한다.
+`write`는 `data`를 빌리며, 범위가 배열 밖이면 실행을 끝낸다. `write`는 값을 돌려주지
+않는다. IR에서 `start`와 `len`은 `core.index`, `newline`은 `core.i1`이므로, stub
+호출을 `write`로 바꾸는 lowering이 `Nat` 위치를 `core.index`로 넓히고 stub의 `Nil`
+결과 자리에 nil 값을 만든다. `read_line`의 `Line`
+payload와 `System` message는 boundary가 유효한 UTF-8임을 보장하므로 source
+wrapper가 배열 전체를 보는 `Bytes`를 만들어
+`String::from_bytes`로 감싼다. 나머지 status는 `std::io::Error`로 변환하여
+`Throw(Error)` operation을 호출한다.
 
 `tribute_io.*`는 shared IR operation이며 public source symbol이 아니다. Embedded source가
 사용하는 private runtime bridge stub은 frontend lowering에서 이 operation으로 즉시 바뀌고,
@@ -159,10 +167,11 @@ target pipeline 이전에는 제거된다. Shared contract는 target ABI를 포�
 
 ### Wasm Runtime Boundary
 
-Wasm backend의 `Bytes`는 WasmGC `array i8`과 범위 시작/길이를 field로 가진 일반
-사용자 struct다([string.md](string.md#bytes-1)). WASI preview1 `fd_write`의
-iovec은 linear memory에 있어야 하므로 GC array reference를 직접 전달할 수 없다.
-첫 구현은 instance-local linear scratch buffer를 사용한다.
+Wasm backend의 `Bytes`는 WasmGC `array i8`과 범위 시작/길이를 field로 가진 표현
+struct의 값이며, 다른 사용자 struct와 같은 GC 타입을 쓴다
+([string.md](string.md#bytes-1)). WASI preview1 `fd_write`의 iovec은 linear
+memory에 있어야 하므로 GC array reference를 직접 전달할 수 없다. 첫 구현은
+instance-local linear scratch buffer를 사용한다.
 
 - 출력할 `Bytes` slice를 GC array에서 scratch buffer로 복사한다.
 - `print_line`은 payload 끝에 `\n` 하나를 붙여 하나의 연속 구간으로 쓴다.
@@ -187,7 +196,7 @@ Native lowering은 다음 private C ABI를 사용한다. 이 ABI는 source API�
 `tribute-runtime`과 native compiler pipeline 사이에서만 공유된다.
 
 ```text
-__tribute_io_write(data: *const ByteArray, start: u32, len: u32, newline: u32) -> void
+__tribute_io_write(data: *const ByteArray, start: usize, len: usize, newline: u32) -> void
 __tribute_io_read_line() -> *mut NativeReadLineResult
 __tribute_io_read_line_result_dealloc(result: *mut NativeReadLineResult) -> void
 
@@ -201,14 +210,13 @@ NativeReadLineResult = repr(C) {
 
 `ByteArray`는 [byte 배열](rc.md#bytes) 객체의 payload(`[len: i64] [bytes...]`)다.
 `__tribute_io_write`는 `data`를 호출 동안 빌리고 `[start, start + len)`를 쓴다.
-Native lowering은 `Bytes`의 `data`, `start`, `len` field를 읽어 넘긴다. Runtime은
-범위가 배열 안인지 검사하고, 벗어나면 실행을 끝낸다.
+Runtime은 범위가 배열 안인지 검사하고, 벗어나면 실행을 끝낸다.
 
 Runtime은 Tribute enum, struct, `Bytes`를 직접 생성하지 않으며, 직접 할당하는 RC 객체는
 예약 RTTI index의 byte 배열뿐이다. Native lowering이 descriptor의 필드를 읽어
 `std::io::ReadLineResult` ADT를 만들고 descriptor를 즉시 해제한다. `bytes`와
-`message`는 unit 하나를 가진 byte 배열이며, lowering이 배열 전체를 보는 `Bytes`로
-감싸 해당 variant로 소유권을 이전한다. 사용하지 않는 pointer field는 null이다.
+`message`는 unit 하나를 가진 byte 배열이며, 해당 variant로 소유권이 이전된다.
+사용하지 않는 pointer field는 null이다.
 
 `newline`은 native ABI에서 `u32` 0/1로 전달한다. Runtime은 byte 범위를 먼저 모두
 쓰고, 값이 1일 때만 `\n` 하나를 추가한다.

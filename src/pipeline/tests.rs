@@ -1242,6 +1242,37 @@ fn main() -> Nil {
     }
 }
 
+/// A byte literal is a byte array constant wrapped in the representation of
+/// `Bytes` that views all of it (`design/string.md` § "Constant lowering").
+#[salsa_test]
+fn bytes_literal_wraps_a_byte_array_constant(db: &salsa::DatabaseImpl) {
+    let source = source_from_str(
+        "bytes_literal.trb",
+        r#"
+fn data() -> Bytes {
+    b"payload"
+}
+
+fn main() -> Nil {
+    let _ = data()
+}
+"#,
+    );
+
+    let (ctx, module) = compile_ast(db, source)
+        .expect("pipeline should not fail")
+        .expect("pipeline should produce a module");
+    let output = module.op().display(&ctx).to_string();
+
+    // The frontend writes one operation; target constant lowering expands it.
+    assert!(
+        output.contains(r#"adt.bytes_const b"payload" : !"std::Bytes::Repr""#),
+        "{output}"
+    );
+    assert!(!output.contains("adt.array_const"), "{output}");
+    assert!(!output.contains("core.bytes"), "{output}");
+}
+
 #[salsa_test]
 fn test_std_io_lowers_to_shared_dialect(db: &salsa::DatabaseImpl) {
     let source = source_from_str(
@@ -1271,11 +1302,14 @@ fn main() ->{std::io::Io} Nil {
     assert!(output.contains("tribute_io.read_line"), "{output}");
     assert!(!output.contains("__tribute_io_"), "{output}");
 
+    // `print` and `print_line` reach `tribute_io.write` through one helper,
+    // passing it the newline flag.
     let mut newline_values = Vec::new();
     let _ = trunk_ir::walk::walk_op::<()>(&ctx, module.op(), &mut |op| {
-        if let Ok(write) = tribute_ir::dialect::tribute_io::Write::from_op(&ctx, op)
-            && let trunk_ir::refs::ValueDef::OpResult(producer, _) =
-                ctx.value_def(write.newline(&ctx))
+        if let Ok(call) = trunk_ir::dialect::func::Call::from_op(&ctx, op)
+            && *call.callee(&ctx) == ["std::io::write_bytes"]
+            && let Some(&newline) = ctx.op_operands(op).last()
+            && let trunk_ir::refs::ValueDef::OpResult(producer, _) = ctx.value_def(newline)
             && let Ok(constant) = trunk_ir::dialect::arith::Constant::from_op(&ctx, producer)
             && let trunk_ir::Attribute::Bool(value) = constant.value(&ctx)
         {
@@ -2289,9 +2323,9 @@ fn arithmetic_intrinsic_lowering_consumes_its_identities(db: &salsa::DatabaseImp
              declarations nothing references"
     );
     assert_eq!(
-        identity("std::__bytes_get_or_panic"),
-        Some(Some("std::__bytes_get_or_panic")),
-        "bytes lowering consumes its identity inside the target boundary"
+        identity("std::runtime::ByteArray::get"),
+        None,
+        "byte array lowering is the last reader of its identities"
     );
 }
 

@@ -1209,8 +1209,9 @@ Pipeline 단계의 불변 조건과 representation/ABI 경계 계약은
 
 Primitive scalar, address-width index, pointer, reference, array, tuple,
 function, and nil types are represented in TrunkIR. TrunkIR has no byte-string
-type: byte data is an `adt.array<core.i8>`, and `Bytes` is a prelude struct
-over it ([string.md](string.md#bytes)). Library data types such as
+type: byte data is an `adt.array<core.i8>`, and a `Bytes` value is a struct
+over it, the representation the prelude declares
+([string.md](string.md#bytes)). Library data types such as
 `Option`, `Result`, `String`, and `Bytes` lower through ADT and runtime/library
 conventions. `List` is an opaque nominal builtin whose shared construction and
 sequence-view observations use `list.*`; target-specific passes choose and

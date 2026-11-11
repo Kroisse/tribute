@@ -8,7 +8,7 @@ use crate::dialect::tribute_rtti::{
     DescriptorFieldsError, DescriptorLayoutType, ManagedRef, ManagedRefType,
 };
 use trunk_ir::asm_format::TypeAliasHint;
-use trunk_ir::dialect::core::{I1, Index};
+use trunk_ir::dialect::core::{I1, I8, Index};
 use trunk_ir::op_flag::Pure;
 
 #[trunk_ir::dialect]
@@ -359,20 +359,37 @@ mod adt {
     #[asm_format(value attr_dict_bare ":" type(result))]
     fn string_const(value: Attr<String>) -> Value<_> {}
 
-    /// A byte array holding `value`: its result is an
-    /// `adt.array<core.i8>` whose elements are the bytes of `value`, owned
-    /// with one unit like a new allocation. The frontend wraps it in the
-    /// prelude `Bytes` struct. A native target may produce one static object
-    /// per constant and retain it on each evaluation (`design/rc.md` § "정적
-    /// 객체"); Wasm builds a new array from a passive data segment
-    /// (`design/string.md` § "Constant lowering").
+    /// A byte sequence constant: a value of `Bytes`, whose IR type is the
+    /// representation struct `std::Bytes::Repr`, viewing all of
+    /// `value`. Target constant lowering expands it to that struct over an
+    /// `adt.array_const` of the bytes, placing the fields by their declared
+    /// names (`design/string.md` § "Constant lowering").
     ///
     /// ```text
-    /// %b = adt.bytes_const b"\x01\x02" : adt.array<core.i8>
+    /// %b = adt.bytes_const b"\x01\x02" : !"std::Bytes::Repr"
     /// ```
     #[flags(Pure)]
     #[asm_format(value attr_dict_bare ":" type(result))]
     fn bytes_const(value: Attr<Bytes>) -> Value<_> {}
+
+    /// An array constant of its result type whose elements are `value`, the
+    /// elements' bytes in little-endian order. Its result is owned with one
+    /// unit like a new allocation. Whether two evaluations produce the same
+    /// object is not specified: a native target may produce one static
+    /// object per constant and retain it on each evaluation (`design/rc.md`
+    /// § "정적 객체"), and Wasm builds a new array from a passive data
+    /// segment on each evaluation (`design/string.md` § "Constant
+    /// lowering"). Constant lowering builds it while expanding
+    /// `adt.bytes_const` and `adt.string_const`.
+    ///
+    /// The element type is `core.i8`, so `value` holds one byte per element.
+    ///
+    /// ```text
+    /// %b = adt.array_const dense<"0x0102"> : adt.array<core.i8>
+    /// ```
+    #[flags(Pure)]
+    #[asm_format(value attr_dict_bare ":" type(result))]
+    fn array_const<A: Array<Element = I8>>(value: Attr<Dense>) -> Value<A> {}
 }
 
 // A value of a nominal layout type points to an allocation of that layout.
@@ -639,7 +656,7 @@ impl Fold for RefCast {
 // === Nominal struct layout type ===
 
 use rustc_hash::FxHashMap as HashMap;
-use trunk_ir::attr_kind::{Bytes, Type};
+use trunk_ir::attr_kind::{Bytes, Dense, Type};
 use trunk_ir::context::IrContext;
 use trunk_ir::ops::DialectType;
 use trunk_ir::types::{
@@ -897,6 +914,13 @@ impl NominalDecls {
     pub fn variant_position(&self, ctx: &IrContext, layout: Enum, variant: &str) -> Option<u32> {
         self.of_enum(layout)?.position_of(ctx, variant)
     }
+
+    /// The position of the field the declaration of `layout` names `field`,
+    /// for a pass that builds a value of a compiler-owned struct by its
+    /// source field names.
+    pub fn field_position(&self, ctx: &IrContext, layout: Struct, field: &str) -> Option<u32> {
+        self.of_struct(layout)?.position_of(ctx, field)
+    }
 }
 
 /// A nominal declaration that does not fit its layout.
@@ -933,6 +957,14 @@ impl trunk_ir::ops::Verify for EnumDecl {
             return Err(NominalDeclError::CountMismatch { names, positions }.into());
         }
         Ok(())
+    }
+}
+
+impl StructDecl {
+    /// The position of the field this declaration names `field`.
+    pub fn position_of(self, ctx: &IrContext, field: &str) -> Option<u32> {
+        let position = self.fields(ctx).position(|name| name == field)?;
+        Some(u32::try_from(position).expect("a struct has fewer than 2^32 fields"))
     }
 }
 
@@ -2155,6 +2187,36 @@ mod tests {
             ),
         );
         trunk_ir::validation::validate_op_schemas(&ctx, module.op()).is_ok()
+    }
+
+    #[test]
+    fn array_constants_spell_their_payload_as_a_dense_literal() {
+        let text = "core.module @test {\n  func.func @f() -> core.nil {\n    %b = adt.array_const dense<\"0x00FF7A\"> : adt.array<core.i8>\n    func.return\n  }\n}";
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, text);
+        assert!(trunk_ir::validation::validate_op_schemas(&ctx, module.op()).is_ok());
+        let printed = module.op().display(&ctx).to_string();
+        assert!(printed.contains("dense<\"0x00FF7A\">"), "{printed}");
+        let mut found = None;
+        let _ = trunk_ir::walk::walk_op::<()>(&ctx, module.op(), &mut |op| {
+            found = found.or(ArrayConst::from_op(&ctx, op).ok());
+            std::ops::ControlFlow::Continue(trunk_ir::walk::WalkAction::Advance)
+        });
+        let constant = found.expect("the constant");
+        assert_eq!(constant.value(&ctx), [0x00, 0xFF, 0x7A]);
+
+        // Only byte elements are accepted, and the digits come in pairs.
+        assert!(!array_schema_ok(
+            "%b = adt.array_const dense<\"0x00\"> : !A"
+        ));
+        let mut ctx = IrContext::new();
+        assert!(
+            trunk_ir::parser::parse_module(
+                &mut ctx,
+                "core.module @test {\n  %b = adt.array_const dense<\"0x0\"> : adt.array<core.i8>\n}"
+            )
+            .is_err()
+        );
     }
 
     #[test]

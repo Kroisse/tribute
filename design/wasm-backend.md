@@ -490,8 +490,8 @@ user-defined type은 그 뒤에 배치된다:
 verifier는 closure 1, described 2, user-defined type 3+를 정확히
 사용하며 CPS control carrier나 trampoline placeholder index를 예약하지 않는다.
 Index 0은 `"boxed_f64"`, index 1과 2는 `"closure"`, `"described"`
-[runtime layout 식별자](ir.md#runtime-layout-식별자)로만 정해진다. `Bytes`는
-prelude struct이므로 다른 사용자 struct와 같은 GC 타입을 받고, 그 byte 배열
+[runtime layout 식별자](ir.md#runtime-layout-식별자)로만 정해진다. `Bytes`의
+값은 표현 struct이므로 다른 사용자 struct와 같은 GC 타입을 받고, 그 byte 배열
 `adt.array<core.i8>`은 다른 배열과 같은 GC 배열이다([string.md](string.md#bytes-1)).
 Wasm lowering의 첫 단계는 `tribute_rt` primitive 타입을 Wasm 표현으로 바꾼다. 이
 변환은 alias, 연산 속성, 결과와 block 인자뿐 아니라 ADT field, variant payload,
