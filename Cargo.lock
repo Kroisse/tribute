@@ -1881,7 +1881,7 @@ dependencies = [
  "trunk-ir",
  "trunk-ir-cranelift-backend",
  "trunk-ir-wasm-backend",
- "wasmparser",
+ "wasmparser 0.259.0",
 ]
 
 [[package]]
@@ -1897,7 +1897,7 @@ dependencies = [
  "tribute-front",
  "tribute-passes",
  "trunk-ir",
- "wasmparser",
+ "wasmparser 0.259.0",
 ]
 
 [[package]]
@@ -1969,7 +1969,7 @@ dependencies = [
  "trunk-ir",
  "trunk-ir-cranelift-backend",
  "trunk-ir-wasm-backend",
- "wasmparser",
+ "wasmparser 0.259.0",
 ]
 
 [[package]]
@@ -2071,7 +2071,7 @@ dependencies = [
  "tracing",
  "trunk-ir",
  "wasm-encoder",
- "wasmparser",
+ "wasmparser 0.259.0",
 ]
 
 [[package]]
@@ -2175,12 +2175,12 @@ dependencies = [
 
 [[package]]
 name = "wasm-encoder"
-version = "0.259.0"
+version = "0.263.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b1d0246511d901aacf25d2dc9111f0054947de5e093fe662099e709ff7530dc3"
+checksum = "0b883a26aea02eaabe2d2c3fba7eb039ef5cdcb5d5201ae5551e73d5e251a81f"
 dependencies = [
  "leb128fmt",
- "wasmparser",
+ "wasmparser 0.263.0",
 ]
 
 [[package]]
@@ -2188,6 +2188,16 @@ name = "wasmparser"
 version = "0.259.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0f7c12eac7bb587801590f6a67ff0bc84d0748513864b71108e4b311cc3df694"
+dependencies = [
+ "bitflags 2.13.2",
+ "indexmap",
+]
+
+[[package]]
+name = "wasmparser"
+version = "0.263.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4f5fa0a054ae153606df820eb0a84213e28cda41bbe04ba2628e71b6ba100fcb"
 dependencies = [
  "bitflags 2.13.2",
  "indexmap",
