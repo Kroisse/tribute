@@ -155,9 +155,18 @@ conversion 오류로 거부한다. 결과가 있는 switch는 각 `wasm.if`가 �
 Wasm 값 하나이다. Lowering은 결과를 묶은 aggregate를 만들지 않는다. `wasm.block`,
 `wasm.loop`, `wasm.if`의 Wasm block type은 결과가 없거나 `core.nil` 하나뿐이면 빈
 block type, 결과가 하나이면 그 값 타입이고, 둘 이상이면 type section에 등록한 함수
-타입 `() -> (결과...)`의 인덱스이다(multi-value의 type-indexed block type). 결과가
-둘 이상인 구조적 제어는 `core.nil` 결과를 갖지 않으며, emitter는 그런 block type을
-거부한다. Loop-carried 값은 local로 전달하므로 block type은 매개변수를 갖지 않는다.
+타입 `() -> (결과...)`의 인덱스이다(multi-value의 type-indexed block type).
+
+Wasm에서 `core.nil` 값은 null로 stack에 오르지만, `core.nil` 결과 하나뿐인
+구조적 제어는 값을 남기지 않는다. 결과가 여럿인 목록에서는 `core.nil` 결과마다 이
+둘 중 하나를 골라야 하므로, Wasm target은 그런 목록을 지원하지 않는다. IR 계약은
+`(core.nil, core.i32)` 같은 목록을 허용하지만, `scf_to_wasm`은 변환을 시작하기 전에
+`core.nil` 결과가 섞인 다중 결과 `scf.if`, `scf.index_switch`, `scf.loop`를 이유를
+담은 conversion 오류로 거부하고 module을 바꾸지 않는다. 그런 목록을 만드는 lowering은
+Wasm lowering 전에 `core.nil` 결과를 없애야 한다. 지금 frontend가 만드는 구조적 제어는
+결과가 하나 이하이다.
+
+Loop-carried 값은 local로 전달하므로 block type은 매개변수를 갖지 않는다.
 이 함수 타입은 같은 입력과 결과를 가진 signature의 타입 인덱스를 함께 쓴다. Yield
 없이 끝나는 region은 마지막 operation의 결과 전체를 넘긴다.
 
