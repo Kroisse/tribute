@@ -128,7 +128,7 @@ EOF는 runtime failure와 같은 `Throw(Error)` 채널을 사용하므로 반환
 
 Public API는 `extern "C"`, WASI import, `__print_line` 같은 target detail을
 노출하지 않는다. Shared lowering은 동적 byte를 읽고 쓸 수 있는
-target-independent I/O boundary를 생성한다. Boundary는 `Bytes` struct가 아니라
+target-independent I/O boundary를 생성한다. Boundary는 `Bytes` 값이 아니라
 [byte 배열](types.md#bytearray)과 범위를 주고받으므로, target은 `Bytes`의 layout을
 알 필요가 없다.
 
@@ -144,9 +144,10 @@ ReadLineResult =
 ```
 
 Embedded `std::io` source는 `String::to_bytes`로 rope를 flatten한 뒤 그 `Bytes`의
-`data`, `start`, `len`으로 `write`를 호출한다. `write`는 `data`를 빌리며, 범위가 배열
-밖이면 실행을 끝낸다. `read_line`의 `Line` payload와 `System` message는 boundary가
-유효한 UTF-8임을 보장하므로 source wrapper가 배열 전체를 보는 `Bytes`를 만들어
+배열과 범위(`Bytes::impl`의 `data`, `start`, `len`)로 `write`를 호출한다.
+`write`는 `data`를 빌리며, 범위가 배열 밖이면 실행을 끝낸다. `read_line`의 `Line`
+payload와 `System` message는 boundary가 유효한 UTF-8임을 보장하므로 source
+wrapper가 배열 전체를 보는 `Bytes`를 만들어
 `String::from_bytes`로 감싼다. 나머지 status는 `std::io::Error`로 변환하여
 `Throw(Error)` operation을 호출한다.
 
@@ -163,10 +164,11 @@ target pipeline 이전에는 제거된다. Shared contract는 target ABI를 포�
 
 ### Wasm Runtime Boundary
 
-Wasm backend의 `Bytes`는 WasmGC `array i8`과 범위 시작/길이를 field로 가진 일반
-사용자 struct다([string.md](string.md#bytes-1)). WASI preview1 `fd_write`의
-iovec은 linear memory에 있어야 하므로 GC array reference를 직접 전달할 수 없다.
-첫 구현은 instance-local linear scratch buffer를 사용한다.
+Wasm backend의 `Bytes`는 WasmGC `array i8`과 범위 시작/길이를 field로 가진 표현
+struct의 값이며, 다른 사용자 struct와 같은 GC 타입을 쓴다
+([string.md](string.md#bytes-1)). WASI preview1 `fd_write`의 iovec은 linear
+memory에 있어야 하므로 GC array reference를 직접 전달할 수 없다. 첫 구현은
+instance-local linear scratch buffer를 사용한다.
 
 - 출력할 `Bytes` slice를 GC array에서 scratch buffer로 복사한다.
 - `print_line`은 payload 끝에 `\n` 하나를 붙여 하나의 연속 구간으로 쓴다.

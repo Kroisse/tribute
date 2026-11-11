@@ -92,12 +92,13 @@ Boxed primitives are the simplest heap objects — just the raw value:
 
 ### Bytes
 
-`Bytes`는 prelude source가 선언한 일반 struct이며, byte는
-[byte 배열](types.md#bytearray)에 담긴다. Byte 배열은 원소가 `core.i8`인
-일반 [배열](#array) 객체다.
+`Bytes`의 IR 타입은 표현 struct `Bytes::impl::Repr`의 타입이며
+([primitive 타입의 표현](types.md#primitive-타입의-표현)), 그 값은 일반 struct다. Byte는
+[byte 배열](types.md#bytearray)에 담긴다. Byte 배열은 원소가 `core.i8`인 일반
+[배열](#array) 객체다.
 
 ```text
-std::Bytes:               struct { data: ByteArray, start: Nat, len: Nat }
+std::Bytes::impl::Repr:   struct { data: ByteArray, start: Nat, len: Nat }
 std::runtime::ByteArray:  adt.array<core.i8>  →  [len: i64] [bytes...]
 ```
 
@@ -107,11 +108,10 @@ std::runtime::ByteArray:  adt.array<core.i8>  →  [len: i64] [bytes...]
 - Byte의 소유자를 따로 기록하거나 해제를 특수하게 다루지 않는다. `Bytes`의
   release는 일반 struct의 [type-specific release](#type-specific-release)이고, byte
   배열의 release는 managed 원소가 없는 배열의 release다.
-- Struct의 field는 struct의 [가시성](modules.md#가시성-visibility)을 따르므로
-  `start + len ≤ len(data)`는 값이 보장하는 불변식이 아니다. Byte를 읽는 곳이 모두
-  범위를 검사한다. `adt.array_get`은 범위 밖 index를 trap으로 끝내고, byte 범위를
-  받는 runtime 함수는 overflow를 검사한 덧셈으로 범위를 확인한 뒤 벗어나면 실행을
-  끝낸다. 범위 검사 없이 byte 주소를 만드는 경로는 없다.
+- `start + len ≤ len(data)`는 `std`가 지키는 불변식이다([string.md](string.md#내부-표현)).
+  메모리 안전성은 이 불변식에 기대지 않는다. `adt.array_get`은 범위 밖 index를 trap으로
+  끝내고, byte 범위를 받는 runtime 함수는 overflow를 검사한 덧셈으로 범위를 확인한 뒤
+  벗어나면 실행을 끝낸다. 범위 검사 없이 byte 주소를 만드는 경로는 없다.
 
 Byte 배열의 RTTI index는 예약 index `0`이다([RTTI table](#rtti-table)). Runtime은
 compiler가 계획한 descriptor 번호 없이 이 번호로 byte 배열을 직접 할당한다.
@@ -119,7 +119,7 @@ compiler가 계획한 descriptor 번호 없이 이 번호로 byte 배열을 직�
 Runtime 함수는 byte 배열 argument를 호출 동안 빌리고, 읽을 범위는 별도의 정수
 argument로 받는다. Byte 배열 결과는 호출자가 unit 하나를 갖는 새 값으로 돌려준다.
 Runtime이 다른 기록 안에 raw pointer로 담아 돌려준 byte 배열도 같은 방식으로 unit
-하나를 넘겨준다. `Bytes` struct의 layout은 compiler가 정하므로
+하나를 넘겨준다. `Bytes` 표현의 layout은 compiler가 정하므로
 ([Field Reordering](#field-reordering)) runtime은 `Bytes`를 만들거나 읽지 않는다.
 Byte 배열을 `Bytes`로 감싸고 `Bytes`에서 배열과 범위를 꺼내는 일은 compiler가 만든
 code가 한다.

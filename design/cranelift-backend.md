@@ -358,7 +358,7 @@ Enum:   [the variant's fields in order, naturally aligned], sized per variant
 Array:  [length: i64] [elements, stride = element size]
 ```
 
-`Bytes`는 byte 배열(`adt.array<core.i8>`) 위의 일반 struct다([rc.md](rc.md#bytes)).
+`Bytes`의 값은 byte 배열(`adt.array<core.i8>`) 위의 표현 struct다([rc.md](rc.md#bytes)).
 배열의 stride, 할당 크기와 소유 규칙은 [rc.md](rc.md#array)를, byte literal의 정적
 객체는 [rc.md](rc.md#정적-객체)를 따른다.
 

@@ -12,7 +12,7 @@ Tribute는 텍스트와 바이트 데이터를 명확히 구분한다.
 
 **설계 원칙:**
 
-- `Bytes`는 byte 배열의 한 범위를 보는 prelude struct
+- `Bytes`는 byte 배열의 한 범위를 보는 primitive 타입
 - `String`은 UTF-8 인코딩된 텍스트 (내부적으로 rope 구조)
 - 인코딩 변환은 명시적으로 수행
 
@@ -22,22 +22,40 @@ Tribute는 텍스트와 바이트 데이터를 명확히 구분한다.
 
 ### 내부 표현
 
+`Bytes`는 `Int`, `Nat`처럼 언어가 정한 primitive 타입이다. Field가 없으므로 레코드
+생성, spread, 레코드 패턴의 대상이 아니며, 값은 literal과 prelude 함수로만 만든다.
+표현은 [primitive 타입의 표현](types.md#primitive-타입의-표현) 규칙에 따라 prelude
+source의 `Bytes::impl`이 정한다.
+
 ```rust
-pub struct Bytes { data: ByteArray, start: Nat, pub len: Nat }
+pub mod Bytes {
+    pub(pkg) mod impl {
+        struct Repr { data: ByteArray, start: Nat, len: Nat }
+
+        extern "intrinsic" fn repr(bytes: Bytes) -> Repr
+        extern "intrinsic" fn from_repr(repr: Repr) -> Bytes
+
+        pub(pkg) fn data(bytes: Bytes) -> ByteArray { repr(bytes).data }
+        pub(pkg) fn start(bytes: Bytes) -> Nat { repr(bytes).start }
+        pub(pkg) fn len(bytes: Bytes) -> Nat { repr(bytes).len }
+        pub(pkg) fn new(data: ByteArray, start: Nat, len: Nat) -> Bytes { .. }
+    }
+}
 ```
 
-`Bytes`는 prelude source가 선언한 일반 struct다. Byte는 compiler 소유 불변 배열
-[`std::runtime::ByteArray`](types.md#bytearray)(IR에서 `adt.array<core.i8>`)에 담기고,
-값은 그중 `[start, start + len)`을 본다. 불변(immutable)이다.
+`std` 안의 다른 코드는 `bytes.impl::len()`처럼 `Bytes::impl`의 함수로 표현을 읽고
+만든다. `Repr`과 두 intrinsic은 `Bytes::impl` 밖에서 보이지 않는다.
+
+Byte는 compiler 소유 불변 배열 [`std::runtime::ByteArray`](types.md#bytearray)(IR에서
+`adt.array<core.i8>`)에 담기고, 값은 그중 `[start, start + len)`을 본다.
+불변(immutable)이다.
 
 - 잘라내기는 같은 `data`를 담은 새 `Bytes`를 만들며 byte를 복사하지 않는다.
   소유권과 해제는 일반 struct와 배열의 규칙을 따른다([rc.md](rc.md#bytes)).
-- `data`와 `start`는 `std` 밖에서 보이지 않지만 `len`은 공개 field라 setter와
-  spread로 바꿀 수 있으므로, `start + len ≤ len(data)`는 값이 보장하지 않는다.
-  Byte를 읽는 모든 연산이 범위를 검사하고, 벗어나면 실행을 끝낸다.
-- `Bytes`는 IR 타입 이름이 아니라 다른 prelude 타입처럼 nominal layout으로
-  내려간다. Literal lowering은 `std::String`처럼 root module의
-  [`tribute.types`](tribute-dialects.md#tributetypes)에 게시된 `std::Bytes`를 읽는다.
+- `start + len ≤ len(data)`는 `Bytes` 값의 불변식이다. `Bytes::impl`은 `std` 밖에서
+  보이지 않으므로 값을 만들고 범위를 정하는 코드는 모두 `std` 안에 있고, 그 코드가
+  불변식을 지킨다. 범위가 배열 밖인 값이 생기더라도 byte 읽기는
+  `ByteArray::get`의 범위 검사가 trap으로 끝낸다.
 
 ### 리터럴
 
@@ -378,7 +396,8 @@ ability Display {
 ;; ByteArray는 원소가 i8인 일반 GC 배열이다. 예약 GC 타입 index를 받지 않는다.
 (type $byte_array (array (mut i8)))
 
-;; Bytes는 다른 사용자 struct와 같은 structural GC 타입이다.
+;; Bytes는 표현 struct Bytes::impl::Repr의 GC 타입이며, 다른 사용자 struct와
+;; 같은 structural GC 타입이다.
 (type $bytes (sub $described (struct
   (field $descriptor i32)
   (field $data (ref $byte_array))
@@ -411,13 +430,14 @@ ability Display {
 
 ### Constant lowering
 
-`adt.bytes_const`의 결과는 byte 배열 `adt.array<core.i8>`이다. Frontend는
-`b"..."` 리터럴을 그 배열 전체를 보는 `Bytes`로 감싸고, `"..."` 리터럴을 다시
-`String::Leaf`로 감싼다.
+`adt.bytes_const`의 결과는 byte 배열 `adt.array<core.i8>`이다. `b"..."` 리터럴은
+그 배열 전체를 보는 `Bytes` 표현이고, `"..."` 리터럴은 그것을 다시 `String::Leaf`로
+감싼다. `Bytes`의 IR 타입은 `Repr`의 IR 타입이므로 리터럴은 `Repr`의 field를 이름으로
+찾아 만든다.
 
 ```text
-b"..."  ->  Bytes { data: adt.bytes_const(bytes), start: 0, len }
-"..."   ->  String::Leaf(Bytes { data: adt.bytes_const(utf8), start: 0, len })
+b"..."  ->  Repr { data: adt.bytes_const(bytes), start: 0, len }
+"..."   ->  String::Leaf(Repr { data: adt.bytes_const(utf8), start: 0, len })
 ```
 
 Target은 byte 배열을 다음처럼 만든다. 표현은 의미에 드러나지 않으므로
@@ -460,7 +480,7 @@ Native와 Wasm 모두 이 의미적 경계를 공유한다. Public I/O wrapper�
 | 타입 이름 | `String` (보편적인 이름 원칙) |
 | String 인코딩 | UTF-8 |
 | String 구조 | Rope |
-| Bytes 표현 | byte 배열 위의 prelude struct `{ data, start, len }` |
+| Bytes 표현 | primitive 타입, 표현은 byte 배열 위의 `Bytes::impl::Repr { data, start, len }` |
 | Bytes 리터럴 | native는 정적 byte 배열 객체, Wasm은 평가마다 `array.new_data` |
 | Rune 표현 | u32 |
 | 인코딩 변환 | 명시적 |
