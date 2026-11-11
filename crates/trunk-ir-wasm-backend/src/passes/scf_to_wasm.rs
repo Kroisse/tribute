@@ -20,7 +20,8 @@ use trunk_ir::context::{BlockData, IrContext, OpList, RegionData};
 use trunk_ir::dialect::core;
 use trunk_ir::dialect::scf;
 use trunk_ir::dialect::wasm as wasm_dialect;
-use trunk_ir::op_interface::{DynRegionBranch, DynRegionBranchTerminator};
+use trunk_ir::op_flag::{OpFlag, Terminator};
+use trunk_ir::op_interface::DynRegionBranch;
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{
@@ -569,11 +570,11 @@ fn lower_jump_table(
             ops.pop();
             ctx.remove_op(last);
         }
-        // A case that leaves through its loop's `scf.continue` or
-        // `scf.break` never reaches the exit.
+        // A case that ends its block never reaches the exit: it leaves through
+        // its loop's `scf.continue` or `scf.break`, or leaves the function.
         if ops
             .last()
-            .is_some_and(|&last| DynRegionBranchTerminator::is_implemented(ctx, last))
+            .is_some_and(|&last| Terminator::is_set(ctx, last))
         {
             continue;
         }
@@ -1709,6 +1710,45 @@ mod tests {
         format!(
             "core.module @test {{ func.func @main(%cond: core.i1, %choice: core.i32, %unit: core.nil) -> core.nil {{ {body} }} }}"
         )
+    }
+
+    #[test]
+    fn jump_table_cases_that_end_their_block_take_no_exit_branch() {
+        use trunk_ir::dialect::wasm::{Br, BrTable};
+        let body = "scf.index_switch %choice : (core.i32) -> () \
+            case 0 { func.return } \
+            case 1 { func.trap \"out_of_range\" } \
+            case 2 { %n = scf.if %cond -> (core.never) { func.return } else { func.unreachable } } \
+            default { func.return }";
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, &control_fixture(body));
+        lower(
+            &mut ctx,
+            module,
+            TypeConverter::new(),
+            &mut Default::default(),
+        )
+        .unwrap();
+        let printed = module.op().display(&ctx).to_string();
+        // Each case ends in its exit, so no case branches to the exit block.
+        let (mut tables, mut branches) = (0, 0);
+        let _ = trunk_ir::walk::walk_op::<()>(&ctx, module.op(), &mut |op| {
+            tables += usize::from(BrTable::matches(&ctx, op));
+            branches += usize::from(Br::matches(&ctx, op));
+            std::ops::ControlFlow::Continue(trunk_ir::walk::WalkAction::Advance)
+        });
+        assert_eq!((tables, branches), (1, 0), "{printed}");
+        let verifiers = trunk_ir::validation::validate_operation_verifiers(&ctx, module);
+        assert!(verifiers.is_ok(), "{verifiers}");
+        crate::passes::func_to_wasm::lower(&mut ctx, module, TypeConverter::new());
+        let positions = trunk_ir::validation::validate_terminator_positions(&ctx, module.op());
+        assert!(positions.is_ok(), "{positions}");
+        let bytes = crate::emit_module_to_wasm(&mut ctx, module)
+            .expect("module emits")
+            .bytes;
+        wasmparser::Validator::new()
+            .validate_all(&bytes)
+            .expect("valid module");
     }
 
     #[test]

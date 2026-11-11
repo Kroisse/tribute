@@ -52,6 +52,12 @@ pub fn validate_clif_ir(ctx: &IrContext, module: Module) -> CompilationResult<()
         .into_iter()
         .map(|op| format!("{} in boundary {}", op, NATIVE_BACKEND_READY_BOUNDARY))
         .collect();
+    errors.extend(
+        trunk_ir::validation::validate_terminator_positions(ctx, module.op())
+            .errors
+            .iter()
+            .map(ToString::to_string),
+    );
     errors.extend(validate_clif_contracts(ctx, module));
     errors.extend(trunk_ir::validation::link_name_conflicts(ctx, module));
 

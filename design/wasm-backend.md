@@ -168,9 +168,11 @@ discriminant는 부호 없는 index로 표 크기 이상이 되어 `br_table`의
 각 case는 자기 label block의 `end` 바로 뒤에 놓이고, 결과를 `wasm.yield`로 표시한
 뒤 `wasm.br`로 탈출 block에 분기한다. Default는 탈출 block의 마지막에 놓여 그
 block의 결과를 그대로 넘긴다. 결과가 없거나 Wasm 값이 없는 `core.nil` 결과의
-switch는 분기에 값을 싣지 않는다. Loop의 `scf.continue`나 `scf.break`로 끝나는
-case는 탈출 block으로 분기하지 않는다. 이 탈출들은 loop를 낮출 때 case label을
-포함한 모든 사이 label을 세어 target을 정한다([Loop 탈출 분기](#loop-탈출-분기)).
+switch는 분기에 값을 싣지 않는다. [`Terminator`](ir.md#interface와-flag)로 끝나는
+case는 탈출 block으로 분기하지 않는다. Loop의 `scf.continue`나 `scf.break`는 loop를
+낮출 때 case label을 포함한 모든 사이 label을 세어 target을 정하고
+([Loop 탈출 분기](#loop-탈출-분기)), `return`, tail call, trap, 그리고 terminal
+structured control 뒤의 `wasm.unreachable`은 탈출 block에 이르지 않는다.
 
 ### Terminal structured-control 결과
 

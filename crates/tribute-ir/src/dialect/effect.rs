@@ -7,7 +7,7 @@
 
 use trunk_ir::attr_kind::{SymbolRef, Type};
 use trunk_ir::dialect::core::I32;
-use trunk_ir::op_flag::Pure;
+use trunk_ir::op_flag::{Pure, Terminator};
 use trunk_ir::op_interface::CallableExit;
 
 use super::ability::{CpsClosure, Evidence};
@@ -112,6 +112,7 @@ mod effect {
     /// ```text
     /// effect.dispatch_cps @State @get(%payload) [%ev, %dispatch, %resume] -> core.i32
     /// ```
+    #[flags(Terminator)]
     #[implements(CallableExit)]
     #[asm_format(ability symbol(op_name) "(" payload ")" "[" evidence "," dispatch "," resume "]" attr_dict "->" answer_type)]
     fn dispatch_cps<E: Evidence>(

@@ -133,13 +133,18 @@ Operation flag는 동작 없이 operation 정의가 선언하는 예/아니오 �
 남의 operation에 붙여야 하는 성질은 flag가 아니라 interface로 정의한다.
 
 `Terminator` flag는 operation이 자기 block의 마지막 operation이어야 한다는
-성질이다(MLIR의 `IsTerminator`). Operation verifier는 flag가 있는 operation이
-block의 마지막이 아니면 거부하며, operation 이름을 나열하지 않는다. 이 flag는
-제어가 어디로 가는지 말하지 않는다. Callable을 떠나는지는
-[`CallableExit`](#선언적-operation-schema), block successor는 `Branch`, 부모 operation으로
-돌아가는지는 `RegionBranchTerminator`가 말한다. Flag를 선언한 dialect만 그
-operation을 이 규칙으로 검사받으므로, flag가 없다는 것은 terminator가 아니라는
-증거가 아니다.
+성질이다(MLIR의 `IsTerminator`). 이 flag는 제어가 어디로 가는지 말하지 않는다.
+Callable을 떠나는지는 [`CallableExit`](#선언적-operation-schema), block
+successor는 `Branch`, 부모 operation으로 돌아가는지는 `RegionBranchTerminator`가
+말한다. 그 셋 가운데 하나를 구현하는 operation과 무조건 trap하는 operation은 모두
+`Terminator`다. 조건부 분기처럼 다음 operation으로 이어질 수 있는 operation
+(`wasm.br_if`, `clif.trapnz`)과 다음 operation에 값을 넘기는 표시
+(`wasm.yield`)는 아니다.
+
+Flag는 operation 정의의 선언이므로 이름을 나열하지 않고 검사한다. Operation
+verifier, 각 pass 뒤의 debug schema 검사, native와 Wasm backend 경계의 검증이
+flag가 있는 operation이 block의 마지막이 아니면 거부한다. Pass가 terminator 뒤에
+operation을 두면 그 pass의 오류다.
 
 ## 선언적 operation schema
 

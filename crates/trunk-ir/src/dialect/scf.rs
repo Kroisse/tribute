@@ -1,5 +1,7 @@
 //! Arena-based scf dialect.
 
+use crate::op_flag::Terminator;
+
 #[trunk_ir::dialect]
 mod scf {
     #[asm_format(cond ("->" "(" type(result)^ ")")? attr_dict region(then_region) "else" region(else_region))]
@@ -45,6 +47,7 @@ mod scf {
         {}
     }
 
+    #[flags(Terminator)]
     #[implements(RegionBranchTerminator)]
     #[asm_format(values attr_dict_bare)]
     fn r#yield(values: Variadic<_>) {}
@@ -66,10 +69,12 @@ mod scf {
         {}
     }
 
+    #[flags(Terminator)]
     #[implements(RegionBranchTerminator)]
     #[asm_format(values attr_dict_bare)]
     fn r#continue(values: Variadic<_>) {}
 
+    #[flags(Terminator)]
     #[implements(RegionBranchTerminator)]
     #[asm_format(value attr_dict_bare)]
     fn r#break(value: Value<_>) {}

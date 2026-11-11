@@ -53,6 +53,12 @@ pub fn validate_wasm_ir(ctx: &IrContext, module: Module) -> CompilationResult<()
         errors.push(format!("symbol @{name} is defined more than once"));
     }
     errors.extend(trunk_ir::validation::link_name_conflicts(ctx, module));
+    errors.extend(
+        trunk_ir::validation::validate_terminator_positions(ctx, module.op())
+            .errors
+            .iter()
+            .map(ToString::to_string),
+    );
     validate_region(ctx, body, 0, &symbols, &mut errors);
 
     if errors.is_empty() {
