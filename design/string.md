@@ -23,7 +23,7 @@ Tribute는 텍스트와 바이트 데이터를 명확히 구분한다.
 ### 내부 표현
 
 ```rust
-pub struct Bytes { data: ByteArray, start: Nat, len: Nat }
+pub struct Bytes { data: ByteArray, start: Nat, pub len: Nat }
 ```
 
 `Bytes`는 prelude source가 선언한 일반 struct다. Byte는 compiler 소유 불변 배열
@@ -32,8 +32,9 @@ pub struct Bytes { data: ByteArray, start: Nat, len: Nat }
 
 - 잘라내기는 같은 `data`를 담은 새 `Bytes`를 만들며 byte를 복사하지 않는다.
   소유권과 해제는 일반 struct와 배열의 규칙을 따른다([rc.md](rc.md#bytes)).
-- Field는 struct의 가시성을 따르므로 `start + len ≤ len(data)`는 값이 보장하지
-  않는다. Byte를 읽는 모든 연산이 범위를 검사하고, 벗어나면 실행을 끝낸다.
+- `data`와 `start`는 `std` 밖에서 보이지 않지만 `len`은 공개 field라 setter와
+  spread로 바꿀 수 있으므로, `start + len ≤ len(data)`는 값이 보장하지 않는다.
+  Byte를 읽는 모든 연산이 범위를 검사하고, 벗어나면 실행을 끝낸다.
 - `Bytes`는 IR 타입 이름이 아니라 다른 prelude 타입처럼 nominal layout으로
   내려간다. Literal lowering은 `std::String`처럼 root module의
   [`tribute.types`](tribute-dialects.md#tributetypes)에 게시된 `std::Bytes`를 읽는다.

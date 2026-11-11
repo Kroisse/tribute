@@ -360,9 +360,9 @@ fn the_prelude_shows_only_its_public_items(db: &salsa::DatabaseImpl) {
         r#"
 use std::io::ReadLineResult
 
-fn raw(bytes: Bytes) -> Bool {
-    __tribute_byte_array_range_equal(bytes.data, 0, bytes.data, 0, 0)
-        && std::__tribute_byte_array_range_equal(bytes.data, 0, bytes.data, 0, 0)
+fn raw() -> Nil {
+    let _ = __tribute_byte_array_range_equal
+    let _ = std::__tribute_byte_array_range_equal
 }
 
 fn cursor(c: String::Cursor) -> Nat { 0 }

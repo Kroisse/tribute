@@ -572,7 +572,7 @@ extern "C" fn __tribute_byte_array_range_equal(
 pub struct Bytes {
     data: runtime::ByteArray,
     start: Nat,
-    len: Nat,
+    pub len: Nat,
 }
 
 /// Bytes module with operations for byte sequences.
