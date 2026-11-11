@@ -37,6 +37,7 @@ mod frontend_instances;
 mod frontend_type_roots;
 mod lang_examples;
 mod manifests;
+mod multi_result_values;
 mod native_arrays;
 mod native_multiway_branch;
 mod open_callback_evidence_root;

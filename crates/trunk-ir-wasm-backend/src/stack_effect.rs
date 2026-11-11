@@ -35,11 +35,8 @@ pub(crate) fn pushed_results(ctx: &IrContext, op: OpRef) -> SmallVec<[ValueRef; 
             .filter(|&result| !is_nil_type(ctx, ctx.value_ty(result)))
             .collect();
     }
-    if is_structured(ctx, op) {
-        return structured_result_type(ctx, op)
-            .map(|_| ctx.op_result(op, 0))
-            .into_iter()
-            .collect();
+    if is_structured(ctx, op) && structured_result_types(ctx, op).is_empty() {
+        return SmallVec::new();
     }
     results.iter().copied().collect()
 }
@@ -49,33 +46,46 @@ pub(crate) fn is_structured(ctx: &IrContext, op: OpRef) -> bool {
     wasm::Block::matches(ctx, op) || wasm::Loop::matches(ctx, op) || wasm::If::matches(ctx, op)
 }
 
-/// The result type of a structured operation's Wasm block type, or `None`
-/// when the block type is empty.
+/// The result types of a structured operation's Wasm block type, in order;
+/// empty when the block type is empty.
 ///
-/// A `wasm.if` has a result only when its then region passes one.
-pub(crate) fn structured_result_type(ctx: &IrContext, op: OpRef) -> Option<TypeRef> {
-    let ty = ctx
-        .op_result_types(op)
-        .first()
-        .copied()
-        .filter(|&ty| !is_nil_type(ctx, ty))?;
-    if wasm::If::matches(ctx, op) {
-        let then_region = ctx.op_region(op, 0)?;
-        region_result_value(ctx, then_region)?;
+/// Each result is one Wasm value, except that a single `core.nil` result
+/// leaves nothing. A `wasm.if` has results only when its then region passes
+/// values.
+pub(crate) fn structured_result_types(ctx: &IrContext, op: OpRef) -> SmallVec<[TypeRef; 2]> {
+    let types = ctx.op_result_types(op);
+    let leaves_nothing = match types {
+        [] => true,
+        [ty] => is_nil_type(ctx, *ty),
+        _ => false,
+    };
+    if leaves_nothing
+        || (wasm::If::matches(ctx, op)
+            && ctx
+                .op_region(op, 0)
+                .is_none_or(|then_region| region_result_values(ctx, then_region).is_empty()))
+    {
+        return SmallVec::new();
     }
-    Some(ty)
+    types.iter().copied().collect()
 }
 
-/// The value a region passes to its parent: the operand of its last
-/// operation when that is a `wasm.yield`, or else the first result of its
-/// last operation.
-pub(crate) fn region_result_value(ctx: &IrContext, region: RegionRef) -> Option<ValueRef> {
-    let &block = ctx.region(region).blocks.last()?;
-    let &op = ctx.block(block).ops.last()?;
+/// The values a region passes to its parent: the operands of its last
+/// operation when that is a `wasm.yield`, or else the results of its last
+/// operation.
+pub(crate) fn region_result_values(ctx: &IrContext, region: RegionRef) -> SmallVec<[ValueRef; 2]> {
+    let Some(&op) = ctx
+        .region(region)
+        .blocks
+        .last()
+        .and_then(|&block| ctx.block(block).ops.last())
+    else {
+        return SmallVec::new();
+    };
     if let Ok(yield_op) = wasm::Yield::from_op(ctx, op) {
-        return Some(yield_op.value(ctx));
+        return yield_op.values(ctx).iter().copied().collect();
     }
-    ctx.op_results(op).first().copied()
+    ctx.op_results(op).iter().copied().collect()
 }
 
 /// The abstract heap type of the null a `wasm.nop` of type `ty` pushes, or
@@ -137,23 +147,23 @@ pub(crate) fn trailing_parameters(ctx: &IrContext, op: OpRef) -> SmallVec<[u32; 
     locals
 }
 
-/// Where a `wasm.yield` passes its value.
+/// Where a `wasm.yield` passes its values.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum YieldTransfer {
-    /// On the stack, to the region's parent or the label of the `wasm.br`
-    /// after it.
+    /// On the stack in order, to the region's parent or the label of the
+    /// `wasm.br` after it.
     Stack,
     /// To the only body block argument of the loop the `wasm.br` after it
     /// continues.
     LoopArgument,
-    /// To each of the other number of body block arguments of the loop the
-    /// `wasm.br` after it continues.
+    /// Each value to its body block argument, among the other number of
+    /// body block arguments of the loop the `wasm.br` after it continues.
     LoopArguments(usize),
     /// Nowhere: the parent takes no value and no branch follows.
     None,
 }
 
-/// Where the `wasm.yield` at `position` of `ops` passes its value. `loop_args`
+/// Where the `wasm.yield` at `position` of `ops` passes its values. `loop_args`
 /// holds, for each enclosing structured operation, innermost last, the
 /// number of body block arguments of a loop or `None`; `passes_result` tells
 /// whether the region's parent takes its value.

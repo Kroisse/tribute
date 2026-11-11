@@ -567,7 +567,7 @@ fn build_local_dispatcher_instance(
         )?;
         let fallback_region = single_block_region(ctx, location, fallback_block);
         let choose = scf::If::operands(same_prompt.result(ctx))
-            .results(never)
+            .results([never])
             .regions(local_region, fallback_region)
             .build(ctx, location);
         ctx.push_op(case_block, choose.op_ref());

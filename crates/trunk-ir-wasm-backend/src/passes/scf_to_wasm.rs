@@ -193,7 +193,6 @@ enum SwitchLoweringReason {
     MalformedShape,
     UnsupportedDiscriminantType(String),
     CaseValueOutsideRange(SwitchWidth),
-    TooManyResults(usize),
     ResultDefaultWithoutYield,
 }
 
@@ -212,9 +211,6 @@ impl std::fmt::Display for SwitchLoweringReason {
             }
             Self::CaseValueOutsideRange(SwitchWidth::I64) => {
                 write!(f, "case integer value is outside the i64 range")
-            }
-            Self::TooManyResults(count) => {
-                write!(f, "switch has {count} results; at most one is supported")
             }
             Self::ResultDefaultWithoutYield => {
                 write!(
@@ -268,10 +264,6 @@ fn default_yield(ctx: &IrContext, region: RegionRef) -> Option<OpRef> {
 
 fn switch_arms(ctx: &IrContext, op: OpRef) -> Result<ScfSwitchArms, SwitchLoweringReason> {
     let shape = switch_shape(ctx, op).ok_or(SwitchLoweringReason::MalformedShape)?;
-    let result_count = ctx.op_results(op).len();
-    if result_count > 1 {
-        return Err(SwitchLoweringReason::TooManyResults(result_count));
-    }
     // Without cases the default's ops replace the switch, so its yield must
     // provide the result. A Never result is instead dropped, and the Never
     // control check requires the default to be terminal.
@@ -441,7 +433,7 @@ impl OpRewritePattern for ScfSwitchPattern<'_> {
             rewriter.insert_op(unreachable.op_ref());
         }
         let values = if has_result {
-            vec![ctx.op_result(outer, 0)]
+            ctx.op_results(outer).to_vec()
         } else {
             vec![]
         };
@@ -648,9 +640,9 @@ fn lower_comparison_chain(
             outer_ops = Some((ops, branch.op_ref()));
         } else {
             if has_result {
-                let value = ctx.op_result(branch.op_ref(), 0);
+                let values = ctx.op_results(branch.op_ref()).to_vec();
                 ops.push(
-                    wasm_dialect::Yield::operands(value)
+                    wasm_dialect::Yield::operands(values)
                         .build(ctx, loc)
                         .op_ref(),
                 );
@@ -745,10 +737,6 @@ impl OpRewritePattern for ScfLoopPattern<'_> {
             collect_loop_exits(ctx, body),
             "a loop exit is nested in an operation that is not a Wasm label",
         )?;
-        rewriter.ensure(
-            exits.iter().all(|exit| ctx.op_operands(exit.op).len() <= 1),
-            "multiple loop-carried values are not supported",
-        )?;
 
         // Detach the body region from the original loop op
         ctx.detach_region(body);
@@ -836,14 +824,8 @@ impl OpRewritePattern for ScfYieldPattern {
             return Some(());
         }
 
-        if operands.len() > 1 {
-            // Multi-value yields are not yet supported; leave unlowered.
-            return None;
-        }
-
-        let value = operands[0];
         let loc = ctx.op(op).location;
-        let new_op = wasm_dialect::Yield::operands(value).build(ctx, loc);
+        let new_op = wasm_dialect::Yield::operands(operands).build(ctx, loc);
         rewriter.replace_op(new_op.op_ref());
         Some(())
     }
@@ -913,8 +895,9 @@ fn lower_loop_exits(ctx: &mut IrContext, exits: &[LoopExit]) {
         } else {
             exit.labels
         };
-        if let Some(&value) = ctx.op_operands(exit.op).first() {
-            let yield_op = wasm_dialect::Yield::operands(value).build(ctx, loc);
+        let values = ctx.op_operands(exit.op).to_vec();
+        if !values.is_empty() {
+            let yield_op = wasm_dialect::Yield::operands(values).build(ctx, loc);
             ctx.insert_op_before(block, exit.op, yield_op.op_ref());
         }
         let br = wasm_dialect::Br::operands().target(target).build(ctx, loc);
@@ -1276,18 +1259,6 @@ mod tests {
                 "case integer value is outside the i32 range",
             ),
             (
-                "rejects a switch with two results without mutating",
-                r#"core.module @test {
-  func.func @main(%choice: core.i32, %a: core.i32) -> core.nil {
-    %r, %s = scf.index_switch %choice : (core.i32) -> (core.i32, core.i32)
-    case 0 { scf.yield %a, %a }
-    default { scf.yield %a, %a }
-    func.return
-  }
-}"#,
-                "switch has 2 results; at most one is supported",
-            ),
-            (
                 "rejects a caseless result switch whose default does not yield",
                 r#"core.module @test {
   func.func @main(%choice: core.i32) -> core.i32 {
@@ -1300,6 +1271,76 @@ mod tests {
         ] {
             assert_switch_rejected_unchanged(case, input, reason);
         }
+    }
+
+    #[test]
+    fn multi_value_if_and_switch_yield_every_value() {
+        let output = lower_text(
+            r#"core.module @test {
+  func.func @main(%c: core.i1, %choice: core.i32, %a: core.i32, %b: core.i32) -> (core.i32, core.i32) {
+    %x, %y = scf.if %c -> (core.i32, core.i32) {
+      scf.yield %b, %a
+    } else {
+      scf.yield %a, %b
+    }
+    %p, %q = scf.index_switch %choice : (core.i32) -> (core.i32, core.i32)
+    case 0 {
+      scf.yield %x, %y
+    }
+    default {
+      scf.yield %y, %x
+    }
+    func.return %p, %q
+  }
+}"#,
+        );
+
+        assert!(
+            output.contains("%4, %5 = wasm.if %0 -> (core.i32, core.i32)"),
+            "{output}"
+        );
+        assert!(output.contains("wasm.yield %3, %2"), "{output}");
+        assert!(output.contains("wasm.yield %4, %5"), "{output}");
+        assert!(output.contains("wasm.yield %5, %4"), "{output}");
+        assert!(output.contains("func.return %"), "{output}");
+    }
+
+    #[test]
+    fn loops_carry_and_break_with_several_values() {
+        let output = lower_text(
+            r#"core.module @test {
+  func.func @main(%done: core.i1, %a: core.i32, %b: core.i32) -> (core.i32, core.i32) {
+    %x, %y = scf.loop(%a, %b) -> (core.i32, core.i32) {
+      ^body(%p: core.i32, %q: core.i32):
+        scf.if %done {
+          scf.break %p, %q
+        } else {
+          scf.yield
+        }
+        scf.continue %q, %p
+    }
+    func.return %x, %y
+  }
+}"#,
+        );
+
+        assert!(
+            output.contains("%3, %4 = wasm.block -> (core.i32, core.i32)"),
+            "{output}"
+        );
+        assert!(
+            output.contains("= wasm.loop(%1, %2) -> (core.i32, core.i32)"),
+            "{output}"
+        );
+        assert!(
+            output.contains("wasm.yield %7, %8\n") && output.contains("wasm.br {target = 2}"),
+            "the break passes both values to the exit block:\n{output}"
+        );
+        assert!(
+            output.contains("wasm.yield %8, %7\n") && output.contains("wasm.br {target = 0}"),
+            "the continue passes both values to the loop:\n{output}"
+        );
+        assert!(output.contains("func.return %3, %4"), "{output}");
     }
 
     #[test]

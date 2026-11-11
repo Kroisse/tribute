@@ -794,7 +794,7 @@ fn yielding_region(
         last = Some(op);
     }
     let value = ctx.op_result(last.expect("a yielding region has an op"), 0);
-    let yield_value = wasm_dialect::Yield::operands(value).build(ctx, loc);
+    let yield_value = wasm_dialect::Yield::operands([value]).build(ctx, loc);
     ctx.push_op(block, yield_value.op_ref());
     region
 }

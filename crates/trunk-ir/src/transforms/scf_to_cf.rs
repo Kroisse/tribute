@@ -218,31 +218,17 @@ fn lower_scf_if(
         return;
     }
 
-    // Only results with users need a CFG merge value. This intentionally
-    // applies to every result type: an unused result does not need a block
-    // argument or branch operands merely because the structured op has one.
-    let result = match ctx.op_results(scf_op) {
-        [] => None,
-        [result] if ctx.has_uses(*result) => Some((*result, ctx.value_ty(*result))),
-        [_] => None,
-        _ => return,
+    // Each result becomes a merge block argument, except that a single
+    // unused result needs none: the yields then pass no value, whatever
+    // the result's type.
+    let results = match *ctx.op_results(scf_op) {
+        [result] if !ctx.has_uses(result) => Vec::new(),
+        ref results => results.to_vec(),
     };
 
     // Split block at the scf op: ops after scf_op go to merge block
     let merge_block = split_block(ctx, block, scf_op);
-
-    // Add a merge block argument and RAUW only a used result.
-    if let Some((if_result, ty)) = result {
-        let merge_arg = ctx.add_block_arg(
-            merge_block,
-            BlockArgData {
-                ty,
-                attrs: Default::default(),
-            },
-        );
-        // RAUW: replace all uses of scf.if result with merge block arg
-        ctx.replace_all_uses(if_result, merge_arg);
-    }
+    add_merge_args(ctx, merge_block, &results);
 
     // Remove the scf op (split_block moved it to merge_block)
     ctx.detach_op(scf_op);
@@ -287,31 +273,15 @@ fn lower_scf_loop(
     let init_values: Vec<_> = loop_op.init(ctx).to_vec();
     let body_region = loop_op.body(ctx);
 
-    // Determine result type
-    let result_ty = match ctx.op_results(scf_op) {
-        [] => None,
-        [result] => Some(ctx.value_ty(*result)),
-        _ => return,
-    };
-
     // Split block at scf op: ops after go to exit block
     let exit_block = split_block(ctx, block, scf_op);
 
     // Remove the scf op (split_block moved it to exit_block)
     ctx.detach_op(scf_op);
 
-    // Add exit block argument for the result (if any)
-    if let Some(ty) = result_ty {
-        let exit_arg = ctx.add_block_arg(
-            exit_block,
-            BlockArgData {
-                ty,
-                attrs: Default::default(),
-            },
-        );
-        let loop_result = ctx.op_results(scf_op)[0];
-        ctx.replace_all_uses(loop_result, exit_arg);
-    }
+    // Each result becomes an exit block argument that the breaks pass.
+    let results = ctx.op_results(scf_op).to_vec();
+    add_merge_args(ctx, exit_block, &results);
 
     // Inline body region blocks into parent region (before exit block)
     let parent_region = ctx.block(block).parent_region.unwrap();
@@ -463,17 +433,7 @@ fn lower_scf_switch(
 
     // Each result becomes a merge block argument that the yields branch with.
     let results = ctx.op_results(scf_op).to_vec();
-    for result in results {
-        let ty = ctx.value_ty(result);
-        let merge_arg = ctx.add_block_arg(
-            merge_block,
-            BlockArgData {
-                ty,
-                attrs: Default::default(),
-            },
-        );
-        ctx.replace_all_uses(result, merge_arg);
-    }
+    add_merge_args(ctx, merge_block, &results);
 
     // Remove the scf op (split_block moved it to merge_block)
     ctx.detach_op(scf_op);
@@ -637,6 +597,22 @@ fn switch_case_values(
     Some(values)
 }
 
+/// Add one argument to `merge` per structured-control result, in order, and
+/// replace each result's uses with its argument.
+fn add_merge_args(ctx: &mut IrContext, merge: BlockRef, results: &[ValueRef]) {
+    for &result in results {
+        let ty = ctx.value_ty(result);
+        let arg = ctx.add_block_arg(
+            merge,
+            BlockArgData {
+                ty,
+                attrs: Default::default(),
+            },
+        );
+        ctx.replace_all_uses(result, arg);
+    }
+}
+
 /// Replace `scf.yield` ops in the given blocks with `cf.br` to the target block.
 ///
 /// Only passes as many yield values as the target block expects arguments,
@@ -680,7 +656,6 @@ fn replace_continue_break(
     exit: BlockRef,
     loc: Location,
 ) {
-    let exit_arg_count = ctx.block_args(exit).len();
     for &block in blocks {
         let ops = ctx.block(block).ops.clone();
         for op in ops {
@@ -692,8 +667,7 @@ fn replace_continue_break(
                 ctx.push_op(block, br.op_ref());
             } else if scf::Break::matches(ctx, op) {
                 let break_op = scf::Break::from_op(ctx, op).unwrap();
-                let value = break_op.value(ctx);
-                let values = (exit_arg_count != 0).then_some(value);
+                let values = break_op.values(ctx).to_vec();
                 let br = cf::Br::operands(values).successors(exit).build(ctx, loc);
                 crate::rewrite::erase_op(ctx, op);
                 ctx.push_op(block, br.op_ref());
@@ -988,7 +962,7 @@ mod tests {
         // scf.if
         let cond_v = cond_const.result(&ctx);
         let if_op = scf::If::operands(cond_v)
-            .results(i32_ty)
+            .results([i32_ty])
             .regions(then_region, else_region)
             .build(&mut ctx, loc);
         ctx.push_op(entry, if_op.op_ref());
@@ -1169,6 +1143,63 @@ mod tests {
         let blocks = &ctx.region(func_body).blocks;
         let merge = blocks.last().unwrap();
         assert_eq!(ctx.block_args(*merge).len(), 0);
+    }
+
+    #[test]
+    fn multi_value_if_and_loop_pass_every_value_as_a_block_argument() {
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @main(%c: core.i1, %a: core.i32, %b: core.i32) -> (core.i32, core.i32) {
+    %x, %y = scf.if %c -> (core.i32, core.i32) {
+      scf.yield %b, %a
+    } else {
+      scf.yield %a, %b
+    }
+    %p, %q = scf.loop(%x, %y) -> (core.i32, core.i32) {
+      ^body(%i: core.i32, %j: core.i32):
+        scf.if %c {
+          scf.break %i, %j
+        } else {
+          scf.yield
+        }
+        scf.continue %j, %i
+    }
+    func.return %p, %q
+  }
+}"#,
+        );
+
+        lower_scf_to_cf(&mut ctx, module, &mut Default::default());
+
+        let use_chains = crate::validation::validate_use_chains(&ctx, module);
+        assert!(use_chains.is_ok(), "{use_chains}");
+        assert_eq!(
+            module.op().display(&ctx).to_string(),
+            r#"core.module @test {
+  func.func @main(%0: core.i1, %1: core.i32, %2: core.i32) -> (core.i32, core.i32) {
+      cf.cond_br %0 [^bb1, ^bb2]
+    ^bb1:
+      cf.br %2, %1 [^bb3]
+    ^bb2:
+      cf.br %1, %2 [^bb3]
+    ^bb3(%3: core.i32, %4: core.i32):
+      cf.br %3, %4 [^bb4]
+    ^bb4(%5: core.i32, %6: core.i32):
+      cf.cond_br %0 [^bb5, ^bb6]
+    ^bb5:
+      cf.br %5, %6 [^bb8]
+    ^bb6:
+      cf.br [^bb7]
+    ^bb7:
+      cf.br %6, %5 [^bb4]
+    ^bb8(%7: core.i32, %8: core.i32):
+      func.return %7, %8
+  }
+}
+"#
+        );
     }
 
     fn assert_lowered_unit_tail_transfer(input: &str, expected_nil_merge_args: usize) {
@@ -1844,7 +1875,7 @@ mod tests {
             parent_region: None,
         });
         let loop_arg = ctx.block_arg(body_block, 0);
-        let break_op = scf::Break::operands(loop_arg).build(&mut ctx, loc);
+        let break_op = scf::Break::operands([loop_arg]).build(&mut ctx, loc);
         ctx.push_op(body_block, break_op.op_ref());
         let body_region = ctx.create_region(RegionData {
             location: loc,
@@ -1854,7 +1885,7 @@ mod tests {
 
         let init_v = init.result(&ctx);
         let loop_op = scf::Loop::operands([init_v])
-            .results(i32_ty)
+            .results([i32_ty])
             .regions(body_region)
             .build(&mut ctx, loc);
         let loop_result = loop_op.result(&ctx);
@@ -1893,7 +1924,7 @@ mod tests {
     }
 
     #[test]
-    fn lower_scf_loop_resultless_drops_break_value() {
+    fn lower_scf_loop_resultless_break_passes_no_value() {
         let (mut ctx, loc) = test_ctx();
         let i32_ty = i32_type(&mut ctx);
         let fn_ty = fn_type(&mut ctx);
@@ -1919,8 +1950,7 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let loop_arg = ctx.block_arg(body_block, 0);
-        let break_op = scf::Break::operands(loop_arg).build(&mut ctx, loc);
+        let break_op = scf::Break::operands(std::iter::empty()).build(&mut ctx, loc);
         ctx.push_op(body_block, break_op.op_ref());
         let body_region = ctx.create_region(RegionData {
             location: loc,
@@ -2284,7 +2314,7 @@ mod tests {
 
         let cond_v = cond.result(&ctx);
         let if_op = scf::If::operands(cond_v)
-            .results(i32_ty)
+            .results([i32_ty])
             .regions(then_region, else_region)
             .build(&mut ctx, loc);
         let if_result = if_op.result(&ctx);

@@ -2,9 +2,24 @@
 
 #[trunk_ir::dialect]
 mod scf {
-    #[asm_format(cond ("->" "(" type(result)^ ")")? attr_dict region(then_region) "else" region(else_region))]
+    /// A two-way branch on `cond`.
+    ///
+    /// ```text
+    /// %a, %b = scf.if %c -> (core.i32, core.i32) {
+    ///     scf.yield %x, %y
+    /// } else {
+    ///     scf.yield %y, %x
+    /// }
+    /// ```
+    ///
+    /// - **Shape:** one condition, `then_region` and `else_region`, and any
+    ///   number of results.
+    /// - **Meaning:** runs `then_region` when `cond` is true and
+    ///   `else_region` otherwise. Each region ends in `scf.yield`, whose
+    ///   values become the results in order, or in its own terminator.
+    #[asm_format(cond ("->" "(" types(results)^ ")")? attr_dict region(then_region) "else" region(else_region))]
     #[implements(RegionBranch, Fold)]
-    fn r#if(cond: Value<_>) -> Option<Value<_>> {
+    fn r#if(cond: Value<_>) -> Variadic<_> {
         #[region(then_region)]
         {}
         #[region(else_region)]
@@ -51,7 +66,8 @@ mod scf {
 
     /// A loop whose body receives `init` as its entry block arguments on
     /// the first iteration and the values of `scf.continue` on the next.
-    /// `scf.break` leaves it with the optional result.
+    /// `scf.break` leaves it, and its values become the loop's results in
+    /// order.
     ///
     /// ```text
     /// %r = scf.loop(%init) -> (core.i32) {
@@ -59,9 +75,9 @@ mod scf {
     ///     scf.break %acc
     /// }
     /// ```
-    #[asm_format("(" init ")" ("->" "(" type(result)^ ")")? attr_dict region(body))]
+    #[asm_format("(" init ")" ("->" "(" types(results)^ ")")? attr_dict region(body))]
     #[implements(RegionBranch)]
-    fn r#loop(init: Variadic<_>) -> Option<Value<_>> {
+    fn r#loop(init: Variadic<_>) -> Variadic<_> {
         #[region(body)]
         {}
     }
@@ -71,8 +87,8 @@ mod scf {
     fn r#continue(values: Variadic<_>) {}
 
     #[implements(RegionBranchTerminator)]
-    #[asm_format(value attr_dict_bare)]
-    fn r#break(value: Value<_>) {}
+    #[asm_format(values attr_dict_bare)]
+    fn r#break(values: Variadic<_>) {}
 }
 
 // =========================================================================
@@ -109,6 +125,29 @@ impl Loop {
 fn immediate_region_owner(ctx: &IrContext, op: OpRef) -> Option<OpRef> {
     op_parent_region(ctx, op).and_then(|region| ctx.region(region).parent_op)
 }
+
+macro_rules! single_control_result {
+    ($name:ident) => {
+        impl $name {
+            /// The result of an operation with exactly one result.
+            pub fn single_result(&self, ctx: &IrContext) -> Option<ValueRef> {
+                match *self.results(ctx) {
+                    [result] => Some(result),
+                    _ => None,
+                }
+            }
+
+            /// The result of an operation its producer built with exactly
+            /// one result.
+            pub fn result(&self, ctx: &IrContext) -> ValueRef {
+                self.single_result(ctx)
+                    .expect("one-result structured control required by producer")
+            }
+        }
+    };
+}
+single_control_result!(If);
+single_control_result!(Loop);
 
 impl If {
     fn validate_region_shape(self, ctx: &IrContext) -> Result<(), ControlFlowInterfaceError> {
@@ -449,21 +488,12 @@ impl RegionBranchTerminator for Break {
         successor: RegionSuccessor,
     ) -> Result<ForwardedValues, ControlFlowInterfaceError> {
         let op = self.op_ref();
-        if ctx.op_operands(op).len() != 1 {
-            return Err(ControlFlowInterfaceError::new(
-                "scf.break requires exactly one value",
-            ));
-        }
         match successor {
             RegionSuccessor::Parent => {
-                let owner = Loop::enclosing(ctx, op).ok_or_else(|| {
+                Loop::enclosing(ctx, op).ok_or_else(|| {
                     ControlFlowInterfaceError::new("scf.break has no enclosing scf.loop")
                 })?;
-                if ctx.op_results(owner.op_ref()).is_empty() {
-                    Ok(ForwardedValues::default())
-                } else {
-                    Ok(ForwardedValues::new([self.value(ctx)]))
-                }
+                Ok(ForwardedValues::new(self.values(ctx).iter().copied()))
             }
             RegionSuccessor::Region(_) => Err(ControlFlowInterfaceError::new(
                 "scf.break cannot enter a region",

@@ -17,7 +17,7 @@ use trunk_ir::smallvec::SmallVec;
 use trunk_ir::{BlockRef, IrContext, OpRef, RegionRef, ValueDef, ValueRef};
 
 use crate::stack_effect::{
-    YieldTransfer, pushed_results, stack_operand_slots, structured_result_type, yield_transfer,
+    YieldTransfer, pushed_results, stack_operand_slots, structured_result_types, yield_transfer,
 };
 
 /// A local read emitted before another operation than its user: operand
@@ -101,12 +101,12 @@ impl Stackify {
                 .collect(),
         };
         // A region whose last operation is not a yield passes that
-        // operation's first result, which `ExplicitLocals` reads from its
-        // local.
-        let implicit_result = ops
+        // operation's results, which `ExplicitLocals` reads from their
+        // locals.
+        let implicit_results = ops
             .last()
             .filter(|&&last| passes_result && !wasm::Yield::matches(ctx, last))
-            .and_then(|&last| ctx.op_results(last).first().copied());
+            .map_or(&[][..], |&last| ctx.op_results(last));
 
         let mut pending: Vec<Entry> = Vec::new();
         for (position, &op) in ops.iter().enumerate() {
@@ -122,7 +122,7 @@ impl Stackify {
             };
             let start = self.take_operands(ctx, op, position, &block_ops, &operands, &mut pending);
 
-            let pushes_region_result = structured_result_type(ctx, op).is_some();
+            let pushes_region_result = !structured_result_types(ctx, op).is_empty();
             let regions: SmallVec<[RegionRef; 4]> = ctx.op_regions(op).collect();
             if !regions.is_empty() {
                 loop_args.push(
@@ -139,7 +139,7 @@ impl Stackify {
 
             let pushed = pushed_results(ctx, op);
             for &result in &pushed {
-                if Some(result) == implicit_result {
+                if implicit_results.contains(&result) {
                     continue;
                 }
                 let uses = ctx.uses(result);

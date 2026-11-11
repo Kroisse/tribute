@@ -1230,7 +1230,6 @@ mod tests {
 }"#,
         );
         assert_eq!(text, "validation passed");
-        assert_eq!(scf::If::DEF.schema.result_count().to_string(), "0 to 1");
         assert_eq!(func::Func::DEF.schema.region_count().to_string(), "0 to 1");
     }
 
