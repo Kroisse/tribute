@@ -148,7 +148,7 @@ Array: [len: i64] [element: E...]
 ### 정적 객체
 
 정적 객체는 compiler가 프로그램의 data에 둔, 해제되지 않는 RC 객체다. 지금은
-byte 배열 literal(`adt.bytes_const`)만 정적 객체가 된다.
+byte 배열 상수(원소가 `core.i8`인 `adt.array_const`)만 정적 객체가 된다.
 
 ```text
 [-8] refcount: u32 = 2^31

@@ -96,27 +96,47 @@ impl WellKnownTypes {
     }
 }
 
-/// What a string literal builds: the `Leaf` variant of the prelude `String`
-/// holding a `Bytes` representation that views all of a byte array
+/// The representation of `Bytes` that a byte constant builds: the struct
+/// `std::Bytes::impl::Repr` and the positions of its fields
 /// (`design/string.md` § "Constant lowering").
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct StringLeaf {
-    /// The `String` layout.
-    pub string: TypeRef,
-    /// The position of `Leaf` in `string`.
-    pub leaf: u32,
-    /// The type of `Leaf`'s field, the `Bytes` value type.
-    pub bytes: TypeRef,
-    /// The positions of the `data`, `start`, and `len` fields of `bytes`.
+pub struct BytesRepr {
+    /// The `Bytes` value type, a value of the `Repr` layout.
+    pub ty: TypeRef,
+    /// The positions of the `data`, `start`, and `len` fields.
     pub data: u32,
     pub start: u32,
     pub len: u32,
 }
 
-impl StringLeaf {
-    /// The `Bytes` field values in their positions: `data`, a start of
-    /// `start`, and a length of `len`.
-    pub fn bytes_fields(
+impl BytesRepr {
+    /// The representation whose value type is `ty`, as `decls` name its
+    /// fields. `None` when `ty` is not a value of a struct with exactly the
+    /// fields `data`, `start`, and `len`.
+    pub fn of(
+        ctx: &IrContext,
+        decls: &crate::dialect::adt::NominalDecls,
+        ty: TypeRef,
+    ) -> Option<Self> {
+        use crate::dialect::adt;
+        use trunk_ir::ops::DialectType;
+
+        let layout = adt::Struct::from_type_ref(ctx, adt::layout_of(ctx, ty)?)?;
+        let position = |field| decls.field_position(ctx, layout, field);
+        let (data, start, len) = (position("data")?, position("start")?, position("len")?);
+        let mut positions = [data, start, len];
+        positions.sort_unstable();
+        (positions == [0, 1, 2] && layout.fields(ctx).len() == 3).then_some(Self {
+            ty,
+            data,
+            start,
+            len,
+        })
+    }
+
+    /// The field values in their positions: `data`, a start of `start`, and
+    /// a length of `len`.
+    pub fn fields(
         &self,
         data: trunk_ir::refs::ValueRef,
         start: trunk_ir::refs::ValueRef,
@@ -130,32 +150,39 @@ impl StringLeaf {
     }
 }
 
-/// The [`StringLeaf`] of the root module `module`, as the module's nominal
-/// declarations name the variant and fields. `None` when the module
-/// publishes no `String` or does not declare it and its `Bytes`.
-pub fn string_leaf(ctx: &IrContext, module: trunk_ir::rewrite::Module) -> Option<StringLeaf> {
+/// The variant a string constant builds: `Leaf` of the prelude `String`,
+/// whose one field is a `Bytes` (`design/string.md` § "Constant lowering").
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StringLeaf {
+    /// The `String` layout.
+    pub string: TypeRef,
+    /// The position of `Leaf` in `string`.
+    pub leaf: u32,
+    /// The type of `Leaf`'s field, the `Bytes` value type.
+    pub bytes: TypeRef,
+}
+
+/// The [`StringLeaf`] of the root module `module`, as `decls`, the module's
+/// nominal declarations, name the variant. `None` when the module publishes
+/// no `String` or does not declare it.
+pub fn string_leaf(
+    ctx: &IrContext,
+    module: trunk_ir::rewrite::Module,
+    decls: &crate::dialect::adt::NominalDecls,
+) -> Option<StringLeaf> {
     use crate::dialect::adt;
     use trunk_ir::ops::DialectType;
 
     let string = WellKnownTypes::from_module(ctx, module.op()).string?;
     let layout = adt::Enum::from_type_ref(ctx, string)?;
-    let decls = adt::NominalDecls::collect(ctx, module);
     let leaf = decls.variant_position(ctx, layout, "Leaf")?;
     let &[bytes] = layout.variant_fields(ctx, leaf)? else {
         return None;
     };
-    let bytes_layout = adt::Struct::from_type_ref(ctx, adt::layout_of(ctx, bytes)?)?;
-    let position = |field| decls.field_position(ctx, bytes_layout, field);
-    let (data, start, len) = (position("data")?, position("start")?, position("len")?);
-    let mut positions = [data, start, len];
-    positions.sort_unstable();
-    (positions == [0, 1, 2] && bytes_layout.fields(ctx).len() == 3).then_some(StringLeaf {
+    Some(StringLeaf {
         string,
         leaf,
         bytes,
-        data,
-        start,
-        len,
     })
 }
 

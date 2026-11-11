@@ -1264,14 +1264,12 @@ fn main() -> Nil {
         .expect("pipeline should produce a module");
     let output = module.op().display(&ctx).to_string();
 
+    // The frontend writes one operation; target constant lowering expands it.
     assert!(
-        output.contains(r#"adt.bytes_const b"payload" : adt.array<core.i8>"#),
+        output.contains(r#"adt.bytes_const b"payload" : !"std::Bytes::impl::Repr""#),
         "{output}"
     );
-    assert!(
-        output.contains(r#"-> !"std::Bytes::impl::Repr""#) && output.contains("adt.struct_new"),
-        "{output}"
-    );
+    assert!(!output.contains("adt.array_const"), "{output}");
     assert!(!output.contains("core.bytes"), "{output}");
 }
 

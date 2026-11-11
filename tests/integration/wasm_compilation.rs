@@ -220,14 +220,15 @@ fn main() ->{std::io::Io} Nil {
 #[test]
 fn test_execute_dynamic_bytes_write_boundary() {
     let mut ctx = trunk_ir::IrContext::new();
-    let left = "x".repeat(35_000);
-    let right = "y".repeat(35_000);
+    // The bytes of `x` and `y`, as an `adt.array_const` payload spells them.
+    let left = "78".repeat(35_000);
+    let right = "79".repeat(35_000);
     let ir = format!(
         r#"core.module @test {{
   func.func @__tribute_byte_array_concat(%left: adt.array<core.i8>, %left_start: core.i32, %left_len: core.i32, %right: adt.array<core.i8>, %right_start: core.i32, %right_len: core.i32) -> adt.array<core.i8> attributes {{abi = "C"}}
   func.func @main() -> core.nil {{
-    %left = adt.bytes_const b"{left}" : adt.array<core.i8>
-    %right = adt.bytes_const b"{right}" : adt.array<core.i8>
+    %left = adt.array_const dense<"0x{left}"> {{type = adt.array<core.i8>}} : adt.array<core.i8>
+    %right = adt.array_const dense<"0x{right}"> {{type = adt.array<core.i8>}} : adt.array<core.i8>
     %zero = arith.constant 0 : core.i32
     %len = arith.constant 35000 : core.i32
     %total = arith.constant 70000 : core.i32
@@ -249,8 +250,8 @@ fn test_execute_dynamic_bytes_write_boundary() {
         .expect("lower dynamic output to Wasm and finalize its WasmGC types");
     let binary = trunk_ir_wasm_backend::emit_module_to_wasm(&mut ctx, module)
         .expect("emit dynamic output Wasm");
-    let mut expected = left.into_bytes();
-    expected.extend_from_slice(right.as_bytes());
+    let mut expected = vec![b'x'; 35_000];
+    expected.extend(std::iter::repeat_n(b'y', 35_000));
     expected.push(b'\n');
     assert_wasm_output(&binary.bytes, expected);
 }

@@ -483,9 +483,9 @@ byte 값은 `0`–`255`의 `Nat`이다.
 | `get(bytes: ByteArray, at: Nat) -> Nat` | `at`번째 byte를 부호 없이 넓힌 값 | `adt.array_get` |
 
 `get`은 `at < len`을 요구하며, target은 이를 어긴 실행을 trap으로 끝낸다. 새 byte
-배열은 byte literal(`adt.bytes_const`)과 runtime 함수가 만든다. 두 byte 배열을 이어
-붙이는 일처럼 새 byte를 만드는 연산은 runtime 함수이며, 배열과 범위를 받아
-새 배열을 돌려준다([rc.md](rc.md#bytes)).
+배열은 literal을 펼친 배열 상수(`adt.array_const`)와 runtime 함수가
+만든다. 두 byte 배열을 이어 붙이는 일처럼 새 byte를 만드는 연산은 runtime
+함수이며, 배열과 범위를 받아 새 배열을 돌려준다([rc.md](rc.md#bytes)).
 
 ## Primitive 타입의 표현
 

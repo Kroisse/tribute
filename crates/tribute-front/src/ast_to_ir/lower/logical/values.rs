@@ -24,53 +24,21 @@ use super::callable::{
 use super::declarations::Declarations;
 use super::nominal::expr_type_for_id;
 
-/// A `bytes_ty` value, the representation of `Bytes`, that views all of
-/// `bytes`: the byte array constant with `start` 0 and `len` its length
-/// (`design/string.md` § "Constant lowering"). Fields are placed by the
-/// names `Bytes::impl::Repr` declares.
+/// A `bytes_ty` value, a `Bytes`, viewing all of `bytes`: one
+/// `adt.bytes_const` that target constant lowering expands
+/// (`design/string.md` § "Constant lowering").
 pub(in crate::ast_to_ir::lower) fn emit_bytes_literal(
     builder: &mut IrBuilder<'_, '_>,
     location: Location,
     bytes: Vec<u8>,
     bytes_ty: TypeRef,
 ) -> ValueRef {
-    let len = bytes.len();
-    let array_ty = tribute_ir::runtime_layout::byte_array(builder.ir);
-    let data = adt::BytesConst::operands()
+    let value = adt::BytesConst::operands()
         .value(bytes.into())
-        .results(array_ty)
-        .build(builder.ir, location);
-    builder.ir.push_op(builder.block, data.op_ref());
-    let data = data.result(builder.ir);
-    let nat_ty = builder.ctx.i32_type(builder.ir);
-    let nat = |builder: &mut IrBuilder<'_, '_>, value: usize| {
-        let constant = arith::Constant::operands()
-            .value(Attribute::Int(value as i128))
-            .results(nat_ty)
-            .build(builder.ir, location);
-        builder.ir.push_op(builder.block, constant.op_ref());
-        constant.result(builder.ir)
-    };
-    let start = nat(builder, 0);
-    let len = nat(builder, len);
-    let ctor = crate::ast::CtorId::new(builder.db(), crate::ast_to_ir::nominal::bytes_repr_path());
-    let fields = builder
-        .ctx
-        .struct_field_names(ctor)
-        .unwrap_or_else(|| panic!("a bytes literal needs the prelude `Bytes::impl::Repr`"))
-        .iter()
-        .map(|name| match name.as_str() {
-            "data" => data,
-            "start" => start,
-            "len" => len,
-            other => panic!("`Bytes::impl::Repr` has an unexpected field `{other}`"),
-        })
-        .collect::<Vec<_>>();
-    let record = adt::StructNew::operands(fields)
         .results(bytes_ty)
         .build(builder.ir, location);
-    builder.ir.push_op(builder.block, record.op_ref());
-    record.result(builder.ir)
+    builder.ir.push_op(builder.block, value.op_ref());
+    value.result(builder.ir)
 }
 
 pub(super) fn lower_expr<'db>(

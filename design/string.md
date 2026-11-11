@@ -431,28 +431,30 @@ ability Display {
 
 ### Constant lowering
 
-`adt.bytes_const`의 결과는 byte 배열 `adt.array<core.i8>`이다. `b"..."` 리터럴은
-그 배열 전체를 보는 `Bytes` 표현이고, `"..."` 리터럴은 그것을 다시 `String::Leaf`로
-감싼다. `Bytes`의 IR 타입은 `Repr`의 IR 타입이므로 리터럴은 `Repr`의 field를 이름으로
-찾아 만든다.
+Frontend는 `b"..."`를 `Bytes` 값을 내는 `adt.bytes_const` 하나로, `"..."`를
+`String` 값을 내는 `adt.string_const` 하나로 낸다. Frontend는 byte 배열이나 `Repr`의
+field를 다루지 않는다. Target의 constant lowering이 두 operation을 펼친다. Byte 배열은
+배열 상수 `adt.array_const`이고, `b"..."`는 그 배열 전체를 보는 `Repr`, `"..."`는
+그것을 다시 `String::Leaf`로 감싼 값이다. `Bytes`의 IR 타입은 `Repr`의 IR 타입이므로
+`Repr`의 field는 `adt.bytes_const` 결과 타입의 선언에서 이름으로 찾는다.
 
 ```text
-b"..."  ->  Repr { data: adt.bytes_const(bytes), start: 0, len }
-"..."   ->  String::Leaf(Repr { data: adt.bytes_const(utf8), start: 0, len })
+b"..."  ->  Repr { data: adt.array_const(bytes), start: 0, len }
+"..."   ->  String::Leaf(Repr { data: adt.array_const(utf8), start: 0, len })
 ```
 
-Target은 byte 배열을 다음처럼 만든다. 표현은 의미에 드러나지 않으므로
-([runtime-types.md](runtime-types.md#표현은-의미에-드러나지-않는다)) 두 target의
-선택은 서로 달라도 된다.
+같은 상수를 두 번 평가한 결과가 같은 객체인지는 정하지 않는다. 표현은 의미에 드러나지
+않으므로([runtime-types.md](runtime-types.md#표현은-의미에-드러나지-않는다)) 두
+target의 선택은 서로 달라도 된다. Target은 배열 상수를 다음처럼 만든다.
 
 - Native는 literal마다 [정적 객체](rc.md#정적-객체) 하나를 data에 두고, 평가할
   때마다 그 객체를 retain한다. 할당과 byte 복사가 없다.
 - Wasm은 평가할 때마다 passive data segment에서 `array.new_data`로 새 배열을
   만든다. `array.new_data`는 상수식이 아니므로 global 초기화식으로 쓸 수 없다.
 
-`Bytes` 표현 struct는 두 target 모두 평가마다 일반 할당이다. Wasm에서
-`adt.bytes_const`와 `adt.string_const`는 같은 passive data-segment index 공간을
-사용하며, 동일한 payload는 `String`과 `Bytes` 리터럴 사이에서도 data segment를
+`Bytes` 표현 struct는 두 target 모두 평가마다 일반 할당이다. Wasm에서 모든
+`adt.array_const`는 같은 passive data-segment index 공간을 사용하며, 동일한
+payload는 `String`과 `Bytes` 리터럴 사이에서도 data segment를
 재사용할 수 있다. Constant lowering은 자신이 참조하는 data segment를 같은 단계에서 모듈에
 선언한다([모듈 수준 자원의 선언][wasm-resources]). `String::Leaf` 생성은 target의
 일반 enum/variant lowering보다 먼저 일어나고, 그 이후에는 source에서 작성한

@@ -33,7 +33,7 @@ use trunk_ir::rewrite::{
 };
 use trunk_ir::types::{Attribute, TypeDataBuilder};
 
-use tribute_ir::metadata::StringLeaf;
+use crate::string_literal::{ExpandBytesConst, ExpandStringConst, LiteralLayouts};
 use trunk_ir::SymbolPath;
 use trunk_ir::dialect::func;
 
@@ -47,10 +47,8 @@ const RODATA_PREFIX: &str = "__tribute_rodata_";
 pub struct NativeConstAnalysis {
     /// Distinct string/bytes payloads, in first-occurrence order.
     contents: Vec<Vec<u8>>,
-    /// Whether the module contains any `adt.string_const` ops.
-    has_string_consts: bool,
-    /// What a string constant builds, from module metadata.
-    string_leaf: Option<StringLeaf>,
+    /// The layouts the byte and string constants build.
+    layouts: LiteralLayouts,
 }
 
 impl NativeConstAnalysis {
@@ -91,7 +89,7 @@ impl ConstCollector {
                     self.intern(s.as_bytes());
                     self.has_string_consts = true;
                 }
-            } else if adt::BytesConst::matches(ctx, op)
+            } else if (adt::BytesConst::matches(ctx, op) || adt::ArrayConst::matches(ctx, op))
                 && let Some(Attribute::Bytes(b)) = ctx.op_attrs(op).get("value")
             {
                 self.intern(b);
@@ -126,21 +124,18 @@ fn analyze_consts(ctx: &IrContext, module: Module) -> NativeConstAnalysis {
         });
     }
 
-    let string_leaf = collector
-        .has_string_consts
-        .then(|| tribute_ir::metadata::string_leaf(ctx, module))
-        .flatten();
+    let layouts = LiteralLayouts::collect(ctx, module, collector.has_string_consts);
 
     NativeConstAnalysis {
         contents: collector.contents,
-        has_string_consts: collector.has_string_consts,
-        string_leaf,
+        layouts,
     }
 }
 
-/// Lower `adt.string_const` and `adt.bytes_const` operations to native clif ops.
+/// Lower `adt.string_const`, `adt.bytes_const`, and `adt.array_const`
+/// operations to native clif ops.
 ///
-/// `adt.bytes_const(b"hello")` becomes:
+/// `adt.array_const dense<"0x68656C6C6F">` becomes:
 /// ```text
 /// %data_ptr = clif.symbol_addr @__tribute_rodata_0
 /// %len = clif.iconst 5
@@ -148,8 +143,9 @@ fn analyze_consts(ctx: &IrContext, module: Module) -> NativeConstAnalysis {
 /// %result = tribute_rt.from_raw %payload : adt.array<core.i8>
 /// ```
 ///
-/// `adt.string_const("hello")` becomes `String::Leaf(Bytes { .. })` over an
-/// `adt.bytes_const` of the same bytes, which is then lowered as above.
+/// `adt.bytes_const` and `adt.string_const` first expand to the `Bytes`
+/// representation and `String::Leaf` over an `adt.array_const` of the same
+/// bytes, which is then lowered as above.
 fn lower(
     ctx: &mut IrContext,
     module: Module,
@@ -165,23 +161,32 @@ fn lower(
     let content_to_symbol = declare_rodata(ctx, module, &analysis.contents);
     declare_byte_array_from(ctx, module, ptr_ty, i64_ty);
 
-    let mut applicator =
-        PatternApplicator::new(TypeConverter::new()).add_pattern(BytesConstNativePattern {
+    let nat = |ctx: &mut IrContext, ty: TypeRef, value: i64, loc| {
+        let constant = trunk_ir::dialect::arith::Constant::operands()
+            .value(Attribute::Int(i128::from(value)))
+            .results(ty)
+            .build(ctx, loc);
+        (constant.op_ref(), constant.result(ctx))
+    };
+    let target = ConversionTarget::new()
+        .illegal_op("adt.array_const")
+        .illegal_op("adt.bytes_const")
+        .illegal_op("adt.string_const");
+    PatternApplicator::new(TypeConverter::new())
+        .add_pattern(ArrayConstNativePattern {
             content_to_symbol,
             ptr_ty,
             i64_ty,
-        });
-
-    if analysis.has_string_consts {
-        applicator = applicator.add_pattern(StringConstNativePattern {
-            string_leaf: analysis.string_leaf,
-        });
-    }
-
-    let target = ConversionTarget::new()
-        .illegal_op("adt.bytes_const")
-        .illegal_op("adt.string_const");
-    applicator
+        })
+        .add_pattern(ExpandBytesConst {
+            layouts: &analysis.layouts,
+            nat: &nat,
+        })
+        .add_pattern(ExpandStringConst {
+            layouts: &analysis.layouts,
+            nat: &nat,
+            cast_to_result: true,
+        })
         .with_target(target)
         .apply_partial_conversion(ctx, module, "const-to-native")?;
     Ok(())
@@ -291,24 +296,24 @@ fn declare_byte_array_from(ctx: &mut IrContext, module: Module, ptr_ty: TypeRef,
     ctx.push_op(block, declaration);
 }
 
-/// Pattern for `adt.bytes_const` → clif ops (rodata + a copying allocation).
-struct BytesConstNativePattern {
+/// Pattern for `adt.array_const` → clif ops (rodata + a copying allocation).
+struct ArrayConstNativePattern {
     content_to_symbol: HashMap<Vec<u8>, Symbol>,
     ptr_ty: TypeRef,
     i64_ty: TypeRef,
 }
 
-impl OpRewritePattern for BytesConstNativePattern {
-    type Op = adt::BytesConst;
+impl OpRewritePattern for ArrayConstNativePattern {
+    type Op = adt::ArrayConst;
 
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
-        bytes_const: Self::Op,
+        array_const: Self::Op,
         rewriter: &mut PatternRewriter<'_>,
     ) -> Option<()> {
-        let op = bytes_const.op_ref();
-        let content: Vec<u8> = bytes_const.value(ctx).to_vec();
+        let op = array_const.op_ref();
+        let content: Vec<u8> = array_const.value(ctx).to_vec();
 
         let data_sym = self.content_to_symbol.get(&content).cloned()?;
 
@@ -337,52 +342,7 @@ impl OpRewritePattern for BytesConstNativePattern {
     }
 
     fn name(&self) -> &'static str {
-        "BytesConstNativePattern"
-    }
-}
-
-/// Pattern for `adt.string_const` → `String::Leaf` of a `Bytes` over a byte
-/// array constant, which [`BytesConstNativePattern`] then lowers.
-struct StringConstNativePattern {
-    string_leaf: Option<StringLeaf>,
-}
-
-impl OpRewritePattern for StringConstNativePattern {
-    type Op = adt::StringConst;
-
-    fn match_and_rewrite(
-        &self,
-        ctx: &mut IrContext,
-        string_const: Self::Op,
-        rewriter: &mut PatternRewriter<'_>,
-    ) -> Option<()> {
-        let op = string_const.op_ref();
-        let leaf = rewriter.require(
-            self.string_leaf,
-            "String enum type not found, skipping string_const",
-        )?;
-        let text = string_const.value(ctx).as_bytes().to_vec();
-        let result_ty = ctx.op_result_types(op)[0];
-        let loc = ctx.op(op).location;
-        let ops =
-            crate::string_literal::build(ctx, &leaf, &text, result_ty, loc, |ctx, ty, value| {
-                let constant = trunk_ir::dialect::arith::Constant::operands()
-                    .value(Attribute::Int(i128::from(value)))
-                    .results(ty)
-                    .build(ctx, loc);
-                (constant.op_ref(), constant.result(ctx))
-            });
-        let mut ops = rewriter.require(ops, "the String leaf has no Bytes layout")?;
-        let last = ops.pop().expect("a string constant builds its value");
-        for inserted in ops {
-            rewriter.insert_op(inserted);
-        }
-        rewriter.replace_op(last);
-        Some(())
-    }
-
-    fn name(&self) -> &'static str {
-        "StringConstNativePattern"
+        "ArrayConstNativePattern"
     }
 }
 
@@ -451,13 +411,20 @@ mod tests {
 
         let analysis = analyze_consts(&ctx, module);
 
-        let leaf = analysis.string_leaf.expect("the prelude String's leaf");
+        let leaf = analysis
+            .layouts
+            .string_leaf()
+            .expect("the prelude String's leaf");
         assert_eq!(
             (leaf.string, leaf.leaf, leaf.bytes),
             (prelude_string, 0, type_alias(&ctx, "Bytes"))
         );
         // Fields are found by their declared names, not their positions.
-        assert_eq!((leaf.data, leaf.start, leaf.len), (1, 2, 0));
+        let repr = analysis
+            .layouts
+            .bytes_repr(leaf.bytes)
+            .expect("the representation of Bytes");
+        assert_eq!((repr.data, repr.start, repr.len), (1, 2, 0));
     }
 
     #[test]
@@ -537,9 +504,9 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @main() -> core.nil {
-    %first = adt.bytes_const b"first" : adt.array<core.i8>
-    %second = adt.bytes_const b"second" : adt.array<core.i8>
-    %again = adt.bytes_const b"first" : adt.array<core.i8>
+    %first = adt.array_const dense<"0x6669727374"> {type = adt.array<core.i8>} : adt.array<core.i8>
+    %second = adt.array_const dense<"0x7365636F6E64"> {type = adt.array<core.i8>} : adt.array<core.i8>
+    %again = adt.array_const dense<"0x6669727374"> {type = adt.array<core.i8>} : adt.array<core.i8>
     func.return
   }
 }"#,
@@ -577,8 +544,8 @@ mod tests {
     func.return
   }
   func.func @main() -> core.nil {
-    %kept = adt.bytes_const b"kept" : adt.array<core.i8>
-    %wide = adt.bytes_const b"wide" : adt.array<core.i8>
+    %kept = adt.array_const dense<"0x6B657074"> {type = adt.array<core.i8>} : adt.array<core.i8>
+    %wide = adt.array_const dense<"0x77696465"> {type = adt.array<core.i8>} : adt.array<core.i8>
     func.return
   }
 }"#,
@@ -613,7 +580,7 @@ mod tests {
     ^param:
       cf.br %x [^merge]
     ^literal:
-      %no = adt.bytes_const b"no" : adt.array<core.i8>
+      %no = adt.array_const dense<"0x6E6F"> {type = adt.array<core.i8>} : adt.array<core.i8>
       cf.br %no [^merge]
     ^merge(%picked: adt.array<core.i8>):
       func.return %picked
