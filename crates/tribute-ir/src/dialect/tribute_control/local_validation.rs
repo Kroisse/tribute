@@ -90,10 +90,6 @@ pub(super) fn validate_return(ctx: &IrContext, op: OpRef, errors: &mut Vec<Valid
     }
 }
 
-pub(super) fn is_tail_call(ctx: &IrContext, op: OpRef) -> bool {
-    TailCall::matches(ctx, op) || SourceTailCallIndirect::is_set(ctx, op)
-}
-
 /// The callable whose body contains `op` and its source signature, or an
 /// error when `op` is not in its tail position or a handle lies between
 /// them.
@@ -187,22 +183,6 @@ pub(crate) fn validate_tail_call(ctx: &IrContext, op: OpRef, errors: &mut Vec<Va
                 "callee convention must not be stronger than the enclosing callable",
             );
         }
-    }
-}
-
-pub(crate) fn validate_trap(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
-    validate_return_or_yield_shape(ctx, op, errors);
-    let valid_owner = parent_op(ctx, op).is_some_and(|owner| {
-        DynSourceCallable::is_implemented(ctx, owner)
-            || DynRegionBranch::selects_one_region(ctx, owner)
-    });
-    if !valid_owner {
-        push_op_error(
-            ctx,
-            op,
-            errors,
-            "must end a callable body or an arm of an operation that selects one region",
-        );
     }
 }
 

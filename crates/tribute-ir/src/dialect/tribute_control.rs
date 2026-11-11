@@ -21,7 +21,7 @@ use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::dialect::core;
 use trunk_ir::op_def::OpDef;
 use trunk_ir::op_interface::{
-    CallLike, CallableExit, DynRegionBranch, RegionBranchPoint, RegionSuccessor,
+    CallLike, CallableExit, DynCallableExit, DynRegionBranch, RegionBranchPoint, RegionSuccessor,
 };
 use trunk_ir::op_schema::OpSchema;
 use trunk_ir::ops::{DialectOp, DialectType};
