@@ -281,8 +281,17 @@ impl Converter<'_> {
         }
         let never = self.never_type();
         let lowered = self.rebuild_structured(source, mapping, [never], converted_regions);
-        self.ctx.push_op(block, lowered);
+        self.push_terminal(block, lowered, location);
         Ok(())
+    }
+
+    /// End `block` with `structured`, an operation whose every arm leaves
+    /// the callable, and the `func.unreachable` that terminates the block
+    /// after it.
+    fn push_terminal(&mut self, block: BlockRef, structured: OpRef, location: Location) {
+        self.ctx.push_op(block, structured);
+        let unreachable = func::Unreachable::operands().build(self.ctx, location);
+        self.ctx.push_op(block, unreachable.op_ref());
     }
 
     /// The single block of one arm of an operation that
@@ -443,7 +452,7 @@ impl Converter<'_> {
         if continuation.is_some() {
             let never = self.never_type();
             let lowered = self.rebuild_structured(source, mapping, [never], converted_regions);
-            self.ctx.push_op(block, lowered);
+            self.push_terminal(block, lowered, location);
             return Ok(());
         }
 

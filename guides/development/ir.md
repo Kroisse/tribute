@@ -562,7 +562,7 @@ list of names.
 The same checks require every block to end in a `Terminator`, unless the
 operation that owns its region declares `NoTerminator`, as MLIR's
 `NoTerminator` does: `core.module`, `ability.decl`, `clif.data`, `wasm.elem`,
-and the Wasm structured operations. A pass that builds a structured
+`wasm.func`, and the Wasm structured operations. A pass that builds a structured
 operation whose every arm leaves the callable puts `func.unreachable` after
 it.
 

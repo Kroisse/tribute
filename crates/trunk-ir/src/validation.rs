@@ -25,7 +25,7 @@ use super::analysis::AnalysisCache;
 use super::context::IrContext;
 use super::dialect::core;
 use super::op_def::OpDef;
-use super::op_flag::{IsolatedFromAbove, OpFlag, Terminator};
+use super::op_flag::{IsolatedFromAbove, NoTerminator, OpFlag, Terminator};
 use super::op_interface::{
     DynBranch, DynCallableExit, DynCallableOwner, DynRegionBranch, DynRegionBranchTerminator,
     RegionBranchPoint, RegionSuccessor, RegionValueTransfer,
@@ -480,8 +480,12 @@ fn validate_type_shapes(ctx: &IrContext, errors: &mut Vec<ValidationError>) {
     }
 }
 
-/// Reject an operation flagged `Terminator` that is not the last of its
-/// block, as MLIR's `IsTerminator` verifier does.
+/// Check terminator placement as MLIR's verifier does: an operation flagged
+/// `Terminator` is the last of its block, and each block of `op`'s regions
+/// ends in one unless `op` declares `NoTerminator`.
+///
+/// An unregistered operation declares nothing, so it is checked neither as
+/// a region owner nor as the last operation of a block.
 fn validate_terminator_position(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
     if Terminator::is_set(ctx, op)
         && ctx
@@ -494,6 +498,32 @@ fn validate_terminator_position(ctx: &IrContext, op: OpRef, errors: &mut Vec<Val
             op,
             "must terminate its block",
         ));
+    }
+    if OpDef::of(ctx, op).is_none() || NoTerminator::is_set(ctx, op) {
+        return;
+    }
+    for region in ctx.op_regions(op) {
+        for &block in &ctx.region(region).blocks {
+            match ctx.block(block).ops.last() {
+                None => errors.push(operation_verifier_error(
+                    ctx,
+                    op,
+                    format!("{block} is empty but must end in a terminator"),
+                )),
+                Some(&last) if OpDef::of(ctx, last).is_none() => {}
+                Some(&last) if !Terminator::is_set(ctx, last) => {
+                    errors.push(operation_verifier_error(
+                        ctx,
+                        op,
+                        format!(
+                            "{block} must end in a terminator, not {}",
+                            ctx.op(last).name.display(ctx)
+                        ),
+                    ))
+                }
+                Some(_) => {}
+            }
+        }
     }
 }
 
@@ -1090,7 +1120,7 @@ fn validate_region_branch_terminator_interface(
 /// Return whether `op` is a resultless transfer that may terminate a
 /// structured `core.never` region without an `scf.yield`.
 pub fn is_proper_tail_terminator(ctx: &IrContext, op: OpRef) -> bool {
-    use crate::dialect::{func, scf};
+    use crate::dialect::func;
     let name = ctx.op(op).name;
     func::TailCall::matches(ctx, op)
         || func::TailCallIndirect::matches(ctx, op)
@@ -1102,8 +1132,6 @@ pub fn is_proper_tail_terminator(ctx: &IrContext, op: OpRef) -> bool {
                 "perform" | "handle_dispatch" | "exit" | "handle" | "abort"
             ))
         || name.is(ctx, "effect.dispatch_cps")
-        || scf::If::matches(ctx, op)
-        || scf::IndexSwitch::matches(ctx, op)
 }
 
 fn validate_scf_if_structure(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
@@ -1439,6 +1467,15 @@ mod tests {
 
                 Some(message.as_str())
             })
+            .collect()
+    }
+
+    /// The operation errors other than the generic block rule's, which a
+    /// malformed region also violates.
+    fn errors_besides_block_ends(result: &ValidationResult) -> Vec<&str> {
+        operation_error_messages(result)
+            .into_iter()
+            .filter(|message| !message.contains("must end in a terminator"))
             .collect()
     }
 
@@ -2526,6 +2563,37 @@ mod tests {
     }
 
     #[test]
+    fn every_block_ends_in_a_terminator_unless_its_owner_opts_out() {
+        let input = r#"core.module @test {
+  func.func @falls_off(%cond: core.i1) -> core.never {
+    %never = scf.if %cond -> (core.never) { func.return } else { func.unreachable }
+  }
+  func.func @ends(%cond: core.i1) -> core.never {
+    %never = scf.if %cond -> (core.never) { func.return } else { func.unreachable }
+    func.unreachable
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(&mut ctx, input);
+        let result = validate_operation_verifiers(&ctx, module);
+        let misplaced: Vec<_> = result
+            .errors
+            .iter()
+            .map(ToString::to_string)
+            .filter(|error| error.contains("must end in a terminator"))
+            .collect();
+        // Only `@falls_off` fails: `core.module` is `NoTerminator`, and the
+        // terminal `scf.if` in `@ends` is followed by its exit.
+        let [error] = misplaced.as_slice() else {
+            panic!("{result}");
+        };
+        assert!(
+            error.contains("for func.func (") && error.contains("not scf.if"),
+            "{error}"
+        );
+    }
+
+    #[test]
     fn scf_never_regions_accept_every_proper_tail_surface() {
         let input = r#"core.module @test {
   func.func @main(%cond: core.i1) -> core.never {
@@ -2537,7 +2605,9 @@ mod tests {
       } else {
         "ability.handle_dispatch"()
       }
+      func.unreachable
     }
+    func.unreachable
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -2811,7 +2881,7 @@ mod tests {
             let module = crate::parser::parse_test_module(&mut ctx, input);
 
             let result = validate_operation_verifiers(&ctx, module);
-            let operation_errors = operation_error_messages(&result);
+            let operation_errors = errors_besides_block_ends(&result);
             let [error] = operation_errors.as_slice() else {
                 panic!(
                     "{op} {fragments:?}: expected one operation error, got {operation_errors:?}"
@@ -3375,7 +3445,8 @@ mod tests {
             // `cf.br` is a `Terminator`, so the generic check reports it
             // before the `Branch` interface check runs.
             "cf.br (op1): must terminate its block",
-            "contains an empty block",
+            // The generic block rule reports the empty arm first, too.
+            "is empty but must end in a terminator",
             "has no complete owning RegionBranch mapping",
         ] {
             assert!(
@@ -3548,7 +3619,7 @@ mod tests {
             let module = wrap_if_in_module(&mut ctx, loc, i32_ty, entry, if_op);
 
             let result = validate_operation_verifiers(&ctx, module);
-            let operation_errors = operation_error_messages(&result);
+            let operation_errors = errors_besides_block_ends(&result);
             let [error] = operation_errors.as_slice() else {
                 panic!("{case}: expected one operation error, got {operation_errors:?}");
             };

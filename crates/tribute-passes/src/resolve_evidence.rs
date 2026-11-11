@@ -723,6 +723,7 @@ mod tests {
         default {
           func.unreachable
         }
+        func.unreachable
     }"#,
         );
         let mut ctx = IrContext::new();

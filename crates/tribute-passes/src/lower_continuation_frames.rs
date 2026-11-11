@@ -548,9 +548,10 @@ mod tests {
         // The one-shot state is a literal layout holding its consumed flag.
         assert!(printed.contains("adt.struct<(core.i1)>"), "{printed}");
         // The wrapper marks the state consumed before it enters the raw
-        // resumption, and traps when it is already consumed.
+        // resumption, and traps when it is already consumed. A second
+        // `func.unreachable` ends the wrapper's block after its guard.
         assert_eq!(printed.matches("adt.struct_set").count(), 1, "{printed}");
-        assert_eq!(printed.matches("func.unreachable").count(), 1, "{printed}");
+        assert_eq!(printed.matches("func.unreachable").count(), 2, "{printed}");
         assert_eq!(
             printed.matches("func.tail_call_indirect").count(),
             1,

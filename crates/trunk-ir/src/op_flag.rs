@@ -68,3 +68,12 @@ pub struct IsolatedFromAbove;
 /// the flag may still end its block.
 #[op_flag]
 pub struct Terminator;
+
+/// Operations whose regions' blocks need not end in a [`Terminator`], as
+/// MLIR's `NoTerminator` trait.
+///
+/// Every other operation's blocks end in a `Terminator`. A region that
+/// holds declarations rather than control flow, such as a module body, opts
+/// out with this flag.
+#[op_flag]
+pub struct NoTerminator;

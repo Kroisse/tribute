@@ -60,11 +60,7 @@ impl Analysis for StructuredControlAnalysis {
                 continue;
             }
             analysis.terminal_successors.insert(op);
-            if ir
-                .op(op)
-                .parent_block
-                .is_none_or(|block| ir.block(block).ops.last() != Some(&op))
-            {
+            if !ends_its_block(ir, op) {
                 continue;
             }
             let results = ir.op_results(op);
@@ -85,6 +81,20 @@ impl Analysis for StructuredControlAnalysis {
 /// Unproven terminal properties are ordinary results, never failures.
 impl InfallibleAnalysis for StructuredControlAnalysis {}
 
+/// Whether nothing but a callable exit follows `op` in its block: the
+/// `func.unreachable` that terminates a block after an operation whose arms
+/// all leave the callable (`design/ir.md`, "Interface와 flag").
+pub fn ends_its_block(ctx: &IrContext, op: OpRef) -> bool {
+    let Some(block) = ctx.op(op).parent_block else {
+        return false;
+    };
+    match ctx.block(block).ops.as_slice() {
+        [.., last] if *last == op => true,
+        [.., before, last] if *before == op => DynCallableExit::prove(ctx, *last).is_ok(),
+        _ => false,
+    }
+}
+
 impl StructuredControlAnalysis {
     /// Whether a single-block region is proven to exit its callable.
     pub fn is_terminal_region(&self, region: RegionRef) -> bool {
@@ -96,13 +106,14 @@ impl StructuredControlAnalysis {
         self.terminal_successors.contains(&op)
     }
 
-    /// Whether final structured control has exactly one unused Never result
-    /// and only terminal entry successors.
+    /// Whether structured control that ends its block (`ends_its_block`) has
+    /// exactly one unused Never result and only terminal entry successors.
     pub fn has_terminal_unused_never_result(&self, op: OpRef) -> bool {
         self.unused_never_controls.contains(&op)
     }
 
-    /// Whether a final resultless switch has only terminal entry successors.
+    /// Whether a resultless switch that ends its block has only terminal
+    /// entry successors.
     pub fn is_terminal_resultless_switch(&self, op: OpRef) -> bool {
         self.terminal_switches.contains(&op)
     }
@@ -139,7 +150,9 @@ mod tests {
       scf.index_switch %tag : (core.i32) -> ()
       case 0 { func.return }
       default { func.unreachable }
+      func.unreachable
     } else { func.unreachable }
+    func.unreachable
   }
   func.func @second() -> core.nil { func.return }
 }"#;
@@ -196,13 +209,12 @@ mod tests {
         assert!(!Arc::ptr_eq(&original, &used));
         assert!(used.has_only_terminal_region_successors(control));
         assert!(!used.has_terminal_unused_never_result(control));
-        assert!(!used.is_terminal_region(body));
 
-        // Remove the use and append an exit: only the final-position fact changes.
+        // Move the use between the control and its exit: the control no
+        // longer ends its block, so only the position fact changes.
         ctx.detach_op(user.op_ref());
-        ctx.remove_op(user.op_ref());
-        let trailing = func::Unreachable::operands().build(&mut ctx, loc);
-        ctx.push_op(entry, trailing.op_ref());
+        let exit_after = *ctx.block(entry).ops.last().unwrap();
+        ctx.insert_op_before(entry, exit_after, user.op_ref());
         assert!(
             cache
                 .get_cached::<StructuredControlAnalysis>(&ctx, module.op())
@@ -211,20 +223,20 @@ mod tests {
         let followed = cache.require::<StructuredControlAnalysis>(&ctx, module.op());
         assert!(followed.has_only_terminal_region_successors(control));
         assert!(!followed.has_terminal_unused_never_result(control));
+        // The body still ends in its exit.
         assert!(followed.is_terminal_region(body));
 
-        // Restoring the outer position cannot hide a changed nested exit.
-        ctx.detach_op(trailing.op_ref());
-        ctx.remove_op(trailing.op_ref());
-        let mut nested_exit = None;
-        let _ = walk_op::<()>(&ctx, control, &mut |op| {
-            if func::Return::matches(&ctx, op) {
-                nested_exit = Some(op);
-            }
-            ControlFlow::Continue(WalkAction::Advance)
-        });
-        let exit = nested_exit.unwrap();
-        let arm = ctx.op(exit).parent_block.unwrap();
+        // Restoring the outer position cannot hide a changed exit of an arm.
+        ctx.detach_op(user.op_ref());
+        ctx.remove_op(user.op_ref());
+        assert!(
+            cache
+                .require::<StructuredControlAnalysis>(&ctx, module.op())
+                .has_terminal_unused_never_result(control)
+        );
+        let else_region = ctx.op_region(control, 1).unwrap();
+        let arm = ctx.region(else_region).blocks[0];
+        let exit = *ctx.block(arm).ops.last().unwrap();
         ctx.detach_op(exit);
         ctx.remove_op(exit);
         let yielding = scf::Yield::operands([]).build(&mut ctx, loc);
@@ -237,7 +249,6 @@ mod tests {
         let changed = cache.require::<StructuredControlAnalysis>(&ctx, module.op());
         assert!(!changed.has_only_terminal_region_successors(control));
         assert!(!changed.has_terminal_unused_never_result(control));
-        assert!(!changed.is_terminal_region(body));
         assert!(crate::validation::validate_use_chains(&ctx, module).is_ok());
     }
 }

@@ -144,8 +144,9 @@ successor는 `Branch`, 부모 operation으로 돌아가는지는 `RegionBranchTe
 MLIR처럼 모든 block은 `Terminator`로 끝난다. 빈 block도 허용하지 않는다.
 Region이 제어 흐름이 아니라 선언을 담는 operation은 `NoTerminator` flag(MLIR의
 `NoTerminator`)를 선언해 이 규칙에서 빠진다. `core.module`, `ability.decl`,
-`clif.data`, `wasm.elem`이 그렇다. Wasm의 `wasm.if`, `wasm.block`, `wasm.loop`도
-`NoTerminator`다. Stack machine의 region은 마지막 명령어 뒤에서 암묵적으로 끝나고,
+`clif.data`, `wasm.elem`이 그렇다. Wasm의 `wasm.func`, `wasm.if`, `wasm.block`,
+`wasm.loop`도 `NoTerminator`다. Stack machine의 함수 본문과 region은 마지막 명령어
+뒤에서 암묵적으로 끝나고,
 `wasm.yield`는 뒤따르는 `wasm.br`에 값을 넘기는 표시이므로 terminator가 아니다.
 등록되지 않은 operation은 정의를 읽을 수 없으므로 어느 쪽으로도 검사하지 않는다.
 

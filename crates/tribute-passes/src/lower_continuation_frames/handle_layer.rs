@@ -571,6 +571,8 @@ fn build_local_dispatcher_instance(
             .regions(local_region, fallback_region)
             .build(ctx, location);
         ctx.push_op(case_block, choose.op_ref());
+        let end = func::Unreachable::operands().build(ctx, location);
+        ctx.push_op(case_block, end.op_ref());
         let case_region = single_block_region(ctx, location, case_block);
         switch_arms.push((i64::from(arm.op_index(ctx)), case_region));
     }
@@ -586,6 +588,9 @@ fn build_local_dispatcher_instance(
     let switch =
         scf::IndexSwitch::build_with_arms(ctx, location, args[4], [], switch_arms, foreign_region);
     ctx.push_op(block, switch.op_ref());
+    // Every arm leaves the dispatcher; the block still ends in a terminator.
+    let unreachable = func::Unreachable::operands().build(ctx, location);
+    ctx.push_op(block, unreachable.op_ref());
     let region = single_block_region(ctx, location, block);
     let lambda = closure_over(
         ctx,
@@ -684,6 +689,9 @@ fn build_tail_dispatcher(
     let switch =
         scf::IndexSwitch::build_with_arms(ctx, location, op_idx, [], switch_arms, reject_region);
     ctx.push_op(block, switch.op_ref());
+    // Every arm returns or rejects; the block still ends in a terminator.
+    let unreachable = func::Unreachable::operands().build(ctx, location);
+    ctx.push_op(block, unreachable.op_ref());
 
     let region = single_block_region(ctx, location, block);
     let function = func::func_sig(ctx, params, [anyref]).as_type_ref();
