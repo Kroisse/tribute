@@ -434,8 +434,8 @@ version = "0.135.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "547433a3f4204f0ed0f5a5e3ffaf086a0c005fd0efdf040098083f38572e8a49"
 dependencies = [
- "cranelift-entity",
- "wasmtime-internal-core",
+ "cranelift-entity 0.135.2",
+ "wasmtime-internal-core 48.0.2",
 ]
 
 [[package]]
@@ -444,7 +444,16 @@ version = "0.135.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "61ca4f30f5f2eb3837b6e73664d9c0c9a42c4c0dce05f0027f2f2af54c1b20d7"
 dependencies = [
- "wasmtime-internal-core",
+ "wasmtime-internal-core 48.0.2",
+]
+
+[[package]]
+name = "cranelift-bitset"
+version = "0.137.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eebb94b54db96b26e387bc8c698823d83d9254d551a6ed846a60cebf62ed7135"
+dependencies = [
+ "wasmtime-internal-core 50.0.1",
 ]
 
 [[package]]
@@ -456,11 +465,11 @@ dependencies = [
  "bumpalo",
  "cranelift-assembler-x64",
  "cranelift-bforest",
- "cranelift-bitset",
+ "cranelift-bitset 0.135.2",
  "cranelift-codegen-meta",
  "cranelift-codegen-shared",
  "cranelift-control",
- "cranelift-entity",
+ "cranelift-entity 0.135.2",
  "cranelift-isle",
  "gimli",
  "hashbrown 0.17.1",
@@ -471,7 +480,7 @@ dependencies = [
  "serde",
  "smallvec",
  "target-lexicon",
- "wasmtime-internal-core",
+ "wasmtime-internal-core 48.0.2",
 ]
 
 [[package]]
@@ -507,8 +516,18 @@ version = "0.135.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bc2c3088c6be94765abea42eccff7ac2b6519488e66bb5159febabcf539afd6e"
 dependencies = [
- "cranelift-bitset",
- "wasmtime-internal-core",
+ "cranelift-bitset 0.135.2",
+ "wasmtime-internal-core 48.0.2",
+]
+
+[[package]]
+name = "cranelift-entity"
+version = "0.137.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a1bffb83ac1d7052691d1710ca8eb334d4fcaad363e589f2b89d38d97bda5776"
+dependencies = [
+ "cranelift-bitset 0.137.1",
+ "wasmtime-internal-core 50.0.1",
 ]
 
 [[package]]
@@ -2004,7 +2023,7 @@ dependencies = [
 name = "trunk-ir"
 version = "0.1.0"
 dependencies = [
- "cranelift-entity",
+ "cranelift-entity 0.137.1",
  "derive_more",
  "hashbrown 0.17.1",
  "insta",
@@ -2199,6 +2218,16 @@ name = "wasmtime-internal-core"
 version = "48.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8679b612a408274d91d1e0edf6baa36b63cc48d937f84dd1e7fb2fbe16a907ae"
+dependencies = [
+ "hashbrown 0.17.1",
+ "libm",
+]
+
+[[package]]
+name = "wasmtime-internal-core"
+version = "50.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e765a08b721bf2b2e5cbd3e9365a71b497d57fc5e8b2cf73ddf12d85d502d7fa"
 dependencies = [
  "hashbrown 0.17.1",
  "libm",
