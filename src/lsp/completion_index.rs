@@ -1017,7 +1017,7 @@ mod tests {
     #[test]
     fn test_field_items_are_the_fields_each_module_sees() {
         let db = salsa::DatabaseImpl::default();
-        let text = "pub mod shapes {\n    pub struct Window { pub label: String, pub(pkg) size: Nat, data: Nat }\n    pub mod Window {\n        pub fn area(window: Window) -> Nat { window.data }\n    }\n    pub mod inner {\n        use super::Window as W\n    }\n}\nuse shapes::Window\n";
+        let text = "pub mod shapes {\n    pub struct Window { pub label: String, pub(pkg) size: Nat, data: Nat }\n    pub mod Window {\n        pub fn area(window: Window) -> Nat { window.data }\n    }\n    pub mod inner {\n        use super::Window as W\n    }\n}\nuse shapes::Window\nuse shapes::Window::area\n";
         let source = make_source(&db, text);
         let items = field_items(&db, AnalysisUnit::Executable(source));
         let at = |module: &[&str]| -> Vec<(String, String)> {

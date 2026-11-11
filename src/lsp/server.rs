@@ -678,8 +678,17 @@ impl LspServer {
         // Extract prefix from current position (for filtering)
         let prefix = extract_completion_prefix(&rope, offset);
 
+        // After a typed `r#`, completions replace it too and are spelled raw;
+        // otherwise names that are keywords complete to their raw spelling.
+        let prefix_start = offset - prefix.len();
+        let raw_start = prefix_start.checked_sub(2).filter(|&start| {
+            rope.get_byte_slice(start..prefix_start)
+                .is_some_and(|t| t == "r#")
+        });
+
+        // The dot, if any, comes before the `r#` marker.
         let dot = source_cst.tree(&self.db).map_or(DotContext::Other, |tree| {
-            dot_context(&rope, tree, offset - prefix.len())
+            dot_context(&rope, tree, raw_start.unwrap_or(prefix_start))
         });
         let items = self.db.attach(|db| {
             let mut completions = Vec::new();
@@ -736,13 +745,6 @@ impl LspServer {
             Some(completions)
         })?;
 
-        // After a typed `r#`, completions replace it too and are spelled raw;
-        // otherwise names that are keywords complete to their raw spelling.
-        let prefix_start = offset - prefix.len();
-        let raw_start = prefix_start.checked_sub(2).filter(|&start| {
-            rope.get_byte_slice(start..prefix_start)
-                .is_some_and(|t| t == "r#")
-        });
         let raw_range = raw_start.map(|start| {
             let (start_line, start_char) = position_from_offset(&rope, start);
             let (end_line, end_char) = position_from_offset(&rope, offset);
@@ -3229,6 +3231,40 @@ mod tests {
             Some(lsp_types::CompletionItemKind::FUNCTION),
             "functions the module names remain method candidates"
         );
+    }
+
+    #[test]
+    fn test_completion_after_a_method_dot_and_raw_prefix_offers_fields() {
+        let mut harness = TestHarness::new();
+        let uri = test_uri("completion_raw_field");
+        let source =
+            "struct Window { r#type: Nat }\nfn read(window: Window) -> Nat {\n    window.r#t\n}";
+
+        harness.open_document(&uri, source);
+
+        let params = CompletionParams {
+            text_document_position: TextDocumentPositionParams {
+                text_document: lsp_types::TextDocumentIdentifier { uri },
+                position: lsp_types::Position {
+                    line: 2,
+                    character: 14, // After `window.r#t`
+                },
+            },
+            work_done_progress_params: Default::default(),
+            partial_result_params: Default::default(),
+            context: None,
+        };
+
+        let result: Option<lsp_types::CompletionResponse> = harness.request::<Completion>(params);
+        let Some(lsp_types::CompletionResponse::List(list)) = result else {
+            panic!("Should return a completion list");
+        };
+        let item = list
+            .items
+            .iter()
+            .find(|item| item.kind == Some(lsp_types::CompletionItemKind::FIELD))
+            .expect("Should suggest the raw-named field");
+        assert_eq!(item.label, "r#type");
     }
 
     #[test]
