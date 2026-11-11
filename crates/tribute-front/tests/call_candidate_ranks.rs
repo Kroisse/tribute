@@ -279,3 +279,56 @@ mod inner {
         assert!(errors.is_empty(), "{errors:#?}");
     }
 }
+
+/// An operator a module declares is a direct candidate of that module's
+/// operator calls. `raw::len` competes with `Buffer::len` from a lower rank,
+/// so `x.len()` waits for its result's type, and the operator call waits
+/// for that operand instead of selecting `Buffer::==` by rank.
+#[salsa_test]
+fn operator_waits_for_an_operand_another_deferred_call_types(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "module_operator.trb",
+        r#"
+struct Buffer { size: Nat }
+
+pub mod Buffer {
+    mod raw {
+        use pkg::Buffer
+
+        pub fn len(buffer: Buffer) -> Nat { buffer.Buffer::size }
+    }
+
+    pub fn len(buffer: Buffer) -> Nat { buffer.raw::len() }
+
+    pub fn (==)(left: Buffer, right: Buffer) -> Bool {
+        let len = left.len()
+        len == right.len()
+    }
+}
+"#,
+    );
+
+    let errors = ast_pipeline_error_messages(db, source);
+    assert!(errors.is_empty(), "{errors:#?}");
+    assert_eq!(
+        tdnr_function_summary(db, source, "=="),
+        TdnrSummary {
+            method_calls: vec![],
+            calls: vec![
+                TdnrCall {
+                    target: "pkg::Buffer::len".to_owned(),
+                    arg_count: 1,
+                },
+                TdnrCall {
+                    target: "std::Nat::==".to_owned(),
+                    arg_count: 2,
+                },
+                TdnrCall {
+                    target: "pkg::Buffer::len".to_owned(),
+                    arg_count: 1,
+                },
+            ],
+        }
+    );
+}
