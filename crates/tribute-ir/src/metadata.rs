@@ -97,7 +97,7 @@ impl WellKnownTypes {
 }
 
 /// What a string literal builds: the `Leaf` variant of the prelude `String`
-/// holding a prelude `Bytes` that views all of a byte array
+/// holding a `Bytes` representation that views all of a byte array
 /// (`design/string.md` § "Constant lowering").
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct StringLeaf {

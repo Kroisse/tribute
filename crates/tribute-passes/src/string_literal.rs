@@ -1,7 +1,7 @@
 //! The `adt` operations a string constant becomes on every target.
 //!
 //! An `adt.string_const` is the `Leaf` of the prelude `String` holding a
-//! prelude `Bytes` that views all of a byte array constant
+//! `Bytes` representation that views all of a byte array constant
 //! (`design/string.md` § "Constant lowering"). Each target's constant
 //! lowering builds these operations and then lowers the `adt.bytes_const`
 //! among them as it lowers any other byte array constant.
@@ -16,7 +16,7 @@ use trunk_ir::types::Location;
 /// The operations that build the string `text` as a value of `result_ty`,
 /// in order. The last one produces the value. `nat` builds the target's
 /// constant of a `Nat` field type. `None`, with nothing built, when `leaf`
-/// names no `Bytes` struct layout.
+/// names no `Bytes` representation layout.
 pub(crate) fn build(
     ctx: &mut IrContext,
     leaf: &StringLeaf,

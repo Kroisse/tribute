@@ -362,7 +362,7 @@ mod adt {
     /// A byte array holding `value`: its result is an
     /// `adt.array<core.i8>` whose elements are the bytes of `value`, owned
     /// with one unit like a new allocation. The frontend wraps it in the
-    /// prelude `Bytes` struct. A native target may produce one static object
+    /// representation of `Bytes`. A native target may produce one static object
     /// per constant and retain it on each evaluation (`design/rc.md` § "정적
     /// 객체"); Wasm builds a new array from a passive data segment
     /// (`design/string.md` § "Constant lowering").
