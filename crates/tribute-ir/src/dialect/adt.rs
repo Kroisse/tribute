@@ -372,7 +372,7 @@ mod adt {
     #[asm_format(value attr_dict_bare ":" type(result))]
     fn bytes_const(value: Attr<Bytes>) -> Value<_> {}
 
-    /// An array constant of type `type` whose elements are `value`, the
+    /// An array constant of its result type whose elements are `value`, the
     /// elements' bytes in little-endian order. Its result is owned with one
     /// unit like a new allocation. Whether two evaluations produce the same
     /// object is not specified: a native target may produce one static
@@ -385,15 +385,11 @@ mod adt {
     /// The element type is `core.i8`, so `value` holds one byte per element.
     ///
     /// ```text
-    /// %b = adt.array_const dense<"0x0102"> {type = adt.array<core.i8>} : adt.array<core.i8>
+    /// %b = adt.array_const dense<"0x0102"> : adt.array<core.i8>
     /// ```
     #[flags(Pure)]
     #[asm_format(value attr_dict_bare ":" type(result))]
-    fn array_const<A: Array<Element = I8>>(
-        r#type: Attr<TypeOf<A>>,
-        value: Attr<Dense>,
-    ) -> Value<A> {
-    }
+    fn array_const<A: Array<Element = I8>>(value: Attr<Dense>) -> Value<A> {}
 }
 
 // A value of a nominal layout type points to an allocation of that layout.
@@ -2195,7 +2191,7 @@ mod tests {
 
     #[test]
     fn array_constants_spell_their_payload_as_a_dense_literal() {
-        let text = "core.module @test {\n  func.func @f() -> core.nil {\n    %b = adt.array_const dense<\"0x00FF7A\"> {type = adt.array<core.i8>} : adt.array<core.i8>\n    func.return\n  }\n}";
+        let text = "core.module @test {\n  func.func @f() -> core.nil {\n    %b = adt.array_const dense<\"0x00FF7A\"> : adt.array<core.i8>\n    func.return\n  }\n}";
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, text);
         assert!(trunk_ir::validation::validate_op_schemas(&ctx, module.op()).is_ok());
@@ -2211,13 +2207,13 @@ mod tests {
 
         // Only byte elements are accepted, and the digits come in pairs.
         assert!(!array_schema_ok(
-            "%b = adt.array_const dense<\"0x00\"> {type = !A} : !A"
+            "%b = adt.array_const dense<\"0x00\"> : !A"
         ));
         let mut ctx = IrContext::new();
         assert!(
             trunk_ir::parser::parse_module(
                 &mut ctx,
-                "core.module @test {\n  %b = adt.array_const dense<\"0x0\"> {type = adt.array<core.i8>} : adt.array<core.i8>\n}"
+                "core.module @test {\n  %b = adt.array_const dense<\"0x0\"> : adt.array<core.i8>\n}"
             )
             .is_err()
         );

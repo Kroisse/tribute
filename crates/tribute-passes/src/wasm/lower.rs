@@ -1411,9 +1411,9 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @run(%n: core.index, %newline: core.i1) -> core.nil {
-    %first = adt.array_const dense<"0x6669727374"> {type = adt.array<core.i8>} : adt.array<core.i8>
-    %second = adt.array_const dense<"0x7365636F6E64"> {type = adt.array<core.i8>} : adt.array<core.i8>
-    %again = adt.array_const dense<"0x6669727374"> {type = adt.array<core.i8>} : adt.array<core.i8>
+    %first = adt.array_const dense<"0x6669727374"> : adt.array<core.i8>
+    %second = adt.array_const dense<"0x7365636F6E64"> : adt.array<core.i8>
+    %again = adt.array_const dense<"0x6669727374"> : adt.array<core.i8>
     tribute_io.write %first, %n, %n, %newline
     tribute_io.write %again, %n, %n, %newline
     func.return

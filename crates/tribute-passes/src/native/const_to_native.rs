@@ -504,9 +504,9 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @main() -> core.nil {
-    %first = adt.array_const dense<"0x6669727374"> {type = adt.array<core.i8>} : adt.array<core.i8>
-    %second = adt.array_const dense<"0x7365636F6E64"> {type = adt.array<core.i8>} : adt.array<core.i8>
-    %again = adt.array_const dense<"0x6669727374"> {type = adt.array<core.i8>} : adt.array<core.i8>
+    %first = adt.array_const dense<"0x6669727374"> : adt.array<core.i8>
+    %second = adt.array_const dense<"0x7365636F6E64"> : adt.array<core.i8>
+    %again = adt.array_const dense<"0x6669727374"> : adt.array<core.i8>
     func.return
   }
 }"#,
@@ -544,8 +544,8 @@ mod tests {
     func.return
   }
   func.func @main() -> core.nil {
-    %kept = adt.array_const dense<"0x6B657074"> {type = adt.array<core.i8>} : adt.array<core.i8>
-    %wide = adt.array_const dense<"0x77696465"> {type = adt.array<core.i8>} : adt.array<core.i8>
+    %kept = adt.array_const dense<"0x6B657074"> : adt.array<core.i8>
+    %wide = adt.array_const dense<"0x77696465"> : adt.array<core.i8>
     func.return
   }
 }"#,
@@ -580,7 +580,7 @@ mod tests {
     ^param:
       cf.br %x [^merge]
     ^literal:
-      %no = adt.array_const dense<"0x6E6F"> {type = adt.array<core.i8>} : adt.array<core.i8>
+      %no = adt.array_const dense<"0x6E6F"> : adt.array<core.i8>
       cf.br %no [^merge]
     ^merge(%picked: adt.array<core.i8>):
       func.return %picked

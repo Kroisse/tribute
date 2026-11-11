@@ -227,8 +227,8 @@ fn test_execute_dynamic_bytes_write_boundary() {
         r#"core.module @test {{
   func.func @__tribute_byte_array_concat(%left: adt.array<core.i8>, %left_start: core.i32, %left_len: core.i32, %right: adt.array<core.i8>, %right_start: core.i32, %right_len: core.i32) -> adt.array<core.i8> attributes {{abi = "C"}}
   func.func @main() -> core.nil {{
-    %left = adt.array_const dense<"0x{left}"> {{type = adt.array<core.i8>}} : adt.array<core.i8>
-    %right = adt.array_const dense<"0x{right}"> {{type = adt.array<core.i8>}} : adt.array<core.i8>
+    %left = adt.array_const dense<"0x{left}"> : adt.array<core.i8>
+    %right = adt.array_const dense<"0x{right}"> : adt.array<core.i8>
     %zero = arith.constant 0 : core.i32
     %len = arith.constant 35000 : core.i32
     %joined = func.call @__tribute_byte_array_concat(%left, %zero, %len, %right, %zero, %len) : (adt.array<core.i8>, core.i32, core.i32, adt.array<core.i8>, core.i32, core.i32) -> adt.array<core.i8>

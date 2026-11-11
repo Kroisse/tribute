@@ -383,7 +383,7 @@ mod tests {
             r#"core.module @test {
   wasm.func @main() -> core.nil {
     %string = adt.string_const "shared" : tribute_rt.anyref
-    %bytes = adt.array_const dense<"0x736861726564"> {type = adt.array<core.i8>} : adt.array<core.i8>
+    %bytes = adt.array_const dense<"0x736861726564"> : adt.array<core.i8>
     wasm.return
   }
 }"#,
@@ -603,9 +603,9 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   wasm.func @main() -> core.nil {
-    %first = adt.array_const dense<"0x6669727374"> {type = adt.array<core.i8>} : adt.array<core.i8>
-    %second = adt.array_const dense<"0x7365636F6E64"> {type = adt.array<core.i8>} : adt.array<core.i8>
-    %again = adt.array_const dense<"0x6669727374"> {type = adt.array<core.i8>} : adt.array<core.i8>
+    %first = adt.array_const dense<"0x6669727374"> : adt.array<core.i8>
+    %second = adt.array_const dense<"0x7365636F6E64"> : adt.array<core.i8>
+    %again = adt.array_const dense<"0x6669727374"> : adt.array<core.i8>
     wasm.return
   }
 }"#,
@@ -635,9 +635,9 @@ mod tests {
   wasm.data(b"active") offset 0
   wasm.data(b"kept") offset 0 passive
   wasm.func @main() -> core.nil {
-    %new = adt.array_const dense<"0x6E6577"> {type = adt.array<core.i8>} : adt.array<core.i8>
-    %kept = adt.array_const dense<"0x6B657074"> {type = adt.array<core.i8>} : adt.array<core.i8>
-    %active = adt.array_const dense<"0x616374697665"> {type = adt.array<core.i8>} : adt.array<core.i8>
+    %new = adt.array_const dense<"0x6E6577"> : adt.array<core.i8>
+    %kept = adt.array_const dense<"0x6B657074"> : adt.array<core.i8>
+    %active = adt.array_const dense<"0x616374697665"> : adt.array<core.i8>
     wasm.return
   }
 }"#,

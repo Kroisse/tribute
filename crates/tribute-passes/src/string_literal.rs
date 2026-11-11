@@ -89,8 +89,8 @@ fn build_bytes(
     let nat_ty = adt::field_type(ctx, repr.ty, repr.start as usize)?;
     let array_ty = tribute_ir::runtime_layout::byte_array(ctx);
     let data = adt::ArrayConst::operands()
-        .r#type(array_ty)
         .value(bytes.into())
+        .results(array_ty)
         .build(ctx, loc);
     let (start_op, start) = nat(ctx, nat_ty, 0, loc);
     let (len_op, len) = nat(ctx, nat_ty, bytes.len() as i64, loc);
