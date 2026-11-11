@@ -34,7 +34,8 @@ enum Settling {
     Open,
     /// No call can be selected with the types determined so far. A call
     /// whose argument is the undetermined result of another deferred call
-    /// still waits, since selecting that call types the argument.
+    /// or implicit constructor still waits, since selecting that one types
+    /// the argument.
     Independent,
     /// The calls that waited for each other's results select too.
     All,
@@ -648,10 +649,9 @@ impl<'db> TypeChecker<'db> {
             let waiting_results: Vec<_> = if settling == Settling::Independent {
                 deferred
                     .iter()
-                    .map(|mc| {
-                        let result = solver.type_subst().apply(self.db(), mc.result_ty);
-                        (mc.node_id, result)
-                    })
+                    .map(|mc| (mc.node_id, mc.result_ty))
+                    .chain(constructors.iter().map(|c| (c.node_id, c.result_ty)))
+                    .map(|(node, result)| (node, solver.type_subst().apply(self.db(), result)))
                     .filter(|(_, result)| matches!(result.kind(self.db()), TypeKind::UniVar { .. }))
                     .collect()
             } else {

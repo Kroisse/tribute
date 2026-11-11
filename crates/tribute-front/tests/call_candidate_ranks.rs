@@ -301,3 +301,36 @@ pub mod Buffer {
         ])
     );
 }
+
+/// An implicit constructor waits like a call: the user's `Option::Some`
+/// and the prelude's both fit `.Some(1)`. The call `o.tag()` takes the
+/// constructed value, so it waits for the constructor instead of selecting
+/// the direct `tag` for `std::Option` by rank.
+#[salsa_test]
+fn call_waits_for_an_argument_a_deferred_constructor_types(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "constructor_argument.trb",
+        r#"
+enum Option { Some(Nat), None }
+
+pub mod Option {
+    pub fn tag(option: Option) -> Nat { 1 }
+}
+
+fn tag(option: std::Option(Nat)) -> Nat { 2 }
+
+fn test() -> Nat {
+    let o = .Some(1)
+    o.tag()
+}
+"#,
+    );
+
+    let errors = ast_pipeline_error_messages(db, source);
+    assert!(errors.is_empty(), "{errors:#?}");
+    assert_eq!(
+        tdnr_function_summary(db, source, "test"),
+        TdnrSummary::selected([TdnrCall::new("pkg::Option::tag", 1)])
+    );
+}
