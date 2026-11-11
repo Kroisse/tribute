@@ -597,9 +597,10 @@ descriptor](runtime-types.md#wasm-배치) index를 두어 runtime identity를 �
 - 사용자 struct와 variant의 타입은 `wasm_gc.struct<T...>`이다. 매개변수는
   descriptor 필드의 `core.i32`와 각 소스 필드의 Wasm 저장 표현이며, 같은 매개변수
   목록은 interning으로 같은 타입이 된다.
-- 소스 필드의 저장 표현은 다음과 같다. `core.i1`은 `core.i32`, `heap.box`는
-  자기를 담을 수 있으므로 `wasm.structref`, inline 필드는 자신의 leaf들을 둘러싼
-  GC struct의 필드로 기여하며, literal `adt.enum` 값은 emission이
+- 소스 필드의 저장 표현은 다음과 같다. `core.i1`은 `core.i32`, struct나 enum
+  layout의 `heap.box`는 자기를 담을 수 있으므로 `wasm.structref`, 배열 layout의
+  `heap.box`는 아래 배열 규칙이 원소 타입으로 정한 표현, inline 필드는 자신의
+  leaf들을 둘러싼 GC struct의 필드로 기여하며, literal `adt.enum` 값은 emission이
   쓰는 erased `wasm.anyref`, 중첩된 사용자 struct는 그 struct의
   `wasm_gc.struct`이다. Builtin layout을 포함한 나머지 타입은 그대로 둔다.
 - Variant의 타입은 그 variant 자신의 필드로 만든다. Enum의 다른 variant 필드를
