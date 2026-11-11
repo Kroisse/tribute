@@ -239,10 +239,21 @@ fn build_write_helper(ctx: &mut IrContext, loc: Location) -> OpRef {
     let len = ctx.block_arg(body, 2);
     let newline = ctx.block_arg(body, 3);
 
-    // The range must not wrap; a byte past the array traps when it is read.
+    // The range must not wrap and must lie within the array, even when it
+    // is empty and the copy reads nothing.
     let range_end = wasm_dialect::I32Add::operands(offset, len).build(ctx, loc);
     ctx.push_op(body, range_end.op_ref());
     trap_if_less(ctx, body, loc, range_end.result(ctx), offset, i32_ty);
+    let array_len = wasm_dialect::ArrayLen::operands(data).build(ctx, loc);
+    ctx.push_op(body, array_len.op_ref());
+    trap_if_less(
+        ctx,
+        body,
+        loc,
+        array_len.result(ctx),
+        range_end.result(ctx),
+        i32_ty,
+    );
 
     let total = wasm_dialect::I32Add::operands(len, newline).build(ctx, loc);
     ctx.push_op(body, total.op_ref());

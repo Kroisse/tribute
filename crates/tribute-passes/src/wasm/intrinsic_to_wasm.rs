@@ -75,6 +75,34 @@ fn trap_if_range_wraps(
     vec![end.op_ref(), wrapped.op_ref(), check.op_ref()]
 }
 
+/// Trap unless `[start, start + len)` lies within `array`, as the native
+/// helpers check before reading (`design/rc.md` § "Bytes"). Returns the
+/// operations, in order.
+fn trap_if_out_of_range(
+    ctx: &mut IrContext,
+    location: Location,
+    array: ValueRef,
+    start: ValueRef,
+    len: ValueRef,
+) -> Vec<OpRef> {
+    let i32_ty = core::I32::type_ref(ctx);
+    let nil_ty = core::Nil::params().intern(ctx).as_type_ref();
+    let mut ops = trap_if_range_wraps(ctx, location, start, len);
+    let end = ctx.op_result(ops[0], 0);
+    let array_len = wasm_dialect::ArrayLen::operands(array).build(ctx, location);
+    let past_end = wasm_dialect::I32GtU::operands(end, array_len.result(ctx))
+        .results(i32_ty)
+        .build(ctx, location);
+    let trap = trap_region(ctx, location);
+    let ok = empty_region(ctx, location);
+    let check = wasm_dialect::If::operands(past_end.result(ctx))
+        .results([nil_ty])
+        .regions(trap, ok)
+        .build(ctx, location);
+    ops.extend([array_len.op_ref(), past_end.op_ref(), check.op_ref()]);
+    ops
+}
+
 /// Pattern for comparing equal-length ranges of two byte arrays.
 ///
 /// The generated Wasm loop compares bytes directly in the two arrays and
@@ -103,8 +131,10 @@ impl OpRewritePattern for RangeEqualPattern<'_> {
         let i32_ty = core::I32::type_ref(ctx);
         let nil_ty = core::Nil::params().intern(ctx).as_type_ref();
         let array_ty = byte_array_type(ctx);
-        let mut checks = trap_if_range_wraps(ctx, location, left_start, len);
-        checks.extend(trap_if_range_wraps(ctx, location, right_start, len));
+        // Both whole ranges are checked first, since the loop may stop at
+        // the first mismatch before reading past an array.
+        let mut checks = trap_if_out_of_range(ctx, location, left, left_start, len);
+        checks.extend(trap_if_out_of_range(ctx, location, right, right_start, len));
         let zero = wasm_dialect::I32Const::operands()
             .value(0)
             .results(i32_ty)
