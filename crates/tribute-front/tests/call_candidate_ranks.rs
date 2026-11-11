@@ -9,21 +9,16 @@ use self::common::{TdnrCall, TdnrSummary, ast_pipeline_error_messages, tdnr_func
 use salsa_test_macros::salsa_test;
 use tribute_front::SourceCst;
 
+/// A body whose calls each take one argument and select `targets`, in
+/// order; a target outside `std` is in package `pkg`.
 fn selected(targets: &[&str]) -> TdnrSummary {
-    TdnrSummary {
-        method_calls: vec![],
-        calls: targets
-            .iter()
-            .map(|target| TdnrCall {
-                target: if target.starts_with("std::") {
-                    (*target).to_owned()
-                } else {
-                    format!("pkg::{target}")
-                },
-                arg_count: 1,
-            })
-            .collect(),
-    }
+    TdnrSummary::selected(targets.iter().map(|target| {
+        if target.starts_with("std::") {
+            TdnrCall::new(target, 1)
+        } else {
+            TdnrCall::new(&format!("pkg::{target}"), 1)
+        }
+    }))
 }
 
 /// A user `Option` hides the prelude's short name but not its methods: on a
@@ -49,13 +44,7 @@ fn test(x: std::Option(Nat)) -> std::Option(Nat) {
 
     assert_eq!(
         tdnr_function_summary(db, source, "test"),
-        TdnrSummary {
-            method_calls: vec![],
-            calls: vec![TdnrCall {
-                target: "std::Option::map".to_owned(),
-                arg_count: 2,
-            }],
-        }
+        TdnrSummary::selected([TdnrCall::new("std::Option::map", 2)])
     );
     let errors = ast_pipeline_error_messages(db, source);
     assert!(errors.is_empty(), "{errors:#?}");
@@ -112,7 +101,7 @@ fn test(name: Name) -> String {{ name.text }}
     assert_eq!(
         tdnr_function_summary(db, source, "test"),
         TdnrSummary {
-            method_calls: vec!["text".to_owned()],
+            unselected_calls: vec!["text".to_owned()],
             calls: vec![],
         }
     );
@@ -259,13 +248,7 @@ mod inner {
 "#,
     );
 
-    let map = |target: &str| TdnrSummary {
-        method_calls: vec![],
-        calls: vec![TdnrCall {
-            target: target.to_owned(),
-            arg_count: 2,
-        }],
-    };
+    let map = |target: &str| TdnrSummary::selected([TdnrCall::new(target, 2)]);
     assert_eq!(
         tdnr_function_summary(db, prelude, "test"),
         map("std::Option::map")
@@ -278,4 +261,78 @@ mod inner {
         let errors = ast_pipeline_error_messages(db, source);
         assert!(errors.is_empty(), "{errors:#?}");
     }
+}
+
+/// An operator a module declares is a direct candidate of that module's
+/// operator calls. `raw::len` competes with `Buffer::len` from a lower rank,
+/// so `x.len()` waits for its result's type, and the operator call waits
+/// for that operand instead of selecting `Buffer::==` by rank.
+#[salsa_test]
+fn operator_waits_for_an_operand_another_deferred_call_types(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "module_operator.trb",
+        r#"
+struct Buffer { size: Nat }
+
+pub mod Buffer {
+    mod raw {
+        use pkg::Buffer
+
+        pub fn len(buffer: Buffer) -> Nat { buffer.Buffer::size }
+    }
+
+    pub fn len(buffer: Buffer) -> Nat { buffer.raw::len() }
+
+    pub fn (==)(left: Buffer, right: Buffer) -> Bool {
+        let len = left.len()
+        len == right.len()
+    }
+}
+"#,
+    );
+
+    let errors = ast_pipeline_error_messages(db, source);
+    assert!(errors.is_empty(), "{errors:#?}");
+    assert_eq!(
+        tdnr_function_summary(db, source, "=="),
+        TdnrSummary::selected([
+            TdnrCall::new("pkg::Buffer::len", 1),
+            TdnrCall::new("std::Nat::==", 2),
+            TdnrCall::new("pkg::Buffer::len", 1),
+        ])
+    );
+}
+
+/// An implicit constructor waits like a call: the user's `Option::Some`
+/// and the prelude's both fit `.Some(1)`. The call `o.tag()` takes the
+/// constructed value, so it waits for the constructor instead of selecting
+/// the direct `tag` for `std::Option` by rank.
+#[salsa_test]
+fn call_waits_for_an_argument_a_deferred_constructor_types(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "constructor_argument.trb",
+        r#"
+enum Option { Some(Nat), None }
+
+pub mod Option {
+    pub fn tag(option: Option) -> Nat { 1 }
+}
+
+fn tag(option: std::Option(Nat)) -> Nat { 2 }
+
+fn test() -> Nat {
+    let o = .Some(1)
+    o.tag()
+}
+"#,
+    );
+
+    let errors = ast_pipeline_error_messages(db, source);
+    assert!(errors.is_empty(), "{errors:#?}");
+    assert_eq!(
+        tdnr_function_summary(db, source, "test"),
+        TdnrSummary::selected([TdnrCall::new("pkg::Option::tag", 1)])
+    );
 }

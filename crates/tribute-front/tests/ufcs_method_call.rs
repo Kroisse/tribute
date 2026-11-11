@@ -142,19 +142,10 @@ fn test() -> Nat {
 
     assert_eq!(
         tdnr_function_summary(db, source, "test"),
-        TdnrSummary {
-            method_calls: vec![],
-            calls: vec![
-                TdnrCall {
-                    target: "pkg::pure_value".to_owned(),
-                    arg_count: 0,
-                },
-                TdnrCall {
-                    target: "std::Nat::+".to_owned(),
-                    arg_count: 2,
-                },
-            ],
-        }
+        TdnrSummary::selected([
+            TdnrCall::new("pkg::pure_value", 0),
+            TdnrCall::new("std::Nat::+", 2),
+        ])
     );
 }
 
@@ -181,22 +172,18 @@ fn test(n: Int) -> Int {
 "#,
     );
 
-    let call = |target: &str, arg_count| TdnrCall {
-        target: target.to_owned(),
-        arg_count,
-    };
-    let summary = tdnr_function_summary(db, source, "test");
-    assert_eq!(summary.method_calls, Vec::<String>::new());
-    let mut calls = summary.calls;
-    calls.sort_by(|a, b| (&a.target, a.arg_count).cmp(&(&b.target, b.arg_count)));
+    let mut summary = tdnr_function_summary(db, source, "test");
+    summary
+        .calls
+        .sort_by(|a, b| (&a.target, a.arg_count).cmp(&(&b.target, b.arg_count)));
     assert_eq!(
-        calls,
-        vec![
-            call("pkg::math::add", 2),
-            call("pkg::math::double", 1),
-            call("pkg::math::double", 1),
-            call("pkg::math::inner::twice", 1),
-        ]
+        summary,
+        TdnrSummary::selected([
+            TdnrCall::new("pkg::math::add", 2),
+            TdnrCall::new("pkg::math::double", 1),
+            TdnrCall::new("pkg::math::double", 1),
+            TdnrCall::new("pkg::math::inner::twice", 1),
+        ])
     );
     run_ast_pipeline(db, source);
 }
@@ -248,13 +235,7 @@ fn test(p: Point) -> Nat {
 
     assert_eq!(
         tdnr_function_summary(db, field_accessor, "test"),
-        TdnrSummary {
-            method_calls: vec![],
-            calls: vec![TdnrCall {
-                target: "pkg::Point::x".to_owned(),
-                arg_count: 1,
-            }],
-        }
+        TdnrSummary::selected([TdnrCall::new("pkg::Point::x", 1)])
     );
 
     let user_defined = SourceCst::from_source_str(
@@ -277,13 +258,7 @@ fn test(c: Counter) -> Nat {
 
     assert_eq!(
         tdnr_function_summary(db, user_defined, "test"),
-        TdnrSummary {
-            method_calls: vec![],
-            calls: vec![TdnrCall {
-                target: "pkg::Counter::add".to_owned(),
-                arg_count: 2,
-            }],
-        }
+        TdnrSummary::selected([TdnrCall::new("pkg::Counter::add", 2)])
     );
 
     let ambiguous = SourceCst::from_source_str(
@@ -313,7 +288,7 @@ fn test(t: Thing) -> Nat {
     assert_eq!(
         tdnr_function_summary(db, ambiguous, "test"),
         TdnrSummary {
-            method_calls: vec!["pick".to_owned()],
+            unselected_calls: vec!["pick".to_owned()],
             calls: vec![],
         }
     );
@@ -340,13 +315,7 @@ fn test(i: Item) -> Nat {
 
     assert_eq!(
         tdnr_function_summary(db, nested_module, "test"),
-        TdnrSummary {
-            method_calls: vec![],
-            calls: vec![TdnrCall {
-                target: "pkg::Outer::score".to_owned(),
-                arg_count: 1,
-            }],
-        }
+        TdnrSummary::selected([TdnrCall::new("pkg::Outer::score", 1)])
     );
 }
 
@@ -373,23 +342,11 @@ fn score_b(thing: B::Thing) -> Nat { thing.score() }
 
     assert_eq!(
         tdnr_function_summary(db, source, "score_a"),
-        TdnrSummary {
-            method_calls: vec![],
-            calls: vec![TdnrCall {
-                target: "pkg::A::score".to_owned(),
-                arg_count: 1,
-            }],
-        }
+        TdnrSummary::selected([TdnrCall::new("pkg::A::score", 1)])
     );
     assert_eq!(
         tdnr_function_summary(db, source, "score_b"),
-        TdnrSummary {
-            method_calls: vec![],
-            calls: vec![TdnrCall {
-                target: "pkg::B::score".to_owned(),
-                arg_count: 1,
-            }],
-        }
+        TdnrSummary::selected([TdnrCall::new("pkg::B::score", 1)])
     );
 }
 
@@ -419,19 +376,10 @@ fn test() -> #(Nat, Nat) {
 
     assert_eq!(
         tdnr_function_summary(db, source, "test"),
-        TdnrSummary {
-            method_calls: vec![],
-            calls: vec![
-                TdnrCall {
-                    target: "pkg::A::tag".to_owned(),
-                    arg_count: 1,
-                },
-                TdnrCall {
-                    target: "pkg::B::tag".to_owned(),
-                    arg_count: 1,
-                },
-            ],
-        }
+        TdnrSummary::selected([
+            TdnrCall::new("pkg::A::tag", 1),
+            TdnrCall::new("pkg::B::tag", 1),
+        ])
     );
 }
 
@@ -457,13 +405,7 @@ fn test() -> Nat {
 
     assert_eq!(
         tdnr_function_summary(db, source, "test"),
-        TdnrSummary {
-            method_calls: vec![],
-            calls: vec![TdnrCall {
-                target: "std::String::len".to_owned(),
-                arg_count: 1,
-            }],
-        }
+        TdnrSummary::selected([TdnrCall::new("std::String::len", 1)])
     );
 }
 
