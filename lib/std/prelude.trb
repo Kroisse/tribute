@@ -685,7 +685,7 @@ pub mod io {
     use super::{String, abilities}
 
     /// Platform error details reported by an I/O operation.
-    pub struct SystemError { code: Int, message: String }
+    pub struct SystemError { pub code: Int, pub message: String }
 
     /// Errors that may be raised by standard I/O operations.
     pub enum Error {

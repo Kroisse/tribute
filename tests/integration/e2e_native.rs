@@ -312,11 +312,11 @@ fn test_native_generic_specializations_distinguish_same_spelled_source_types() {
 use std::io::{Io, print_line}
 
 pub mod A {
-    pub struct Thing { value: Nat }
+    pub struct Thing { pub value: Nat }
 }
 
 pub mod B {
-    pub struct Thing { value: Nat }
+    pub struct Thing { pub value: Nat }
 }
 
 fn keep(value: a) -> a {

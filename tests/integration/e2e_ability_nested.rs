@@ -428,11 +428,11 @@ fn test_same_ability_instances_with_same_spelled_nominal_arguments() {
     let code = r#"use std::io::{Io, print_line}
 
 pub mod A {
-    pub struct Color { value: Nat }
+    pub struct Color { pub value: Nat }
 }
 
 pub mod B {
-    pub struct Color { value: Nat }
+    pub struct Color { pub value: Nat }
 }
 
 ability State(s) {

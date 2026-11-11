@@ -207,7 +207,7 @@ fn a_hidden_companion_does_not_hide_its_type(db: &salsa::DatabaseImpl) {
         db,
         r#"
 pub mod api {
-    pub struct T { n: Nat }
+    pub struct T { pub n: Nat }
     mod T {
         pub fn hidden(t: T) -> Nat { t.n }
     }
@@ -313,7 +313,7 @@ fn a_re_export_joins_its_module_namespace(db: &salsa::DatabaseImpl) {
         r#"
 pub mod source {
     pub fn f() -> Nat { 1 }
-    pub struct P { n: Nat }
+    pub struct P { pub n: Nat }
     pub ability Tick {
         op tick() -> Nat
     }
@@ -496,6 +496,216 @@ pub mod facade {
         [
             "`pkg::facade::alias::secret` is not visible here: `facade::alias` is declared `pub(self)`",
             "`alias::secret` is not visible here: `source::inner::secret` is private",
+        ]
+    );
+}
+
+/// A struct field is private unless marked, even on a public struct. The
+/// struct's module sees every field; elsewhere a spread record and a record
+/// pattern may leave hidden fields out, while a public field is read and
+/// changed as usual.
+#[salsa_test]
+fn a_public_field_of_a_struct_with_hidden_ones(db: &salsa::DatabaseImpl) {
+    let errors = errors(
+        db,
+        r#"
+pub mod m {
+    pub struct Window { pub label: String, data: Nat, pub(pkg) start: Nat }
+
+    pub fn new(label: String) -> Window { Window { label, data: 0, start: 0 } }
+
+    fn data(window: Window) -> Nat {
+        let Window { label: _, data, start: _ } = window
+        window.data + data + Window::data(window)
+    }
+}
+
+use m::Window
+
+fn main() -> Nil {
+    let window = m::new("a")
+    let renamed = Window { ..window, label: "b", start: 1 }
+    let relabeled = window.label::set("c").start::modify(fn(n) n + 1)
+    let Window { label, start, .. } = renamed
+    let Window { .. } = relabeled
+    let _ = label <> relabeled.label
+    let _ = start + window.start
+}
+"#,
+    );
+    assert_eq!(errors, Vec::<String>::new());
+}
+
+/// Outside its module a hidden field has no field functions, and a struct
+/// with one cannot be built from scratch or matched in full.
+#[salsa_test]
+fn a_hidden_field_is_hidden_outside_its_module(db: &salsa::DatabaseImpl) {
+    let errors = errors(
+        db,
+        r#"
+pub mod m {
+    pub struct Window { pub label: String, data: Nat }
+
+    pub fn new(label: String) -> Window { Window { label, data: 0 } }
+}
+
+use m::Window
+
+fn main() -> Nil {
+    let window = m::new("a")
+    let _ = window.data
+    let _ = Window::data(window)
+    let _ = Window::data::set(window, 1)
+    let _ = Window { label: "b", data: 1 }
+    let _ = Window("b", 1)
+    let make = Window
+    let _ = Window { ..window, data: 1 }
+    let Window { data, .. } = window
+    let Window(label, data) = window
+}
+
+fn implicit() -> Window { .Window { label: "b", data: 1 } }
+
+fn respread(window: Window) -> Window { .Window { ..window, label: "c" } }
+"#,
+    );
+    let hidden = "`m::Window::data` is private";
+    assert_eq!(
+        errors,
+        [
+            format!("`data` is not visible here: {hidden}"),
+            format!("`Window::data` is not visible here: {hidden}"),
+            format!("`Window::data::set` is not visible here: {hidden}"),
+            format!("`Window` is not visible here: {hidden}"),
+            format!("`Window` is not visible here: {hidden}"),
+            format!("`Window` is not visible here: {hidden}"),
+            format!("field `data` of `Window` is not visible here: {hidden}"),
+            format!("field `data` of `Window` is not visible here: {hidden}"),
+            format!("`Window` is not visible here: {hidden}"),
+            format!("`m::Window` is not visible here: {hidden}"),
+        ]
+    );
+}
+
+/// An implicit record form and a restricted re-export cannot reach a hidden
+/// field either.
+#[salsa_test]
+fn other_spellings_cannot_reach_a_hidden_field(db: &salsa::DatabaseImpl) {
+    let errors = errors(
+        db,
+        r#"
+pub mod m {
+    pub struct Window { pub label: String, data: Nat }
+}
+
+mod facade {
+    pub(pkg) use pkg::m::Window
+}
+
+use m::Window
+
+fn respread(window: Window) -> Window { .Window { ..window, data: 1 } }
+
+fn relabel(window: Window) -> Window { .Window { ..window, label: "b" } }
+
+fn unannotated(window: Window) -> Nil {
+    let updated = .Window { ..window, data: 1 }
+    let relabeled = .Window { ..window, label: "b" }
+}
+
+mod aliased {
+    use pkg::m::Window as Pane
+
+    fn update(window: pkg::m::Window) -> Nil {
+        let changed = .Pane { ..window, data: 1 }
+        let relabeled = .Pane { ..window, label: "b" }
+    }
+}
+
+fn matched(window: Window) -> Nat {
+    case window {
+        .Window { data, .. } -> data
+    }
+}
+
+fn labeled(window: Window) -> String {
+    case window {
+        .Window { label, .. } -> label
+    }
+}
+
+fn reexported() -> Window { facade::Window("b", 1) }
+"#,
+    );
+    let hidden = "`m::Window::data` is private";
+    assert_eq!(
+        errors,
+        [
+            format!("`facade::Window` is not visible here: {hidden}"),
+            format!("`m::Window` is not visible here: {hidden}"),
+            format!("`m::Window` is not visible here: {hidden}"),
+            // The alias selects no constructor once its candidate is hidden.
+            "type `m::Window` has no constructor `Pane`".to_owned(),
+            format!("`m::Window` is not visible here: {hidden}"),
+        ]
+    );
+}
+
+/// A field's `pub(path)` names the struct's module or a module around it,
+/// and an enum variant's fields take no marker.
+#[salsa_test]
+fn field_visibility_markers_are_checked(db: &salsa::DatabaseImpl) {
+    let errors = errors(
+        db,
+        r#"
+pub mod m {
+    pub struct Window { pub(pkg::other) data: Nat, pub(super) start: Nat }
+    pub enum Shape { Dot { pub x: Nat } }
+}
+
+pub mod other {}
+
+fn main() -> Nil {}
+"#,
+    );
+    assert_eq!(
+        errors,
+        [
+            "`pub(pkg::other)` names no module around this declaration: \
+             a restricted visibility names the declaring module or a module around it",
+            "`pub` on an enum variant field: a variant's fields follow the enum's visibility",
+        ]
+    );
+}
+
+/// A field is visible no wider than its struct, and `pub(path)` widens it
+/// to the modules below that path.
+#[salsa_test]
+fn a_field_is_visible_no_wider_than_its_struct(db: &salsa::DatabaseImpl) {
+    let errors = errors(
+        db,
+        r#"
+pub mod a {
+    pub mod b {
+        pub(super) struct Inner { pub value: Nat, pub(super) shared: Nat, own: Nat }
+
+        pub(super) fn make() -> Inner { Inner { value: 1, shared: 2, own: 3 } }
+    }
+
+    fn read(inner: b::Inner) -> Nat { b::Inner::value(inner) + b::Inner::shared(inner) }
+    fn own(inner: b::Inner) -> Nat { b::Inner::own(inner) }
+}
+
+fn main() -> Nil {
+    let _ = a::b::Inner::value
+}
+"#,
+    );
+    assert_eq!(
+        errors,
+        [
+            "`b::Inner::own` is not visible here: `a::b::Inner::own` is private",
+            "`a::b::Inner::value` is not visible here: `a::b::Inner` is declared `pub(super)`",
         ]
     );
 }

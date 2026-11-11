@@ -8,7 +8,7 @@ use std::sync::LazyLock;
 use super::env::{Binding, PackageEnv, Restriction};
 use super::package::{IdentityPath, Location, PackageName};
 use super::{PRELUDE_MODULE, STD_PACKAGE};
-use crate::ast::FuncDefId;
+use crate::ast::{CtorId, FuncDefId};
 
 /// The path of the prelude module from the root of its package.
 fn prelude_module() -> &'static SymbolPath {
@@ -228,6 +228,30 @@ impl<'s, 'db> ScopeRef<'s, 'db> {
                 .iter()
                 .find_map(|env| env.restriction(binding))
         })
+    }
+
+    /// Where the struct constructor `ctor` builds a value from scratch, in
+    /// whichever package declares it, if a field restricts it more than its
+    /// struct.
+    pub fn construction_restriction(&self, ctor: CtorId<'db>) -> Option<&'s Restriction> {
+        self.own.construction_restriction(ctor).or_else(|| {
+            self.dependencies
+                .iter()
+                .find_map(|env| env.construction_restriction(ctor))
+        })
+    }
+
+    /// The struct constructors of the package and its dependencies that a
+    /// field restricts more than their struct, with where each builds a
+    /// value from scratch.
+    pub fn construction_restrictions(
+        &self,
+    ) -> impl Iterator<Item = (&'s CtorId<'db>, &'s Restriction)> {
+        self.own.construction_restrictions().chain(
+            self.dependencies
+                .iter()
+                .flat_map(|env| env.construction_restrictions()),
+        )
     }
 
     /// The bindings of the package and its dependencies that are not

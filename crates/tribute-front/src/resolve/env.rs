@@ -176,6 +176,11 @@ pub struct PackageEnv<'db> {
     restrictions: HashMap<Binding<'db>, Restriction>,
     /// The modules that are not public, by package-root path.
     module_restrictions: HashMap<SymbolPath, Restriction>,
+    /// Where each struct constructor that a field restricts more than its
+    /// struct writes every field: where all of them are visible. A
+    /// constructor named to build a value from scratch is visible only
+    /// there.
+    construction_restrictions: HashMap<CtorId<'db>, Restriction>,
     /// The re-exports that inline modules declare.
     exports: Vec<Export>,
     /// The location each resolved re-export names, by namespace and name,
@@ -334,6 +339,24 @@ impl<'db> PackageEnv<'db> {
         self.restrictions.insert(binding, restriction);
     }
 
+    /// Restrict where the struct constructor `ctor` builds a value from
+    /// scratch, when a field restricts it more than its struct.
+    pub fn restrict_construction(&mut self, ctor: CtorId<'db>, restriction: Restriction) {
+        self.construction_restrictions.insert(ctor, restriction);
+    }
+
+    /// Where the struct constructor `ctor` builds a value from scratch, if a
+    /// field restricts it more than its struct.
+    pub fn construction_restriction(&self, ctor: CtorId<'db>) -> Option<&Restriction> {
+        self.construction_restrictions.get(&ctor)
+    }
+
+    /// The struct constructors a field restricts more than their struct,
+    /// with where each builds a value from scratch.
+    pub fn construction_restrictions(&self) -> impl Iterator<Item = (&CtorId<'db>, &Restriction)> {
+        self.construction_restrictions.iter()
+    }
+
     /// Restrict where the module at the package-root path `module` is
     /// visible.
     pub fn restrict_module(&mut self, module: SymbolPath, restriction: Restriction) {
@@ -433,6 +456,12 @@ impl<'db> PackageEnv<'db> {
                 .module_restrictions
                 .iter()
                 .map(|(path, restriction)| (path.clone(), restriction.clone())),
+        );
+        self.construction_restrictions.extend(
+            other
+                .construction_restrictions
+                .iter()
+                .map(|(ctor, restriction)| (*ctor, restriction.clone())),
         );
         self.exports.extend(other.exports.iter().cloned());
         self.module_uses.extend(
