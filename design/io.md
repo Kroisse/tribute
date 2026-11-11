@@ -133,7 +133,7 @@ target-independent I/O boundary를 생성한다. Boundary는 `Bytes` 값이 아�
 알 필요가 없다.
 
 ```text
-tribute_io.write(data: ByteArray, start: Nat, len: Nat, newline: Bool) -> Nil
+tribute_io.write(data: ByteArray, start: Nat, len: Nat, newline: Bool)
 tribute_io.read_line() -> ReadLineResult
 
 ReadLineResult =
@@ -145,7 +145,10 @@ ReadLineResult =
 
 Embedded `std::io` source는 `String::to_bytes`로 rope를 flatten한 뒤 그 `Bytes`의
 배열과 범위(`Bytes::Repr`의 `data`, `start`, `len`)로 `write`를 호출한다.
-`write`는 `data`를 빌리며, 범위가 배열 밖이면 실행을 끝낸다. `read_line`의 `Line`
+`write`는 `data`를 빌리며, 범위가 배열 밖이면 실행을 끝낸다. `write`는 값을 돌려주지
+않는다. IR에서 `start`와 `len`은 `core.index`, `newline`은 `core.i1`이므로, stub
+호출을 `write`로 바꾸는 lowering이 `Nat` 위치를 `core.index`로 넓히고 stub의 `Nil`
+결과 자리에 nil 값을 만든다. `read_line`의 `Line`
 payload와 `System` message는 boundary가 유효한 UTF-8임을 보장하므로 source
 wrapper가 배열 전체를 보는 `Bytes`를 만들어
 `String::from_bytes`로 감싼다. 나머지 status는 `std::io::Error`로 변환하여
@@ -193,7 +196,7 @@ Native lowering은 다음 private C ABI를 사용한다. 이 ABI는 source API�
 `tribute-runtime`과 native compiler pipeline 사이에서만 공유된다.
 
 ```text
-__tribute_io_write(data: *const ByteArray, start: u32, len: u32, newline: u32) -> void
+__tribute_io_write(data: *const ByteArray, start: usize, len: usize, newline: u32) -> void
 __tribute_io_read_line() -> *mut NativeReadLineResult
 __tribute_io_read_line_result_dealloc(result: *mut NativeReadLineResult) -> void
 

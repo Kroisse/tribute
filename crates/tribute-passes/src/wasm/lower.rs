@@ -1184,8 +1184,8 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  func.func @main(%bytes: adt.array<core.i8>, %n: core.i32, %cond: core.i1) -> core.nil {
-    %write = tribute_io.write %bytes, %n, %n, %cond : core.nil
+  func.func @main(%bytes: adt.array<core.i8>, %n: core.index, %cond: core.i1) -> core.nil {
+    tribute_io.write %bytes, %n, %n, %cond
     %never = scf.if %cond -> (core.never) {
       func.unreachable
     } else {
@@ -1213,8 +1213,8 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  func.func @main(%bytes: adt.array<core.i8>, %n: core.i32, %newline: core.i1, %choice: core.i16) -> core.nil {
-    %write = tribute_io.write %bytes, %n, %n, %newline : core.nil
+  func.func @main(%bytes: adt.array<core.i8>, %n: core.index, %newline: core.i1, %choice: core.i16) -> core.nil {
+    tribute_io.write %bytes, %n, %n, %newline
     scf.index_switch %choice : (core.i16) -> ()
     case 0 { scf.yield }
     default { scf.yield }
@@ -1410,12 +1410,12 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  func.func @run(%n: core.i32, %newline: core.i1) -> core.nil {
+  func.func @run(%n: core.index, %newline: core.i1) -> core.nil {
     %first = adt.array_const dense<"0x6669727374"> {type = adt.array<core.i8>} : adt.array<core.i8>
     %second = adt.array_const dense<"0x7365636F6E64"> {type = adt.array<core.i8>} : adt.array<core.i8>
     %again = adt.array_const dense<"0x6669727374"> {type = adt.array<core.i8>} : adt.array<core.i8>
-    %write = tribute_io.write %first, %n, %n, %newline : core.nil
-    %rewrite = tribute_io.write %again, %n, %n, %newline : core.nil
+    tribute_io.write %first, %n, %n, %newline
+    tribute_io.write %again, %n, %n, %newline
     func.return
   }
 }"#,

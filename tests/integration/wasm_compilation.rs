@@ -231,10 +231,11 @@ fn test_execute_dynamic_bytes_write_boundary() {
     %right = adt.array_const dense<"0x{right}"> {{type = adt.array<core.i8>}} : adt.array<core.i8>
     %zero = arith.constant 0 : core.i32
     %len = arith.constant 35000 : core.i32
-    %total = arith.constant 70000 : core.i32
     %joined = func.call @__tribute_byte_array_concat(%left, %zero, %len, %right, %zero, %len) : (adt.array<core.i8>, core.i32, core.i32, adt.array<core.i8>, core.i32, core.i32) -> adt.array<core.i8>
     %newline = arith.constant 1 : core.i1
-    %result = tribute_io.write %joined, %zero, %total, %newline : core.nil
+    %start = arith.constant 0 : core.index
+    %count = arith.constant 70000 : core.index
+    tribute_io.write %joined, %start, %count, %newline
     func.return
   }}
 }}"#
@@ -245,7 +246,9 @@ fn test_execute_dynamic_bytes_write_boundary() {
             .expect("core.module");
     let mut pm = trunk_ir::pass::PassManager::new();
     tribute_passes::wasm::lower::add_lowering_passes(&mut pm);
-    pm.add_pass(tribute_passes::wasm::lower::FinalizeWasmGcTypes);
+    pm.add_pass(tribute_passes::wasm::lower::LegalizeUnrealizedCasts)
+        .add_pass(trunk_ir::conversion::ReconcileUnrealizedCasts)
+        .add_pass(tribute_passes::wasm::lower::FinalizeWasmGcTypes);
     pm.run(&mut ctx, root, &mut Default::default())
         .expect("lower dynamic output to Wasm and finalize its WasmGC types");
     let binary = trunk_ir_wasm_backend::emit_module_to_wasm(&mut ctx, module)

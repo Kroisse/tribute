@@ -162,8 +162,8 @@ impl ByteArray {
     /// # Safety
     ///
     /// `self` must be the payload of a live byte array.
-    unsafe fn range(&self, start: u32, len: u32) -> &[u8] {
-        let (start, len) = (u64::from(start), u64::from(len));
+    unsafe fn range(&self, start: impl Into<u64>, len: impl Into<u64>) -> &[u8] {
+        let (start, len) = (start.into(), len.into());
         match start.checked_add(len) {
             Some(end) if end <= self.len => {}
             _ => bounds_check_abort(),
@@ -328,11 +328,12 @@ impl StdinBuffer {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __tribute_io_write(
     data: *const ByteArray,
-    start: u32,
-    len: u32,
+    start: usize,
+    len: usize,
     newline: u32,
 ) {
-    let bytes = unsafe { (*data).range(start, len) };
+    // `usize` is at most 64 bits wide on every supported target.
+    let bytes = unsafe { (*data).range(start as u64, len as u64) };
     if !bytes.is_empty() {
         write_stdout_all(bytes);
     }
@@ -602,7 +603,7 @@ mod tests {
             return Vec::new();
         }
         let bytes = unsafe { &*bytes };
-        unsafe { bytes.range(0, bytes.len as u32) }.to_vec()
+        unsafe { bytes.range(0u64, bytes.len) }.to_vec()
     }
 
     unsafe fn dealloc_test_bytes(bytes: *mut ByteArray) {
@@ -673,7 +674,7 @@ mod tests {
         assert_eq!(core::mem::offset_of!(NativeReadLineResult, message), 16);
         assert_eq!(core::mem::size_of::<NativeReadLineResult>(), 24);
 
-        let _: unsafe extern "C" fn(*const ByteArray, u32, u32, u32) = __tribute_io_write;
+        let _: unsafe extern "C" fn(*const ByteArray, usize, usize, u32) = __tribute_io_write;
         let _: extern "C" fn() -> *mut NativeReadLineResult = __tribute_io_read_line;
         let _: unsafe extern "C" fn(*mut NativeReadLineResult) =
             __tribute_io_read_line_result_dealloc;

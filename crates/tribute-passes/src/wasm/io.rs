@@ -204,11 +204,15 @@ impl OpRewritePattern for WritePattern {
             write.len(ctx),
             write.newline(ctx),
         ];
+        // The range is `core.index`, which the Wasm type conversion makes the
+        // helper's `i32`.
+        let nil_ty = core::Nil::params().intern(ctx).as_type_ref();
         let call = func::Call::operands(args)
             .callee(SymbolPath::new([WRITE_HELPER]))
-            .results([ctx.op_result_types(op)[0]])
+            .results([nil_ty])
             .build(ctx, loc);
-        rewriter.replace_op(call.op_ref());
+        rewriter.insert_op(call.op_ref());
+        rewriter.erase_op(vec![]);
         Some(())
     }
 }
@@ -695,8 +699,8 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  func.func @main(%bytes: adt.array<core.i8>, %n: core.i32, %newline: core.i1) -> core.nil {
-    %write = tribute_io.write %bytes, %n, %n, %newline : core.nil
+  func.func @main(%bytes: adt.array<core.i8>, %n: core.index, %newline: core.i1) -> core.nil {
+    tribute_io.write %bytes, %n, %n, %newline
     func.return
   }
 }"#,
@@ -726,8 +730,8 @@ mod tests {
             r#"core.module @test {
   wasm.import_func @fd_write from "wasi_snapshot_preview1" "fd_write" : (core.i32, core.i32, core.i32, core.i32) -> core.i32
   wasm.memory {min = 0, max = 0, shared = false, memory64 = false}
-  func.func @main(%bytes: adt.array<core.i8>, %n: core.i32, %newline: core.i1) -> core.nil {
-    %write = tribute_io.write %bytes, %n, %n, %newline : core.nil
+  func.func @main(%bytes: adt.array<core.i8>, %n: core.index, %newline: core.i1) -> core.nil {
+    tribute_io.write %bytes, %n, %n, %newline
     func.return
   }
 }"#,
@@ -756,8 +760,8 @@ mod tests {
                 &format!(
                     r#"core.module @test {{
   {import}
-  func.func @main(%bytes: adt.array<core.i8>, %n: core.i32, %newline: core.i1) -> core.nil {{
-    %write = tribute_io.write %bytes, %n, %n, %newline : core.nil
+  func.func @main(%bytes: adt.array<core.i8>, %n: core.index, %newline: core.i1) -> core.nil {{
+    tribute_io.write %bytes, %n, %n, %newline
     func.return
   }}
 }}"#
@@ -779,8 +783,8 @@ mod tests {
             format!(
                 r#"core.module @test {{
   wasm.memory {{min = 1, max = 2, shared = true, memory64 = {memory64}}}
-  func.func @main(%bytes: adt.array<core.i8>, %n: core.i32, %newline: core.i1) -> core.nil {{
-    %write = tribute_io.write %bytes, %n, %n, %newline : core.nil
+  func.func @main(%bytes: adt.array<core.i8>, %n: core.index, %newline: core.i1) -> core.nil {{
+    tribute_io.write %bytes, %n, %n, %newline
     func.return
   }}
 }}"#
