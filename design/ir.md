@@ -321,7 +321,7 @@ continue after its enclosing structured region. It is not a generic
 terminator marker: `scf.yield`, `scf.break`, and `scf.continue` transfer within
 structured control flow and do not satisfy it. Dialects register only their
 verified callable exits, including ordinary `func.return`, proper tail
-transfers, and unreachable control flow. An arm of a result-producing
+transfers, traps, and unreachable control flow. An arm of a result-producing
 operation that selects one region may end with a verified `CallableExit`
 instead of `scf.yield`; such an arm produces no value and the operation's
 results come from its yielding arms. Source `become` ends a tail-position arm
@@ -1070,7 +1070,10 @@ Tribute 고수준 dialect의 규칙은 [tribute-dialects.md](tribute-dialects.md
 ## Mid-Level Dialects
 
 `func.*` represents function definitions, direct calls, indirect calls, function
-references, returns, tail calls, and unreachable control flow.
+references, returns, tail calls, traps, and unreachable control flow.
+`func.trap` is a defined end of the execution that a program may reach, and
+`func.unreachable` marks a point no execution reaches
+([tribute-dialects.md](tribute-dialects.md#trap)).
 `func.call_indirect`와 `func.tail_call_indirect`는 필수 `signature: TypeRef`
 attribute로 exact `func.func_sig` contract를 가지며, callee가 erased pointer나 table
 index로 바뀐 뒤에도 이 contract를 보존한다. 인자 목록과 `func.call_indirect`의 결과

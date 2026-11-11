@@ -143,6 +143,12 @@ Operation의 이름과 의미는 대응하는 대상을 따르며, Cranelift에 
 operation은 이 dialect에 두지 않는다. 전체 연산 목록은
 [`clif` dialect 선언](../crates/trunk-ir/src/dialect/clif.rs)을 참조.
 
+`clif.trap`과 `clif.trapnz`의 `code`는 trap의 원인을 이름으로 적는다.
+`func_to_clif`는 [`func.trap`](tribute-dialects.md#trap)의 `code`를 그대로
+`clif.trap`에 옮기고, `func.unreachable`은 `code = "unreachable"`인 `clif.trap`으로
+낮춘다. Emitter는 모든 `code`를 같은 Cranelift trap으로 내보내므로 object code는
+원인을 구별하지 않는다.
+
 핵심 차이점 (`wasm.*` 대비):
 
 - **GC 타입 없음**: struct/array 대신 포인터 + load/store
