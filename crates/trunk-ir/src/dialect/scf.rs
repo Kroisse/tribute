@@ -1,5 +1,7 @@
 //! Arena-based scf dialect.
 
+use crate::op_flag::Terminator;
+
 #[trunk_ir::dialect]
 mod scf {
     /// A structured two-way branch on a boolean condition, as MLIR's
@@ -61,6 +63,7 @@ mod scf {
         {}
     }
 
+    #[flags(Terminator)]
     #[implements(RegionBranchTerminator)]
     #[asm_format(values attr_dict_bare)]
     fn r#yield(values: Variadic<_>) {}
@@ -83,10 +86,12 @@ mod scf {
         {}
     }
 
+    #[flags(Terminator)]
     #[implements(RegionBranchTerminator)]
     #[asm_format(values attr_dict_bare)]
     fn r#continue(values: Variadic<_>) {}
 
+    #[flags(Terminator)]
     #[implements(RegionBranchTerminator)]
     #[asm_format(values attr_dict_bare)]
     fn r#break(values: Variadic<_>) {}

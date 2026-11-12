@@ -9,6 +9,7 @@ pub use syntax::{Dispatchers, HandlerArms};
 
 use super::closure::Closure;
 use super::tribute_control::EvidenceStep;
+use trunk_ir::op_flag::Terminator;
 
 #[trunk_ir::dialect]
 mod ability {
@@ -100,6 +101,7 @@ mod ability {
     /// checks that there is one dispatcher per ability.
     #[verify]
     #[asm_format(evidence "," prompt_tag custom(Dispatchers(abilities, dispatchers)) attr_dict region(body))]
+    #[flags(Terminator)]
     #[implements(CallableExit)]
     fn handle_dispatch(
         abilities: Attr<[SymbolRef]>,
@@ -175,6 +177,7 @@ mod ability {
     /// A resultless terminator that takes an `ability.frame<R>` and one value
     /// of type `R`. It appears only in a `Cps` callable, a completion, or a
     /// generated continuation body.
+    #[flags(Terminator)]
     #[implements(CallableExit)]
     #[asm_format(frame "," value attr_dict_bare)]
     fn exit<F: Frame>(frame: Value<F>, value: Value<F::Result>) {}
@@ -224,6 +227,7 @@ mod ability {
     /// proper tail transfer or `func.unreachable`.
     #[verify]
     #[asm_format(evidence "," exit "," completion custom(HandlerArms(handlers, arms)) attr_dict region(body))]
+    #[flags(Terminator)]
     #[implements(CallableExit)]
     fn handle<F: Frame>(
         handlers: Attr<[HandlerBinding]>,
@@ -252,6 +256,7 @@ mod ability {
     /// raw `ResumeExact<I, R>`, and the operation arguments. `I` is not
     /// `core.never`.
     #[asm_format(ability symbol(op_name) "(" values ")" "[" evidence "," frame "," resumption "]" attr_dict ":" functional_type(values))]
+    #[flags(Terminator)]
     #[implements(CallableExit)]
     fn perform<F: Frame, C>(
         ability: Attr<SymbolRef>,
@@ -275,6 +280,7 @@ mod ability {
     /// The shape of `ability.perform` without the resumption, used only for
     /// source `op -> Never`.
     #[asm_format(ability symbol(op_name) "(" values ")" "[" evidence "," frame "]" attr_dict ":" functional_type(values))]
+    #[flags(Terminator)]
     #[implements(CallableExit)]
     fn abort<F: Frame>(
         ability: Attr<SymbolRef>,

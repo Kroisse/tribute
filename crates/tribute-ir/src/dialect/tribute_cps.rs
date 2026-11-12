@@ -13,7 +13,7 @@
 
 use trunk_ir::IrContext;
 use trunk_ir::attr_kind::{Dict, SymbolRef};
-use trunk_ir::op_flag::{IsolatedFromAbove, Pure};
+use trunk_ir::op_flag::{IsolatedFromAbove, Pure, Terminator};
 use trunk_ir::op_interface::CallableExit;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{RegionRef, ValueRef};
@@ -269,7 +269,7 @@ mod tribute_cps {
     /// - **Location:** the source span including the `become` keyword.
     #[verify]
     #[asm_format(callee "(" args ")" attr_dict ":" signature(callee))]
-    #[flags(SourceTailCallIndirect)]
+    #[flags(SourceTailCallIndirect, Terminator)]
     #[implements(CallableExit, LocalValidation)]
     fn tail_call_indirect<S: FuncSig>(
         convention: Attr<CallingConvention>,

@@ -556,10 +556,15 @@ pub struct Pure;
 ```
 
 `Terminator` marks an operation that must be the last of its block, as
-MLIR's `IsTerminator` does; the operation verifier checks it for every
-flagged operation. It says nothing about where control goes, which
-`CallableExit`, `Branch`, and `RegionBranchTerminator` describe. The `func`
-and `cf` terminators carry it.
+MLIR's `IsTerminator` does. It says nothing about where control goes, which
+`CallableExit`, `Branch`, and `RegionBranchTerminator` describe; every
+operation implementing one of those, and every unconditional trap, carries
+it. A conditional branch that may fall through (`wasm.br_if`,
+`clif.trapnz`) and `wasm.yield` do not. The operation verifier, the debug
+schema checkpoint after each pass (`validate_op_schemas`), and both backend
+boundaries reject a flagged operation that some operation follows, so test
+whether an operation ends its block with `Terminator::is_set` rather than a
+list of names.
 
 ### Type Interfaces
 

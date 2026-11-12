@@ -382,7 +382,8 @@ pub fn validate_operation_verifiers(ctx: &IrContext, module: Module) -> Validati
 /// Check `root` and every operation nested in it against its declarative
 /// schema only.
 ///
-/// Unlike [`validate_operation_verifiers`], this skips `#[verify]` hooks,
+/// It also checks the placement the `Terminator` flag declares. Unlike
+/// [`validate_operation_verifiers`], this skips `#[verify]` hooks,
 /// the hand-written operation checks, and interface verification. It is the
 /// debug checkpoint run after each pipeline pass, where the IR must satisfy
 /// the declared constraints again; a pass nested under an operation checks only that
@@ -393,6 +394,21 @@ pub fn validate_op_schemas(ctx: &IrContext, root: OpRef) -> ValidationResult {
         if let Some(def) = OpDef::of(ctx, op) {
             report_schema_violations(ctx, op, def.schema.verify(ctx, op), &mut errors);
         }
+        validate_terminator_position(ctx, op, &mut errors);
+        std::ops::ControlFlow::Continue(walk::WalkAction::Advance)
+    });
+    ValidationResult { errors }
+}
+
+/// Check that every operation under `root` flagged
+/// [`Terminator`] is the last of its block.
+///
+/// Backend boundaries run it on their target IR, which no other declarative
+/// check covers in release builds.
+pub fn validate_terminator_positions(ctx: &IrContext, root: OpRef) -> ValidationResult {
+    let mut errors = Vec::new();
+    let _ = walk::walk_op::<std::convert::Infallible>(ctx, root, &mut |op| {
+        validate_terminator_position(ctx, op, &mut errors);
         std::ops::ControlFlow::Continue(walk::WalkAction::Advance)
     });
     ValidationResult { errors }

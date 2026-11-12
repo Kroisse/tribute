@@ -858,7 +858,7 @@ fn validator_rejects_structure_arity_type_and_terminator_errors() {
         messages.contains("expected at least 2 region(s), found 1"),
         "{messages}"
     );
-    assert!(messages.contains("must terminate with tribute_control.return"));
+    assert!(messages.contains("body must end in tribute_control.return or another callable exit"));
     assert!(messages.contains("expected at least 1 operand(s), found 0"));
 }
 

@@ -9,7 +9,7 @@ use rustc_hash::FxHashSet as HashSet;
 use std::fmt;
 use std::ops::ControlFlow;
 use trunk_ir::attr_kind::SymbolRef;
-use trunk_ir::op_flag::{IsolatedFromAbove, OpFlag, Pure};
+use trunk_ir::op_flag::{IsolatedFromAbove, OpFlag, Pure, Terminator};
 
 use crate::calling_convention::{
     CALLING_CONVENTION_ATTR, CallingConvention, DynPhysicalCallableType,
@@ -563,6 +563,7 @@ mod tribute_control {
     /// - **Location:** the source span including the `become` keyword and
     ///   the call.
     #[verify]
+    #[flags(Terminator)]
     #[implements(CallLike, CallableExit, LocalValidation)]
     #[asm_format(callee "(" args ")" attr_dict ":" functional_type(args))]
     fn tail_call(
@@ -598,7 +599,7 @@ mod tribute_control {
     ///   the indirect call.
     #[verify]
     #[asm_format(callee "(" args ")" attr_dict ":" signature(callee))]
-    #[flags(SourceTailCallIndirect)]
+    #[flags(SourceTailCallIndirect, Terminator)]
     #[implements(CallableExit, LocalValidation)]
     fn tail_call_indirect<S: FuncSig>(
         evidence_plan: Option<Attr<[EvidenceStep]>>,
@@ -614,15 +615,18 @@ mod tribute_control {
     /// ```
     ///
     /// - **Shape:** takes one source-logical result and has no results,
-    ///   attributes, or regions. It is the terminator of a
-    ///   `tribute_control.func` or `lambda` body and is invalid anywhere else.
+    ///   attributes, or regions. A `Terminator`, registered as a
+    ///   `CallableExit`. It ends a `tribute_control.func` or `lambda` body and
+    ///   is invalid anywhere else, including an arm of a structured
+    ///   operation, where `CallableExit` alone would allow it.
     /// - **Meaning:** returns the enclosing callable's logical result.
     /// - **Local verification:** matches the operand type against the
     ///   enclosing callable's result.
     /// - **Ownership and value flow:** consumes an ordinary SSA value.
     /// - **Location:** the span of the source return or of the implicit
     ///   body-result expression.
-    #[implements(LocalValidation)]
+    #[flags(Terminator)]
+    #[implements(CallableExit, LocalValidation)]
     #[asm_format(value attr_dict_bare)]
     fn r#return(value: Value<_>) {}
 
@@ -868,6 +872,7 @@ mod tribute_control {
     ///   yielded.
     /// - **Location:** the source expression that makes the region result. A
     ///   synthesized identity completion uses the owning `handle` location.
+    #[flags(Terminator)]
     #[implements(LocalValidation)]
     #[asm_format(value attr_dict_bare)]
     fn r#yield(value: Value<_>) {}
@@ -901,6 +906,7 @@ mod tribute_control {
     /// - **Lowering:** shared legalization replaces it with `func.trap`
     ///   whose `code` is the cause keyword.
     /// - **Location:** the source span of the intrinsic call.
+    #[flags(Terminator)]
     #[implements(CallableExit, LocalValidation)]
     #[asm_format(cause attr_dict)]
     fn trap(cause: Attr<TrapCause>) {}

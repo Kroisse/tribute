@@ -3,7 +3,7 @@
 use crate::attr_kind::SymbolRef;
 use crate::attr_kind::{Bytes, Type};
 use crate::dialect::core::I32;
-use crate::op_flag::IsolatedFromAbove;
+use crate::op_flag::{IsolatedFromAbove, Terminator};
 use crate::op_interface::{CallLike, IndirectCallLike};
 use crate::ops::{DialectOp, DialectType};
 use crate::refs::{OpRef, ValueRef};
@@ -71,6 +71,7 @@ mod wasm {
         {}
     }
 
+    #[flags(Terminator)]
     #[asm_format(attr_dict_bare)]
     fn br(target: Attr<u32>) {}
 
@@ -89,9 +90,11 @@ mod wasm {
     /// ```text
     /// wasm.br_table %index, default 3 [0, 2, 1]
     /// ```
+    #[flags(Terminator)]
     #[asm_format(index "," "default" default targets attr_dict_bare)]
     fn br_table(index: Value<I32>, targets: Attr<[u32]>, default: Attr<u32>) {}
 
+    #[flags(Terminator)]
     #[asm_format(values attr_dict_bare)]
     fn r#return(values: Variadic<_>) {}
     /// Pass `values` to the enclosing structured operation.
@@ -149,6 +152,7 @@ mod wasm {
     ) -> Variadic<_> {
     }
 
+    #[flags(Terminator)]
     #[implements(CallLike)]
     #[asm_format(callee "(" args ")" attr_dict ":" functional_type(args))]
     fn return_call(callee: Attr<SymbolRef>, args: Variadic<_>) {}
@@ -167,6 +171,7 @@ mod wasm {
     ///   signature's results are the enclosing function's.
     /// - **Ownership and value flow:** as `wasm.call_indirect`.
     #[asm_format(callee "(" args ")" ("table" table^)? attr_dict ":" signature(signature))]
+    #[flags(Terminator)]
     #[implements(IndirectCallLike, StackOperandOrder)]
     fn return_call_indirect<S: FuncSig>(
         #[default(0)] table: Attr<u32>,
@@ -176,6 +181,7 @@ mod wasm {
     ) {
     }
 
+    #[flags(Terminator)]
     #[asm_format(attr_dict_bare)]
     fn unreachable() {}
     #[asm_format(attr_dict_bare ":" type(result))]
