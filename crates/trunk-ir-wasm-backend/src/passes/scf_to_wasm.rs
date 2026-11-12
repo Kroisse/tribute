@@ -101,7 +101,7 @@ fn validate_structured_control(
     analysis: &StructuredControlAnalysis,
     mut accept: impl FnMut(OpRef, ControlLowering),
 ) -> Result<(), ConversionError> {
-    validate_lowerable_switches(ctx, module)?;
+    validate_lowerable_controls(ctx, module)?;
     let result = walk_op(ctx, module.op(), &mut |op| {
         let has_never = DynRegionBranch::is_implemented(ctx, op)
             && ctx.op_results(op).iter().any(|&value| {
@@ -130,9 +130,10 @@ fn validate_structured_control(
     }
 }
 
-/// Reject switches this target cannot lower without mutating the module.
-pub fn validate_lowerable_switches(ctx: &IrContext, module: Module) -> Result<(), ConversionError> {
-    if let Some((op, reason)) = find_nonlowerable_switch(ctx, module.op()) {
+/// Reject structured control this target cannot lower without mutating the
+/// module.
+pub fn validate_lowerable_controls(ctx: &IrContext, module: Module) -> Result<(), ConversionError> {
+    if let Some((op, reason)) = find_nonlowerable_control(ctx, module.op()) {
         let data = ctx.op(op);
         return Err(ConversionError::new(
             SCF_TO_WASM_BOUNDARY,
@@ -177,15 +178,15 @@ struct ScfSwitchShape {
 }
 
 #[derive(Debug)]
-enum SwitchLoweringReason {
+enum ControlLoweringReason {
     MalformedShape,
     UnsupportedDiscriminantType(String),
     CaseValueOutsideRange(SwitchWidth),
-    TooManyResults(usize),
     ResultDefaultWithoutYield,
+    NilAmongSeveralResults,
 }
 
-impl std::fmt::Display for SwitchLoweringReason {
+impl std::fmt::Display for ControlLoweringReason {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::MalformedShape => write!(f, "malformed switch shape"),
@@ -201,13 +202,16 @@ impl std::fmt::Display for SwitchLoweringReason {
             Self::CaseValueOutsideRange(SwitchWidth::I64) => {
                 write!(f, "case integer value is outside the i64 range")
             }
-            Self::TooManyResults(count) => {
-                write!(f, "switch has {count} results; at most one is supported")
-            }
             Self::ResultDefaultWithoutYield => {
                 write!(
                     f,
                     "a switch with a result and no cases needs a default ending in scf.yield"
+                )
+            }
+            Self::NilAmongSeveralResults => {
+                write!(
+                    f,
+                    "structured control with several results has no core.nil result"
                 )
             }
         }
@@ -254,12 +258,8 @@ fn default_yield(ctx: &IrContext, region: RegionRef) -> Option<OpRef> {
     (scf::Yield::matches(ctx, last) || wasm_dialect::Yield::matches(ctx, last)).then_some(last)
 }
 
-fn switch_arms(ctx: &IrContext, op: OpRef) -> Result<ScfSwitchArms, SwitchLoweringReason> {
-    let shape = switch_shape(ctx, op).ok_or(SwitchLoweringReason::MalformedShape)?;
-    let result_count = ctx.op_results(op).len();
-    if result_count > 1 {
-        return Err(SwitchLoweringReason::TooManyResults(result_count));
-    }
+fn switch_arms(ctx: &IrContext, op: OpRef) -> Result<ScfSwitchArms, ControlLoweringReason> {
+    let shape = switch_shape(ctx, op).ok_or(ControlLoweringReason::MalformedShape)?;
     // Without cases the default's ops replace the switch, so its yield must
     // provide the result. A Never result is instead dropped, and the Never
     // control check requires the default to be terminal.
@@ -268,11 +268,11 @@ fn switch_arms(ctx: &IrContext, op: OpRef) -> Result<ScfSwitchArms, SwitchLoweri
         .first()
         .is_some_and(|&result| !core::Never::matches(ctx, ctx.value_ty(result)));
     if yields_result && shape.cases.is_empty() && default_yield(ctx, shape.default).is_none() {
-        return Err(SwitchLoweringReason::ResultDefaultWithoutYield);
+        return Err(ControlLoweringReason::ResultDefaultWithoutYield);
     }
     let Some(width) = switch_width(ctx, shape.discriminant) else {
         let ty = ctx.get_type(ctx.value_ty(shape.discriminant));
-        return Err(SwitchLoweringReason::UnsupportedDiscriminantType(format!(
+        return Err(ControlLoweringReason::UnsupportedDiscriminantType(format!(
             "{}",
             ty.name.display(ctx)
         )));
@@ -283,7 +283,7 @@ fn switch_arms(ctx: &IrContext, op: OpRef) -> Result<ScfSwitchArms, SwitchLoweri
             SwitchWidth::I32 => i32::try_from(value).map(i64::from).ok(),
             SwitchWidth::I64 => Some(value),
         }
-        .ok_or(SwitchLoweringReason::CaseValueOutsideRange(width))?;
+        .ok_or(ControlLoweringReason::CaseValueOutsideRange(width))?;
         cases.push((value, body));
     }
     Ok(ScfSwitchArms {
@@ -295,7 +295,17 @@ fn switch_arms(ctx: &IrContext, op: OpRef) -> Result<ScfSwitchArms, SwitchLoweri
 }
 
 /// Find the first switch rejected by the same acceptance contract as lowering.
-fn find_nonlowerable_switch(ctx: &IrContext, op: OpRef) -> Option<(OpRef, SwitchLoweringReason)> {
+fn find_nonlowerable_control(ctx: &IrContext, op: OpRef) -> Option<(OpRef, ControlLoweringReason)> {
+    // A Wasm block type has no slot for a `core.nil` result among several
+    // (`design/wasm-backend.md`, "구조적 제어의 block type").
+    if (scf::If::matches(ctx, op)
+        || scf::Loop::matches(ctx, op)
+        || scf::IndexSwitch::matches(ctx, op))
+        && let types @ [_, _, ..] = ctx.op_result_types(op)
+        && types.iter().any(|&ty| core::Nil::matches(ctx, ty))
+    {
+        return Some((op, ControlLoweringReason::NilAmongSeveralResults));
+    }
     if scf::IndexSwitch::matches(ctx, op)
         && let Err(reason) = switch_arms(ctx, op)
     {
@@ -304,7 +314,7 @@ fn find_nonlowerable_switch(ctx: &IrContext, op: OpRef) -> Option<(OpRef, Switch
     for region in ctx.op_regions(op) {
         for block in ctx.region(region).blocks.iter().copied() {
             for nested in ctx.block(block).ops.iter().copied() {
-                if let Some(rejected) = find_nonlowerable_switch(ctx, nested) {
+                if let Some(rejected) = find_nonlowerable_control(ctx, nested) {
                     return Some(rejected);
                 }
             }
@@ -441,7 +451,7 @@ impl OpRewritePattern for ScfSwitchPattern<'_> {
             rewriter.insert_op(inserted);
         }
         let values = if has_result {
-            vec![ctx.op_result(outer, 0)]
+            ctx.op_results(outer).to_vec()
         } else {
             vec![]
         };
@@ -637,7 +647,7 @@ fn lower_comparison_chain(
             outer_ops = Some((ops, branch.op_ref()));
         } else {
             let values = if has_result {
-                vec![ctx.op_result(branch.op_ref(), 0)]
+                ctx.op_results(branch.op_ref()).to_vec()
             } else {
                 vec![]
             };
@@ -729,10 +739,6 @@ impl OpRewritePattern for ScfLoopPattern<'_> {
             collect_loop_exits(ctx, body),
             "a loop exit is nested in an operation that is not a Wasm label",
         )?;
-        rewriter.ensure(
-            exits.iter().all(|exit| ctx.op_operands(exit.op).len() <= 1),
-            "multiple loop-carried values are not supported",
-        )?;
 
         // Detach the body region from the original loop op
         ctx.detach_region(body);
@@ -802,10 +808,6 @@ impl OpRewritePattern for ScfYieldPattern {
     ) -> Option<()> {
         let op = yield_op.op_ref();
         let operands = ctx.op_operands(op).to_vec();
-        if operands.len() > 1 {
-            // Multi-value yields are not yet supported; leave unlowered.
-            return None;
-        }
         let loc = ctx.op(op).location;
         let new_op = wasm_dialect::Yield::operands(operands).build(ctx, loc);
         rewriter.replace_op(new_op.op_ref());
@@ -1235,18 +1237,6 @@ mod tests {
                 "case integer value is outside the i32 range",
             ),
             (
-                "rejects a switch with two results without mutating",
-                r#"core.module @test {
-  func.func @main(%choice: core.i32, %a: core.i32) -> core.nil {
-    %r, %s = scf.index_switch %choice : (core.i32) -> (core.i32, core.i32)
-    case 0 { scf.yield %a, %a }
-    default { scf.yield %a, %a }
-    func.return
-  }
-}"#,
-                "switch has 2 results; at most one is supported",
-            ),
-            (
                 "rejects a caseless result switch whose default does not yield",
                 r#"core.module @test {
   func.func @main(%choice: core.i32) -> core.i32 {
@@ -1259,6 +1249,130 @@ mod tests {
         ] {
             assert_switch_rejected_unchanged(case, input, reason);
         }
+    }
+
+    #[test]
+    fn nil_among_several_results_is_rejected_unchanged() {
+        for (control, body) in [
+            (
+                "scf.if",
+                "%u, %x = scf.if %c -> (core.nil, core.i32) {
+      scf.yield %unit, %a
+    } else {
+      scf.yield %unit, %a
+    }",
+            ),
+            (
+                "scf.index_switch",
+                "%u, %x = scf.index_switch %a : (core.i32) -> (core.nil, core.i32)
+    default {
+      scf.yield %unit, %a
+    }",
+            ),
+            (
+                "scf.loop",
+                "%u, %x = scf.loop() -> (core.nil, core.i32) {
+      scf.break %unit, %a
+    }",
+            ),
+        ] {
+            let input = format!(
+                "core.module @test {{
+  func.func @main(%c: core.i1, %a: core.i32, %unit: core.nil) -> core.i32 {{
+    {body}
+    func.return %x
+  }}
+}}"
+            );
+            let mut ctx = IrContext::new();
+            let module = parse_test_module(&mut ctx, &input);
+            let before = module.op().display(&ctx).to_string();
+            let error = lower(
+                &mut ctx,
+                module,
+                TypeConverter::new(),
+                &mut Default::default(),
+            )
+            .expect_err("a core.nil among several results is rejected");
+            assert_eq!(error.boundary(), SCF_TO_WASM_BOUNDARY, "{control}");
+            assert_eq!(
+                error.operations()[0].reason.as_deref(),
+                Some("structured control with several results has no core.nil result"),
+                "{control}: {error}"
+            );
+            assert!(error.to_string().contains(control), "{control}: {error}");
+            assert_eq!(module.op().display(&ctx).to_string(), before, "{control}");
+        }
+    }
+
+    #[test]
+    fn multi_value_if_and_switch_yield_every_value() {
+        let output = lower_text(
+            r#"core.module @test {
+  func.func @main(%c: core.i1, %choice: core.i32, %a: core.i32, %b: core.i32) -> (core.i32, core.i32) {
+    %x, %y = scf.if %c -> (core.i32, core.i32) {
+      scf.yield %b, %a
+    } else {
+      scf.yield %a, %b
+    }
+    %p, %q = scf.index_switch %choice : (core.i32) -> (core.i32, core.i32)
+    case 0 {
+      scf.yield %x, %y
+    }
+    default {
+      scf.yield %y, %x
+    }
+    func.return %p, %q
+  }
+}"#,
+        );
+
+        assert!(
+            output.contains("%4, %5 = wasm.if %0 -> (core.i32, core.i32)"),
+            "{output}"
+        );
+        assert!(output.contains("wasm.yield %3, %2"), "{output}");
+        assert!(output.contains("wasm.yield %4, %5"), "{output}");
+        assert!(output.contains("wasm.yield %5, %4"), "{output}");
+        assert!(output.contains("func.return %"), "{output}");
+    }
+
+    #[test]
+    fn loops_carry_and_break_with_several_values() {
+        let output = lower_text(
+            r#"core.module @test {
+  func.func @main(%done: core.i1, %a: core.i32, %b: core.i32) -> (core.i32, core.i32) {
+    %x, %y = scf.loop(%a, %b) -> (core.i32, core.i32) {
+      ^body(%p: core.i32, %q: core.i32):
+        scf.if %done {
+          scf.break %p, %q
+        } else {
+          scf.yield
+        }
+        scf.continue %q, %p
+    }
+    func.return %x, %y
+  }
+}"#,
+        );
+
+        assert!(
+            output.contains("%3, %4 = wasm.block -> (core.i32, core.i32)"),
+            "{output}"
+        );
+        assert!(
+            output.contains("= wasm.loop(%1, %2) -> (core.i32, core.i32)"),
+            "{output}"
+        );
+        assert!(
+            output.contains("wasm.br %7, %8 {target = 2}"),
+            "the break passes both values to the exit block:\n{output}"
+        );
+        assert!(
+            output.contains("wasm.br %8, %7 {target = 0}"),
+            "the continue passes both values to the loop:\n{output}"
+        );
+        assert!(output.contains("func.return %3, %4"), "{output}");
     }
 
     #[test]

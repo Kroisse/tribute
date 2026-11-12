@@ -32,7 +32,7 @@ use trunk_ir::SymbolPath;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
 use trunk_ir::dialect::{clif, core};
 use trunk_ir::location::Span;
-use trunk_ir::ops::{DialectOp, DialectType};
+use trunk_ir::ops::{DialectOp, DialectType, VariadicResults};
 use trunk_ir::refs::{BlockRef, OpRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{
     Module, OpRewritePattern, PatternApplicator, PatternRewriter, TypeConverter,
@@ -455,7 +455,7 @@ impl ArrayOp for adt::ArrayNew {
             .callee(helper_symbol(Helper::New, descriptor))
             .results([ptr_ty])
             .build(ctx, emit.loc);
-        Some(emit.push(call).results(ctx)[0])
+        Some(emit.push(call).result(ctx))
     }
 }
 
@@ -475,7 +475,7 @@ impl ArrayOp for adt::ArraySplice {
             .callee(helper_symbol(Helper::Splice, descriptor))
             .results([ptr_ty])
             .build(ctx, emit.loc);
-        let payload = emit.push(call).results(ctx)[0];
+        let payload = emit.push(call).result(ctx);
         if !elements.is_empty() {
             let base = emit.element_base(ctx, payload, start, descriptor.stride);
             for (position, element) in elements.into_iter().enumerate() {

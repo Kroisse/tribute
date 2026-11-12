@@ -10,7 +10,7 @@ use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::dialect::{core, func};
 use trunk_ir::op_flag::{OpFlag, Terminator};
-use trunk_ir::ops::{DialectOp, DialectType};
+use trunk_ir::ops::{DialectOp, DialectType, VariadicResults};
 use trunk_ir::refs::{OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{
     ConversionError, ConversionTarget, IllegalOp, LegalityCheck, Module, OpRewritePattern,
@@ -501,7 +501,7 @@ fn write_loop(
         .build(ctx, loc);
     ctx.push_op(loop_block, call.op_ref());
     let zero = i32_const(ctx, loop_block, loc, i32_ty, 0);
-    let succeeded = wasm_dialect::I32Eq::operands(call.results(ctx)[0], zero)
+    let succeeded = wasm_dialect::I32Eq::operands(call.result(ctx), zero)
         .results(i32_ty)
         .build(ctx, loc);
     ctx.push_op(loop_block, succeeded.op_ref());
@@ -531,7 +531,7 @@ fn write_loop(
     });
     let failure = region(ctx, loc, |ctx, block| {
         let intr = i32_const(ctx, block, loc, i32_ty, WASI_ERRNO_INTR);
-        let interrupted = wasm_dialect::I32Eq::operands(call.results(ctx)[0], intr)
+        let interrupted = wasm_dialect::I32Eq::operands(call.result(ctx), intr)
             .results(i32_ty)
             .build(ctx, loc);
         ctx.push_op(block, interrupted.op_ref());

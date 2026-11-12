@@ -135,7 +135,10 @@ fn validate_stack_region(
                 ));
             }
             if let Some(transfer) = value_transfer(ctx, op) {
-                let takes = usize::from(transfer == ValueTransfer::Stack);
+                let takes = match transfer {
+                    ValueTransfer::Stack(count) => count,
+                    ValueTransfer::LoopArguments(_) | ValueTransfer::None => 0,
+                };
                 let carried = ctx.op_operands(op).len();
                 if carried != takes {
                     errors.push(format!(

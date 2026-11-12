@@ -17,7 +17,7 @@ mod tests {
     use crate::Span;
     use crate::Symbol;
     use crate::SymbolPath;
-    use crate::ops::{DialectOp, DialectType};
+    use crate::ops::{DialectOp, DialectType, VariadicResults};
     use crate::refs::PathRef;
     use crate::types::Location;
     use crate::{Attribute, BlockData, IrContext, RegionData, TypeDataBuilder, ValueDef};
@@ -211,7 +211,7 @@ mod tests {
         });
 
         let if_op = super::scf::If::operands(cond)
-            .results(i32_ty)
+            .results([i32_ty])
             .regions(then_region, else_region)
             .build(&mut ctx, loc);
 
@@ -220,7 +220,9 @@ mod tests {
         assert_eq!(if_op.else_region(&ctx), else_region);
 
         // Verify result
-        let result = if_op.result(&ctx);
+        let &[result] = if_op.results(&ctx) else {
+            panic!("one result");
+        };
         assert_eq!(ctx.value_ty(result), i32_ty);
     }
 
@@ -514,12 +516,13 @@ mod tests {
         let mut ctx = IrContext::new();
         let i32_ty = make_i32_type(&mut ctx);
         let nil_ty = super::core::Nil::params().intern(&mut ctx).as_type_ref();
-        let cases: [(&str, &[_], &[_]); 5] = [
+        let cases: [(&str, &[_], &[_]); 6] = [
             ("(i32, i32) -> i32", &[i32_ty, i32_ty], &[i32_ty]),
             ("(i32) -> i32", &[i32_ty], &[i32_ty]),
             ("() -> nil", &[], &[nil_ty]),
             ("() -> i32", &[], &[i32_ty]),
             ("() -> ()", &[], &[]),
+            ("(i32) -> (i32, nil)", &[i32_ty], &[i32_ty, nil_ty]),
         ];
         for (case, inputs, results) in cases {
             let f =
@@ -531,7 +534,11 @@ mod tests {
             );
             assert_eq!(f.inputs(&ctx), inputs, "{case}");
             assert_eq!(f.results(&ctx), results, "{case}");
-            assert_eq!(f.single_result(&ctx), results.first().copied(), "{case}");
+            let single = match results {
+                &[result] => Some(result),
+                _ => None,
+            };
+            assert_eq!(f.single_result(&ctx), single, "{case}");
         }
     }
 
@@ -704,10 +711,14 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "func.func_sig currently supports at most one result")]
-    fn test_func_type_constructor_rejects_multiple_results() {
+    fn test_func_type_multiple_results_round_trip_through_text() {
         let mut ctx = IrContext::new();
         let i32_ty = make_i32_type(&mut ctx);
-        let _ = super::func::func_sig(&mut ctx, [], [i32_ty, i32_ty]);
+        let i64_ty = TypeDataBuilder::new("core.i64").intern(&mut ctx);
+        let pair = super::func::func_sig(&mut ctx, [i32_ty], [i32_ty, i64_ty]);
+        let text = pair.as_type_ref().display(&ctx).to_string();
+        assert_eq!(text, "func.func_sig<(core.i32) -> (core.i32, core.i64)>");
+        let parsed = crate::parser::parse_type(&mut ctx, &text).expect("multi-result signature");
+        assert_eq!(parsed, pair.as_type_ref());
     }
 }

@@ -230,10 +230,10 @@ impl Rewrite<'_> {
     ) -> CompilationResult<()> {
         let count = ctx.op_operands(op).len();
         match transfer {
-            ValueTransfer::Stack => {
-                if count != 1 {
+            ValueTransfer::Stack(takes) => {
+                if count != takes {
                     return Err(CompilationError::invalid_module(format!(
-                        "{} carries {count} values to a label that takes one",
+                        "{} carries {count} values to a label that takes {takes}",
                         ctx.op(op).name.display(ctx)
                     )));
                 }
@@ -892,6 +892,53 @@ mod tests {
         assert!(
             error.contains("other than its body block arguments"),
             "{error}"
+        );
+    }
+
+    #[test]
+    fn reads_every_loop_carried_value_before_writing_the_argument_locals() {
+        let ir = explicit(
+            r#"core.module @test {
+  wasm.func @f(%a: core.i32, %b: core.i32) -> core.i32 {
+    %x, %y = wasm.block -> (core.i32, core.i32) {
+      %l, %m = wasm.loop(%a, %b) -> (core.i32, core.i32) {
+        ^body(%p: core.i32, %q: core.i32):
+          wasm.br %q, %p {target = 0}
+      }
+      wasm.yield %l, %m
+    }
+    wasm.return %y
+  }
+}"#,
+        );
+        assert_eq!(
+            ir,
+            r#"core.module @test {
+  wasm.func @f(%0: core.i32, %1: core.i32) -> core.i32 attributes {locals = [core.i32, core.i32, core.i32, core.i32, core.i32]} {
+      %2, %3 = wasm.block -> (core.i32, core.i32) {
+          wasm.local_set %0 {index = 2}
+          wasm.local_set %1 {index = 3}
+          %4, %5 = wasm.loop() -> (core.i32, core.i32) {
+            ^bb2(%6: core.i32, %7: core.i32):
+              %8 = wasm.local_get {index = 3} : core.i32
+              %9 = wasm.local_get {index = 2} : core.i32
+              wasm.local_set %9 {index = 3}
+              wasm.local_set %8 {index = 2}
+              wasm.br {target = 0}
+          }
+          wasm.local_set %5 {index = 5}
+          wasm.local_set %4 {index = 4}
+          %10 = wasm.local_get {index = 4} : core.i32
+          %11 = wasm.local_get {index = 5} : core.i32
+          wasm.yield %10, %11
+      }
+      wasm.local_set %3 {index = 6}
+      wasm.drop %2
+      %12 = wasm.local_get {index = 6} : core.i32
+      wasm.return %12
+  }
+}
+"#
         );
     }
 

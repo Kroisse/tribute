@@ -276,9 +276,12 @@ struct ModuleInfo {
     func_indices: HashMap<SymbolPath, u32>,
     /// Functions referenced via ref.func that need declarative elem segment.
     ref_funcs: HashSet<SymbolPath>,
-    /// Additional target function types from call_indirect that need to be added to the type section.
+    /// Additional function types from call_indirect and multi-value block
+    /// types that need to be added to the type section.
     /// Stored as (type_idx, wasm.func_sig TypeRef) pairs.
     call_indirect_types: Vec<(u32, TypeRef)>,
+    /// The type index of each block type with several results.
+    block_types: HashMap<BlockResults, u32>,
 }
 
 /// `fields` of the struct at `index` with each field an ancestor also declares
@@ -702,7 +705,7 @@ fn collect_module_info(ctx: &mut IrContext, module: IrModule) -> CompilationResu
             .or_insert(gc_type_count as u32 + info.imports.len() as u32 + i as u32);
     }
 
-    let call_indirect_types = collect_call_indirect_types(
+    let indexed = collect_call_indirect_types(
         ctx,
         module,
         &mut type_idx_by_type,
@@ -711,7 +714,8 @@ fn collect_module_info(ctx: &mut IrContext, module: IrModule) -> CompilationResu
     )?;
 
     info.type_idx_by_type = type_idx_by_type;
-    info.call_indirect_types = call_indirect_types;
+    info.call_indirect_types = indexed.types;
+    info.block_types = indexed.block_types;
 
     // Build function type lookup map
     for func in &info.funcs {

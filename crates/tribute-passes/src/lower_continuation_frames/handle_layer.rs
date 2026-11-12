@@ -14,7 +14,7 @@ use tribute_ir::dialect::ability::{HandlerBinding, OperationKind};
 use tribute_ir::dialect::{ability, adt, effect, tribute_control, tribute_rt};
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{arith, core, func, scf};
-use trunk_ir::ops::{DialectOp, DialectType};
+use trunk_ir::ops::{DialectOp, DialectType, VariadicResults};
 use trunk_ir::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{Module, OpRewritePattern, PatternRewriter};
 use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
@@ -567,7 +567,7 @@ fn build_local_dispatcher_instance(
         )?;
         let fallback_region = single_block_region(ctx, location, fallback_block);
         let choose = scf::If::operands(same_prompt.result(ctx))
-            .results(never)
+            .results([never])
             .regions(local_region, fallback_region)
             .build(ctx, location);
         ctx.push_op(case_block, choose.op_ref());

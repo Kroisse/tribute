@@ -1820,13 +1820,13 @@ mod tests {
     }
 
     #[test]
-    fn signatures_reject_more_results_than_their_type_allows() {
-        let error = parse_error(
+    fn signatures_write_several_results_as_a_list() {
+        assert_round_trip(
             r#"core.module @m {
   asm_format_test.fun @f() -> (core.i32, core.i32)
-}"#,
+}
+"#,
         );
-        assert!(error.contains("no more results"), "{error}");
     }
 
     #[test]

@@ -194,7 +194,6 @@ pub enum FuncSigTypeError {
         num_results: u32,
         params: usize,
     },
-    UnsupportedResultCount(u32),
 }
 
 impl std::fmt::Display for FuncSigTypeError {
@@ -211,16 +210,14 @@ impl std::fmt::Display for FuncSigTypeError {
                 f,
                 "num_inputs ({num_inputs}) + num_results ({num_results}) must equal params length ({params})"
             ),
-            Self::UnsupportedResultCount(count) => {
-                write!(f, "currently supports at most one result, found {count}")
-            }
         }
     }
 }
 
 impl std::error::Error for FuncSigTypeError {}
 
-/// Validated wrapper for an input-first, zero-or-one-result `func.func_sig` type.
+/// Validated wrapper for an input-first `func.func_sig` type with zero or more
+/// results.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct FuncSig(TypeRef);
 
@@ -234,9 +231,6 @@ impl crate::type_verifier::VerifyType for FuncSig {
 
         let num_inputs = read_count(ctx, &data.attrs, NUM_INPUTS_ATTR)?;
         let num_results = read_count(ctx, &data.attrs, NUM_RESULTS_ATTR)?;
-        if num_results > 1 {
-            return Err(FuncSigTypeError::UnsupportedResultCount(num_results).into());
-        }
         let total = num_inputs
             .checked_add(num_results)
             .ok_or(FuncSigTypeError::CountOverflow)?;
@@ -331,8 +325,12 @@ impl FuncSig {
         func_sig_with_param_attrs(ctx, inputs, results, attrs)
     }
 
+    /// The result of a signature with exactly one result.
     pub fn single_result(&self, ctx: &IrContext) -> Option<TypeRef> {
-        self.results(ctx).first().copied()
+        match self.results(ctx) {
+            &[result] => Some(result),
+            _ => None,
+        }
     }
 
     /// Iterate function metadata without the input/result count delimiters.
@@ -385,7 +383,7 @@ impl crate::asm_format::TypeAsmFormat for FuncSig {
     }
 
     fn parse(p: &mut AsmParser<'_>, name: &str) -> ParseResult<Option<TypeRef>> {
-        parse_signature_type(p, name, Some(1))
+        parse_signature_type(p, name, None)
     }
 }
 
@@ -401,7 +399,7 @@ impl crate::asm_format::SignatureCodec for FuncSig {
         results: Vec<(TypeRef, AttributeMap)>,
         tail: AttributeMap,
     ) -> ParseResult<TypeRef> {
-        signature_from_parts(p, "func.func_sig", inputs, results, tail, Some(1))
+        signature_from_parts(p, "func.func_sig", inputs, results, tail, None)
     }
 }
 
@@ -598,7 +596,7 @@ fn read_count(
     }
 }
 
-/// Construct a canonical `func.func_sig` with zero or one result.
+/// Construct a canonical `func.func_sig` with zero or more results.
 pub fn func_sig(
     ctx: &mut IrContext,
     inputs: impl IntoIterator<Item = TypeRef>,
@@ -651,10 +649,6 @@ pub fn func_sig_with_attrs(
 
     let inputs: Vec<_> = inputs.into_iter().collect();
     let results: Vec<_> = results.into_iter().collect();
-    assert!(
-        results.len() <= 1,
-        "func.func_sig currently supports at most one result"
-    );
     let num_inputs = u32::try_from(inputs.len()).expect("func.func_sig input count exceeds u32");
     let num_results = u32::try_from(results.len()).expect("func.func_sig result count exceeds u32");
     if let Err(error) =
@@ -676,30 +670,6 @@ pub fn func_sig_with_attrs(
     <FuncSig as crate::type_verifier::VerifyType>::verify(ctx, ty)
         .expect("func.func_sig constructor must produce a valid type")
 }
-
-// One-result source producers use these explicit convenience accessors. Generic
-// consumers use `results` / `single_result` and validate cardinality first.
-macro_rules! single_call_result {
-    ($name:ident) => {
-        impl $name {
-            pub fn single_result(&self, ctx: &crate::IrContext) -> Option<crate::ValueRef> {
-                match self.results(ctx) {
-                    [result] => Some(*result),
-                    _ => None,
-                }
-            }
-            pub fn result(&self, ctx: &crate::IrContext) -> crate::ValueRef {
-                self.single_result(ctx)
-                    .expect("one-result call required by producer")
-            }
-            pub fn result_ty(&self, ctx: &crate::IrContext) -> crate::TypeRef {
-                ctx.value_ty(self.result(ctx))
-            }
-        }
-    };
-}
-single_call_result!(Call);
-single_call_result!(CallIndirect);
 
 impl CallLike for Call {
     fn call_args<'a>(&self, ctx: &'a crate::IrContext) -> &'a [crate::ValueRef] {
@@ -1202,6 +1172,7 @@ mod result_list_tests {
     use crate::IrContext;
     use crate::SymbolPath;
     use crate::dialect::core;
+    use crate::ops::VariadicResults as _;
     use crate::parser::parse_module;
     use crate::rewrite::Module;
     use crate::validation::validate_all;
@@ -1396,8 +1367,8 @@ mod normal_validation_regressions {
     fn normal_validation_rejects_known_contract_mismatches() {
         for (body, expected) in [
             (
-                "%a, %b = func.call @runtime() : () -> (core.i32, core.i32)\nfunc.return",
-                "multiple call results",
+                "%a = func.call @pair() : () -> core.i32\nfunc.return",
+                "call result list mismatch",
             ),
             (
                 "%a = func.call @sink() : () -> core.i32\nfunc.return",
@@ -1407,7 +1378,7 @@ mod normal_validation_regressions {
         ] {
             let mut ctx = crate::IrContext::new();
             let input = format!(
-                "core.module @m {{ func.func @sink() func.func @run(%k: func.func_sig<() -> ()>) {{ func.call @runtime() : () -> () {body} }} }}"
+                "core.module @m {{ func.func @sink() func.func @pair() -> (core.i32, core.i32) func.func @run(%k: func.func_sig<() -> ()>) {{ func.call @runtime() : () -> () {body} }} }}"
             );
             let module = crate::parser::parse_test_module(&mut ctx, &input);
             let result = crate::validation::validate_all(&ctx, module, &mut Default::default());

@@ -6,7 +6,7 @@ use smallvec::smallvec;
 use super::{parse_module, parse_test_module};
 use crate::context::{IrContext, OperationDataBuilder};
 use crate::dialect::{arith, clif, core, func};
-use crate::ops::{DialectOp, DialectType};
+use crate::ops::{DialectOp, DialectType, VariadicResults};
 use crate::refs::*;
 use crate::rewrite::Module;
 use crate::types::*;
@@ -989,16 +989,31 @@ fn test_func_type_rejects_reserved_textual_attributes() {
 }
 
 #[test]
-fn test_func_type_rejects_multiple_results_after_recognizing_syntax() {
-    let input = "core.module @test { !bad = func.func_sig<() -> (core.i32, core.i64)> }";
+fn test_func_type_accepts_multiple_results() {
+    let input = "core.module @test {
+  func.func @pair(%a: core.i32) -> (core.i32, core.i64) {
+    %b = arith.constant 1 : core.i64
+    func.return %a, %b
+  }
+  func.func @caller(%a: core.i32) -> core.i64 {
+    %x, %y = func.call @pair(%a) : (core.i32) -> (core.i32, core.i64)
+    func.return %y
+  }
+}";
     let mut ctx = IrContext::new();
-    let error = parse_module(&mut ctx, input).expect_err("multi-result must be rejected");
+    let module = parse_module(&mut ctx, input).expect("multi-result signatures parse");
+    let printed = module.display(&ctx).to_string();
     assert!(
-        error
-            .message
-            .contains("results than the signature type allows"),
-        "{error}"
+        printed.contains("func.func @pair(%0: core.i32) -> (core.i32, core.i64)"),
+        "{printed}"
     );
+    assert!(
+        printed.contains("%1, %2 = func.call @pair(%0) : (core.i32) -> (core.i32, core.i64)"),
+        "{printed}"
+    );
+    let mut reparsed = IrContext::new();
+    let again = parse_module(&mut reparsed, &printed).expect("printed form parses");
+    assert_eq!(again.display(&reparsed).to_string(), printed);
 }
 
 #[test]
@@ -1024,7 +1039,7 @@ fn unregistered_func_sig_uses_generic_syntax() {
 fn malformed_func_sig_storage_roundtrips_as_concrete_type() {
     let input = r#"core.module @test {
   !foreign = foreign.func_sig<core.i32, {num_inputs = 2, num_results = 1}>
-  !shared = func.func_sig<core.i32, core.i32, core.i32, {num_inputs = 1, num_results = 2}>
+  !shared = func.func_sig<core.i32, core.i32, core.i32, {num_inputs = 1, num_results = 1}>
 }"#;
     let mut ctx = IrContext::new();
     let module = parse_module(&mut ctx, input).expect("raw storage should remain parseable");
@@ -1036,7 +1051,7 @@ fn malformed_func_sig_storage_roundtrips_as_concrete_type() {
     );
     assert!(
         printed.contains(
-            "!shared = func.func_sig<core.i32, core.i32, core.i32, {num_inputs = 1, num_results = 2}>"
+            "!shared = func.func_sig<core.i32, core.i32, core.i32, {num_inputs = 1, num_results = 1}>"
         ),
         "{printed}"
     );

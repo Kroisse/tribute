@@ -37,11 +37,8 @@ pub(crate) fn pushed_results(ctx: &IrContext, op: OpRef) -> SmallVec<[ValueRef; 
             .filter(|&result| !is_nil_type(ctx, ctx.value_ty(result)))
             .collect();
     }
-    if is_structured(ctx, op) {
-        return structured_result_type(ctx, op)
-            .map(|_| ctx.op_result(op, 0))
-            .into_iter()
-            .collect();
+    if is_structured(ctx, op) && structured_result_types(ctx, op).is_empty() {
+        return SmallVec::new();
     }
     results.iter().copied().collect()
 }
@@ -51,34 +48,41 @@ pub(crate) fn is_structured(ctx: &IrContext, op: OpRef) -> bool {
     wasm::Block::matches(ctx, op) || wasm::Loop::matches(ctx, op) || wasm::If::matches(ctx, op)
 }
 
-/// The result type of a structured operation's Wasm block type, or `None`
-/// when the block type is empty.
+/// The result types of a structured operation's Wasm block type, in order;
+/// empty when the block type is empty.
 ///
-/// A `wasm.if` has a result only when one of its regions passes one. The
-/// other may end the function instead, as an arm ending in a trap does.
-pub(crate) fn structured_result_type(ctx: &IrContext, op: OpRef) -> Option<TypeRef> {
-    let ty = ctx
-        .op_result_types(op)
-        .first()
-        .copied()
-        .filter(|&ty| !is_nil_type(ctx, ty))?;
-    if wasm::If::matches(ctx, op)
-        && !ctx
-            .op_regions(op)
-            .any(|region| region_result_value(ctx, region).is_some())
+/// Each result is one Wasm value, except that a single `core.nil` result
+/// leaves nothing. A `wasm.if` has results only when one of its regions
+/// passes values. The other may end the function instead, as an arm ending
+/// in a trap does.
+pub(crate) fn structured_result_types(ctx: &IrContext, op: OpRef) -> SmallVec<[TypeRef; 2]> {
+    let types = ctx.op_result_types(op);
+    let leaves_nothing = match types {
+        [] => true,
+        [ty] => is_nil_type(ctx, *ty),
+        _ => false,
+    };
+    if leaves_nothing
+        || (wasm::If::matches(ctx, op)
+            && !ctx
+                .op_regions(op)
+                .any(|region| !region_result_values(ctx, region).is_empty()))
     {
-        return None;
+        return SmallVec::new();
     }
-    Some(ty)
+    types.iter().copied().collect()
 }
 
-/// The value a region passes to its parent: the first value of the
+/// The values a region passes to its parent: the values of the
 /// `wasm.yield` that ends it.
-pub(crate) fn region_result_value(ctx: &IrContext, region: RegionRef) -> Option<ValueRef> {
-    let &block = ctx.region(region).blocks.last()?;
-    let &op = ctx.block(block).ops.last()?;
-    let yield_op = wasm::Yield::from_op(ctx, op).ok()?;
-    yield_op.values(ctx).first().copied()
+pub(crate) fn region_result_values(ctx: &IrContext, region: RegionRef) -> SmallVec<[ValueRef; 2]> {
+    ctx.region(region)
+        .blocks
+        .last()
+        .and_then(|&block| ctx.block(block).ops.last())
+        .and_then(|&op| wasm::Yield::from_op(ctx, op).ok())
+        .map(|yield_op| yield_op.values(ctx).iter().copied().collect())
+        .unwrap_or_default()
 }
 
 /// The abstract heap type of the null a `wasm.nop` of type `ty` pushes, or
@@ -143,11 +147,12 @@ pub(crate) fn trailing_parameters(ctx: &IrContext, op: OpRef) -> SmallVec<[u32; 
 /// Where a `wasm.br` or `wasm.yield` passes its values.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ValueTransfer {
-    /// On the stack, as the result its label's operation leaves there.
-    Stack,
+    /// On the stack in order, as the given number of results its label's
+    /// operation leaves there.
+    Stack(usize),
     /// To the body block arguments of the loop a branch continues.
     LoopArguments(wasm::Loop),
-    /// Nowhere: the label's operation leaves no result on the stack.
+    /// Nowhere: the label's operation leaves no results on the stack.
     None,
 }
 
@@ -167,9 +172,9 @@ pub(crate) fn value_transfer(ctx: &IrContext, op: OpRef) -> Option<ValueTransfer
     {
         return Some(ValueTransfer::LoopArguments(loop_op));
     }
-    Some(match structured_result_type(ctx, label) {
-        Some(_) => ValueTransfer::Stack,
-        None => ValueTransfer::None,
+    Some(match structured_result_types(ctx, label).len() {
+        0 => ValueTransfer::None,
+        count => ValueTransfer::Stack(count),
     })
 }
 

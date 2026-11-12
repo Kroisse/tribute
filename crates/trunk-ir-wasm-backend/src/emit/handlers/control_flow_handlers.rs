@@ -17,24 +17,38 @@ use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::refs::OpRef;
 use wasm_encoder::{BlockType, Function, Instruction};
 
-use crate::stack_effect::structured_result_type;
+use crate::stack_effect::structured_result_types;
 use crate::{CompilationError, CompilationResult};
 
 use super::super::{ModuleInfo, emit_region_ops, helpers};
 
-/// The Wasm block type of a structured operation.
+/// The Wasm block type of a structured operation: empty, one value type, or
+/// the index of the function type `() -> (results)` for several results.
 fn block_type(
     ctx: &IrContext,
     op: OpRef,
     module_info: &ModuleInfo,
 ) -> CompilationResult<BlockType> {
-    match structured_result_type(ctx, op) {
-        Some(ty) => Ok(BlockType::Result(helpers::type_to_valtype(
+    let results = structured_result_types(ctx, op);
+    match results[..] {
+        [] => Ok(BlockType::Empty),
+        [ty] => Ok(BlockType::Result(helpers::type_to_valtype(
             ctx,
             ty,
             &module_info.type_idx_by_type,
         )?)),
-        None => Ok(BlockType::Empty),
+        _ if results.iter().any(|&ty| helpers::is_nil_type(ctx, ty)) => Err(
+            CompilationError::invalid_module("a multi-value block type has no core.nil result"),
+        ),
+        _ => module_info
+            .block_types
+            .get(&results)
+            .map(|&index| BlockType::FunctionType(index))
+            .ok_or_else(|| {
+                CompilationError::invalid_module(
+                    "multi-value block type not registered in type section",
+                )
+            }),
     }
 }
 
@@ -50,7 +64,7 @@ pub(crate) fn handle_if(
         .op_region(op, 0)
         .ok_or_else(|| CompilationError::invalid_module("wasm.if missing then region"))?;
     let else_region = ctx.op_region(op, 1);
-    if matches!(block_type, BlockType::Result(_)) && else_region.is_none() {
+    if !matches!(block_type, BlockType::Empty) && else_region.is_none() {
         return Err(CompilationError::invalid_module(
             "wasm.if with result requires else region",
         ));

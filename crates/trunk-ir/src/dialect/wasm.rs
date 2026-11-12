@@ -137,22 +137,23 @@ mod wasm {
     /// `values` as the parent's results.
     ///
     /// ```text
-    /// wasm.yield %v
+    /// wasm.yield %a, %b
     /// wasm.yield
     /// ```
     ///
     /// - **Meaning:** control reaches the end of the region, and so the end
-    ///   of its parent, whose results are `values`; a loop's body leaves the
-    ///   loop. A region whose parent takes no results ends in a yield
-    ///   without values.
-    /// - **Value flow:** a value reaches the parent's end on the stack only
-    ///   when the parent leaves its result there; emission's `ExplicitLocals`
-    ///   pass removes every other value as an operand. After that pass,
-    ///   each value is either one the operations before it left on top of
-    ///   the stack, or a function parameter, which emission reads from its
-    ///   local right before the yield. Emission writes no instruction for
-    ///   the yield itself (`design/wasm-backend.md`, "분기와 region 끝의
-    ///   값" and "명시적 지역 변수와 stack 계약").
+    ///   of its parent, whose results are `values` in order; a loop's body
+    ///   leaves the loop. A region whose parent takes no results ends in a
+    ///   yield without values.
+    /// - **Value flow:** the values reach the parent's end on the stack only
+    ///   when the parent leaves its results there; emission's
+    ///   `ExplicitLocals` pass removes them as operands otherwise. After
+    ///   that pass, `values` are the values the operations before it left
+    ///   on top of the stack in order, the last of them possibly function
+    ///   parameters, which emission reads from their locals right before
+    ///   the yield. Emission writes no instruction for the yield itself
+    ///   (`design/wasm-backend.md`, "분기와 region 끝의 값" and "명시적 지역
+    ///   변수와 stack 계약").
     #[flags(Terminator)]
     #[asm_format(values attr_dict_bare)]
     fn r#yield(values: Variadic<_>) {}
