@@ -5,7 +5,7 @@ use crate::Symbol;
 use crate::SymbolPath;
 use crate::attr_kind::Dict;
 use crate::dialect::core;
-use crate::dialect::core::{BoolLike, I32, IntegerLike, Ptr};
+use crate::dialect::core::{I32, IntegerLike, Ptr};
 use crate::dialect::func;
 use crate::ops::DialectOp;
 use crate::type_constraint::{ProjectionKind, TypeConstraint};
@@ -32,7 +32,7 @@ mod test_typed {
             predicate: Attr<String>,
             lhs: Value<T>,
             rhs: Value<T>,
-        ) -> Value<impl BoolLike> {
+        ) -> Value<impl IntegerLike> {
         }
 
         fn first<P: Pair>(pair: Value<P>) -> Value<P::First> {}
@@ -54,7 +54,7 @@ mod test_typed {
 
         fn pack<T>(elements: Values<(T, T, impl IntegerLike)>) -> Value<_> {}
 
-        fn select(cond: Value<impl BoolLike>, label: Option<Attr<String>>) -> Option<Value<_>> {
+        fn select(cond: Value<impl IntegerLike>, label: Option<Attr<String>>) -> Option<Value<_>> {
             #[region(then_region)]
             {}
             #[region(else_region?)]
@@ -200,7 +200,7 @@ fn typed_schema_records_variables_and_constraints() {
     let ValueConstraint::Each(TypeSpec::Anon(bounds)) = cmp.result_constraint else {
         panic!("expected an anonymous result bound");
     };
-    assert_eq!(bounds[0].name, "BoolLike");
+    assert_eq!(bounds[0].name, "IntegerLike");
     assert_eq!(cmp.attributes[0].kind, AttributeKind::String);
 
     let first = &test_typed::First::DEF.schema;

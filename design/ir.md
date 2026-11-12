@@ -186,7 +186,7 @@ format과 선언적 rewrite 도구는 operation 정의를 중복하지 않고 �
   monomorphization을 뜻하지 않는다.
 - Bound는 교집합이다. Exact bound는 하나의 dialect 타입과 그 wrapper의 내부
   invariant를 요구하며, 한 변수에 서로 다른 exact bound를 둘 수 없다.
-  Category bound는 `IntegerLike`, `IntegerOrIndex`, `BoolLike`, `FloatLike`처럼
+  Category bound는 `IntegerLike`, `IntegerOrIndex`, `FloatLike`처럼
   타입 범주를 요구하며 여러 개를 함께 둘 수 있다. 이 범주들은 `core` 스칼라 타입만 보는
   닫힌 판별이다. 다른 dialect의 타입까지 포함해야 하는 실제 소비자가 생기기
   전에는 dialect 등록형 범주를 두지 않는다.
