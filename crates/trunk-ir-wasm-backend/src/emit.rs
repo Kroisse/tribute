@@ -1691,6 +1691,7 @@ mod tests {
                     wasm.if %condition {{
                         wasm.return_call @consume(%unit) : (core.nil) -> ()
                     }} else {{ wasm.unreachable }}
+                    wasm.unreachable
                 }}
             }}"#
                 ),

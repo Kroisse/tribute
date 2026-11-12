@@ -8,9 +8,9 @@
 //! - wasm.br_if (conditional branch)
 //! - wasm.br_table (indexed branch)
 //!
-//! A region's result reaches the end of its structured operation on the
-//! stack, and loop-carried values are written to their locals before the
-//! loop and its back edges, so the handlers write only the structure.
+//! A region's result and a branch's value reach their label on the stack,
+//! and loop-carried values are written to their locals before the loop and
+//! its back edges, so the handlers write only the structure.
 
 use trunk_ir::IrContext;
 use trunk_ir::dialect::wasm as wasm_dialect;

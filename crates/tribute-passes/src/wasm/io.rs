@@ -9,6 +9,7 @@ use trunk_ir::SymbolPath;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::dialect::{core, func};
+use trunk_ir::op_flag::{OpFlag, Terminator};
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{
@@ -439,9 +440,9 @@ fn copy_loop(ctx: &mut IrContext, input: CopyLoopInput) -> OpRef {
     let one = i32_const(ctx, loop_block, loc, i32_ty, 1);
     let next = wasm_dialect::I32Add::operands(index, one).build(ctx, loc);
     ctx.push_op(loop_block, next.op_ref());
-    let yield_next = wasm_dialect::Yield::operands(next.result(ctx)).build(ctx, loc);
-    ctx.push_op(loop_block, yield_next.op_ref());
-    let continue_loop = wasm_dialect::Br::operands().target(0).build(ctx, loc);
+    let continue_loop = wasm_dialect::Br::operands([next.result(ctx)])
+        .target(0)
+        .build(ctx, loc);
     ctx.push_op(loop_block, continue_loop.op_ref());
     loop_in_block(ctx, loc, init, loop_block, nil_ty)
 }
@@ -523,9 +524,9 @@ fn write_loop(
         ctx.push_op(block, break_if_stalled.op_ref());
         let next = wasm_dialect::I32Add::operands(written, count.result(ctx)).build(ctx, loc);
         ctx.push_op(block, next.op_ref());
-        let yield_next = wasm_dialect::Yield::operands(next.result(ctx)).build(ctx, loc);
-        ctx.push_op(block, yield_next.op_ref());
-        let continue_loop = wasm_dialect::Br::operands().target(1).build(ctx, loc);
+        let continue_loop = wasm_dialect::Br::operands([next.result(ctx)])
+            .target(1)
+            .build(ctx, loc);
         ctx.push_op(block, continue_loop.op_ref());
     });
     let failure = region(ctx, loc, |ctx, block| {
@@ -538,7 +539,7 @@ fn write_loop(
             .target(1)
             .build(ctx, loc);
         ctx.push_op(block, retry_if_interrupted.op_ref());
-        let stop = wasm_dialect::Br::operands().target(2).build(ctx, loc);
+        let stop = wasm_dialect::Br::operands([]).target(2).build(ctx, loc);
         ctx.push_op(block, stop.op_ref());
     });
     let handle_result = wasm_dialect::If::operands(succeeded.result(ctx))
@@ -546,6 +547,9 @@ fn write_loop(
         .regions(success, failure)
         .build(ctx, loc);
     ctx.push_op(loop_block, handle_result.op_ref());
+    // Both arms branch, so control never reaches the body's end.
+    let end = wasm_dialect::Yield::operands([]).build(ctx, loc);
+    ctx.push_op(loop_block, end.op_ref());
     loop_in_block(ctx, loc, init, loop_block, nil_ty)
 }
 
@@ -572,6 +576,9 @@ fn loop_in_block(
         parent_region: None,
     });
     ctx.push_op(block, loop_op.op_ref());
+    let loop_results = ctx.op_results(loop_op.op_ref()).to_vec();
+    let end = wasm_dialect::Yield::operands(loop_results).build(ctx, loc);
+    ctx.push_op(block, end.op_ref());
     let region = ctx.create_region(RegionData {
         location: loc,
         blocks: smallvec![block],
@@ -619,6 +626,8 @@ fn trap_if(
     ctx.push_op(body, if_op.op_ref());
 }
 
+/// A region of one block that `build` fills. When control can reach the
+/// block's end, it ends in a `wasm.yield` without values.
 fn region(
     ctx: &mut IrContext,
     loc: Location,
@@ -631,6 +640,15 @@ fn region(
         parent_region: None,
     });
     build(ctx, block);
+    if !ctx
+        .block(block)
+        .ops
+        .last()
+        .is_some_and(|&last| Terminator::is_set(ctx, last))
+    {
+        let end = wasm_dialect::Yield::operands([]).build(ctx, loc);
+        ctx.push_op(block, end.op_ref());
+    }
     ctx.create_region(RegionData {
         location: loc,
         blocks: smallvec![block],

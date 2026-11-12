@@ -786,7 +786,7 @@ fn yielding_region(
     loc: trunk_ir::types::Location,
     ops: impl IntoIterator<Item = OpRef>,
 ) -> trunk_ir::RegionRef {
-    let region = super::intrinsic_to_wasm::empty_region(ctx, loc);
+    let region = super::intrinsic_to_wasm::unterminated_region(ctx, loc);
     let block = ctx.region(region).blocks[0];
     let mut last = None;
     for op in ops {
@@ -794,7 +794,7 @@ fn yielding_region(
         last = Some(op);
     }
     let value = ctx.op_result(last.expect("a yielding region has an op"), 0);
-    let yield_value = wasm_dialect::Yield::operands(value).build(ctx, loc);
+    let yield_value = wasm_dialect::Yield::operands([value]).build(ctx, loc);
     ctx.push_op(block, yield_value.op_ref());
     region
 }

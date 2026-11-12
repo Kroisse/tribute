@@ -194,9 +194,9 @@ impl OpRewritePattern for RangeEqualPattern<'_> {
         ctx.push_op(loop_block, one.op_ref());
         let next = wasm_dialect::I32Add::operands(index, one.result(ctx)).build(ctx, location);
         ctx.push_op(loop_block, next.op_ref());
-        let yield_next = wasm_dialect::Yield::operands(next.result(ctx)).build(ctx, location);
-        ctx.push_op(loop_block, yield_next.op_ref());
-        let continue_loop = wasm_dialect::Br::operands().target(0).build(ctx, location);
+        let continue_loop = wasm_dialect::Br::operands([next.result(ctx)])
+            .target(0)
+            .build(ctx, location);
         ctx.push_op(loop_block, continue_loop.op_ref());
 
         let loop_region = ctx.create_region(RegionData {
@@ -208,12 +208,16 @@ impl OpRewritePattern for RangeEqualPattern<'_> {
             .results([result_ty])
             .regions(loop_region)
             .build(ctx, location);
+        let compared = wasm_dialect::Yield::operands([ctx.op_result(compare_loop.op_ref(), 0)])
+            .build(ctx, location);
         let outer_block = ctx.create_block(BlockData {
             location,
             args: vec![],
-            ops: smallvec![compare_loop.op_ref()],
+            ops: smallvec![],
             parent_region: None,
         });
+        ctx.push_op(outer_block, compare_loop.op_ref());
+        ctx.push_op(outer_block, compared.op_ref());
         let outer_region = ctx.create_region(RegionData {
             location,
             blocks: smallvec![outer_block],
@@ -237,7 +241,17 @@ impl OpRewritePattern for RangeEqualPattern<'_> {
     }
 }
 
+/// A region whose control reaches its end at once, passing no values.
 pub(super) fn empty_region(ctx: &mut IrContext, location: Location) -> trunk_ir::RegionRef {
+    let region = unterminated_region(ctx, location);
+    let block = ctx.region(region).blocks[0];
+    let end = wasm_dialect::Yield::operands([]).build(ctx, location);
+    ctx.push_op(block, end.op_ref());
+    region
+}
+
+/// A region of one empty block, which its builder ends in a terminator.
+pub(super) fn unterminated_region(ctx: &mut IrContext, location: Location) -> trunk_ir::RegionRef {
     let block = ctx.create_block(BlockData {
         location,
         args: vec![],
@@ -268,9 +282,9 @@ fn value_break_region(
         .results(i32_ty)
         .build(ctx, location);
     ctx.push_op(block, value.op_ref());
-    let yield_value = wasm_dialect::Yield::operands(value.result(ctx)).build(ctx, location);
-    ctx.push_op(block, yield_value.op_ref());
-    let break_outer = wasm_dialect::Br::operands().target(2).build(ctx, location);
+    let break_outer = wasm_dialect::Br::operands([value.result(ctx)])
+        .target(2)
+        .build(ctx, location);
     ctx.push_op(block, break_outer.op_ref());
     ctx.create_region(RegionData {
         location,
@@ -343,7 +357,7 @@ impl OpRewritePattern for ConcatPattern<'_> {
 }
 
 pub(super) fn trap_region(ctx: &mut IrContext, location: Location) -> trunk_ir::RegionRef {
-    let region = empty_region(ctx, location);
+    let region = unterminated_region(ctx, location);
     let block = ctx.region(region).blocks[0];
     let unreachable = wasm_dialect::Unreachable::operands().build(ctx, location);
     ctx.push_op(block, unreachable.op_ref());

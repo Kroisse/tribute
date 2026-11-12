@@ -11,14 +11,10 @@
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use trunk_ir::analysis::{Analysis, AnalysisContext, AnalysisError, InfallibleAnalysis};
 use trunk_ir::callable::{CallableBody, classify_callable_body};
-use trunk_ir::dialect::wasm;
-use trunk_ir::ops::DialectOp;
 use trunk_ir::smallvec::SmallVec;
 use trunk_ir::{BlockRef, IrContext, OpRef, RegionRef, ValueDef, ValueRef};
 
-use crate::stack_effect::{
-    YieldTransfer, pushed_results, stack_operand_slots, structured_result_type, yield_transfer,
-};
+use crate::stack_effect::{ValueTransfer, pushed_results, stack_operand_slots, value_transfer};
 
 /// A local read emitted before another operation than its user: operand
 /// `slot` of `user`.
@@ -59,7 +55,7 @@ impl Analysis for Stackify {
         let ir = ctx.ir();
         let mut stackify = Stackify::default();
         if let Ok(CallableBody::Definition { region, .. }) = classify_callable_body(ir, target) {
-            stackify.region(ir, region, &mut Vec::new(), false);
+            stackify.region(ir, region);
         }
         Ok(stackify)
     }
@@ -75,17 +71,8 @@ struct Entry {
 }
 
 impl Stackify {
-    /// Decide the values of one region. `loop_args` holds, for each enclosing
-    /// structured operation, innermost last, the number of body block
-    /// arguments of a loop or `None`; `passes_result` tells whether the
-    /// parent takes the region's value.
-    fn region(
-        &mut self,
-        ctx: &IrContext,
-        region: RegionRef,
-        loop_args: &mut Vec<Option<usize>>,
-        passes_result: bool,
-    ) {
+    /// Decide the values of one region.
+    fn region(&mut self, ctx: &IrContext, region: RegionRef) {
         // `ExplicitLocals` rejects a region of several blocks.
         let [block] = ctx.region(region).blocks[..] else {
             return;
@@ -100,48 +87,23 @@ impl Stackify {
                 .map(|(position, &op)| (op, position))
                 .collect(),
         };
-        // A region whose last operation is not a yield passes that
-        // operation's first result, which `ExplicitLocals` reads from its
-        // local.
-        let implicit_result = ops
-            .last()
-            .filter(|&&last| passes_result && !wasm::Yield::matches(ctx, last))
-            .and_then(|&last| ctx.op_results(last).first().copied());
-
         let mut pending: Vec<Entry> = Vec::new();
         for (position, &op) in ops.iter().enumerate() {
-            let operands = if wasm::Yield::matches(ctx, op) {
-                match yield_transfer(ctx, ops, position, loop_args, passes_result) {
-                    YieldTransfer::Stack | YieldTransfer::LoopArgument => {
-                        stack_operand_slots(ctx, op)
-                    }
-                    YieldTransfer::LoopArguments(_) | YieldTransfer::None => SmallVec::new(),
-                }
-            } else {
-                stack_operand_slots(ctx, op)
+            // A branch to a loop takes its values from the stack to write
+            // them to the loop's argument locals; a value whose label leaves
+            // nothing on the stack is not taken.
+            let operands = match value_transfer(ctx, op) {
+                Some(ValueTransfer::None) => SmallVec::new(),
+                _ => stack_operand_slots(ctx, op),
             };
             let start = self.take_operands(ctx, op, position, &block_ops, &operands, &mut pending);
 
-            let pushes_region_result = structured_result_type(ctx, op).is_some();
-            let regions: SmallVec<[RegionRef; 4]> = ctx.op_regions(op).collect();
-            if !regions.is_empty() {
-                loop_args.push(
-                    wasm::Loop::from_op(ctx, op)
-                        .ok()
-                        .and_then(|loop_op| ctx.region(loop_op.body(ctx)).blocks.first().copied())
-                        .map(|body| ctx.block_args(body).len()),
-                );
-                for nested in regions {
-                    self.region(ctx, nested, loop_args, pushes_region_result);
-                }
-                loop_args.pop();
+            for nested in ctx.op_regions(op) {
+                self.region(ctx, nested);
             }
 
             let pushed = pushed_results(ctx, op);
             for &result in &pushed {
-                if Some(result) == implicit_result {
-                    continue;
-                }
                 let uses = ctx.uses(result);
                 if uses.is_empty() {
                     self.dropped.insert(result);

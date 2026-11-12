@@ -4,10 +4,12 @@
 //! dialect's [`StackOperandOrder`](trunk_ir::dialect::wasm::StackOperandOrder).
 //! Which results it leaves on the stack is this backend's representation
 //! rule: a call's `core.nil` result slots, a `wasm.nop` of a type with no Wasm
-//! null, and structured control whose result is `core.nil` or whose then
-//! region passes no value leave nothing (`design/wasm-backend.md`, "명시적
-//! 지역 변수와 stack 계약"). `ExplicitLocals`, the stack contract check, and
-//! the emitter all read it here.
+//! null, and structured control whose result is `core.nil` or whose regions
+//! yield no value leave nothing (`design/wasm-backend.md`, "명시적 지역
+//! 변수와 stack 계약"). Where a `wasm.br` or `wasm.yield` passes its values
+//! follows from that (`design/wasm-backend.md`, "분기와 region 끝의 값").
+//! `ExplicitLocals`, the stack contract check, and the emitter all read it
+//! here.
 
 use trunk_ir::IrContext;
 use trunk_ir::dialect::wasm;
@@ -70,16 +72,13 @@ pub(crate) fn structured_result_type(ctx: &IrContext, op: OpRef) -> Option<TypeR
     Some(ty)
 }
 
-/// The value a region passes to its parent: the operand of its last
-/// operation when that is a `wasm.yield`, or else the first result of its
-/// last operation.
+/// The value a region passes to its parent: the first value of the
+/// `wasm.yield` that ends it.
 pub(crate) fn region_result_value(ctx: &IrContext, region: RegionRef) -> Option<ValueRef> {
     let &block = ctx.region(region).blocks.last()?;
     let &op = ctx.block(block).ops.last()?;
-    if let Ok(yield_op) = wasm::Yield::from_op(ctx, op) {
-        return Some(yield_op.value(ctx));
-    }
-    ctx.op_results(op).first().copied()
+    let yield_op = wasm::Yield::from_op(ctx, op).ok()?;
+    yield_op.values(ctx).first().copied()
 }
 
 /// The abstract heap type of the null a `wasm.nop` of type `ty` pushes, or
@@ -141,50 +140,44 @@ pub(crate) fn trailing_parameters(ctx: &IrContext, op: OpRef) -> SmallVec<[u32; 
     locals
 }
 
-/// Where a `wasm.yield` passes its value.
+/// Where a `wasm.br` or `wasm.yield` passes its values.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum YieldTransfer {
-    /// On the stack, to the region's parent or the label of the `wasm.br`
-    /// after it.
+pub(crate) enum ValueTransfer {
+    /// On the stack, as the result its label's operation leaves there.
     Stack,
-    /// To the only body block argument of the loop the `wasm.br` after it
-    /// continues.
-    LoopArgument,
-    /// To each of the other number of body block arguments of the loop the
-    /// `wasm.br` after it continues.
-    LoopArguments(usize),
-    /// Nowhere: the parent takes no value and no branch follows.
+    /// To the body block arguments of the loop a branch continues.
+    LoopArguments(wasm::Loop),
+    /// Nowhere: the label's operation leaves no result on the stack.
     None,
 }
 
-/// Where the `wasm.yield` at `position` of `ops` passes its value. `loop_args`
-/// holds, for each enclosing structured operation, innermost last, the
-/// number of body block arguments of a loop or `None`; `passes_result` tells
-/// whether the region's parent takes its value.
-pub(crate) fn yield_transfer(
-    ctx: &IrContext,
-    ops: &[OpRef],
-    position: usize,
-    loop_args: &[Option<usize>],
-    passes_result: bool,
-) -> YieldTransfer {
-    let branch_depth = ops
-        .get(position + 1)
-        .and_then(|&next| wasm::Br::from_op(ctx, next).ok())
-        .map(|br| br.target(ctx) as usize);
-    match branch_depth {
-        Some(depth) => match loop_args
-            .len()
-            .checked_sub(depth + 1)
-            .and_then(|label| loop_args[label])
-        {
-            Some(1) => YieldTransfer::LoopArgument,
-            Some(count) => YieldTransfer::LoopArguments(count),
-            None => YieldTransfer::Stack,
-        },
-        None if passes_result && position + 1 == ops.len() => YieldTransfer::Stack,
-        None => YieldTransfer::None,
+/// Where `op` passes its values, when it is a `wasm.br` or a `wasm.yield`
+/// inside the structured operation it names (`design/wasm-backend.md`,
+/// "분기와 region 끝의 값").
+pub(crate) fn value_transfer(ctx: &IrContext, op: OpRef) -> Option<ValueTransfer> {
+    let label = if let Ok(br) = wasm::Br::from_op(ctx, op) {
+        (0..=br.target(ctx)).try_fold(op, |inner, _| enclosing_structured(ctx, inner))?
+    } else if wasm::Yield::matches(ctx, op) {
+        enclosing_structured(ctx, op)?
+    } else {
+        return None;
+    };
+    if wasm::Br::matches(ctx, op)
+        && let Ok(loop_op) = wasm::Loop::from_op(ctx, label)
+    {
+        return Some(ValueTransfer::LoopArguments(loop_op));
     }
+    Some(match structured_result_type(ctx, label) {
+        Some(_) => ValueTransfer::Stack,
+        None => ValueTransfer::None,
+    })
+}
+
+/// The `wasm.block`, `wasm.loop`, or `wasm.if` whose region holds `op`.
+fn enclosing_structured(ctx: &IrContext, op: OpRef) -> Option<OpRef> {
+    let block = ctx.op(op).parent_block?;
+    let parent = ctx.region(ctx.block(block).parent_region?).parent_op?;
+    is_structured(ctx, parent).then_some(parent)
 }
 
 /// Whether nothing after `op` in its block runs: an unconditional branch,
