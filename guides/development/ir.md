@@ -131,7 +131,9 @@ where
   implements the `ops::VariadicResults` mixin for every wrapper with
   variadic results, as ODS attaches MLIR's `OpTrait::VariadicResults`:
   `single_result` returns the result of an operation with exactly one, and
-  `result` expects its producer to have built exactly one.
+  `result` expects its producer to have built exactly one. Such an
+  operation cannot name an entity `single_result`, `result`, or
+  `result_ty`.
 - Attribute kinds are Rust types implementing `attr_kind::AttrKind`, resolved
   in the dialect's scope like bounds: primitives (`bool`, `i32`, `i64`, `u32`,
   `u64`, `f32`, `f64`), `String`, the markers

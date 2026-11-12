@@ -332,6 +332,14 @@ fn parse_item(iter: &mut TokenIter) -> Result<DialectItem, String> {
                     "#[asm_format] reserves the name `{name}` for `OpAsmFormat::{name}`"
                 ));
             }
+            if matches!(op.results, ResultDef::Variadic(_))
+                && let Some(name) = entity_names(&op)
+                    .find(|name| ["single_result", "result", "result_ty"].contains(name))
+            {
+                return Err(format!(
+                    "variadic results reserve the name `{name}` for `VariadicResults::{name}`"
+                ));
+            }
             for name in entity_names(&op) {
                 if RESERVED_WRAPPER_NAMES.contains(&name) {
                     return Err(format!(
@@ -1662,6 +1670,45 @@ mod tests {
             let err = parse_test_module(item).err().expect("should fail");
             assert!(err.contains(expected), "unexpected error: {err}");
         }
+    }
+
+    #[test]
+    fn test_variadic_results_reserve_mixin_names() {
+        for (item, expected) in [
+            (
+                quote!(
+                    mod test {
+                        fn op(result: Value<_>) -> Variadic<_> {}
+                    }
+                ),
+                "reserve the name `result`",
+            ),
+            (
+                quote!(
+                    mod test {
+                        fn op<S: FuncSig>(result_ty: Attr<TypeOf<S>>) -> Values<S::Results> {}
+                    }
+                ),
+                "reserve the name `result_ty`",
+            ),
+            (
+                quote!(
+                    mod test {
+                        fn op(single_result: Value<_>) -> Variadic<_> {}
+                    }
+                ),
+                "reserve the name `single_result`",
+            ),
+        ] {
+            let err = parse_test_module(item).err().expect("should fail");
+            assert!(err.contains(expected), "unexpected error: {err}");
+        }
+        parse_test_module(quote!(
+            mod test {
+                fn op(result_ty: Attr<Type>) -> Value<_> {}
+            }
+        ))
+        .expect("a fixed result does not get the mixin");
     }
 
     #[test]
