@@ -3,7 +3,7 @@
 use tribute_ir::dialect::adt;
 use trunk_ir::context::{BlockData, IrContext, RegionData};
 use trunk_ir::dialect::{arith, core, func, mem, scf};
-use trunk_ir::ops::DialectOp;
+use trunk_ir::ops::{DialectOp, VariadicResults};
 use trunk_ir::refs::{OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{
     ConversionError, ConversionTarget, Module, OpRewritePattern, PatternApplicator,

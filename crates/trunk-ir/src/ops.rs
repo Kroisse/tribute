@@ -9,7 +9,7 @@ use std::error::Error;
 
 use super::context::IrContext;
 use super::op_def::{OpDef, OpName};
-use super::refs::{OpRef, TypeRef};
+use super::refs::{OpRef, TypeRef, ValueRef};
 use super::type_def::{TypeDef, TypeName};
 
 /// Convert an identifier token into a clean string, handling raw identifiers.
@@ -98,6 +98,35 @@ pub trait DialectOp: Sized + Copy {
 
     fn matches(ctx: &IrContext, op: OpRef) -> bool {
         ctx.op(op).name == Self::NAME
+    }
+}
+
+/// Accessors for an operation that declares a variadic result list, as
+/// MLIR's `OpTrait::VariadicResults` is for one.
+///
+/// It is a static mixin on the operation's wrapper, not an interface: every
+/// such operation answers the same way, and callers already hold the
+/// wrapper. An operation that declares a fixed result has the generated
+/// `result` accessor instead, so the names do not meet.
+pub trait VariadicResults: DialectOp {
+    /// The result of an operation with exactly one result.
+    fn single_result(&self, ctx: &IrContext) -> Option<ValueRef> {
+        match *ctx.op_results(self.op_ref()) {
+            [result] => Some(result),
+            _ => None,
+        }
+    }
+
+    /// The result of an operation its producer built with exactly one
+    /// result. Generic consumers use [`single_result`](Self::single_result).
+    fn result(&self, ctx: &IrContext) -> ValueRef {
+        self.single_result(ctx)
+            .expect("producer built the operation with exactly one result")
+    }
+
+    /// The type of [`result`](Self::result).
+    fn result_ty(&self, ctx: &IrContext) -> TypeRef {
+        ctx.value_ty(self.result(ctx))
     }
 }
 

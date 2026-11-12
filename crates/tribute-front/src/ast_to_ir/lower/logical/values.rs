@@ -6,7 +6,7 @@ use tribute_ir::dialect::{adt, list, tribute_control};
 use trunk_ir::Symbol;
 use trunk_ir::context::{BlockData, IrContext, RegionData};
 use trunk_ir::dialect::{arith, scf};
-use trunk_ir::ops::DialectOp;
+use trunk_ir::ops::{DialectOp, VariadicResults};
 use trunk_ir::refs::{BlockRef, TypeRef, ValueRef};
 use trunk_ir::types::{Attribute, Location};
 

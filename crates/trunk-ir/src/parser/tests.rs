@@ -543,7 +543,7 @@ fn test_roundtrip_func_call() {
         .results([i32_ty])
         .build(&mut ctx, loc);
     ctx.push_op(entry2, call.op_ref());
-    let call_val = call.result(&ctx);
+    let call_val = call.results(&ctx)[0];
     let ret2 = func::Return::operands([call_val]).build(&mut ctx, loc);
     ctx.push_op(entry2, ret2.op_ref());
     let body2 = ctx.create_region(RegionData {

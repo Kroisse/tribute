@@ -127,7 +127,11 @@ where
   attribute is absent, and the builder, the parser, and the printer drop a
   value equal to `v`, so absence is the canonical form. Type attributes take
   no default. Results are `Value<C>` or `Option<Value<C>>` (accessor
-  `result`) or `Variadic<C>` / `Values<L>` (accessor `results`).
+  `result`) or `Variadic<C>` / `Values<L>` (accessor `results`). A wrapper
+  with variadic results that callers read as one value implements the
+  `ops::VariadicResults` mixin, as MLIR's `OpTrait::VariadicResults` is:
+  `single_result` returns the result of an operation with exactly one, and
+  `result` expects its producer to have built exactly one.
 - Attribute kinds are Rust types implementing `attr_kind::AttrKind`, resolved
   in the dialect's scope like bounds: primitives (`bool`, `i32`, `i64`, `u32`,
   `u64`, `f32`, `f64`), `String`, the markers

@@ -9,7 +9,7 @@ use tribute_ir::dialect::adt::layout::get_struct_fields;
 use tribute_ir::dialect::list;
 use trunk_ir::context::{BlockData, IrContext, RegionData};
 use trunk_ir::dialect::{arith, scf};
-use trunk_ir::ops::DialectType;
+use trunk_ir::ops::{DialectType, VariadicResults};
 use trunk_ir::refs::{BlockRef, TypeRef, ValueRef};
 use trunk_ir::types::{Attribute, Location};
 use trunk_ir::{Symbol, SymbolPath};

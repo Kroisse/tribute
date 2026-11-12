@@ -104,7 +104,7 @@ mod tests {
         assert_eq!(args[1], v2);
 
         // Verify result
-        let result = call.result(&ctx);
+        let result = call.results(&ctx)[0];
         assert_eq!(ctx.value_ty(result), i32_ty);
     }
 

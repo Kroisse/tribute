@@ -126,28 +126,9 @@ fn immediate_region_owner(ctx: &IrContext, op: OpRef) -> Option<OpRef> {
     op_parent_region(ctx, op).and_then(|region| ctx.region(region).parent_op)
 }
 
-macro_rules! single_control_result {
-    ($name:ident) => {
-        impl $name {
-            /// The result of an operation with exactly one result.
-            pub fn single_result(&self, ctx: &IrContext) -> Option<ValueRef> {
-                match *self.results(ctx) {
-                    [result] => Some(result),
-                    _ => None,
-                }
-            }
-
-            /// The result of an operation its producer built with exactly
-            /// one result.
-            pub fn result(&self, ctx: &IrContext) -> ValueRef {
-                self.single_result(ctx)
-                    .expect("one-result structured control required by producer")
-            }
-        }
-    };
-}
-single_control_result!(If);
-single_control_result!(Loop);
+impl crate::ops::VariadicResults for If {}
+impl crate::ops::VariadicResults for Loop {}
+impl crate::ops::VariadicResults for IndexSwitch {}
 
 impl If {
     fn validate_region_shape(self, ctx: &IrContext) -> Result<(), ControlFlowInterfaceError> {

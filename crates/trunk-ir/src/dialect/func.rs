@@ -671,29 +671,8 @@ pub fn func_sig_with_attrs(
         .expect("func.func_sig constructor must produce a valid type")
 }
 
-// One-result source producers use these explicit convenience accessors. Generic
-// consumers use `results` / `single_result` and validate cardinality first.
-macro_rules! single_call_result {
-    ($name:ident) => {
-        impl $name {
-            pub fn single_result(&self, ctx: &crate::IrContext) -> Option<crate::ValueRef> {
-                match self.results(ctx) {
-                    [result] => Some(*result),
-                    _ => None,
-                }
-            }
-            pub fn result(&self, ctx: &crate::IrContext) -> crate::ValueRef {
-                self.single_result(ctx)
-                    .expect("one-result call required by producer")
-            }
-            pub fn result_ty(&self, ctx: &crate::IrContext) -> crate::TypeRef {
-                ctx.value_ty(self.result(ctx))
-            }
-        }
-    };
-}
-single_call_result!(Call);
-single_call_result!(CallIndirect);
+impl crate::ops::VariadicResults for Call {}
+impl crate::ops::VariadicResults for CallIndirect {}
 
 impl CallLike for Call {
     fn call_args<'a>(&self, ctx: &'a crate::IrContext) -> &'a [crate::ValueRef] {
@@ -1196,6 +1175,7 @@ mod result_list_tests {
     use crate::IrContext;
     use crate::SymbolPath;
     use crate::dialect::core;
+    use crate::ops::VariadicResults as _;
     use crate::parser::parse_module;
     use crate::rewrite::Module;
     use crate::validation::validate_all;
