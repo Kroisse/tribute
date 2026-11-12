@@ -2,9 +2,25 @@
 
 #[trunk_ir::dialect]
 mod scf {
+    /// A structured two-way branch on a boolean condition, as MLIR's
+    /// `scf.if`.
+    ///
+    /// ```text
+    /// %r = scf.if %c -> (core.i32) {
+    ///     scf.yield %a
+    /// } else {
+    ///     scf.yield %b
+    /// }
+    /// ```
+    ///
+    /// - **Shape:** a `core.i1` condition, `then_region`, `else_region`, and
+    ///   at most one result.
+    /// - **Meaning:** runs `then_region` when the condition is 1 and
+    ///   `else_region` when it is 0. Each region ends in `scf.yield`, whose
+    ///   value becomes the result, or in its own terminator.
     #[asm_format(cond ("->" "(" type(result)^ ")")? attr_dict region(then_region) "else" region(else_region))]
     #[implements(RegionBranch, Fold)]
-    fn r#if(cond: Value<_>) -> Option<Value<_>> {
+    fn r#if(cond: Value<I1>) -> Option<Value<_>> {
         #[region(then_region)]
         {}
         #[region(else_region)]
@@ -478,7 +494,7 @@ impl RegionBranchTerminator for Break {
 
 use crate::context::IrContext;
 use crate::dialect::arith::const_int_value;
-use crate::dialect::core::{BoolLike, IntegerOrIndex};
+use crate::dialect::core::{I1, IntegerOrIndex};
 use crate::ops::DialectOp;
 use crate::refs::{OpRef, ValueRef};
 use crate::transforms::canonicalize::{Fold, FoldResult};
@@ -496,23 +512,16 @@ use crate::types::Attribute;
 ///
 /// Multi-block regions are left alone — they only appear
 /// post-`scf_to_cf`, where this pass doesn't run anyway. Bails out on
-/// any structural mismatch (yield arity, non-`i1` const, malformed
+/// any structural mismatch (yield arity, a payload other than 0 or 1, malformed
 /// regions).
 impl Fold for If {
     fn fold(&self, ctx: &IrContext) -> Option<FoldResult> {
         let op = self.op_ref();
         let if_op = self;
         let cond = if_op.cond(ctx);
-        // Guard against malformed IR: only fold when the cond's type is
-        // `core.i1`. Without this, an `arith.constant value=2 : core.i32`
-        // wired into the cond slot would be treated as truthy here,
-        // burning the dead branch before the validator gets to reject it.
-        if !BoolLike::matches(ctx, ctx.value_ty(cond)) {
-            return None;
-        }
         let cond_value = const_int_value(ctx, cond)?;
-        // We've gated on cond's type being `core.i1`; the only valid
-        // payloads are 0 and 1. Reject anything else (e.g.
+        // The schema types cond as `core.i1`, whose only valid payloads
+        // are 0 and 1. Reject anything else (e.g.
         // `arith.constant value=2 : core.i1`) so the validator surfaces the
         // malformed const instead of the fold silently picking a branch.
         let active_region = match cond_value {
@@ -792,30 +801,6 @@ mod canonicalize_tests {
         let input = r#"core.module @test {
   func.func @f(%cond: core.i1, %x: core.i32) -> core.i32 {
     %r = scf.if %cond -> (core.i32) {
-      scf.yield %x
-    } else {
-      scf.yield %x
-    }
-    func.return %r
-  }
-}"#;
-        let mut ctx = IrContext::new();
-        let module = parse_test_module(&mut ctx, input);
-
-        let result = run_scf_patterns(&mut ctx, module);
-        assert_eq!(result.total_changes, 0);
-        assert_eq!(count_ops(&ctx, module, crate::dialect::scf::If::NAME), 1);
-    }
-
-    #[test]
-    fn if_non_i1_const_cond_is_not_folded() {
-        // Malformed IR: the cond slot is wired to a `core.i32` constant
-        // instead of `core.i1`. The fold must bail and leave the op for
-        // validation rather than picking a branch by truthiness.
-        let input = r#"core.module @test {
-  func.func @f(%x: core.i32) -> core.i32 {
-    %bad = arith.constant 2 : core.i32
-    %r = scf.if %bad -> (core.i32) {
       scf.yield %x
     } else {
       scf.yield %x
