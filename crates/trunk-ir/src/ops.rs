@@ -106,8 +106,10 @@ pub trait DialectOp: Sized + Copy {
 ///
 /// It is a static mixin on the operation's wrapper, not an interface: every
 /// such operation answers the same way, and callers already hold the
-/// wrapper. An operation that declares a fixed result has the generated
-/// `result` accessor instead, so the names do not meet.
+/// wrapper. `#[dialect]` implements it for every operation whose results are
+/// declared `Variadic<C>` or `Values<L>`, as ODS attaches the MLIR trait. An
+/// operation that declares a fixed result has the generated `result`
+/// accessor instead, so the names do not meet.
 pub trait VariadicResults: DialectOp {
     /// The result of an operation with exactly one result.
     fn single_result(&self, ctx: &IrContext) -> Option<ValueRef> {

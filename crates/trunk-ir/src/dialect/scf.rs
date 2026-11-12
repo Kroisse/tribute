@@ -127,10 +127,6 @@ fn immediate_region_owner(ctx: &IrContext, op: OpRef) -> Option<OpRef> {
     op_parent_region(ctx, op).and_then(|region| ctx.region(region).parent_op)
 }
 
-impl crate::ops::VariadicResults for If {}
-impl crate::ops::VariadicResults for Loop {}
-impl crate::ops::VariadicResults for IndexSwitch {}
-
 impl If {
     fn validate_region_shape(self, ctx: &IrContext) -> Result<(), ControlFlowInterfaceError> {
         let op = self.op_ref();

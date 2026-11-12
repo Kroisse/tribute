@@ -409,6 +409,7 @@ mod mechanics {
     use super::*;
     use crate::dialect::cf;
     use crate::location::Span;
+    use crate::ops::VariadicResults;
     use crate::*;
     use smallvec::smallvec;
     fn test_ctx() -> (IrContext, Location) {
@@ -529,7 +530,7 @@ mod mechanics {
                 .callee(SymbolPath::new(["helper"]))
                 .results([i32_ty])
                 .build(ctx, loc);
-            let result = call.results(ctx)[0];
+            let result = call.result(ctx);
             ctx.push_op(entry, call.op_ref());
             let ret = func::Return::operands([result]).build(ctx, loc);
             ctx.push_op(entry, ret.op_ref());
@@ -589,7 +590,7 @@ mod mechanics {
                 .callee(SymbolPath::new(["helper"]))
                 .results([i32_ty])
                 .build(ctx, loc);
-            let result = call.results(ctx)[0];
+            let result = call.result(ctx);
             ctx.push_op(entry, call.op_ref());
             let ret = func::Return::operands([result]).build(ctx, loc);
             ctx.push_op(entry, ret.op_ref());
@@ -674,7 +675,7 @@ mod mechanics {
                 .callee(SymbolPath::new(["helper"]))
                 .results([i32_ty])
                 .build(ctx, loc);
-            let result = call.results(ctx)[0];
+            let result = call.result(ctx);
             ctx.push_op(entry, call.op_ref());
             let ret = func::Return::operands([result]).build(ctx, loc);
             ctx.push_op(entry, ret.op_ref());
@@ -746,7 +747,7 @@ mod mechanics {
                 .callee(SymbolPath::new(["helper"]))
                 .results([i32_ty])
                 .build(ctx, loc);
-            let result = call.results(ctx)[0];
+            let result = call.result(ctx);
             ctx.push_op(entry, call.op_ref());
             let ret = func::Return::operands([result]).build(ctx, loc);
             ctx.push_op(entry, ret.op_ref());
@@ -801,6 +802,7 @@ mod mechanics {
 mod pass {
     use super::*;
     use crate::location::Span;
+    use crate::ops::VariadicResults;
     use crate::*;
     use smallvec::smallvec;
 
@@ -922,7 +924,7 @@ mod pass {
                 .callee(SymbolPath::new(["helper"]))
                 .results([i32_ty])
                 .build(ctx, loc);
-            let r = call.results(ctx)[0];
+            let r = call.result(ctx);
             ctx.push_op(entry, call.op_ref());
             let ret = func::Return::operands([r]).build(ctx, loc);
             ctx.push_op(entry, ret.op_ref());
@@ -998,7 +1000,7 @@ mod pass {
                 .callee(SymbolPath::new(["f"]))
                 .results([i32_ty])
                 .build(ctx, loc);
-            let r = call.results(ctx)[0];
+            let r = call.result(ctx);
             ctx.push_op(entry, call.op_ref());
             let ret = func::Return::operands([r]).build(ctx, loc);
             ctx.push_op(entry, ret.op_ref());
@@ -1053,7 +1055,7 @@ mod pass {
                 .callee(SymbolPath::new(["helper"]))
                 .results([i32_ty])
                 .build(ctx, loc);
-            let r = call.results(ctx)[0];
+            let r = call.result(ctx);
             ctx.push_op(entry, call.op_ref());
             let ret = func::Return::operands([r]).build(ctx, loc);
             ctx.push_op(entry, ret.op_ref());
@@ -1094,7 +1096,7 @@ mod pass {
                 .callee(SymbolPath::new(["helper"]))
                 .results([i32_ty])
                 .build(ctx, loc);
-            let r = call.results(ctx)[0];
+            let r = call.result(ctx);
             ctx.push_op(entry, call.op_ref());
             let ret = func::Return::operands([r]).build(ctx, loc);
             ctx.push_op(entry, ret.op_ref());
@@ -1104,7 +1106,7 @@ mod pass {
                 .callee(SymbolPath::new(["helper"]))
                 .results([i32_ty])
                 .build(ctx, loc);
-            let r = call.results(ctx)[0];
+            let r = call.result(ctx);
             ctx.push_op(entry, call.op_ref());
             let ret = func::Return::operands([r]).build(ctx, loc);
             ctx.push_op(entry, ret.op_ref());
@@ -1156,7 +1158,7 @@ mod pass {
                 .callee(SymbolPath::new(["helper"]))
                 .results([i32_ty])
                 .build(ctx, loc);
-            let r = call.results(ctx)[0];
+            let r = call.result(ctx);
             ctx.push_op(entry, call.op_ref());
             let ret = func::Return::operands([r]).build(ctx, loc);
             ctx.push_op(entry, ret.op_ref());

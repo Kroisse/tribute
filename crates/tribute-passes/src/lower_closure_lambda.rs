@@ -439,6 +439,7 @@ mod tests {
     use trunk_ir::SymbolPath;
     use trunk_ir::context::RegionData;
     use trunk_ir::dialect::{arith, core};
+    use trunk_ir::ops::VariadicResults;
     use trunk_ir::refs::PathRef;
     use trunk_ir::types::Location;
     use trunk_ir::types::TypeDataBuilder;
@@ -786,6 +787,6 @@ mod tests {
             .expect("first op should be closure.unpack");
         assert_eq!(unpack.closure(&ctx), environment);
         assert_eq!(unpack.results(&ctx).len(), 1);
-        assert_eq!(ctx.value_ty(unpack.results(&ctx)[0]), i32_ty);
+        assert_eq!(unpack.result_ty(&ctx), i32_ty);
     }
 }

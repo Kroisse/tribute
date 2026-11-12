@@ -177,7 +177,11 @@ format과 선언적 rewrite 도구는 operation 정의를 중복하지 않고 �
 - 결과는 `-> Value<C>`(accessor `result`) 또는 `-> Variadic<C>` /
   `-> Values<L>`(accessor `results`)로 선언한다. 결과가 0개 또는 1개인
   operation은 `-> Option<Value<C>>`로 선언한다. 결과가 없는 operation과
-  `core.nil` 결과 하나를 가진 operation은 서로 다르다.
+  `core.nil` 결과 하나를 가진 operation은 서로 다르다. 가변 결과를 선언한
+  operation의 wrapper는 MLIR의 `OpTrait::VariadicResults`처럼
+  `ops::VariadicResults`의 `single_result`, `result`, `result_ty`를 가진다.
+  Entity accessor는 wrapper가 구현하는 trait의 메서드와 같은 이름을 쓸 수
+  없다.
 - Region은 선언 순서대로 저장된다. 외부 함수 선언의 body처럼 없을 수 있는
   region은 선택 region으로 선언하며, 마지막 region만 선택일 수 있다.
 - 이름 있는 제네릭 파라미터는 논리적 타입 변수다. 같은 변수가 여러 위치에

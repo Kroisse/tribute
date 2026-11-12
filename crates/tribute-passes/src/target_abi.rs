@@ -19,7 +19,7 @@ use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
 use trunk_ir::dialect::{core, func};
 use trunk_ir::op_interface::DynIndirectCallLike;
-use trunk_ir::ops::{DialectOp, DialectType};
+use trunk_ir::ops::{DialectOp, DialectType, VariadicResults};
 use trunk_ir::pass::{Pass, PassRunResult};
 use trunk_ir::refs::{BlockRef, OpRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::Module;
@@ -812,7 +812,7 @@ impl TerminalFunctions {
             .results([cell_ty])
             .build(ctx, location);
         ctx.push_op(done_entry, cell.op_ref());
-        let cell = cell.results(ctx)[0];
+        let cell = cell.result(ctx);
         let stored = if slot == answer {
             done_args[0]
         } else {
