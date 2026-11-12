@@ -160,7 +160,7 @@ where
   blocks, and the builder takes them as an iterator.
 - Bounds are Rust types implementing `type_constraint::TypeConstraint`:
   `core` scalar categories (`IntegerLike` for fixed-width integers,
-  `IntegerOrIndex` for those and `core.index`, `BoolLike`, `FloatLike`,
+  `IntegerOrIndex` for those and `core.index`, `FloatLike`,
   `NumericLike`, `ScalarLike`), exact `core` scalars (`I1`–`I64`, `Index`,
   `F32`, `F64`), macro-defined type wrappers
   (projections are their declared parameters), and the `func`/`clif`/`wasm`
@@ -289,7 +289,7 @@ let resumed = Resume::operands(token, value).build(ctx, loc); // `T::Answer`
 The builder infers result types that are fixed types, variables bound by a
 single operand or a required attribute, or projections of such variables;
 `.results(..)` exists only when they are not all inferred, as for
-`-> Value<impl BoolLike>`. Result types,
+`-> Value<impl IntegerLike>`. Result types,
 regions (`.regions(..)`), and successors (`.successors(..)`) are each set in
 one call, in declaration order; variadic successors are passed as an
 iterator. Missing required inputs panic in `build`; the builder does not check
