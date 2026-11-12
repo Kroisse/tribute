@@ -7,10 +7,10 @@ error[E0277]: the trait bound `std::string::String: trunk_ir::type_constraint::T
   = help: the following other types implement trait `trunk_ir::type_constraint::TypeConstraint`:
             Anyref
             Arrayref
-            BoolLike
             Eqref
             Externref
             FloatLike
             Funcref
             I1
+            I16
           and $N others

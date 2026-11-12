@@ -3,7 +3,7 @@
 use tribute_ir::dialect::adt;
 use trunk_ir::context::{BlockData, IrContext, RegionData};
 use trunk_ir::dialect::{arith, core, func, mem, scf};
-use trunk_ir::ops::DialectOp;
+use trunk_ir::ops::{DialectOp, VariadicResults};
 use trunk_ir::refs::{OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{
     ConversionError, ConversionTarget, Module, OpRewritePattern, PatternApplicator,
@@ -222,14 +222,14 @@ impl OpRewritePattern for NativeReadLinePattern {
         let invalid_region =
             variant_region(ctx, loc, enum_ty, result_ty, variants.invalid_encoding, []);
         let invalid_if = scf::If::operands(invalid_cond.result(ctx))
-            .results(result_ty)
+            .results([result_ty])
             .regions(invalid_region, system_region)
             .build(ctx, loc);
 
         let eof_region = variant_region(ctx, loc, enum_ty, result_ty, variants.end_of_file, []);
         let eof_else = op_region(ctx, loc, invalid_if.op_ref(), invalid_if.result(ctx));
         let eof_if = scf::If::operands(eof_cond.result(ctx))
-            .results(result_ty)
+            .results([result_ty])
             .regions(eof_region, eof_else)
             .build(ctx, loc);
 
@@ -243,7 +243,7 @@ impl OpRewritePattern for NativeReadLinePattern {
         );
         let line_else = op_region(ctx, loc, eof_if.op_ref(), eof_if.result(ctx));
         let line_if = scf::If::operands(line_cond.result(ctx))
-            .results(result_ty)
+            .results([result_ty])
             .regions(line_region, line_else)
             .build(ctx, loc);
 

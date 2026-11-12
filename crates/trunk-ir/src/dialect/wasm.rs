@@ -100,24 +100,25 @@ mod wasm {
     #[flags(Terminator)]
     #[asm_format(values attr_dict_bare)]
     fn r#return(values: Variadic<_>) {}
-    /// Pass `value` to the enclosing structured operation.
+    /// Pass `values` to the enclosing structured operation.
     ///
     /// ```text
-    /// wasm.yield %v
+    /// wasm.yield %a, %b
     /// ```
     ///
-    /// - **Meaning:** as the last operation of a region whose parent has a
-    ///   result, `value` is that region's result. Followed by a `wasm.br`,
-    ///   `value` is the branch's value, or, for a branch to a `wasm.loop`,
-    ///   the loop's next block arguments.
-    /// - **Value flow:** after `ExplicitLocals`, `value` is either the value
-    ///   the operations before it left on top of the stack, or a function
-    ///   parameter, which emission reads from its local right before the
-    ///   yield. Emission writes no instruction for the yield itself. A yield
-    ///   that passes no value, or that precedes a branch to a loop, does not
-    ///   remain (`design/wasm-backend.md`, "명시적 지역 변수와 stack 계약").
-    #[asm_format(value attr_dict_bare)]
-    fn r#yield(value: Value<_>) {}
+    /// - **Meaning:** as the last operation of a region whose parent has
+    ///   results, `values` are that region's results in order. Followed by
+    ///   a `wasm.br`, `values` are the branch's values, or, for a branch to
+    ///   a `wasm.loop`, the loop's next block arguments.
+    /// - **Value flow:** after `ExplicitLocals`, `values` are the values
+    ///   the operations before it left on top of the stack in order, the
+    ///   last of them possibly function parameters, which emission reads
+    ///   from their locals right before the yield. Emission writes no
+    ///   instruction for the yield itself. A yield that passes no value, or
+    ///   that precedes a branch to a loop, does not remain
+    ///   (`design/wasm-backend.md`, "명시적 지역 변수와 stack 계약").
+    #[asm_format(values attr_dict_bare)]
+    fn r#yield(values: Variadic<_>) {}
     #[asm_format(value attr_dict_bare)]
     fn drop(value: Value<_>) {}
 

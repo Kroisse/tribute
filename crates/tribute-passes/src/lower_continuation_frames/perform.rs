@@ -124,7 +124,7 @@ fn push_one_shot_resume(
 
     let never = core::Never::params().intern(ctx).as_type_ref();
     let guard = scf::If::operands(consumed.result(ctx))
-        .results(never)
+        .results([never])
         .regions(reject_region, enter_region)
         .build(ctx, location);
     ctx.push_op(wrapper_block, guard.op_ref());

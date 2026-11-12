@@ -9,7 +9,7 @@ use tribute_ir::dialect::adt::layout::get_struct_fields;
 use tribute_ir::dialect::list;
 use trunk_ir::context::{BlockData, IrContext, RegionData};
 use trunk_ir::dialect::{arith, scf};
-use trunk_ir::ops::DialectType;
+use trunk_ir::ops::{DialectType, VariadicResults};
 use trunk_ir::refs::{BlockRef, TypeRef, ValueRef};
 use trunk_ir::types::{Attribute, Location};
 use trunk_ir::{Symbol, SymbolPath};
@@ -391,7 +391,7 @@ fn emit_logical_variant_pattern_check<'db>(
         parent_op: None,
     });
     let checked = scf::If::operands(tag.result(builder.ir))
-        .results(bool_ty)
+        .results([bool_ty])
         .regions(then_region, else_region)
         .build(builder.ir, location);
     builder.ir.push_op(builder.block, checked.op_ref());
@@ -531,7 +531,7 @@ fn emit_logical_list_pattern_suffix<'db>(
             parent_op: None,
         });
         let guarded = scf::If::operands(condition)
-            .results(bool_ty)
+            .results([bool_ty])
             .regions(match_region, mismatch_region)
             .build(nested.ir, location);
         nested.ir.push_op(nested.block, guarded.op_ref());
@@ -564,7 +564,7 @@ fn emit_logical_list_pattern_suffix<'db>(
         parent_op: None,
     });
     let guarded = scf::If::operands(non_empty.result(builder.ir))
-        .results(bool_ty)
+        .results([bool_ty])
         .regions(then_region, else_region)
         .build(builder.ir, location);
     builder.ir.push_op(builder.block, guarded.op_ref());

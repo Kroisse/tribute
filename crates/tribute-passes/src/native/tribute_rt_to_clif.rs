@@ -22,6 +22,7 @@ use trunk_ir::SymbolPath;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::clif;
 use trunk_ir::dialect::core;
+use trunk_ir::ops::VariadicResults;
 use trunk_ir::refs::{OpRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::rewriter::PatternRewriter;
 use trunk_ir::rewrite::type_converter::TypeConverter;
@@ -67,7 +68,7 @@ fn box_value(
         .callee(SymbolPath::new([ALLOC_FN]))
         .results([ptr_ty])
         .build(ctx, loc);
-    let raw_ptr = call_op.results(ctx)[0];
+    let raw_ptr = call_op.result(ctx);
     ops.push(call_op.op_ref());
 
     // 3. Store refcount = 1

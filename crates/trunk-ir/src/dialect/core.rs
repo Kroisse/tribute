@@ -155,27 +155,6 @@ impl crate::type_constraint::TypeConstraint for Index {
         };
 }
 
-/// The boolean integer type `core.i1`.
-pub struct BoolLike;
-
-impl crate::type_constraint::TypeConstraint for BoolLike {
-    const DESC: &'static crate::type_constraint::ConstraintDesc =
-        &crate::type_constraint::ConstraintDesc {
-            name: "BoolLike",
-            exact: false,
-            projections: &[],
-            matches: Self::matches,
-            project: |_, _, _| None,
-            fixed: None,
-        };
-}
-
-impl BoolLike {
-    pub fn matches(ctx: &IrContext, ty: TypeRef) -> bool {
-        IntegerLike::width(ctx, ty) == Some(1)
-    }
-}
-
 /// IEEE floating-point types `core.f32` and `core.f64`.
 pub struct FloatLike;
 
@@ -561,15 +540,12 @@ mod scalar_category_tests {
     }
 
     #[test]
-    fn bool_and_float_categories() {
+    fn float_category() {
         let mut ctx = IrContext::new();
         let i1 = core::I1::type_ref(&mut ctx);
-        let i8 = core::I8::type_ref(&mut ctx);
         let f32 = core::F32::type_ref(&mut ctx);
         let f64 = core::F64::type_ref(&mut ctx);
         let f16 = TypeDataBuilder::new("core.f16").intern(&mut ctx);
-        assert!(BoolLike::matches(&ctx, i1));
-        assert!(!BoolLike::matches(&ctx, i8));
         assert_eq!(FloatLike::width(&ctx, f32), Some(32));
         assert_eq!(FloatLike::width(&ctx, f64), Some(64));
         assert!(!FloatLike::matches(&ctx, f16));

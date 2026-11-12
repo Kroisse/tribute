@@ -1372,16 +1372,16 @@ mod tests {
             "foreign.func_sig<core.i32, {num_inputs = 2, num_results = 1}>"
         );
 
-        // Shared signatures have a stricter one-result contract, so raw
-        // multi-result storage must not be printed in arrow syntax either.
+        // Counts that do not add up to the parameters are not a shared
+        // signature, so the storage must not be printed in arrow syntax.
         let shared = TypeDataBuilder::new("func.func_sig")
             .params([i32_ty, i32_ty, i32_ty])
             .attr(func::NUM_INPUTS_ATTR, Attribute::Int(1))
-            .attr(func::NUM_RESULTS_ATTR, Attribute::Int(2))
+            .attr(func::NUM_RESULTS_ATTR, Attribute::Int(1))
             .intern(&mut ctx);
         assert_eq!(
             shared.display(&ctx).to_string(),
-            "func.func_sig<core.i32, core.i32, core.i32, {num_inputs = 1, num_results = 2}>"
+            "func.func_sig<core.i32, core.i32, core.i32, {num_inputs = 1, num_results = 1}>"
         );
     }
 

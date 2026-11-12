@@ -61,6 +61,8 @@ fn gen_struct_and_trait(crate_path: &TokenStream, dialect: &str, op: &OperationD
     let def = gen_op_def(crate_path, dialect, op);
     let def_static = format_ident!("__{}_DEF", op_name.to_shouty_snake_case());
     let interfaces = gen_interface_registrations(crate_path, &sname, &op.implements);
+    let variadic_results = matches!(op.results, ResultDef::Variadic(_))
+        .then(|| quote!(impl #crate_path::ops::VariadicResults for #sname {}));
     let docs = &op.docs;
 
     quote! {
@@ -98,6 +100,8 @@ fn gen_struct_and_trait(crate_path: &TokenStream, dialect: &str, op: &OperationD
                 <#sname as #crate_path::ops::DialectOp>::DEF
             )
         }
+
+        #variadic_results
 
         #interfaces
     }
@@ -416,6 +420,10 @@ fn gen_impl_block(crate_path: &TokenStream, op: &OperationDef) -> TokenStream {
     quote! {
         impl #sname {
             #op_ref_method
+        }
+
+        #[deny(clippy::same_name_method)]
+        impl #sname {
             #operand_accessors
             #result_accessors
             #attr_accessors

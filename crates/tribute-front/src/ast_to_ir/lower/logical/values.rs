@@ -6,7 +6,7 @@ use tribute_ir::dialect::{adt, list, tribute_control};
 use trunk_ir::Symbol;
 use trunk_ir::context::{BlockData, IrContext, RegionData};
 use trunk_ir::dialect::{arith, scf};
-use trunk_ir::ops::DialectOp;
+use trunk_ir::ops::{DialectOp, VariadicResults};
 use trunk_ir::refs::{BlockRef, TypeRef, ValueRef};
 use trunk_ir::types::{Attribute, Location};
 
@@ -182,7 +182,7 @@ pub(super) fn lower_expr<'db>(
                 bool_ty,
             )?;
             let branch = scf::If::operands(lhs)
-                .results(bool_ty)
+                .results([bool_ty])
                 .regions(then_region, else_region)
                 .build(builder.ir, location);
             builder.ir.push_op(builder.block, branch.op_ref());
@@ -624,7 +624,7 @@ pub(super) fn lower_case_chain<'db>(
                 declarations,
             )?;
             let branch = scf::If::operands(condition)
-                .results(result_ty)
+                .results([result_ty])
                 .regions(then_region, else_region)
                 .build(builder.ir, location);
             builder.ir.push_op(builder.block, branch.op_ref());
@@ -849,7 +849,7 @@ pub(super) fn build_case_arm_region<'db>(
                     declarations,
                 )?;
                 let branch = scf::If::operands(condition)
-                    .results(result_ty)
+                    .results([result_ty])
                     .regions(then_region, else_region)
                     .build(nested.ir, location);
                 nested.ir.push_op(nested.block, branch.op_ref());
