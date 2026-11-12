@@ -137,17 +137,17 @@ Operation flag는 동작 없이 operation 정의가 선언하는 예/아니오 �
 Callable을 떠나는지는 [`CallableExit`](#선언적-operation-schema), block
 successor는 `Branch`, 부모 operation으로 돌아가는지는 `RegionBranchTerminator`가
 말한다. 그 셋 가운데 하나를 구현하는 operation과 무조건 trap하는 operation은 모두
-`Terminator`다. 조건부 분기처럼 다음 operation으로 이어질 수 있는 operation
-(`wasm.br_if`, `clif.trapnz`)과 다음 operation에 값을 넘기는 표시
-(`wasm.yield`)는 아니다.
+`Terminator`다. Wasm 구조적 제어의 region을 끝내는 `wasm.yield`도 그렇다.
+조건부 분기처럼 다음 operation으로 이어질 수 있는 operation(`wasm.br_if`,
+`clif.trapnz`)은 아니다.
 
 MLIR처럼 모든 block은 `Terminator`로 끝난다. 빈 block도 허용하지 않는다.
 Region이 제어 흐름이 아니라 선언을 담는 operation은 `NoTerminator` flag(MLIR의
 `NoTerminator`)를 선언해 이 규칙에서 빠진다. `core.module`, `ability.decl`,
-`clif.data`, `wasm.elem`이 그렇다. Wasm의 `wasm.func`, `wasm.if`, `wasm.block`,
-`wasm.loop`도 `NoTerminator`다. Stack machine의 함수 본문과 region은 마지막 명령어
-뒤에서 암묵적으로 끝나고,
-`wasm.yield`는 뒤따르는 `wasm.br`에 값을 넘기는 표시이므로 terminator가 아니다.
+`clif.data`, `wasm.elem`이 그렇다. Stack machine인 Wasm의 함수 본문과 구조적 제어
+region도 이 규칙을 따른다. 분기는 자기가 넘기는 값을 operand로 싣고, 끝에 이르는
+region은 `wasm.yield`로 끝난다
+([분기와 region 끝의 값](wasm-backend.md#분기와-region-끝의-값)).
 등록되지 않은 operation은 정의를 읽을 수 없으므로 어느 쪽으로도 검사하지 않는다.
 
 Flag는 operation 정의의 선언이므로 이름을 나열하지 않고 검사한다. Operation
