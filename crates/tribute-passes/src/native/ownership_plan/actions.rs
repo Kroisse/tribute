@@ -607,10 +607,14 @@ impl ActionPlanner<'_> {
             return self.plan_call(op, transferred);
         }
         if func::Return::matches(self.ir, op) {
+            let mut counts = HashMap::<ValueRef, u32>::default();
             for (index, &operand) in self.ir.op_operands(op).iter().enumerate() {
                 if is_managed_value(self.ir, operand, self.managed_layouts) {
                     let root = root_value(self.facts.aliases(), operand);
-                    if self.borrowed.contains_key(&root) {
+                    let count = counts.entry(root).or_default();
+                    // Each returned position owns one unit, so a root
+                    // returned again needs another.
+                    if *count > 0 || self.borrowed.contains_key(&root) {
                         self.actions.push(OwnershipAction {
                             kind: ActionKind::CopyAcquire,
                             value: operand,
@@ -618,6 +622,7 @@ impl ActionPlanner<'_> {
                             destination: index as u32,
                         });
                     }
+                    *count += 1;
                     transferred.insert(root);
                     self.actions.push(OwnershipAction {
                         kind: ActionKind::ReturnTransfer,
