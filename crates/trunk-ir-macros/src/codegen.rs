@@ -420,6 +420,10 @@ fn gen_impl_block(crate_path: &TokenStream, op: &OperationDef) -> TokenStream {
     quote! {
         impl #sname {
             #op_ref_method
+        }
+
+        #[deny(clippy::same_name_method)]
+        impl #sname {
             #operand_accessors
             #result_accessors
             #attr_accessors
