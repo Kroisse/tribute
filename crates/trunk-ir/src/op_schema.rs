@@ -1234,6 +1234,23 @@ mod tests {
     }
 
     #[test]
+    fn if_condition_must_be_i1() {
+        let text = schema_errors(
+            r#"core.module @m {
+  func.func @f(%c: core.i32) {
+    scf.if %c {
+      scf.yield
+    } else {
+      scf.yield
+    }
+    func.return
+  }
+}"#,
+        );
+        assert!(text.contains("expected core.i1, found core.i32"), "{text}");
+    }
+
+    #[test]
     fn structural_violations_report_the_operation_and_entity() {
         let text = schema_errors(
             r#"core.module @m {
