@@ -81,16 +81,18 @@ compiler가 값마다 표현을 고른다. 표현 선택은 값 의미론인 [`a
   SSA 값은 없다. `core.nil` 필드는 값이 하나뿐이므로 leaf를 만들지 않는다. 그래서
   값을 쪼갠 결과 목록에는 `core.nil`이 없다.
 - **Boxed 값은 `heap.box`에 담는다.** 생성은 `heap` 할당이 되고 필드 읽기는 box를
-  빌린 읽기가 된다.
+  빌린 읽기가 되며, `adt.struct_update`와 `adt.array_set`은 source box를 소비하는
+  `heap` 갱신이 된다. Unboxed 값의 갱신은 바뀌는 leaf만 바꿔 끼운다.
+- **Cell은 표현 선택의 대상이 아니다.** Compiler가 쓰는 [`heap.cell`](tribute-dialects.md#heapcell)은
+  표현 선택 전부터 object다.
 - **강제 위치에서는 언제나 box에 담는다.** Unboxed로 고른 타입도 이 위치를 지날 때는
   필드 값으로 object를 할당하고, 거기서 나올 때는 필드를 읽는다.
   - 배열의 원소. Target이 원소를 inline으로 저장하지 못하는 동안이다.
   - `tribute_rt.anyref`로 지워지는 자리. Effect payload, 제네릭으로 지운 값, Cps
     convention의 결과가 여기에 든다. Cps 결과는 continuation을 지나며 지워지므로, 결과를
     쪼개는 일은 Direct와 EvidenceDirect callable에만 해당한다.
-- **언제나 boxed인 값.** Enum 값, 배열 값, closure 값, continuation frame, compiler가
-  소유하는 cell(`heap.struct_set`이 쓰는 layout)은 box에 담는다. 재귀하는 struct도
-  그렇다. 자기 필드를 통해 자기에게 닿는 layout은 크기가 정해지지 않기 때문이다.
+- **언제나 boxed인 값.** Enum 값, 배열 값, closure 값, continuation frame은 box에
+  담는다. 재귀하는 struct도 그렇다. 자기 필드를 통해 자기에게 닿는 layout은 크기가 정해지지 않기 때문이다.
 - **선택 정책.** 강제로 boxed가 아닌 struct 타입 중에서 다음을 모두 만족하는 타입을
   unboxed로 고른다.
   - 펼친 뒤의 managed leaf가 하나 이하다.

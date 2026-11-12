@@ -461,7 +461,7 @@ aggregate이면 [표현 선택](abi-boundary.md#표현-선택)이 원소를 obje
 | `get(slots: Slots(a), at: Nat) -> a` | `at`번째 원소 | `adt.array_get` |
 | `insert(slots: Slots(a), at: Nat, value: a) -> Slots(a)` | `at` 앞에 `value`를 넣은 새 배열 | `adt.array_splice` (`start = end = at`) |
 | `remove(slots: Slots(a), at: Nat) -> Slots(a)` | `at`번째 원소를 뺀 새 배열 | `adt.array_splice` (`end = at + 1`, 원소 없음) |
-| `replace(slots: Slots(a), at: Nat, value: a) -> Slots(a)` | `at`번째 원소를 `value`로 바꾼 새 배열 | `adt.array_splice` (`end = at + 1`) |
+| `replace(slots: Slots(a), at: Nat, value: a) -> Slots(a)` | `at`번째 원소를 `value`로 바꾼 새 배열 | `adt.array_set` |
 
 `Slots`를 만든 뒤 바꾸는 연산은 없다. `insert`, `remove`, `replace`는 원래 배열을
 그대로 두고 새 배열을 만든다. `get`, `remove`, `replace`는 `at < len`을,

@@ -365,7 +365,7 @@ The RC implementation is divided into four stages:
 
 이 단계의 policy-neutral 사실 계산은 같은 경계의 fallible 분석이 소유한다.
 Module 범위 분석이 function 정의, 검증된 managed nominal layout,
-`heap.struct_set`이 쓰는 layout, closure 할당 layout(base와 capture layout)과 할당 순서의
+closure 할당 layout(base와 capture layout)과 할당 순서의
 RTTI descriptor를, function 범위 분석이 flat CFG, managed 값,
 exact alias root, managed projection-owner 관계, 그중 borrow할 수 있는
 projection과 liveness 입력을 제공한다. 이 사실은 `NativeOwnershipPlanOptions`와
@@ -410,9 +410,11 @@ unit을 획득한다.
 위치로 돌려주면 첫 위치만 source의 unit을 받고, 나머지 위치마다 return 직전에 새
 unit을 획득한다. Borrowed source는 모든 위치에서 새 unit을 획득한다.
 
-Aggregate field로의 저장(`heap.struct_new`, `heap.variant_new`, `heap.struct_set`의
-값, `heap.array_of`와 `heap.array_splice`의 `elements`, `heap.array_set`의 값)과
-ordinary call의 consumed 매개변수는 독립된 unit을 받는 자리다. 기준 동작은 그
+Aggregate field로의 저장(`heap.struct_new`, `heap.variant_new`의 값,
+`heap.struct_update`와 `heap.array_set`이 넣는 값, `heap.array_of`와
+`heap.array_splice`의 `elements`, `heap.cell_new`와 `heap.cell_set`의 값),
+`heap.struct_update`와 `heap.array_set`의 source box, ordinary call의 consumed
+매개변수는 독립된 unit을 받는 자리다. 기준 동작은 그
 자리마다 직전에 새 unit을 획득하고 값의 unit은 값에 남긴다. Last-use move 정책을
 켜면 그 operation이 값의 마지막 사용일 때 값의 unit을 그 자리로 옮기고, 획득도 뒤따르는
 final release도 두지 않는다. 마지막 사용은 final release 위치를 정하는 것과 같은
@@ -420,7 +422,7 @@ final release도 두지 않는다. 마지막 사용은 final release 위치를 �
 operation이 값이나 값에서 파생된 borrow를 쓰지 않는다. 옮길 unit이 있어야 하므로
 값은 owned root여야 하며, 파생 borrow와 borrowed 매개변수는 옮기지 않는다. 또한 그
 operation이 값의 root에 닿는 모든 operand가 unit을 받는 자리여야 한다. Indirect
-call의 callee, `heap.struct_set`과 `heap.array_set`의 대상, borrowed·retained
+call의 callee, `heap.cell_set`의 대상 cell, borrowed·retained
 매개변수로의 argument, `heap.array_new`의 `initial`, `heap.array_splice`의 `source`,
 값에서 파생된 borrow는 호출이나 저장 동안 caller의
 unit에 기대므로, 이런 operand가
@@ -433,9 +435,18 @@ operation 자신이 unit을 하나씩 획득한다. 이 원소의 수는 실행 
 이 획득을 action으로 갖지 않으며, release 함수가 field를 release하는 것처럼
 operation의 lowering이 소유한다. 결과는 unit 하나를 갖는 새 owned 값이다.
 
-`heap.array_set`은 `heap.struct_set`과 같다. 대상 배열은 operation 동안 빌리고, 새
-원소는 위의 저장 자리로 unit을 받으며, 바뀌기 전 원소의 unit은 replaced-field
-release로 release한다.
+`heap.struct_update`와 `heap.array_set`은 source box의 unit을 소비하고 unit 하나를
+가진 결과 box를 낸다. Lowering은 source object의 refcount가 1이면 그 object를
+제자리에서 고쳐 결과로 쓴다. 바뀌는 필드나 원소의 옛 값은 replaced-field release로
+release하고 새 값을 쓰며, 나머지 필드의 unit은 그대로 결과로 넘어간다. Refcount가
+1보다 크면 같은 크기의 새 object를 할당해 바뀌지 않는 managed 필드와 원소를 retain해
+복사하고, 새 값을 쓴 뒤 source의 unit을 release한다. Source가 유일할 수 있는 것은
+last-use move가 source의 unit을 옮길 때뿐이다. 기준 동작은 source를 위해 새 unit을
+획득하므로 refcount가 1보다 크고 언제나 복사한다. Ownership 계획이 유일성을 정적으로
+증명하면 lowering은 refcount 검사를 생략하고 제자리에서 고친다.
+
+`heap.cell_set`은 대상 cell을 operation 동안 빌리고, 새 값은 위의 저장 자리로 unit을
+받으며, 바뀌기 전 값의 unit은 replaced-field release로 release한다.
 
 Owner에서 읽은 borrow는 unit이 없으므로, unit이 필요한 사용(저장, consumed 매개변수,
 return, block argument, proper tail)마다 기준 동작대로 새 unit을 획득한다. 그 owner가
@@ -451,7 +462,7 @@ last-use move와 final release 규칙을 그대로 따른다. Field move는 다�
 - Owner의 layout은 release가 정적 `alloc_size`로 해제하는 layout이다. 즉 exact struct,
   continuation frame layout이다. Variant마다 크기가 다른 enum 값, capture layout마다
   크기가 다른 closure 값, 길이마다 크기가 다른 배열과 `tribute_rt.anyref`/`intref`는
-  RTTI로 해제하므로 대상이 아니다. 교체 가능한 layout에서
+  RTTI로 해제하므로 대상이 아니다. Cell에서
   읽은 값은 이미 자신의 unit을 가지므로 옮기지 않는다.
 - Owner의 final release와 옮기는 borrow의 모든 사용이 한 block 안에 있다. Edge에서 죽는
   owner와 block 경계를 넘는 borrow는 옮기지 않는다.
@@ -570,7 +581,8 @@ into control flow and atomic operations by RC lowering.
     가질 때만 해당한다.
 
   그 밖의 모든 사용은 escape이며 retained를 선택한다. 값으로서의 return과 저장,
-  `heap.struct_set`의 대상, branch와 block argument 전달, indirect call과 tail
+  `heap.struct_update`와 `heap.array_set`의 source, `heap.cell_set`의 대상, branch와
+  block argument 전달, indirect call과 tail
   call, 다른 region에서의 사용, 알 수 없는 operation이 여기에 속한다. Closure,
   ability handler, continuation capture는 저장이므로 escape다.
 
@@ -598,9 +610,8 @@ into control flow and atomic operations by RC lowering.
   `heap.variant_get`이 읽은 exact declared managed field와 `heap.array_get`이 읽은
   managed 원소를 그 projection의 owner에서 파생된 temporary borrow로 분류할 수
   있다. Inline으로 놓인 값의 managed leaf도 바깥 object의 declared managed field이며,
-  그 projection의 field 경로는 바깥 object에서 inline 필드를 거쳐 leaf에 이른다. 교체
-  가능한 layout인지는 바깥 object의 layout으로 판정한다. Owner는 projection operand의
-  typed alias root이다. 변환된 `clif.load`
+  그 projection의 field 경로는 바깥 object에서 inline 필드를 거쳐 leaf에 이른다.
+  Owner는 projection operand의 typed alias root이다. 변환된 `clif.load`
   result type, address provenance, `core.ptr` operand는 ownership evidence가
   아니다.
 
@@ -617,16 +628,17 @@ into control flow and atomic operations by RC lowering.
     transfer, aggregate field로의 저장, consumed 매개변수로의 ordinary call이 여기에
     해당한다. Retained 매개변수로의 ordinary call은 callee가 스스로 unit을 획득하고
     caller의 root가 호출 동안 살아 있으므로 caller-side 획득이 없다.
-  - Module 안의 어떤 `heap.struct_set`이든 쓰는 layout은 교체 가능한 layout이다.
-    교체 가능한 layout에서 읽은 projection은 borrow하지 않고 projection 직후 자신의
-    unit을 획득한다. 교체는 이전 field 값의 unit을 release하므로, 이 unit 없이는
-    같은 함수의 뒤따르는 쓰기나 호출된 함수의 쓰기가 파생 값을 해제할 수 있다. 쓰는
-    쪽은 cast와 closure capture를 거쳐 같은 객체에 도달할 수 있으므로 판정은
-    특정 SSA 값이 아니라 layout의 nominal identity로 한다.
-  - 배열도 같다. Module 안의 어떤 `heap.array_set`이든 쓰는 `adt.array` 타입은 교체
-    가능한 layout이며, 그 타입에서 `heap.array_get`이 읽은 managed 원소는 projection
-    직후 자신의 unit을 획득한다. 그 밖의 배열 타입에서 읽은 원소는 borrow할 수 있는
-    projection이다.
+  - Box가 가리키는 object는 다른 참조가 보는 동안 바뀌지 않으므로, box에서 읽은
+    projection은 borrow할 수 있다. `heap.struct_update`와 `heap.array_set`이 object를
+    제자리에서 고치는 것은 source의 unit이 유일할 때뿐이고, source의 alias root의
+    unit을 소비하는 것은 그 root의 마지막 사용이므로 그 뒤에 쓰이는 파생 borrow가 있을
+    수 없다. Cast를 거친 alias도 같은 root이므로 여기에 든다. 파생 borrow가 갱신 뒤에도
+    쓰이면 갱신은 root의 마지막 사용이 아니므로 새 unit을 획득해 넘기고, 갱신은 복사로
+    끝난다.
+  - `heap.cell_get`의 결과는 borrow하지 않고 읽은 직후 자신의 unit을 획득한다.
+    `heap.cell_set`은 이전 값의 unit을 release하고, 쓰는 쪽은 다른 참조나 호출된
+    함수를 거쳐 같은 cell에 닿을 수 있으므로, 이 unit 없이는 뒤따르는 쓰기가 읽은
+    값을 해제할 수 있다. 판정은 타입만 본다. Module을 훑어 쓰기 대상을 찾지 않는다.
 
   이 최적화를 끈 기준 동작은 모든 managed projection이 projection 직후 자신의 unit을
   획득하는 것이다. Exact typed projection 계약을 만족하지 않는 IR은 borrow로도 기준
@@ -894,7 +906,14 @@ managed 참조는 항상 그 저장보다 먼저 만들어진 object를 가리�
   있으므로 순환을 닫지 못한다.
 - **Evidence와 marker도 만든 뒤 바뀌지 않는다.** [Evidence](#evidence)가 정한 대로
   먼저 만들어진 object만 가리킨다.
-- **Managed field를 덮어쓰는 곳은 compiler가 소유한 completion cell뿐이다.**
+- **유일한 object의 제자리 갱신은 순환을 닫지 못한다.** `heap.struct_update`와
+  `heap.array_set`은 refcount가 1인 object만 제자리에서 고친다. Source는 owned root이고
+  갱신이 그 하나뿐인 unit을 소비했으므로, 다른 어떤 object나 참조도 그 object를 가리키지
+  않는다. 그래서 새로 쓰는 값이 그 object에 닿을 수 없다. Borrowed 매개변수나 파생
+  borrow는 unit이 없으므로 source가 될 때 갱신은 새 unit을 획득하고 복사한다.
+  복사하는 경우는 새로 만드는 object이므로 만들 때 채우는 field와 같다.
+- **Managed 값을 덮어쓰는 곳은 [`heap.cell`](tribute-dialects.md#heapcell)뿐이며,
+  managed 값을 담는 compiler cell은 completion cell 하나다.**
   [값 delimiter](cps-effects.md#값-delimiter)의 completion cell은 region의 답을 한 번
   쓴다. 답에서 그 cell이나 cell을 가진 `Done`으로 가는 경로가 없다는 근거는 둘이다.
   - Resume token은 lambda capture로만 옮길 수 있고, token을 담은 closure를 struct나
@@ -905,15 +924,12 @@ managed 참조는 항상 그 저장보다 먼저 만들어진 object를 가리�
     제한이 풀려도 유지되어야 한다.
 
   Root `main`의 delimiter는 `Nil`을 답으로 받으므로 managed 참조를 쓰지 않는다.
-  One-shot resumption이 소비 여부를 표시하는 쓰기는 unmanaged flag를 쓴다. 두 cell의
-  layout은 `heap.struct_set`이 쓰는 [교체 가능한 layout](#3-rc-optimization-pass)이므로
-  그 projection은 borrow하지 않는다.
-- **배열도 만든 뒤 managed 원소가 바뀌지 않는다.** `heap.array_new`,
+  One-shot resumption이 소비 여부를 표시하는 cell은 managed가 아닌 flag를 담는다.
+  [Cell에서 읽은 값](#3-rc-optimization-pass)은 borrow하지 않는다.
+- **배열도 만든 뒤 다른 참조가 보는 원소가 바뀌지 않는다.** `heap.array_new`,
   `heap.array_of`, `heap.array_splice`는 operand와 `source`의 원소로 새 배열을 채우므로
-  struct처럼 이미 있는 object만 담는다. Managed 원소를 덮어쓰는 `heap.array_set`을
-  내는 producer는 없다. 공유된 배열에 그 배열을 capture한 closure를 저장하면 순환이
-  닫히므로, 그런 쓰기를 들이는 producer는 completion cell처럼 순환이 생기지 않는
-  근거를 이 절에 둔다. 원소를 바꾼 배열이 필요하면 `heap.array_splice`로 새로 만든다.
+  struct처럼 이미 있는 object만 담는다. `heap.array_set`은 위의 유일한 object 규칙을
+  따른다. 공유된 배열을 제자리에서 바꾸는 쓰기는 없다.
 - **Inline 값은 간선을 더하지 않는다.** Object 안에 inline으로 놓인 값의 managed
   leaf는 바깥 object가 직접 가진 필드이며, 만들 때 채우는 다른 필드처럼 이미 있는
   object만 가리킨다. Unboxed 값은 object가 아니므로 참조의 대상이 되지 않는다.

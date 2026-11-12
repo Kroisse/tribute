@@ -767,7 +767,7 @@ layout은 저장 표현에만 있다.
   `closure.new` 하나로 표현한다. Compiler가 만드는 closure도 같은 convention entry 규칙을
   따르며, 한 convention으로만 불리는 closure는 그 convention과 더 강한 convention의
   entry만 의미가 있다. 여러
-  closure가 공유하는 가변 상태는 managed cell 참조를 capture해서 표현하며,
+  closure가 공유하는 가변 상태는 [`heap.cell`](#heapcell)을 capture해서 표현하며,
   closure의 필드는 생성 뒤 바뀌지 않는다.
 
 #### Layout
@@ -837,7 +837,11 @@ storage 확정은 다음 변환을 함께 적용한다.
 
 `adt.*`는 target에 독립적인 product, sum, array 값과 literal operation을
 나타낸다. `adt`는 값 의미론이다. `adt` 타입의 값은 object에 대한 참조가 아니라 값
-자체이며, 제자리 쓰기, null, 참조 사이의 cast는 `adt`에 없다. 값이 object에 담기는지,
+자체이며, 제자리 쓰기, null, 참조 사이의 cast는 `adt`에 없다. SSA 값은 정의된 뒤
+바뀌지 않으므로, 값을 갱신하는 operation은 바뀐 새 값을 결과로 내고 operand는 그대로
+둔다. Struct 필드 하나를 바꾼 값은 `adt.struct_update`, 배열 원소 하나를 바꾼 값은
+`adt.array_set`이 낸다. 갱신을 제자리에서 할 수 있는지는 표현 선택과 ownership 계획이
+[`heap`](#heap)에서 정한다. 값이 object에 담기는지,
 SSA 값으로 쪼개지는지, 다른 object 안에 inline으로 놓이는지는
 [표현 선택](abi-boundary.md#표현-선택)이 정한다. Object와 그 참조는
 [`heap`](#heap)이 나타낸다.
@@ -894,7 +898,7 @@ adt.struct<(core.ptr, core.i32),
   nominal 타입으로 가리키는 layout이다. 그 값의 타입은
   [nominal 값 타입](#nominal-값-타입)이다.
 - Literal layout은 nominal 타입으로 가리킬 일이 없는 compiler 저장 layout이다. Closure
-  저장, list node, ability payload, completion cell 같은 layout이며, 정체는 필드
+  저장, list node, ability payload 같은 layout이며, 정체는 필드
   타입과 type 속성뿐이다. 필드가 같은 두 literal layout은 같은 타입이다. Compiler
   소유 layout은 이름이 아니라 [`layout`](ir.md#runtime-layout-식별자) 속성으로
   식별한다.
@@ -1140,14 +1144,14 @@ operation은 `core.array`를 받지 않으며, 어느 target도 `core.array`를 
 배열을 만드는 operation은 `adt.array_new`, `adt.array_of`, `adt.array_splice`
 셋이며, 각각 결과 배열의 원소를 정하는 방법이 하나로 고정되어 있다. Operand
 개수나 모양으로 operation의 뜻을 고르지 않는다. 각 operation의 결과와 전제는
-그 선언이 정한다. 배열 값은 바뀌지 않으므로 `adt`에는 원소를 쓰는 operation이
-없다. 원소를 바꾼 배열은 `adt.array_splice`로 새로 만든다.
+그 선언이 정한다. 배열 값은 바뀌지 않는다. 원소 하나를 바꾼 배열은 `adt.array_set`이
+새 값으로 내며, operand 배열은 그대로다. 범위를 바꾼 배열은 `adt.array_splice`가 낸다.
 
 `adt`의 배열 operation은 target이 객체를 회수하는 방식을 가정하지 않는다.
 Native RC가 배열 object에 두는 ownership 규칙과 순환 제약은
 [rc.md](rc.md#비순환-object-그래프)가 정한다.
 
-`adt.array_get`의 index, `adt.array_splice`의 `start`와 `end`,
+`adt.array_get`과 `adt.array_set`의 index, `adt.array_splice`의 `start`와 `end`,
 `adt.array_new`의 `length`, `adt.array_len`의 결과는
 [`core.index`](ir.md#coreindex-주소-폭-정수)다. 배열의 원소 개수와 위치는
 target의 주소 폭으로 센다. 고정 폭 정수에서 온 index는 `arith.index_cast`나
@@ -1165,9 +1169,15 @@ object를 다룬다. 두 target이 같은 dialect를 쓰며, target이 object를
 방식(native RC, WasmGC)을 가정하지 않는다. 각 operation의 계약은 `heap` dialect
 선언이 정한다.
 
+Object는 두 종류다. `heap.box`가 가리키는 object는 만든 뒤 내용이 바뀌는 것을 어느
+참조도 관찰하지 못한다. 그래서 identity를 가지지만 그 identity가 의미에 드러나지 않고,
+표현 선택은 box 대신 unboxed 표현을 고를 수 있다. `heap.cell`이 가리키는 object는 한
+참조로 쓴 값을 다른 참조가 읽는 공유 가변 장소다. 그 관찰이 cell의 의미이므로 cell은
+언제나 object이며 표현 선택의 대상이 아니다.
+
 ### `heap.box`
 
-- `heap.box<L>`은 layout `L`인 object에 대한 managed 참조다. `L`은 `adt.struct`,
+- `heap.box<L>`은 layout `L`인 불변 object에 대한 managed 참조다. `L`은 `adt.struct`,
   `adt.enum`, `adt.array` layout이다. `heap.box`는 managed 참조라는 표지
   (`ManagedRefType`)를 가지며, layout 타입은 그 표지를 갖지 않고 descriptor가 기술하는
   layout이라는 표지(`DescriptorLayoutType`)만 가진다.
@@ -1176,11 +1186,23 @@ object를 다룬다. 두 target이 같은 dialect를 쓰며, target이 object를
   정한다.
 - 모든 `heap.box<L>`은 null 값을 가진다. `heap.null`이 만들며, retain과 release는
   null에 대해 아무 일도 하지 않는다. 소스 값은 null이 아니다. Null은 compiler가 만든
-  표현(native `List`의 빈 node, 아직 채우지 않은 completion cell 등)만 쓴다.
+  표현(native `List`의 빈 node 등)만 쓴다.
 - `L`의 필드 타입은 표현 선택 전에는 `adt` 값 타입이고, 표현 선택 뒤에는 그 필드의
   저장 표현이다. Box에 담는 값의 필드는 `heap.box`, inline으로 놓는 값의 필드는 그
   layout, scalar는 scalar다. 필드 타입을 바꾸는 이 변환은
   [nominal layout 변환](#nominal-layout-변환)을 따른다.
+
+### `heap.cell`
+
+- `heap.cell<T>`는 `T` 값 하나를 담은 가변 object에 대한 managed 참조다. ML의 `ref`와
+  같다. `T`는 표현 선택 뒤의 저장 표현이며, managed 값이면 cell이 그 unit 하나를 가진다.
+- `heap.cell_new`가 초기값으로 cell을 만들고, `heap.cell_get`이 현재 값을 읽고,
+  `heap.cell_set`이 값을 바꾼다. 같은 cell을 가리키는 모든 참조가 바뀐 값을 본다.
+- Cell의 descriptor는 값 하나를 필드로 가진 compiler 소유 값의 descriptor다.
+- 소스 언어에는 cell이 없다. Compiler가 쓰는 cell은
+  [값 delimiter](cps-effects.md#값-delimiter)의 completion cell과 one-shot resumption의
+  소비 표시다. Cell에 쓰는 일이 순환을 만들지 않는 근거는 cell마다
+  [rc.md](rc.md#비순환-object-그래프)에 둔다.
 
 ### Operation
 
@@ -1193,11 +1215,15 @@ object를 다룬다. 두 target이 같은 dialect를 쓰며, target이 object를
   `heap.array_get`, `heap.array_len`. Box를 빌려 object를 읽는다. Variant 판별과 선언
   위치는 object의 [descriptor](runtime-types.md#variant-판별)로 구한다. Inline으로
   놓인 필드를 읽으면 그 값의 leaf들이 나온다.
-- 쓰기: `heap.struct_set`, `heap.array_set`. Object를 제자리에서 바꾼다. 소스 값은
-  바뀌지 않으므로 compiler가 소유하는 cell만 쓰며, 순환 제약은
-  [rc.md](rc.md#비순환-object-그래프)가 정한다.
-- Literal: `heap.bytes_const`, `heap.string_const`. 같은 이름의 `adt` literal이 만드는
-  값을 담은 object의 box를 낸다.
+- 갱신: `heap.struct_update`, `heap.array_set`. 같은 이름의 `adt` 갱신처럼 필드나 원소
+  하나를 바꾼 새 값을 내며, source box를 소비하고 결과 box를 낸다. 소비한 box가 object의
+  유일한 참조이면 lowering은 그 object를 제자리에서 고쳐 결과로 쓰고, 아니면 새 object를
+  만든다. 유일성은 ownership 계획이 정적으로 증명하거나 실행 때 refcount로 확인한다.
+  어느 쪽이든 다른 참조가 보는 object는 바뀌지 않으므로, 제자리 갱신은 의미가 아니라
+  할당을 아끼는 구현이다.
+- Cell: `heap.cell_new`, `heap.cell_get`, `heap.cell_set`.
+- Literal: `heap.array_const`. `adt.array_const`가 만드는 배열 값을 담은 object의
+  box를 낸다.
 - 참조: `heap.null`, `heap.is_null`, `heap.cast`. `heap.cast`는 nominal identity가
   같다고 확립된 box 사이와, closure capture layout의 box와 closure base의 box 사이에
   쓴다. `heap.box`와 `tribute_rt.anyref` 사이의 이동은 `heap.cast`가 아니라 명시적인
@@ -1207,17 +1233,17 @@ object를 다룬다. 두 target이 같은 dialect를 쓰며, target이 object를
 
 - `heap`은 대부분 [표현 선택](abi-boundary.md#표현-선택)이 `adt`에서 만든다. 표현
   선택보다 앞에서 `heap`을 직접 만드는 곳은 참조 의미론이 필요한 compiler 소유 저장뿐이다.
-  [값 delimiter](cps-effects.md#값-delimiter)의 completion cell, one-shot resumption의
-  소비 표시, [closure 저장](#closure-저장-layout)이 그렇다. 이 구간에서 `adt`와
-  `heap`은 함께 쓰인다.
+  Compiler가 쓰는 [cell](#heapcell)과 [closure 저장](#closure-저장-layout)이 그렇다. 이
+  구간에서 `adt`와 `heap`은 함께 쓰인다.
 - Representation/ABI 경계 출구 뒤에는 `adt` 타입을 가진 값과 `adt`의 값 operation이
   없다. `adt` layout은 `heap.box`의 매개변수, `heap` operation의 layout 속성,
   [nominal 선언](#nominal-선언) 안에만 남는다. Object 접근은 모두 `heap` operation이며
   target lowering이 이를 내린다.
-- Literal operation(`adt.bytes_const`, `adt.string_const`)의 결과는 배열이나 enum이라
-  언제나 boxed다. 표현 선택은 이를 같은 literal을 담은 object의 box를 내는
-  `heap.bytes_const`, `heap.string_const`로 바꾸고, target의 상수 lowering이 이를 내린다.
-  그 결과는 다른 할당처럼 unit 하나를 가진 object다.
+- `Bytes`와 `String` literal(`adt.bytes_const`, `adt.string_const`)은 표현 선택보다
+  앞에서 `adt` 값으로 펼친다([string.md](string.md#constant-lowering)). 배열 상수
+  `adt.array_const`는 배열이라 언제나 boxed이므로, 표현 선택이 `heap.array_const`로
+  바꾸고 target의 상수 lowering이 이를 내린다. 그 결과는 다른 할당처럼 unit 하나를
+  가진 object다.
 
 ## `list`
 

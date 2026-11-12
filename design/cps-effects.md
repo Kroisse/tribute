@@ -945,7 +945,7 @@ delimiter 밖으로 나갈 수 있다. 재개된 계산은 재개한 지점이 �
 
 **구성.** Delimiter는 다음을 소유한다.
 
-- 답 타입 `R`의 completion cell
+- 답 타입 `R`의 completion cell. [`heap.cell`](tribute-dialects.md#heapcell)이다.
 - cell에 정확히 한 번 쓰는 terminal `Done<R>`
 - 도달할 수 없는 terminal `Dispatch<R>`. 도달하면 trap한다
 - 이 둘을 담은 exact `ContinuationFrame<R>`
