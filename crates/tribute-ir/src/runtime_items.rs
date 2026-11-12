@@ -214,6 +214,7 @@ impl RuntimeFunction {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use trunk_ir::ops::VariadicResults;
 
     const FIXTURE: &str = r#"core.module @main {tribute.types = {"rt::Cell" = core.i32}} {
   func.func @"rt::probe"(%value: core.i32) -> core.i32 {
@@ -256,10 +257,7 @@ mod tests {
         let argument = ctx.block_arg(entry, 0);
         let call = probe.call(&mut ctx, location, [argument]);
         assert_eq!(call.callee(&ctx), &SymbolPath::new(["rt::probe"]));
-        assert_eq!(
-            ctx.value_ty(call.results(&ctx)[0]),
-            probe.signature(&ctx).results(&ctx)[0]
-        );
+        assert_eq!(call.result_ty(&ctx), probe.signature(&ctx).results(&ctx)[0]);
     }
 
     #[test]

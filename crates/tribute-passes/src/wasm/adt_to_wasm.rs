@@ -68,7 +68,7 @@ use trunk_ir::dialect::core::{self, IntegerLike};
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::dialect::wasm_gc as wasm_gc_dialect;
 use trunk_ir::op_flag::{IsolatedFromAbove, OpFlag};
-use trunk_ir::ops::{DialectOp, DialectType};
+use trunk_ir::ops::{DialectOp, DialectType, VariadicResults};
 use trunk_ir::refs::{OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{
     Module, OpRewritePattern, PatternApplicator, PatternRewriter, TypeConverter,
@@ -725,7 +725,7 @@ impl OpRewritePattern for ArraySplicePattern {
                 .regions(filled, empty)
                 .build(ctx, loc);
             rewriter.insert_op(fresh.op_ref());
-            fresh.results(ctx)[0]
+            fresh.result(ctx)
         };
 
         let zero = i32_const(ctx, rewriter, 0);
@@ -1149,7 +1149,7 @@ mod tests {
             .rev()
             .find_map(|&op| wasm::If::from_op(&ctx, op).ok())
             .expect("the result is chosen by its length");
-        assert_eq!(returned, fill.results(&ctx)[0]);
+        assert_eq!(returned, fill.result(&ctx));
         let region_ops = |region| {
             let block = ctx.region(region).blocks[0];
             op_names(&ctx, &ctx.block(block).ops)

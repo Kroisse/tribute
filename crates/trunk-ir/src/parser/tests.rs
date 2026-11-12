@@ -6,7 +6,7 @@ use smallvec::smallvec;
 use super::{parse_module, parse_test_module};
 use crate::context::{IrContext, OperationDataBuilder};
 use crate::dialect::{arith, clif, core, func};
-use crate::ops::{DialectOp, DialectType};
+use crate::ops::{DialectOp, DialectType, VariadicResults};
 use crate::refs::*;
 use crate::rewrite::Module;
 use crate::types::*;
@@ -543,7 +543,7 @@ fn test_roundtrip_func_call() {
         .results([i32_ty])
         .build(&mut ctx, loc);
     ctx.push_op(entry2, call.op_ref());
-    let call_val = call.results(&ctx)[0];
+    let call_val = call.result(&ctx);
     let ret2 = func::Return::operands([call_val]).build(&mut ctx, loc);
     ctx.push_op(entry2, ret2.op_ref());
     let body2 = ctx.create_region(RegionData {

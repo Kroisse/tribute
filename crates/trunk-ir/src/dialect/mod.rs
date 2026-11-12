@@ -17,7 +17,7 @@ mod tests {
     use crate::Span;
     use crate::Symbol;
     use crate::SymbolPath;
-    use crate::ops::{DialectOp, DialectType};
+    use crate::ops::{DialectOp, DialectType, VariadicResults};
     use crate::refs::PathRef;
     use crate::types::Location;
     use crate::{Attribute, BlockData, IrContext, RegionData, TypeDataBuilder, ValueDef};
@@ -104,7 +104,7 @@ mod tests {
         assert_eq!(args[1], v2);
 
         // Verify result
-        let result = call.results(&ctx)[0];
+        let result = call.result(&ctx);
         assert_eq!(ctx.value_ty(result), i32_ty);
     }
 

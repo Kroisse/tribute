@@ -716,6 +716,7 @@ mod tests {
     use super::*;
     use crate::dialect::{arith, core, func, scf};
     use crate::location::Span;
+    use crate::ops::VariadicResults;
     use crate::refs::ValueRef;
 
     use crate::*;
@@ -968,7 +969,7 @@ mod tests {
         ctx.push_op(entry, if_op.op_ref());
 
         // Use the if result
-        let if_result = if_op.results(&ctx)[0];
+        let if_result = if_op.result(&ctx);
         let ret = func::Return::operands([if_result]).build(&mut ctx, loc);
         ctx.push_op(entry, ret.op_ref());
 
@@ -1888,7 +1889,7 @@ mod tests {
             .results([i32_ty])
             .regions(body_region)
             .build(&mut ctx, loc);
-        let loop_result = loop_op.results(&ctx)[0];
+        let loop_result = loop_op.result(&ctx);
         ctx.push_op(entry, loop_op.op_ref());
 
         let ret = func::Return::operands([loop_result]).build(&mut ctx, loc);
@@ -2317,7 +2318,7 @@ mod tests {
             .results([i32_ty])
             .regions(then_region, else_region)
             .build(&mut ctx, loc);
-        let if_result = if_op.results(&ctx)[0];
+        let if_result = if_op.result(&ctx);
         ctx.push_op(entry, if_op.op_ref());
 
         // Use the if result in an add
