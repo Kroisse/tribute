@@ -671,9 +671,6 @@ pub fn func_sig_with_attrs(
         .expect("func.func_sig constructor must produce a valid type")
 }
 
-impl crate::ops::VariadicResults for Call {}
-impl crate::ops::VariadicResults for CallIndirect {}
-
 impl CallLike for Call {
     fn call_args<'a>(&self, ctx: &'a crate::IrContext) -> &'a [crate::ValueRef] {
         self.args(ctx)

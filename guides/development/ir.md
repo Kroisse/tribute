@@ -127,9 +127,9 @@ where
   attribute is absent, and the builder, the parser, and the printer drop a
   value equal to `v`, so absence is the canonical form. Type attributes take
   no default. Results are `Value<C>` or `Option<Value<C>>` (accessor
-  `result`) or `Variadic<C>` / `Values<L>` (accessor `results`). A wrapper
-  with variadic results that callers read as one value implements the
-  `ops::VariadicResults` mixin, as MLIR's `OpTrait::VariadicResults` is:
+  `result`) or `Variadic<C>` / `Values<L>` (accessor `results`). The macro
+  implements the `ops::VariadicResults` mixin for every wrapper with
+  variadic results, as ODS attaches MLIR's `OpTrait::VariadicResults`:
   `single_result` returns the result of an operation with exactly one, and
   `result` expects its producer to have built exactly one.
 - Attribute kinds are Rust types implementing `attr_kind::AttrKind`, resolved
