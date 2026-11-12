@@ -439,7 +439,7 @@ fn copy_loop(ctx: &mut IrContext, input: CopyLoopInput) -> OpRef {
     let one = i32_const(ctx, loop_block, loc, i32_ty, 1);
     let next = wasm_dialect::I32Add::operands(index, one).build(ctx, loc);
     ctx.push_op(loop_block, next.op_ref());
-    let yield_next = wasm_dialect::Yield::operands(next.result(ctx)).build(ctx, loc);
+    let yield_next = wasm_dialect::Yield::operands([next.result(ctx)]).build(ctx, loc);
     ctx.push_op(loop_block, yield_next.op_ref());
     let continue_loop = wasm_dialect::Br::operands().target(0).build(ctx, loc);
     ctx.push_op(loop_block, continue_loop.op_ref());
@@ -523,7 +523,7 @@ fn write_loop(
         ctx.push_op(block, break_if_stalled.op_ref());
         let next = wasm_dialect::I32Add::operands(written, count.result(ctx)).build(ctx, loc);
         ctx.push_op(block, next.op_ref());
-        let yield_next = wasm_dialect::Yield::operands(next.result(ctx)).build(ctx, loc);
+        let yield_next = wasm_dialect::Yield::operands([next.result(ctx)]).build(ctx, loc);
         ctx.push_op(block, yield_next.op_ref());
         let continue_loop = wasm_dialect::Br::operands().target(1).build(ctx, loc);
         ctx.push_op(block, continue_loop.op_ref());

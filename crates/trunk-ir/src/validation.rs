@@ -516,22 +516,6 @@ fn validate_func_shapes(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationE
             }
         }
     }
-    if (func::Call::matches(ctx, op) || func::CallIndirect::matches(ctx, op))
-        && ctx.op_results(op).len() > 1
-    {
-        errors.push(operation_verifier_error(
-            ctx,
-            op,
-            "multiple call results are unsupported",
-        ));
-    }
-    if func::Return::matches(ctx, op) && ctx.op_operands(op).len() > 1 {
-        errors.push(operation_verifier_error(
-            ctx,
-            op,
-            "return count mismatch: at most one value is supported",
-        ));
-    }
 }
 
 /// Nearest dialect-registered owner, including a malformed owner boundary.
@@ -1517,13 +1501,6 @@ mod tests {
                     .attr("num_results", Attribute::Int(u32::MAX as i128 + 1))
                     .attr("num_inputs", Attribute::Int(0)),
                 "`num_results` must be a u32",
-            ),
-            (
-                "multiple results",
-                TypeDataBuilder::new("func.func_sig")
-                    .attr(func::NUM_INPUTS_ATTR, Attribute::Int(0))
-                    .attr(func::NUM_RESULTS_ATTR, Attribute::Int(2)),
-                "supports at most one result",
             ),
         ];
 
@@ -3121,7 +3098,7 @@ mod tests {
     }
     scf.loop(%value) {
       ^resultless_break_path(%resultless_value: core.i32):
-        scf.break %resultless_value
+        scf.break
     }
     %zero = arith.constant 0 : core.i32
     func.return %selected

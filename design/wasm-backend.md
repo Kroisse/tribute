@@ -147,7 +147,28 @@ discriminant 타입과
 범위를 벗어난 case 값은 변환을 시작하기 전에 해당 switch와 이유를 담은
 conversion 오류로 거부한다. 결과가 있는 switch는 각 `wasm.if`가 그 결과 타입을
 선언하고, 안쪽 `wasm.if`의 결과를 바깥 region이 `wasm.yield`로 넘긴다.
-`scf.yield` 변환과 같이 결과는 하나까지만 낮춘다.
+결과는 여럿일 수 있으며, `scf.yield`는 같은 순서의 값을 가진 `wasm.yield`가 된다.
+
+### 구조적 제어의 block type
+
+`scf.if`, `scf.index_switch`, `scf.loop`는 결과를 여럿 가질 수 있고, 각 결과는
+Wasm 값 하나이다. Lowering은 결과를 묶은 aggregate를 만들지 않는다. `wasm.block`,
+`wasm.loop`, `wasm.if`의 Wasm block type은 결과가 없거나 `core.nil` 하나뿐이면 빈
+block type, 결과가 하나이면 그 값 타입이고, 둘 이상이면 type section에 등록한 함수
+타입 `() -> (결과...)`의 인덱스이다(multi-value의 type-indexed block type).
+
+Wasm에서 `core.nil` 값은 null로 stack에 오르지만, `core.nil` 결과 하나뿐인
+구조적 제어는 값을 남기지 않는다. 결과가 여럿인 목록에서는 `core.nil` 결과마다 이
+둘 중 하나를 골라야 하므로, Wasm target은 그런 목록을 지원하지 않는다. IR 계약은
+`(core.nil, core.i32)` 같은 목록을 허용하지만, `scf_to_wasm`은 변환을 시작하기 전에
+`core.nil` 결과가 섞인 다중 결과 `scf.if`, `scf.index_switch`, `scf.loop`를 이유를
+담은 conversion 오류로 거부하고 module을 바꾸지 않는다. 그런 목록을 만드는 lowering은
+Wasm lowering 전에 `core.nil` 결과를 없애야 한다. 지금 frontend가 만드는 구조적 제어는
+결과가 하나 이하이다.
+
+Loop-carried 값은 local로 전달하므로 block type은 매개변수를 갖지 않는다.
+이 함수 타입은 같은 입력과 결과를 가진 signature의 타입 인덱스를 함께 쓴다. Yield
+없이 끝나는 region은 마지막 operation의 결과 전체를 넘긴다.
 
 ### Dense switch의 `br_table` 분기
 
@@ -410,8 +431,8 @@ Pass를 거친 IR은 다음 stack 계약을 만족한다.
 - Operation이 stack에 남기는 결과는 같은 block의 뒤쪽 operation이 정확히 한 번
   소비한다. Stack에 값을 남기지 않는 결과에는 사용이 없다. 그 밖의 block argument에도
   사용이 없으며, 그 값은 block argument의 local에서 읽는다.
-- `wasm.yield`는 바로 앞에서 stack 맨 위에 놓인 값을 region의 결과나 뒤따르는
-  `wasm.br`의 값으로 넘긴다. 값을 넘기지 않는 yield는 남기지 않는다.
+- `wasm.yield`는 바로 앞에서 stack 맨 위에 operand 순서대로 놓인 값들을 region의
+  결과나 뒤따르는 `wasm.br`의 값으로 넘긴다. 값을 넘기지 않는 yield는 남기지 않는다.
 - Loop-carried 값은 loop body block argument의 local에 `wasm.local_set`으로
   쓴다. 그래서 `wasm.loop`에는 init operand가 없고, loop로 가는 분기 앞에는 yield가
   없다.
@@ -450,8 +471,11 @@ LLVM WebAssembly backend의 RegStackify처럼 어떤 값이 local을 거치지 �
   대입되고, loop body block argument의 local은 loop로 가는 분기에서만 다시 대입되며,
   그 분기 뒤로는 사용자에게 이르지 않는다. 그래서 앞당긴 local은 같은 block에서 그 앞에
   정의된 값, block argument, 또는 바깥 region에서 정의된 값의 local뿐이다.
-- `wasm.yield`는 값을 넘길 때 그 값의 사용자이다. Loop로 가는 분기 앞의 yield는 loop의
-  block argument가 하나일 때만 stack의 값을 그 local에 바로 쓴다.
+- `wasm.yield`는 값을 넘길 때 그 값들의 사용자이다. Loop로 가는 분기 앞의 yield는 loop의
+  block argument가 하나일 때만 stack의 값을 그 local에 바로 쓴다. Block argument가
+  여럿이면 넘기는 값을 모두 자기 local에서 읽어 stack에 올린 뒤, 역순으로 대응하는
+  argument의 local에 쓴다. 쓰기 전에 모든 값을 읽으므로 이 대입은 병렬 대입이며,
+  `scf.continue %b, %a`처럼 argument끼리 값을 바꾸는 backedge도 옛 값을 잃지 않는다.
 - Stack에 값을 남기지만 사용이 없는 결과는 local에 쓰지 않고 `wasm.drop`으로 버린다.
   Yield 없이 마지막 operation의 결과를 region 결과로 넘기는 경우는 예외로, 그 결과는
   local에 둔다.

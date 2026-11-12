@@ -529,7 +529,7 @@ mod mechanics {
                 .callee(SymbolPath::new(["helper"]))
                 .results([i32_ty])
                 .build(ctx, loc);
-            let result = call.result(ctx);
+            let result = call.results(ctx)[0];
             ctx.push_op(entry, call.op_ref());
             let ret = func::Return::operands([result]).build(ctx, loc);
             ctx.push_op(entry, ret.op_ref());
@@ -589,7 +589,7 @@ mod mechanics {
                 .callee(SymbolPath::new(["helper"]))
                 .results([i32_ty])
                 .build(ctx, loc);
-            let result = call.result(ctx);
+            let result = call.results(ctx)[0];
             ctx.push_op(entry, call.op_ref());
             let ret = func::Return::operands([result]).build(ctx, loc);
             ctx.push_op(entry, ret.op_ref());
@@ -674,7 +674,7 @@ mod mechanics {
                 .callee(SymbolPath::new(["helper"]))
                 .results([i32_ty])
                 .build(ctx, loc);
-            let result = call.result(ctx);
+            let result = call.results(ctx)[0];
             ctx.push_op(entry, call.op_ref());
             let ret = func::Return::operands([result]).build(ctx, loc);
             ctx.push_op(entry, ret.op_ref());
@@ -746,7 +746,7 @@ mod mechanics {
                 .callee(SymbolPath::new(["helper"]))
                 .results([i32_ty])
                 .build(ctx, loc);
-            let result = call.result(ctx);
+            let result = call.results(ctx)[0];
             ctx.push_op(entry, call.op_ref());
             let ret = func::Return::operands([result]).build(ctx, loc);
             ctx.push_op(entry, ret.op_ref());
@@ -922,7 +922,7 @@ mod pass {
                 .callee(SymbolPath::new(["helper"]))
                 .results([i32_ty])
                 .build(ctx, loc);
-            let r = call.result(ctx);
+            let r = call.results(ctx)[0];
             ctx.push_op(entry, call.op_ref());
             let ret = func::Return::operands([r]).build(ctx, loc);
             ctx.push_op(entry, ret.op_ref());
@@ -998,7 +998,7 @@ mod pass {
                 .callee(SymbolPath::new(["f"]))
                 .results([i32_ty])
                 .build(ctx, loc);
-            let r = call.result(ctx);
+            let r = call.results(ctx)[0];
             ctx.push_op(entry, call.op_ref());
             let ret = func::Return::operands([r]).build(ctx, loc);
             ctx.push_op(entry, ret.op_ref());
@@ -1053,7 +1053,7 @@ mod pass {
                 .callee(SymbolPath::new(["helper"]))
                 .results([i32_ty])
                 .build(ctx, loc);
-            let r = call.result(ctx);
+            let r = call.results(ctx)[0];
             ctx.push_op(entry, call.op_ref());
             let ret = func::Return::operands([r]).build(ctx, loc);
             ctx.push_op(entry, ret.op_ref());
@@ -1094,7 +1094,7 @@ mod pass {
                 .callee(SymbolPath::new(["helper"]))
                 .results([i32_ty])
                 .build(ctx, loc);
-            let r = call.result(ctx);
+            let r = call.results(ctx)[0];
             ctx.push_op(entry, call.op_ref());
             let ret = func::Return::operands([r]).build(ctx, loc);
             ctx.push_op(entry, ret.op_ref());
@@ -1104,7 +1104,7 @@ mod pass {
                 .callee(SymbolPath::new(["helper"]))
                 .results([i32_ty])
                 .build(ctx, loc);
-            let r = call.result(ctx);
+            let r = call.results(ctx)[0];
             ctx.push_op(entry, call.op_ref());
             let ret = func::Return::operands([r]).build(ctx, loc);
             ctx.push_op(entry, ret.op_ref());
@@ -1156,7 +1156,7 @@ mod pass {
                 .callee(SymbolPath::new(["helper"]))
                 .results([i32_ty])
                 .build(ctx, loc);
-            let r = call.result(ctx);
+            let r = call.results(ctx)[0];
             ctx.push_op(entry, call.op_ref());
             let ret = func::Return::operands([r]).build(ctx, loc);
             ctx.push_op(entry, ret.op_ref());

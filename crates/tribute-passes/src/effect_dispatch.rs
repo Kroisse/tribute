@@ -16,7 +16,7 @@ use tribute_ir::dialect::{closure, effect, tribute_rt};
 use trunk_ir::SymbolPath;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{arith, core, func};
-use trunk_ir::ops::{DialectOp, DialectType};
+use trunk_ir::ops::{DialectOp, DialectType, VariadicResults};
 use trunk_ir::refs::{OpRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::PatternRewriter;
 use trunk_ir::types::{Attribute, AttributeMap, Location, StringRef, TypeDataBuilder};

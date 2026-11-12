@@ -1671,7 +1671,7 @@ fn cps_indirect_tail_without_a_provenance_bearing_closure_fails_before_insertion
 }
 
 #[test]
-fn malformed_multi_result_effectful_scf_if_remains_unchanged() {
+fn multi_result_effectful_scf_if_is_rejected_inside_a_cps_callable() {
     let input = r#"core.module @test {
   tribute_cps.func @broken(%input: core.i32, %condition: core.i1) -> core.i32 convention(cps) {
     %left, %right = scf.if %condition -> (core.i32, core.i32) {
@@ -1698,16 +1698,14 @@ fn malformed_multi_result_effectful_scf_if_remains_unchanged() {
         i32_type,
     )];
     tribute_control::declare_operations(&mut ctx, module, &declarations);
-    let before = module.op().display(&ctx).to_string();
     let error = tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default()).unwrap_err();
-    assert_eq!(error.boundary, PRE_CPS_BOUNDARY);
+    assert_eq!(error.boundary, POST_CPS_BOUNDARY, "{error}");
     assert!(
         error
             .to_string()
-            .contains("scf.if (op3): expected 0 to 1 result(s), found 2"),
+            .contains("effectful scf.if requires zero or one result inside a CPS callable"),
         "{error}"
     );
-    assert_eq!(module.op().display(&ctx).to_string(), before);
 }
 
 /// A function reference called through a stronger convention than its

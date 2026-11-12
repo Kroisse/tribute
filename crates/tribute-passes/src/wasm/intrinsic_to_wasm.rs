@@ -194,7 +194,7 @@ impl OpRewritePattern for RangeEqualPattern<'_> {
         ctx.push_op(loop_block, one.op_ref());
         let next = wasm_dialect::I32Add::operands(index, one.result(ctx)).build(ctx, location);
         ctx.push_op(loop_block, next.op_ref());
-        let yield_next = wasm_dialect::Yield::operands(next.result(ctx)).build(ctx, location);
+        let yield_next = wasm_dialect::Yield::operands([next.result(ctx)]).build(ctx, location);
         ctx.push_op(loop_block, yield_next.op_ref());
         let continue_loop = wasm_dialect::Br::operands().target(0).build(ctx, location);
         ctx.push_op(loop_block, continue_loop.op_ref());
@@ -268,7 +268,7 @@ fn value_break_region(
         .results(i32_ty)
         .build(ctx, location);
     ctx.push_op(block, value.op_ref());
-    let yield_value = wasm_dialect::Yield::operands(value.result(ctx)).build(ctx, location);
+    let yield_value = wasm_dialect::Yield::operands([value.result(ctx)]).build(ctx, location);
     ctx.push_op(block, yield_value.op_ref());
     let break_outer = wasm_dialect::Br::operands().target(2).build(ctx, location);
     ctx.push_op(block, break_outer.op_ref());

@@ -1327,6 +1327,39 @@ fn a_field_move_needs_the_owner_to_end_before_the_moved_uses() {
 }
 
 #[test]
+fn an_owned_root_returned_twice_acquires_a_unit_per_extra_position() {
+    let ir = r#"core.module @test {
+  !Box = adt.struct<"Box",(core.i32)>
+  !BoxRef = adt.struct<"Box">
+  func.func @twice(%value: core.i32) -> (!BoxRef, !BoxRef) {
+    %box = adt.struct_new(%value) : (core.i32) -> !Box
+    func.return %box, %box
+  }
+}"#;
+    let (_ctx, _module, plan) = build(ir);
+    let function = plan.function(&SymbolPath::new(["twice"])).unwrap();
+    assert_eq!(count(function, ActionKind::ReturnTransfer), 2);
+    assert_eq!(count(function, ActionKind::CopyAcquire), 1);
+    assert_eq!(count(function, ActionKind::FinalRelease), 0);
+
+    let mut ctx = IrContext::new();
+    let module = parse_test_module(&mut ctx, ir);
+    let plan = production_plan(&ctx, module).expect("typed ownership plan");
+    materialize(&mut ctx, module, &plan).expect("typed RC materialization");
+    let materialized = module.op().display(&ctx).to_string();
+    assert_eq!(
+        materialized.matches("tribute_rt.retain").count(),
+        1,
+        "{materialized}"
+    );
+    assert_eq!(
+        materialized.matches("tribute_rt.release").count(),
+        0,
+        "{materialized}"
+    );
+}
+
+#[test]
 fn borrowed_load_return_acquires_a_transfer_unit() {
     let (_ctx, _module, plan) = build(
         r#"core.module @test {

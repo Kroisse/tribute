@@ -7,69 +7,106 @@ use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
 
 use trunk_ir::dialect::wasm as wasm_dialect;
-use trunk_ir::ops::DialectOp;
+use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{RegionRef, TypeRef};
+use trunk_ir::smallvec::SmallVec;
 use trunk_ir::{IrContext, Module, SymbolPath};
 
 use crate::errors::CompilationResult;
+use crate::stack_effect::{is_structured, structured_result_types};
 
 use super::helpers;
 
-/// Register the exact physical signatures carried by indirect calls.
+/// The function types the type section declares beyond the functions' own.
+#[derive(Debug, Default)]
+pub(crate) struct IndexedFuncTypes {
+    /// Each added `wasm.func_sig` with its type index, in index order.
+    pub(crate) types: Vec<(u32, TypeRef)>,
+    /// The type index of each multi-value block type, keyed by its results.
+    pub(crate) block_types: HashMap<BlockResults, u32>,
+}
+
+/// The results of a structured operation's block type.
+pub(crate) type BlockResults = SmallVec<[TypeRef; 2]>;
+
+/// Register the exact physical signatures carried by indirect calls, and the
+/// function type `() -> (results)` of each block type with several results.
 ///
 /// The type section uses the retained signature as its key, including calls
-/// with zero or multiple results. Erased operands cannot reconstruct it.
+/// with zero or multiple results. Erased operands cannot reconstruct it. A
+/// block type shares the index of a signature with the same inputs and
+/// results (`design/wasm-backend.md`, "구조적 제어의 block type").
 pub(crate) fn collect_call_indirect_types(
     ctx: &mut IrContext,
     module: Module,
     type_idx_by_type: &mut HashMap<TypeRef, u32>,
     gc_type_count: usize,
     func_type_count: usize,
-) -> CompilationResult<Vec<(u32, TypeRef)>> {
+) -> CompilationResult<IndexedFuncTypes> {
+    /// A function type to index, in the order the module first uses it.
+    enum Needed {
+        Signature(TypeRef),
+        Block(BlockResults),
+    }
+
     fn collect_from_region(
         ctx: &IrContext,
         region: RegionRef,
-        type_idx_by_type: &mut HashMap<TypeRef, u32>,
-        next_type_idx: &mut u32,
-        new_types: &mut Vec<(u32, TypeRef)>,
+        needed: &mut Vec<Needed>,
     ) -> CompilationResult<()> {
         for &block in &ctx.region(region).blocks {
             for &op in &ctx.block(block).ops {
                 for nested in ctx.op_regions(op) {
-                    collect_from_region(ctx, nested, type_idx_by_type, next_type_idx, new_types)?;
+                    collect_from_region(ctx, nested, needed)?;
                 }
-                let signature = if wasm_dialect::ReturnCallIndirect::matches(ctx, op) {
-                    helpers::exact_return_call_indirect_signature(ctx, op)?
+                if wasm_dialect::ReturnCallIndirect::matches(ctx, op) {
+                    needed.push(Needed::Signature(
+                        helpers::exact_return_call_indirect_signature(ctx, op)?,
+                    ));
                 } else if wasm_dialect::CallIndirect::matches(ctx, op) {
-                    helpers::exact_call_indirect_signature(ctx, op)?
-                } else {
-                    continue;
-                };
-                if let std::collections::hash_map::Entry::Vacant(entry) =
-                    type_idx_by_type.entry(signature)
-                {
-                    let index = *next_type_idx;
-                    *next_type_idx += 1;
-                    entry.insert(index);
-                    new_types.push((index, signature));
+                    needed.push(Needed::Signature(helpers::exact_call_indirect_signature(
+                        ctx, op,
+                    )?));
+                } else if is_structured(ctx, op) {
+                    let results = structured_result_types(ctx, op);
+                    if results.len() > 1 {
+                        needed.push(Needed::Block(results));
+                    }
                 }
             }
         }
         Ok(())
     }
 
+    let mut needed = Vec::new();
+    collect_from_region(ctx, module.body(ctx).unwrap(), &mut needed)?;
+
     let mut next_type_idx = (gc_type_count + func_type_count) as u32;
-    let mut new_types = Vec::new();
+    let mut indexed = IndexedFuncTypes::default();
     let mut staged_indices = type_idx_by_type.clone();
-    collect_from_region(
-        ctx,
-        module.body(ctx).unwrap(),
-        &mut staged_indices,
-        &mut next_type_idx,
-        &mut new_types,
-    )?;
+    for needed in needed {
+        let (signature, block) = match needed {
+            Needed::Signature(signature) => (signature, None),
+            Needed::Block(results) => {
+                if indexed.block_types.contains_key(&results) {
+                    continue;
+                }
+                let signature = wasm_dialect::func_sig(ctx, [], results.iter().copied());
+                (signature.as_type_ref(), Some(results))
+            }
+        };
+        let index = *staged_indices.entry(signature).or_insert_with(|| {
+            let index = next_type_idx;
+            next_type_idx += 1;
+            indexed.types.push((index, signature));
+            index
+        });
+        if let Some(results) = block {
+            indexed.block_types.insert(results, index);
+        }
+    }
     *type_idx_by_type = staged_indices;
-    Ok(new_types)
+    Ok(indexed)
 }
 
 /// Collect function names referenced via wasm.ref_func.
@@ -131,7 +168,6 @@ pub(crate) fn has_call_indirect(ctx: &IrContext, module: Module) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use trunk_ir::ops::DialectType;
     #[test]
     fn resultless_target_functions_do_not_abort_indirect_collection() {
         let mut ctx = IrContext::new();
@@ -147,7 +183,7 @@ mod tests {
         let seed = wasm_dialect::func_sig(&mut ctx, [], []).as_type_ref();
         let mut indices = [(seed, 7)].into_iter().collect::<HashMap<_, _>>();
         let added = collect_call_indirect_types(&mut ctx, module, &mut indices, 8, 0).unwrap();
-        assert_eq!(added.len(), 1);
+        assert_eq!(added.types.len(), 1);
         assert_eq!(indices[&seed], 7);
     }
 
@@ -161,7 +197,7 @@ mod tests {
         let before = module.op().display(&ctx).to_string();
         let mut indices = HashMap::default();
         let added = collect_call_indirect_types(&mut ctx, module, &mut indices, 0, 0).unwrap();
-        assert!(added.is_empty());
+        assert!(added.types.is_empty());
         assert!(indices.is_empty());
         assert_eq!(module.op().display(&ctx).to_string(), before);
     }

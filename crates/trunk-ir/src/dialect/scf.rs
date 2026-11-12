@@ -6,21 +6,21 @@ mod scf {
     /// `scf.if`.
     ///
     /// ```text
-    /// %r = scf.if %c -> (core.i32) {
-    ///     scf.yield %a
+    /// %a, %b = scf.if %c -> (core.i32, core.i32) {
+    ///     scf.yield %x, %y
     /// } else {
-    ///     scf.yield %b
+    ///     scf.yield %y, %x
     /// }
     /// ```
     ///
     /// - **Shape:** a `core.i1` condition, `then_region`, `else_region`, and
-    ///   at most one result.
+    ///   any number of results.
     /// - **Meaning:** runs `then_region` when the condition is 1 and
     ///   `else_region` when it is 0. Each region ends in `scf.yield`, whose
-    ///   value becomes the result, or in its own terminator.
-    #[asm_format(cond ("->" "(" type(result)^ ")")? attr_dict region(then_region) "else" region(else_region))]
+    ///   values become the results in order, or in its own terminator.
+    #[asm_format(cond ("->" "(" types(results)^ ")")? attr_dict region(then_region) "else" region(else_region))]
     #[implements(RegionBranch, Fold)]
-    fn r#if(cond: Value<I1>) -> Option<Value<_>> {
+    fn r#if(cond: Value<I1>) -> Variadic<_> {
         #[region(then_region)]
         {}
         #[region(else_region)]
@@ -67,7 +67,8 @@ mod scf {
 
     /// A loop whose body receives `init` as its entry block arguments on
     /// the first iteration and the values of `scf.continue` on the next.
-    /// `scf.break` leaves it with the optional result.
+    /// `scf.break` leaves it, and its values become the loop's results in
+    /// order.
     ///
     /// ```text
     /// %r = scf.loop(%init) -> (core.i32) {
@@ -75,9 +76,9 @@ mod scf {
     ///     scf.break %acc
     /// }
     /// ```
-    #[asm_format("(" init ")" ("->" "(" type(result)^ ")")? attr_dict region(body))]
+    #[asm_format("(" init ")" ("->" "(" types(results)^ ")")? attr_dict region(body))]
     #[implements(RegionBranch)]
-    fn r#loop(init: Variadic<_>) -> Option<Value<_>> {
+    fn r#loop(init: Variadic<_>) -> Variadic<_> {
         #[region(body)]
         {}
     }
@@ -87,8 +88,8 @@ mod scf {
     fn r#continue(values: Variadic<_>) {}
 
     #[implements(RegionBranchTerminator)]
-    #[asm_format(value attr_dict_bare)]
-    fn r#break(value: Value<_>) {}
+    #[asm_format(values attr_dict_bare)]
+    fn r#break(values: Variadic<_>) {}
 }
 
 // =========================================================================
@@ -125,6 +126,10 @@ impl Loop {
 fn immediate_region_owner(ctx: &IrContext, op: OpRef) -> Option<OpRef> {
     op_parent_region(ctx, op).and_then(|region| ctx.region(region).parent_op)
 }
+
+impl crate::ops::VariadicResults for If {}
+impl crate::ops::VariadicResults for Loop {}
+impl crate::ops::VariadicResults for IndexSwitch {}
 
 impl If {
     fn validate_region_shape(self, ctx: &IrContext) -> Result<(), ControlFlowInterfaceError> {
@@ -465,21 +470,12 @@ impl RegionBranchTerminator for Break {
         successor: RegionSuccessor,
     ) -> Result<ForwardedValues, ControlFlowInterfaceError> {
         let op = self.op_ref();
-        if ctx.op_operands(op).len() != 1 {
-            return Err(ControlFlowInterfaceError::new(
-                "scf.break requires exactly one value",
-            ));
-        }
         match successor {
             RegionSuccessor::Parent => {
-                let owner = Loop::enclosing(ctx, op).ok_or_else(|| {
+                Loop::enclosing(ctx, op).ok_or_else(|| {
                     ControlFlowInterfaceError::new("scf.break has no enclosing scf.loop")
                 })?;
-                if ctx.op_results(owner.op_ref()).is_empty() {
-                    Ok(ForwardedValues::default())
-                } else {
-                    Ok(ForwardedValues::new([self.value(ctx)]))
-                }
+                Ok(ForwardedValues::new(self.values(ctx).iter().copied()))
             }
             RegionSuccessor::Region(_) => Err(ControlFlowInterfaceError::new(
                 "scf.break cannot enter a region",

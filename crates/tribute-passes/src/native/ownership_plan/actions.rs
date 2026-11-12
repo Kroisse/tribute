@@ -607,10 +607,14 @@ impl ActionPlanner<'_> {
             return self.plan_call(op, transferred);
         }
         if func::Return::matches(self.ir, op) {
+            let mut counts = HashMap::<ValueRef, u32>::default();
             for (index, &operand) in self.ir.op_operands(op).iter().enumerate() {
                 if is_managed_value(self.ir, operand, self.managed_layouts) {
                     let root = root_value(self.facts.aliases(), operand);
-                    if self.borrowed.contains_key(&root) {
+                    let count = counts.entry(root).or_default();
+                    // Each returned position owns one unit, so a root
+                    // returned again needs another.
+                    if *count > 0 || self.borrowed.contains_key(&root) {
                         self.actions.push(OwnershipAction {
                             kind: ActionKind::CopyAcquire,
                             value: operand,
@@ -618,6 +622,7 @@ impl ActionPlanner<'_> {
                             destination: index as u32,
                         });
                     }
+                    *count += 1;
                     transferred.insert(root);
                     self.actions.push(OwnershipAction {
                         kind: ActionKind::ReturnTransfer,
@@ -1041,25 +1046,40 @@ pub(super) fn validate_result_contract(
     managed_layouts: &HashSet<TypeRef>,
     subject: &str,
 ) -> Result<(), OwnershipPlanError> {
-    let [expected] = expected else {
-        return if expected.is_empty() && values.is_empty() {
-            Ok(())
-        } else {
-            Err(OwnershipPlanError::new(format!(
-                "{subject} differs from the exact callable signature"
-            )))
-        };
+    let mismatch = || {
+        OwnershipPlanError::new(format!(
+            "{subject} differs from the exact callable signature"
+        ))
     };
-    let expected = *expected;
+    match expected {
+        [] if values.is_empty() => Ok(()),
+        [expected] => validate_single_result(ctx, values, *expected, managed_layouts)
+            .then_some(())
+            .ok_or_else(mismatch),
+        // Several results pair up by position, each one value.
+        _ if values.len() == expected.len()
+            && values.iter().zip(expected).all(|(value, &expected)| {
+                validate_single_result(ctx, std::slice::from_ref(value), expected, managed_layouts)
+            }) =>
+        {
+            Ok(())
+        }
+        _ => Err(mismatch()),
+    }
+}
+
+/// Whether `values` satisfy a contract of the one result `expected`: a
+/// physically empty result may also take no value.
+fn validate_single_result(
+    ctx: &IrContext,
+    values: &[ValueRef],
+    expected: TypeRef,
+    managed_layouts: &HashSet<TypeRef>,
+) -> bool {
     let physically_empty = trunk_ir::dialect::core::Nil::matches(ctx, expected)
         || trunk_ir::dialect::core::Never::matches(ctx, expected);
     if physically_empty {
-        if values.is_empty() || matches!(values, [value] if ctx.value_ty(*value) == expected) {
-            return Ok(());
-        }
-        return Err(OwnershipPlanError::new(format!(
-            "{subject} differs from the exact callable signature"
-        )));
+        return values.is_empty() || matches!(values, [value] if ctx.value_ty(*value) == expected);
     }
     if values.len() == 1
         && !is_typed_managed_reference(ctx, expected, managed_layouts)
@@ -1067,15 +1087,9 @@ pub(super) fn validate_result_contract(
             .iter()
             .any(|&value| is_managed_value(ctx, value, managed_layouts))
     {
-        return Ok(());
+        return true;
     }
-    let valid = matches!(values, [value] if types_compatible(ctx, ctx.value_ty(*value), expected, managed_layouts));
-    if !valid {
-        return Err(OwnershipPlanError::new(format!(
-            "{subject} differs from the exact callable signature"
-        )));
-    }
-    Ok(())
+    matches!(values, [value] if types_compatible(ctx, ctx.value_ty(*value), expected, managed_layouts))
 }
 
 impl ActionPlanner<'_> {

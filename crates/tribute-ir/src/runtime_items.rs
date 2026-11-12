@@ -257,7 +257,7 @@ mod tests {
         let call = probe.call(&mut ctx, location, [argument]);
         assert_eq!(call.callee(&ctx), &SymbolPath::new(["rt::probe"]));
         assert_eq!(
-            ctx.value_ty(call.result(&ctx)),
+            ctx.value_ty(call.results(&ctx)[0]),
             probe.signature(&ctx).results(&ctx)[0]
         );
     }

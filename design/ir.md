@@ -365,7 +365,10 @@ rewrite는 원래 operation에 대한 변환 전 결정만 소비한다. 보존�
 
 `wasm.if`, `wasm.block`, `wasm.loop`의 typed builder는 명시적인 결과 타입 목록을
 받는다. 빈 목록은 SSA 결과가 없는 제어 연산이며 `core.nil` 결과 하나와 다르다.
-SCF lowering이 지원하는 기존 단일 값 결과의 개수와 타입 변환은 유지한다.
+`scf.if`, `scf.index_switch`, `scf.loop`는 결과를 0개 이상 가지며, region을
+끝내는 `scf.yield`와 `scf.break`는 결과마다 값 하나를 넘긴다. 결과 목록은 tuple
+같은 aggregate 값이 아니다. SCF lowering은 결과의 개수와 순서를 보존하고 각 결과의
+타입을 따로 변환한다.
 미사용 결과를 제거하는 rewrite는 새 결과가 비어 있고 기존 결과에 use가 없음을
 검사하는 명시적 경로를 사용한다. 일반 operation 교체는 결과를 1:1로 대응시킨다.
 
@@ -1468,8 +1471,14 @@ func.func_sig<(Evidence, Frame, core.i32) -> core.never>
 ```
 
 The input list is always parenthesized. An empty result list is printed as
-`()`, and the single supported result is printed without parentheses unless it
-carries parameter attributes. Following the
+`()`, a single result is printed without parentheses unless it carries
+parameter attributes, and several results are a parenthesized list:
+
+```text
+func.func_sig<(core.i32, core.i32) -> (core.i32, core.i32)>
+```
+
+Following the
 [self-delimiting type form](#타입-textual-form), each input or result may carry
 its parameter attributes, and the remaining type attributes follow the results
 as a dictionary after a comma:
@@ -1478,32 +1487,29 @@ as a dictionary after a comma:
 func.func_sig<(core.i32 {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}>
 ```
 
-TrunkIR recognizes a parenthesized multi-result list so it can diagnose it, but
-currently rejects more than one result.
-
 The interned representation is:
 
 ```text
 TypeData {
   dialect: func,
   name: func_sig,
-  params: [input_0, ..., input_n, result_0?],
+  params: [input_0, ..., input_n, result_0, ..., result_m],
   attrs: {
     num_inputs: n,
-    num_results: 0 | 1,
+    num_results: m,
     ...other_type_attributes
   }
 }
 ```
 
 Both counts are mandatory `u32` delimiters and participate in type identity.
-They do not identify an ABI. Their sum must equal `params.len()`, and
-`num_results` must not exceed one. The generic recursive type walk continues to
-visit the entire flat `params` vector. The canonical printer hides only these
-two reserved attributes and preserves every other type attribute; textual type
-attribute dictionaries may not specify either reserved key.
+They do not identify an ABI. Their sum must equal `params.len()`. The generic
+recursive type walk continues to visit the entire flat `params` vector. The
+canonical printer hides only these two reserved attributes and preserves every
+other type attribute; textual type attribute dictionaries may not specify
+either reserved key.
 
-함수 타입의 textual spelling은 `func.func_sig<(inputs...) -> result>`만 사용한다.
+함수 타입의 textual spelling은 `func.func_sig<(inputs...) -> results>`만 사용한다.
 Production code는 검증된
 `func::func_sig` API로 함수 타입을 만들며, 직접 `TypeData`를 만드는 코드는
 malformed-type verifier test에 한정한다.
@@ -1525,15 +1531,24 @@ proper tail transfer is the `func.tail_call`/`func.tail_call_indirect` operation
 itself, and the machine calling convention is the signature's `call_conv`
 attribute.
 
-Shared `func.call` and `func.call_indirect` support zero or one SSA result.
-Calls match complete input/result lists; returns match the enclosing function's
-result list. Proper-tail operations themselves remain resultless, including
-when transferring to a logical `[core.never]` callable, and require matching
+A result list with several entries returns one value per entry; it is not a
+tuple or aggregate value. Lowering that splits one logical value into several
+values (for example, a scalarized struct) produces such a list, and each
+target maps it to its own multi-value returns. A CPS-convention callable keeps
+the logical `[core.never]` and physical `[]` results above; several results
+belong only to direct-return callables.
+
+Shared `func.call` and `func.call_indirect` have one SSA result per callee
+result, zero or more. Calls match complete input/result lists; returns match
+the enclosing function's result list. Proper-tail operations themselves remain
+resultless, including when transferring to a logical `[core.never]` callable,
+and require matching
 caller/callee result lists. Indirect calls require an exact signature, which
 must agree with a typed callee.
 
-Custom `func.func` assembly omits the arrow for zero results and prints `-> T`
-for one result. Absent arrow means zero IR results, never implicit Unit.
+Custom `func.func` assembly omits the arrow for zero results, prints `-> T`
+for one result, and `-> (T, U)` for several. Absent arrow means zero IR
+results, never implicit Unit.
 Generic operation syntax preserves its explicit `type` attribute. Custom
 assembly spells the whole type through its
 [signature codec](#signature-codec): parameter attributes follow their
@@ -1546,8 +1561,8 @@ Each dialect's adapter verifies and decodes its own signature and rebuilds it
 with its own constructor, so the shared traversal selects neither a dialect
 identity nor an ABI.
 Normal `validate_all` combines local operation checks with contextual shared
-function-contract checks. Local checks enforce zero/one ordinary-call results,
-resultless terminators, and exact typed indirect operand/result agreement.
+function-contract checks. Local checks enforce resultless terminators and exact
+typed indirect operand/result agreement.
 Contextual checks verify returns, caller/callee tail result lists, and direct
 calls whose declarations are available. An undeclared runtime callee has no
 inferred signature; it does not exempt other known contracts from validation.
