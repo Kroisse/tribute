@@ -433,7 +433,8 @@ GC struct에 inline으로 놓인다. 아래 `String`의 `Leaf`도 그렇다.
 
 Frontend는 `b"..."`를 `Bytes` 값을 내는 `adt.bytes_const` 하나로, `"..."`를
 `String` 값을 내는 `adt.string_const` 하나로 낸다. Frontend는 byte 배열이나 `Repr`의
-field를 다루지 않는다. Target의 constant lowering이 두 operation을 펼친다. Byte 배열은
+field를 다루지 않는다. [표현 선택](abi-boundary.md#표현-선택)보다 앞에서 constant
+lowering이 두 operation을 `adt` 값으로 펼친다. Byte 배열은
 배열 상수 `adt.array_const`이고, `b"..."`는 그 배열 전체를 보는 `Repr`, `"..."`는
 그것을 다시 `String::Leaf`로 감싼 값이다. `Bytes`의 IR 타입은 `Repr`의 IR 타입이므로
 `Repr`의 field는 `adt.bytes_const` 결과 타입의 선언에서 이름으로 찾는다.
@@ -457,8 +458,8 @@ target의 선택은 서로 달라도 된다. Target은 배열 상수를 다음�
 할당한다. 배열 상수는 배열이므로 표현 선택이 `heap.array_const`로 바꾼다.
 Wasm에서 모든 `heap.array_const`는 같은 passive data-segment index 공간을
 사용하며, 동일한 payload는 `String`과 `Bytes` 리터럴 사이에서도 data segment를
-재사용할 수 있다. Constant lowering은 자신이 참조하는 data segment를 같은 단계에서 모듈에
-선언한다([모듈 수준 자원의 선언][wasm-resources]). `String::Leaf` 생성은 target의
+재사용할 수 있다. Constant lowering은 자신이 참조하는 data segment를 같은 단계에서
+모듈에 선언한다([모듈 수준 자원의 선언][wasm-resources]). `String::Leaf` 생성은 target의
 일반 enum/variant lowering보다 먼저 일어나고, 그 이후에는 source에서 작성한
 `.Leaf(bytes)`와 똑같은 ADT 경로를 따른다.
 
