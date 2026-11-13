@@ -90,15 +90,23 @@ mod tests {
             validate_op_schemas(&ctx, module.op()).is_ok()
         };
         let closure = "closure.closure<func.func_sig<() -> core.nil>>";
-        for managed in ["core.bytes", "tribute_rt.anyref", closure] {
+        for managed in ["adt.array<core.i8>", "tribute_rt.anyref", closure] {
             assert!(accepted("into_raw", managed, "core.ptr"), "{managed}");
             assert!(accepted("from_raw", "core.ptr", managed), "{managed}");
         }
         // Neither side accepts the other's type or a scalar.
         assert!(!accepted("into_raw", "core.ptr", "core.ptr"));
         assert!(!accepted("into_raw", "core.i32", "core.ptr"));
-        assert!(!accepted("into_raw", "core.bytes", "core.bytes"));
-        assert!(!accepted("from_raw", "core.bytes", "core.bytes"));
+        assert!(!accepted(
+            "into_raw",
+            "adt.array<core.i8>",
+            "adt.array<core.i8>"
+        ));
+        assert!(!accepted(
+            "from_raw",
+            "adt.array<core.i8>",
+            "adt.array<core.i8>"
+        ));
         assert!(!accepted("from_raw", "core.ptr", "core.ptr"));
         assert!(!accepted("from_raw", "core.ptr", "core.i32"));
     }
@@ -125,15 +133,15 @@ mod tests {
     fn from_raw_becomes_a_conversion_to_its_managed_type() {
         let output = run_pass(
             r#"core.module @test {
-  func.func @f(%raw: core.ptr) -> core.bytes {
-    %bytes = tribute_rt.from_raw %raw : core.bytes
+  func.func @f(%raw: core.ptr) -> adt.array<core.i8> {
+    %bytes = tribute_rt.from_raw %raw : adt.array<core.i8>
     func.return %bytes
   }
 }"#,
         );
         assert!(!output.contains("tribute_rt.from_raw"), "{output}");
         assert!(
-            output.contains("core.unrealized_conversion_cast %0 : core.ptr to core.bytes"),
+            output.contains("core.unrealized_conversion_cast %0 : core.ptr to adt.array<core.i8>"),
             "{output}"
         );
     }

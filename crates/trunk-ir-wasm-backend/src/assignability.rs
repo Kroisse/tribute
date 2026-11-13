@@ -13,7 +13,7 @@ use trunk_ir::refs::TypeRef;
 /// without a runtime cast.
 ///
 /// Registration follows the same structure the rest of the backend uses: builtin
-/// layouts at their reserved indices (`@bytes`, `_closure`, ...) and the
+/// layouts at their reserved indices (`_closure`, `described`, ...) and the
 /// structural `wasm_gc.struct` types, each of which
 /// receives an index. Any other spelling proves nothing and stays rejected.
 fn is_registered_gc_struct_reference(ctx: &IrContext, ty: TypeRef) -> bool {
@@ -21,16 +21,6 @@ fn is_registered_gc_struct_reference(ctx: &IrContext, ty: TypeRef) -> bool {
         return crate::gc_types::is_builtin_struct_index(index);
     }
     trunk_ir::dialect::wasm_gc::Struct::matches(ctx, ty)
-}
-
-/// Whether this IR type is registered by the backend as a concrete WasmGC array
-/// reference, and is therefore assignable to the abstract `wasm.arrayref`
-/// without a runtime cast. Only builtin array layouts (Bytes backing arrays)
-/// qualify; `wasm_gc.array` spellings are handled by the
-/// abstract array rule and never acquire a concrete index on their own.
-fn is_registered_gc_array_reference(ctx: &IrContext, ty: TypeRef) -> bool {
-    crate::passes::wasm_gc_to_wasm::builtin_type_idx(ctx, ty)
-        .is_some_and(|index| !crate::gc_types::is_builtin_struct_index(index))
 }
 
 /// Whether an argument can satisfy an indirect-tail parameter after the Wasm
@@ -85,15 +75,10 @@ pub fn is_wasm_physical_argument_assignable(
     if parameter_is_structref && is_registered_gc_struct_reference(ctx, argument) {
         return true;
     }
-    if parameter_is_arrayref && is_registered_gc_array_reference(ctx, argument) {
-        return true;
-    }
-    // Every registered reference denotes a struct or array, and `anyref` is their
-    // common supertype, so the same registration evidence satisfies an `anyref`
-    // slot. `wasm_gc.array` spellings are emitted as the abstract array reference.
+    // Every registered reference denotes a struct, and every `wasm_gc.array`
+    // an array; `anyref` is their common supertype.
     if parameter_is_anyref
         && (is_registered_gc_struct_reference(ctx, argument)
-            || is_registered_gc_array_reference(ctx, argument)
             || trunk_ir::dialect::wasm_gc::Array::matches(ctx, argument))
     {
         return true;
@@ -123,11 +108,9 @@ mod tests {
         parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !data = wasm_gc.array<core.i8, {layout = "bytes_data"}>
-  !bytes = test.layout<!data, core.i32, core.i32, {layout = "bytes"}>
+  !described = test.layout<core.i32, {layout = "described"}>
   !closure = test.layout<core.i32, wasm.anyref, {layout = "closure"}>
-  !view = test.view<!data, core.i32, core.i32, {layout = "bytes"}>
-  !plain = wasm_gc.array<core.i8>
+  !view = test.view<core.i32, {layout = "described"}>
 }"#,
         );
         let alias = |name: &'static str| ctx.type_alias_by_text(name).expect("fixture alias");
@@ -135,22 +118,17 @@ mod tests {
         assert!(is_wasm_physical_argument_assignable(
             &ctx,
             alias("view"),
-            alias("bytes")
+            alias("described")
         ));
         assert!(is_wasm_physical_argument_assignable(
             &ctx,
-            alias("bytes"),
+            alias("described"),
             alias("view")
         ));
         assert!(!is_wasm_physical_argument_assignable(
             &ctx,
-            alias("bytes"),
+            alias("described"),
             alias("closure")
-        ));
-        assert!(!is_wasm_physical_argument_assignable(
-            &ctx,
-            alias("plain"),
-            alias("data")
         ));
     }
 }

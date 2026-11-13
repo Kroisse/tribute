@@ -8,7 +8,6 @@ mod const_handlers;
 mod control_flow_handlers;
 mod local_global_handlers;
 mod memory_handlers;
-mod misc_handlers;
 mod ref_handlers;
 mod struct_handlers;
 
@@ -36,6 +35,5 @@ pub(super) use memory_handlers::{
     handle_i64_load32_u, handle_i64_store, handle_i64_store8, handle_i64_store16,
     handle_i64_store32, handle_memory_grow, handle_memory_size,
 };
-pub(super) use misc_handlers::handle_bytes_from_data;
 pub(super) use ref_handlers::{handle_ref_cast, handle_ref_func, handle_ref_null, handle_ref_test};
 pub(super) use struct_handlers::{handle_struct_get, handle_struct_new, handle_struct_set};

@@ -1012,14 +1012,14 @@ wasm.return
         };
         let reference = closure_layout("test.reference");
         let declaration = closure_layout("test.declaration");
-        let bytes_layout = ctx.string_attr(crate::gc_types::BYTES_LAYOUT);
-        let bytes = TypeDataBuilder::new("test.bytes")
-            .attr(trunk_ir::types::LAYOUT_ATTR, bytes_layout)
+        let described_layout = ctx.string_attr(crate::gc_types::DESCRIBED_LAYOUT);
+        let described = TypeDataBuilder::new("test.described")
+            .attr(trunk_ir::types::LAYOUT_ATTR, described_layout)
             .intern(&mut ctx);
         let types_before = ctx.types().iter().count();
 
         assert!(types_equivalent_for_gc(&mut ctx, reference, declaration));
-        assert!(!types_equivalent_for_gc(&mut ctx, reference, bytes));
+        assert!(!types_equivalent_for_gc(&mut ctx, reference, described));
         assert_eq!(normalize_type_for_gc(&mut ctx, reference), reference);
         assert_eq!(ctx.types().iter().count(), types_before);
     }

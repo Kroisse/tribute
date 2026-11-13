@@ -1205,8 +1205,8 @@ func.return %0
 #[test]
 fn test_roundtrip_bytes_const() {
     let input = r#"core.module @test {
-  func.func @f() -> core.bytes {
-%0 = "test.bytes_const"() {value = b"hello"} : core.bytes
+  func.func @f() -> test.bytes {
+%0 = "test.bytes_const"() {value = b"hello"} : test.bytes
 func.return %0
   }
 }"#;

@@ -219,13 +219,6 @@ fn unused_runtime_functions_do_not_reach_the_boundary_exit() {
             &mut ctx,
             m,
             target,
-            Stage::LowerRuntimeCalls..=Stage::LowerRuntimeCalls,
-        )
-        .expect("runtime calls");
-        run_target_stages(
-            &mut ctx,
-            m,
-            target,
             Stage::ExitBoundary..=Stage::ExitBoundary,
         )
         .expect("boundary exit");
@@ -245,13 +238,6 @@ fn target_lowering_calls_runtime_functions_by_path() {
         run_target_stages(&mut ctx, m, target, Stage::EnterTarget..=Stage::EnterTarget)
             .expect("target entry");
         let call = call_probe_from_main(&mut ctx, m);
-        run_target_stages(
-            &mut ctx,
-            m,
-            target,
-            Stage::LowerRuntimeCalls..=Stage::LowerRuntimeCalls,
-        )
-        .expect("runtime calls");
         run_target_stages(
             &mut ctx,
             m,

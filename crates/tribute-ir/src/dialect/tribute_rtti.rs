@@ -80,7 +80,7 @@ pub trait ManagedRefType: trunk_ir::ops::DialectType {}
 /// itself, as `tribute_rtti.layout` names it. A struct layout, an enum layout
 /// (one descriptor per variant), and on native an array type are.
 ///
-/// `tribute_rt.anyref`, `tribute_rt.intref`, `core.bytes`, and
+/// `tribute_rt.anyref`, `tribute_rt.intref`, and
 /// `closure.closure` are managed references but not descriptor layouts of
 /// their own, so this is narrower than [`ManagedRefType`]. A nominal
 /// layout's body is no allocation layout of its own; its key is.
@@ -411,7 +411,6 @@ mod tests {
   !small = tribute_rt.intref
   !raw = core.ptr
   !int = tribute_rt.int
-  !bytes = core.bytes
   !callable = closure.closure<func.func_sig<() -> core.nil>>
   !array = adt.array<core.i32>
   !linear = core.array<core.i32>
@@ -425,7 +424,6 @@ mod tests {
             "choice",
             "any",
             "small",
-            "bytes",
             "callable",
             "array",
         ] {

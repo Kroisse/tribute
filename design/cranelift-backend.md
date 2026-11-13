@@ -91,7 +91,6 @@ flowchart TB
     subgraph native_passes["tribute-passes/src/native/"]
         abi["target ABI validation + physicalization\nroot bridge + closure lowering"]
         effect["effect ABI lowering\nevidence runtime 항목 호출 + proper-tail calls"]
-        bytes["bytes intrinsic lowering\nverified identity → runtime 호출"]
         storage["finalize_closure_storage_layout"]
         list_lower["opaque List lowering\nnative::list::lower\nlist.* → private RC nodes"]
         cfg["structured control normalization\nscf_to_cf"]
@@ -116,7 +115,7 @@ flowchart TB
 
     output[".o (object file)\n→ cc 링크 → 실행 파일"]
 
-    input --> abi --> effect --> bytes --> storage --> list_lower --> cfg --> rc_plan --> rc_pass
+    input --> abi --> effect --> storage --> list_lower --> cfg --> rc_plan --> rc_pass
     rc_pass --> structural --> func --> cf --> adt --> arith --> intrinsic
     intrinsic --> validate --> codegen --> obj --> output
 ```

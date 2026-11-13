@@ -49,7 +49,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             &format!(
-                "core.module @test {{\n  func.func @f(%p: core.ptr, %i: core.i64, %n: core.i32, %f: core.f64, %b: core.bytes, %x: core.index) -> core.nil {{\n    {body}\n    func.return\n  }}\n}}"
+                "core.module @test {{\n  func.func @f(%p: core.ptr, %i: core.i64, %n: core.i32, %f: core.f64, %b: test.bytes, %x: core.index) -> core.nil {{\n    {body}\n    func.return\n  }}\n}}"
             ),
         );
         validate_op_schemas(&ctx, module.op()).is_ok()
@@ -116,7 +116,7 @@ mod tests {
                 "%a = mem.load %p {{offset = 0}} : {scalar}"
             )));
         }
-        assert!(!schema_ok("%a = mem.load %p {offset = 0} : core.bytes"));
+        assert!(!schema_ok("%a = mem.load %p {offset = 0} : test.bytes"));
         assert!(!schema_ok("%a = mem.load %p {offset = 0} : core.nil"));
         assert!(schema_ok("mem.store %p, %p {offset = 0}"));
         assert!(!schema_ok("mem.store %p, %b {offset = 0}"));

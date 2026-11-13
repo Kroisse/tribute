@@ -78,7 +78,6 @@ use trunk_ir::types::TypeDataBuilder;
 use rustc_hash::FxHashMap as HashMap;
 
 use tribute_ir::dialect::tribute_rtti;
-use tribute_ir::runtime_layout::{self, has_runtime_layout};
 
 use super::descriptors::has_descriptor_field;
 use super::struct_layouts::variant_type;
@@ -536,14 +535,9 @@ impl OpRewritePattern for VariantGetPattern {
             .get(field_idx as usize)?;
         let declared_field_ty = physical_variant_field_type(ctx, declared_field_ty);
         let requested_result_ty = physical_variant_field_type(ctx, variant_get.result_ty(ctx));
-        // String::Leaf has the canonical bytes layout even though frontend
-        // pattern extraction is temporarily erased to wasm.anyref. All other
-        // variant_get results must agree with their declared enum field type.
-        let declared_is_bytes = has_runtime_layout(ctx, declared_field_ty, runtime_layout::BYTES);
-        let is_bytes_anyref_erasure =
-            declared_is_bytes && wasm_dialect::Anyref::matches(ctx, requested_result_ty);
+        // A variant_get result agrees with its declared enum field type.
         rewriter.ensure(
-            requested_result_ty == declared_field_ty || is_bytes_anyref_erasure,
+            requested_result_ty == declared_field_ty,
             "result type differs from the declared field type",
         )?;
         let result_ty = declared_field_ty;
@@ -1051,6 +1045,7 @@ impl OpRewritePattern for RefCastPattern {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tribute_ir::runtime_layout::{self, has_runtime_layout};
     use trunk_ir::dialect::wasm;
     use trunk_ir::ops::DialectOp;
     use trunk_ir::parser::parse_test_module;
@@ -1641,7 +1636,7 @@ mod tests {
     }
 
     #[test]
-    fn variant_get_requires_declared_result_type_except_bytes_anyref_erasure() {
+    fn variant_get_requires_declared_result_type() {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
             &mut ctx,
@@ -1649,19 +1644,14 @@ mod tests {
   !ERef = adt.enum<"E">
   !BoxRef = adt.enum<"Box">
   !NodeRef = adt.enum<"Node">
-  !StringRef = adt.enum<"String">
   !E = adt.enum<"E", [(core.i32)]>
   !Box = adt.enum<"Box", [(!NodeRef)]>
   !Node = adt.enum<"Node", [()]>
-  !Data = adt.array<core.i8, {layout = "bytes_data"}>
-  !Bytes = adt.struct<(!Data, core.i32, core.i32), {layout = "bytes"}>
-  !String = adt.enum<"String", [(!Bytes)]>
 
-  wasm.func @main(%e: !ERef, %box: !BoxRef, %string: !StringRef) -> core.nil {
+  wasm.func @main(%e: !ERef, %box: !BoxRef) -> core.nil {
     %valid = adt.variant_get %e {type = !E, tag = 0, field = 0} : core.i32
     %invalid = adt.variant_get %e {type = !E, tag = 0, field = 0} : core.i64
     %node = adt.variant_get %box {type = !Box, tag = 0, field = 0} : wasm.structref
-    %bytes = adt.variant_get %string {type = !String, tag = 0, field = 0} : wasm.anyref
     wasm.return
   }
 }"#,
@@ -1679,16 +1669,11 @@ mod tests {
             .filter_map(|&op| wasm_gc_dialect::StructGet::from_op(&ctx, op).ok())
             .map(|op| op.result_ty(&ctx))
             .collect();
-        assert_eq!(lowered_result_types.len(), 3);
+        assert_eq!(lowered_result_types.len(), 2);
         assert!(lowered_result_types.iter().any(|&ty| {
             let data = ctx.get_type(ty);
             data.name.is(&ctx, "core.i32")
         }));
-        assert!(lowered_result_types.iter().any(|&ty| has_runtime_layout(
-            &ctx,
-            ty,
-            runtime_layout::BYTES
-        )));
         assert!(lowered_result_types.iter().any(|&ty| {
             let data = ctx.get_type(ty);
             data.name.is(&ctx, "wasm.structref")

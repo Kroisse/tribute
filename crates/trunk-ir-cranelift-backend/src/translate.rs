@@ -561,7 +561,7 @@ mod tests {
 
     #[test]
     fn unsupported_bound_declaration_signatures_are_rejected_even_when_unreferenced() {
-        for signature in ["(%bytes: core.bytes)", "() -> core.bytes"] {
+        for signature in ["(%bytes: test.bytes)", "() -> test.bytes"] {
             let mut ctx = IrContext::new();
             let module = parse_test_module(
                 &mut ctx,
@@ -576,7 +576,7 @@ mod tests {
             assert!(
                 error
                     .to_string()
-                    .contains("unsupported type for Cranelift: core.bytes"),
+                    .contains("unsupported type for Cranelift: test.bytes"),
                 "{error}"
             );
             assert_eq!(module.op().display(&ctx).to_string(), before);

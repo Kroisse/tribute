@@ -19,7 +19,7 @@ use trunk_ir_macros::op_interface;
 ///
 /// ```text
 /// register_interfaces!(Exit: CallableExit; Br: Branch);
-/// register_interfaces!(core::Bytes: ManagedRefType);
+/// register_interfaces!(core::Ptr: AddressType);
 /// ```
 ///
 /// Each entry requires the interface's impl for the operation or type

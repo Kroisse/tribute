@@ -172,7 +172,6 @@ EnterTarget         value integrity check, global DCE (runtime functions
                     physicalization (physical signatures, root entry bridge,
                     value delimiters), closure lowering, target evidence
                     lowering
-LowerRuntimeCalls   target bytes intrinsic bridge
 ExitBoundary        closure storage layout, value integrity check, global
                     DCE, canonicalization, boundary exit verification
 ── target dialect lowering ──

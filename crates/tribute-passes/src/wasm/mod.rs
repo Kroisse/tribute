@@ -8,9 +8,8 @@
 //! - `convert_signatures`: Convert function and indirect-call signatures to Wasm types
 //! - `tribute_rt_to_wasm`: Lower boxing/unboxing operations to wasm equivalents
 //! - `const_to_wasm`: Lower string/bytes constants to wasm data segments
-//! - `bytes`: Bytes layout types and the in-boundary bytes read intrinsic
 //! - `struct_layouts`: Structural GC struct types of user structs and variants
-//! - `intrinsic_to_wasm`: Bind the `extern "C"` bytes helpers to GC operations
+//! - `intrinsic_to_wasm`: Bind the `extern "C"` byte array helpers to GC operations
 //! - `wasm_gc_to_wasm`: Resolve semantic GC types to indexed WASM operations
 //! - `prompt_tag`: Bind the prompt tag allocator to a counter global
 //! - `runtime_bindings`: The C runtime helpers the Wasm target binds
@@ -18,7 +17,6 @@
 //! - `type_converter`: WASM type converter for IR-level type transformations
 
 pub mod adt_to_wasm;
-pub mod bytes;
 pub mod const_to_wasm;
 pub mod convert_signatures;
 pub mod descriptors;

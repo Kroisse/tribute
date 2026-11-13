@@ -1974,7 +1974,7 @@ fn managed_defined_boundaries_null_and_compatible_cast_are_valid() {
 fn managed_bodyless_external_read_line_shape_and_raw_pointer_cast_chain_fail_closed() {
     let (ctx, module) = parse_fixture(
         r#"core.module @test {
-  !ReadLineResult = adt.enum<"ReadLineResult", [(core.bytes), (), (), (core.i32, core.bytes)]>
+  !ReadLineResult = adt.enum<"ReadLineResult", [(adt.array<core.i8>), (), (), (core.i32, adt.array<core.i8>)]>
   !ReadLineResultRef = adt.enum<"ReadLineResult">
   tribute_control.func @user_read_line() -> !ReadLineResultRef
     attributes {abi = "intrinsic"}

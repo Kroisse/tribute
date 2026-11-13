@@ -64,8 +64,6 @@
 //!     │   canonicalize, DCE → CPS callable physicalization (target ABI
 //!     │   validation, root entry bridge, value delimiters) →
 //!     │   lower-prepared-closures → evidence lowering
-//!     ▼ LowerRuntimeCalls
-//!     │   bytes intrinsic bridge (target-specific)
 //!     ▼ ExitBoundary
 //!     │   closure storage layout finalization → cleanup (global DCE removes
 //!     │   uncalled runtime items, canonicalize, DCE) → boundary exit check
@@ -217,9 +215,6 @@ enum Stage {
     /// stay), inlining, canonicalization, CPS callable physicalization,
     /// prepared closure lowering, and evidence lowering.
     EnterTarget,
-    /// The target-specific stage that calls runtime items: the bytes
-    /// intrinsic bridge.
-    LowerRuntimeCalls,
     /// Leave the boundary: closure storage layout, the cleanup that removes
     /// the runtime functions nothing calls, and the boundary exit check.
     ExitBoundary,
@@ -367,17 +362,6 @@ fn stage_passes(mut config: StageConfig, stages: RangeInclusive<Stage>) -> PassM
         pm.add_pass(tribute_passes::target_abi::PhysicalizeCpsCallables)
             .add_pass(tribute_passes::closure_lower::LowerPreparedClosures)
             .add_pass(tribute_passes::evidence_lowering::LowerEvidence);
-    }
-
-    if stages.contains(&Stage::LowerRuntimeCalls) {
-        // Complete the supported bytes intrinsic bridge inside the boundary;
-        // the lowering consumes its verified compiler intrinsic identity.
-        match config.target_kind() {
-            TargetKind::Native => {
-                pm.add_pass(tribute_passes::native::intrinsic_to_native::LowerBytesIntrinsics)
-            }
-            TargetKind::Wasm => pm.add_pass(tribute_passes::wasm::bytes::LowerBytesIntrinsics),
-        };
     }
 
     if stages.contains(&Stage::ExitBoundary) {

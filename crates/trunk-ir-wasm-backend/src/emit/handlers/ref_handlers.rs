@@ -110,41 +110,7 @@ fn resolve_callee(path: &SymbolPath, module_info: &ModuleInfo) -> CompilationRes
 mod tests {
     use rustc_hash::FxHashMap as HashMap;
 
-    use trunk_ir::Span;
-    use trunk_ir::refs::PathRef;
-    use trunk_ir::types::{Location, TypeDataBuilder};
-    use wasm_encoder::{RefType, ValType};
-
     use super::*;
-
-    #[test]
-    fn ref_cast_uses_non_null_instruction_for_non_null_result() {
-        let mut ctx = IrContext::new();
-        let location = Location::new(PathRef::from_u32(0), Span::default());
-        let anyref_ty = wasm_dialect::Anyref::params()
-            .intern(&mut ctx)
-            .as_type_ref();
-        let bytes_layout = ctx.string_attr(crate::gc_types::BYTES_LAYOUT);
-        let bytes_ty = TypeDataBuilder::new("test.bytes")
-            .attr(trunk_ir::types::LAYOUT_ATTR, bytes_layout)
-            .intern(&mut ctx);
-        let null = wasm_dialect::RefNull::operands()
-            .heap_type("anyref")
-            .type_idx(None)
-            .results(anyref_ty)
-            .build(&mut ctx, location);
-        let null_result = null.result(&ctx);
-        let cast = wasm_dialect::RefCast::operands(null_result)
-            .target_type(bytes_ty)
-            .type_idx(Some(crate::gc_types::BYTES_STRUCT_IDX))
-            .results(bytes_ty)
-            .build(&mut ctx, location);
-        let module_info = ModuleInfo::default();
-        let mut function = Function::new([(2, ValType::Ref(RefType::ANYREF))]);
-
-        handle_ref_cast(&ctx, cast.op_ref(), &module_info, &mut function)
-            .expect("non-null ref.cast should emit");
-    }
 
     #[test]
     fn resolve_callee_reports_missing_symbols() {
