@@ -1675,6 +1675,39 @@ fn a_resume_in_an_op_never_arm_is_rejected_where_it_stands() {
 }
 
 #[test]
+fn a_resumptive_arm_nested_in_an_op_never_arm_provides_its_own_resumption() {
+    let (ctx, module) = parse_fixture(
+        r#"core.module @test {
+  %outer = tribute_control.handle : core.i32 {
+    %body = arith.constant 0 : core.i32
+    tribute_control.yield %body
+  } do(%value: core.i32) {
+      tribute_control.yield %value
+  } op @Fail @fail(%argument: core.i32) : core.never {
+      %nested = tribute_control.handle : core.i32 {
+        tribute_control.yield %argument
+      } do(%value: core.i32) {
+          tribute_control.yield %value
+      } op @State @get(%inner_argument: core.i32) : core.i32 {
+          %resumed = tribute_control.resume %inner_argument : core.i32
+          tribute_control.yield %resumed
+      }
+      tribute_control.yield %nested
+  }
+}"#,
+    );
+    let resume = control_op(&ctx, module, Resume::NAME);
+    let nested = ctx.op_operands(resume)[0];
+    let trunk_ir::ValueDef::BlockArg(block, _) = ctx.value_def(nested) else {
+        panic!("the resumed value is the nested arm's argument");
+    };
+    let resumption = DynResumptionRegions::enclosing(&ctx, resume).expect("a resumption");
+    assert_eq!(ctx.region(resumption.arm).blocks[..], [block]);
+    let result = validate_local(&ctx, module);
+    assert!(result.errors.is_empty(), "{result}");
+}
+
+#[test]
 fn a_nested_handles_fn_arm_is_a_barrier_to_the_outer_resumption() {
     let (ctx, module) = parse_fixture(
         r#"core.module @test {
