@@ -27,6 +27,8 @@ help: the following other types implement trait `SignatureCodec`
 note: required by a bound in `SignatureCodecHooks::of`
  --> src/asm_format.rs
   |
+  | impl SignatureCodecHooks {
+  |     /// The hooks of `T`'s codec.
   |     pub const fn of<T: SignatureCodec>() -> Self {
   |                        ^^^^^^^^^^^^^^ required by this bound in `SignatureCodecHooks::of`
   = note: this error originates in the attribute macro `trunk_ir::dialect` (in Nightly builds, run with -Z macro-backtrace for more info)
