@@ -2551,6 +2551,46 @@ fn main() ->{Io} Nil {
     );
 }
 
+/// A byte literal is one static object for every evaluation: each takes a
+/// unit of it and releases it, and the object is never freed. Its refcount
+/// lives in writable data, so the retains do not fault.
+#[test]
+fn test_native_byte_literals_are_shared_static_objects() {
+    let source = r#"
+use std::io::{Io, print_line}
+
+fn count(n: Nat, acc: Nat) -> Nat {
+    case n == 0 {
+        True -> acc
+        False -> count(n - 1, acc + b"abc".slice(1, 3).len())
+    }
+}
+
+fn keep(n: Nat, kept: Bytes) -> Bytes {
+    case n == 0 {
+        True -> kept
+        False -> keep(n - 1, b"abc")
+    }
+}
+
+fn main() ->{Io} Nil {
+    print_line(count(20000, 0).to_string)
+    print_line(String::from_bytes(keep(3, b"x") <> b"!"))
+}
+"#;
+    for output in [
+        compile_and_run_native("static_byte_literals.trb", source),
+        compile_and_run_native_asan("static_byte_literals_asan.trb", source),
+    ] {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "stderr: {stderr}");
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout).trim(),
+            "40000\nabc!"
+        );
+    }
+}
+
 /// A read or slice past the end of a `Bytes`, or a reversed slice, ends the
 /// execution instead of reading other memory.
 #[test]

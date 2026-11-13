@@ -2,13 +2,18 @@
 //!
 //! This pass uses a two-phase approach:
 //! 1. **Analysis**: Collect the distinct string/bytes payloads of the input IR
-//! 2. **Lowering**: Declare a `clif.data` object for each payload and replace
-//!    const operations with clif operations that:
-//!    - Reference the data object via `clif.symbol_addr`
-//!    - Copy it into a new byte array the runtime allocates
-//!    - Wrap the array in `String::Leaf(Bytes { .. })` for string constants
+//! 2. **Lowering**: Declare one static byte array object per payload, a
+//!    writable `clif.data` holding an RC header and the array
+//!    (`design/rc.md` § "정적 객체"), and replace const operations with clif
+//!    operations that:
+//!    - Take the object's address via `clif.symbol_addr`
+//!    - Retain it, which makes the unit the constant's owned value holds
+//!    - Wrap the array in the `Bytes` representation, and that in
+//!      `String::Leaf` for string constants
 //!
-//! The Cranelift backend emits the declared `clif.data` objects from the IR.
+//! A static object is never allocated, copied, or freed: its refcount starts
+//! at `2^31`, so balanced retains and releases never bring it to zero. The
+//! Cranelift backend emits the declared `clif.data` objects from the IR.
 //!
 //! ## Pipeline Position
 //!
@@ -25,7 +30,7 @@ use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::clif;
 use trunk_ir::dialect::core;
-use trunk_ir::ops::{DialectOp, VariadicResults};
+use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{
     ConversionError, ConversionTarget, Module, OpRewritePattern, PatternApplicator,
@@ -34,14 +39,29 @@ use trunk_ir::rewrite::{
 use trunk_ir::types::{Attribute, TypeDataBuilder};
 
 use crate::string_literal::{ExpandBytesConst, ExpandStringConst, LiteralLayouts};
+use tribute_ir::dialect::tribute_rt::{RC_HEADER_SIZE, REFCOUNT_OFFSET};
 use trunk_ir::SymbolPath;
-use trunk_ir::dialect::func;
-
-/// Name of the runtime function that copies bytes into a new byte array.
-const BYTE_ARRAY_FROM_FN: &str = "__tribute_byte_array_from";
 
 /// Prefix of the data objects this pass declares.
-const RODATA_PREFIX: &str = "__tribute_rodata_";
+const STATIC_BYTES_PREFIX: &str = "__tribute_static_bytes_";
+
+/// The refcount a static object starts with (`design/rc.md` § "정적 객체").
+const STATIC_REFCOUNT: u32 = 1 << 31;
+
+/// The reserved RTTI index of the byte array.
+const BYTE_ARRAY_RTTI_IDX: u32 = 0;
+
+/// The image of a static byte array object holding `content`: the RC header
+/// (refcount, RTTI index), then the array payload (`len: i64`, the bytes),
+/// little-endian as the RTTI table is.
+fn static_byte_array_image(content: &[u8]) -> Vec<u8> {
+    let mut image = Vec::with_capacity(RC_HEADER_SIZE as usize + 8 + content.len());
+    image.extend_from_slice(&STATIC_REFCOUNT.to_le_bytes());
+    image.extend_from_slice(&BYTE_ARRAY_RTTI_IDX.to_le_bytes());
+    image.extend_from_slice(&(content.len() as u64).to_le_bytes());
+    image.extend_from_slice(content);
+    image
+}
 
 /// Result of const analysis.
 pub struct NativeConstAnalysis {
@@ -137,9 +157,11 @@ fn analyze_consts(ctx: &IrContext, module: Module) -> NativeConstAnalysis {
 ///
 /// `adt.array_const dense<"0x68656C6C6F">` becomes:
 /// ```text
-/// %data_ptr = clif.symbol_addr @__tribute_rodata_0
-/// %len = clif.iconst 5
-/// %payload = clif.call @__tribute_byte_array_from(%data_ptr, %len)
+/// %object = clif.symbol_addr @__tribute_static_bytes_0
+/// %one = clif.iconst 1 : core.i32
+/// %old = clif.atomic_rmw %object, %one {bin_op = "add", offset = 0}
+/// %header = clif.iconst 8 : core.i64
+/// %payload = clif.iadd %object, %header
 /// %result = tribute_rt.from_raw %payload : adt.array<core.i8>
 /// ```
 ///
@@ -157,9 +179,9 @@ fn lower(
 
     let ptr_ty = core::Ptr::params().intern(ctx).as_type_ref();
     let i64_ty = TypeDataBuilder::new("core.i64").intern(ctx);
+    let i32_ty = TypeDataBuilder::new("core.i32").intern(ctx);
 
-    let content_to_symbol = declare_rodata(ctx, module, &analysis.contents);
-    declare_byte_array_from(ctx, module, ptr_ty, i64_ty);
+    let content_to_symbol = declare_static_byte_arrays(ctx, module, &analysis.contents);
 
     let nat = |ctx: &mut IrContext, ty: TypeRef, value: i64, loc| {
         let constant = trunk_ir::dialect::arith::Constant::operands()
@@ -177,6 +199,7 @@ fn lower(
             content_to_symbol,
             ptr_ty,
             i64_ty,
+            i32_ty,
         })
         .add_pattern(ExpandBytesConst {
             layouts: &analysis.layouts,
@@ -192,16 +215,19 @@ fn lower(
     Ok(())
 }
 
-/// Map each payload to a byte-aligned `clif.data` object of the module.
+/// Map each payload to a static byte array object of the module, a writable
+/// 8-aligned `clif.data` holding [`static_byte_array_image`].
 ///
-/// Reuses an existing byte-aligned data object with the same bytes, and
-/// appends a new one at the end of the module for every other payload, under
-/// a symbol no module-level operation already uses.
-fn declare_rodata(
+/// Appends one object at the end of the module for each distinct payload,
+/// under a symbol no module-level operation already uses. An existing data
+/// object is never reused, even with the same image: it may be written as
+/// ordinary mutable data, which would change the literal's header or bytes.
+fn declare_static_byte_arrays(
     ctx: &mut IrContext,
     module: Module,
     contents: &[Vec<u8>],
 ) -> HashMap<Vec<u8>, Symbol> {
+    let mut image_to_symbol: HashMap<Vec<u8>, Symbol> = HashMap::default();
     let mut content_to_symbol = HashMap::default();
     let Some(module_block) = module.first_block(ctx) else {
         return content_to_symbol;
@@ -212,95 +238,91 @@ fn declare_rodata(
         if let Some(name) = ctx.op_attrs(op).get_str("sym_name").map(Symbol::new) {
             taken.insert(name);
         }
-        if let Ok(data) = clif::Data::from_op(ctx, op)
-            && data.align(ctx) == 1
-        {
-            content_to_symbol
-                .entry_ref(data.bytes(ctx).as_slice())
-                .or_insert_with(|| Symbol::new(data.sym_name(ctx)));
-        }
     }
 
     let location = ctx.op(module.op()).location;
     let mut next_idx = 0u32;
     for content in contents {
-        let EntryRef::Vacant(entry) = content_to_symbol.entry_ref(content.as_slice()) else {
-            continue;
-        };
-        let sym = loop {
-            let candidate = Symbol::new(&format!("{RODATA_PREFIX}{next_idx}"));
-            next_idx += 1;
-            if !taken.contains(&candidate) {
-                break candidate;
+        let image = static_byte_array_image(content);
+        let sym = match image_to_symbol.entry_ref(image.as_slice()) {
+            EntryRef::Occupied(entry) => entry.get().clone(),
+            EntryRef::Vacant(entry) => {
+                let sym = loop {
+                    let candidate = Symbol::new(&format!("{STATIC_BYTES_PREFIX}{next_idx}"));
+                    next_idx += 1;
+                    if !taken.contains(&candidate) {
+                        break candidate;
+                    }
+                };
+                let data = clif::Data::operands()
+                    .sym_name(ctx.intern_symbol_text(&sym))
+                    .bytes(image.as_slice().into())
+                    .align(8)
+                    .writable(true)
+                    .regions(None)
+                    .build(ctx, location);
+                ctx.push_op(module_block, data.op_ref());
+                entry.insert(sym.clone());
+                sym
             }
         };
-        let data = clif::Data::operands()
-            .sym_name(ctx.intern_symbol_text(&sym))
-            .bytes(content.as_slice().into())
-            .align(1)
-            .regions(None)
-            .build(ctx, location);
-        ctx.push_op(module_block, data.op_ref());
-        entry.insert(sym);
+        content_to_symbol.insert(content.clone(), sym);
     }
     content_to_symbol
 }
 
-/// Emit clif ops that copy the bytes of a rodata symbol into a new byte
-/// array, which the runtime allocates with the byte array's reserved
-/// descriptor (`design/rc.md` § "Bytes").
+/// Emit clif ops that take one unit of the static byte array object
+/// `object_sym`: retain it and return its payload pointer.
 ///
 /// Returns the ops to insert, in order, and the payload pointer they produce.
-fn emit_byte_array(
+fn emit_static_byte_array(
     ctx: &mut IrContext,
     loc: trunk_ir::types::Location,
-    data_sym: Symbol,
-    content_len: u64,
+    object_sym: Symbol,
     ptr_ty: TypeRef,
     i64_ty: TypeRef,
+    i32_ty: TypeRef,
 ) -> (Vec<OpRef>, ValueRef) {
-    let data_ptr = clif::SymbolAddr::operands()
-        .sym(SymbolPath::new([data_sym]))
+    let object = clif::SymbolAddr::operands()
+        .sym(SymbolPath::new([object_sym]))
         .results(ptr_ty)
         .build(ctx, loc);
-    let len = clif::Iconst::operands()
-        .value(content_len as i64)
+    // The retain an owned unit needs, as `tribute_rt.retain` lowers to; the
+    // object is never null.
+    let one = clif::Iconst::operands()
+        .value(1)
+        .results(i32_ty)
+        .build(ctx, loc);
+    let retain = clif::AtomicRmw::operands(object.result(ctx), one.result(ctx))
+        .bin_op("add")
+        .offset(REFCOUNT_OFFSET as i32)
+        .results(i32_ty)
+        .build(ctx, loc);
+    let header = clif::Iconst::operands()
+        .value(RC_HEADER_SIZE as i64)
         .results(i64_ty)
         .build(ctx, loc);
-    let call = clif::Call::operands([data_ptr.result(ctx), len.result(ctx)])
-        .callee(SymbolPath::new([BYTE_ARRAY_FROM_FN]))
-        .results([ptr_ty])
+    let payload = clif::Iadd::operands(object.result(ctx), header.result(ctx))
+        .results(ptr_ty)
         .build(ctx, loc);
-    let payload = call.result(ctx);
     (
-        vec![data_ptr.op_ref(), len.op_ref(), call.op_ref()],
-        payload,
+        vec![
+            object.op_ref(),
+            one.op_ref(),
+            retain.op_ref(),
+            header.op_ref(),
+            payload.op_ref(),
+        ],
+        payload.result(ctx),
     )
 }
 
-/// Declare the runtime function that copies bytes into a new byte array,
-/// unless the module already declares it.
-fn declare_byte_array_from(ctx: &mut IrContext, module: Module, ptr_ty: TypeRef, i64_ty: TypeRef) {
-    let Some(block) = module.first_block(ctx) else {
-        return;
-    };
-    let declared = ctx.block(block).ops.iter().any(|&op| {
-        func::Func::from_op(ctx, op).is_ok_and(|func| func.sym_name(ctx) == BYTE_ARRAY_FROM_FN)
-    });
-    if declared {
-        return;
-    }
-    let loc = ctx.op(module.op()).location;
-    let declaration =
-        super::build_extern_func(ctx, loc, BYTE_ARRAY_FROM_FN, &[ptr_ty, i64_ty], ptr_ty);
-    ctx.push_op(block, declaration);
-}
-
-/// Pattern for `adt.array_const` → clif ops (rodata + a copying allocation).
+/// Pattern for `adt.array_const` → one unit of its static byte array object.
 struct ArrayConstNativePattern {
     content_to_symbol: HashMap<Vec<u8>, Symbol>,
     ptr_ty: TypeRef,
     i64_ty: TypeRef,
+    i32_ty: TypeRef,
 }
 
 impl OpRewritePattern for ArrayConstNativePattern {
@@ -318,17 +340,11 @@ impl OpRewritePattern for ArrayConstNativePattern {
         let data_sym = self.content_to_symbol.get(&content).cloned()?;
 
         let loc = ctx.op(op).location;
-        let (insert_ops, payload) = emit_byte_array(
-            ctx,
-            loc,
-            data_sym,
-            content.len() as u64,
-            self.ptr_ty,
-            self.i64_ty,
-        );
+        let (insert_ops, payload) =
+            emit_static_byte_array(ctx, loc, data_sym, self.ptr_ty, self.i64_ty, self.i32_ty);
 
-        // The allocation is a `core.ptr` to a new object; the constant is the
-        // owned managed value it holds.
+        // The payload is a `core.ptr` to the static object; the constant is the
+        // owned managed value whose unit the retain made.
         let result_ty = ctx.op_result_types(op)[0];
         let typed = tribute_rt::FromRaw::operands(payload)
             .results(result_ty)
@@ -444,8 +460,7 @@ mod tests {
         assert!(!output.contains("adt.string_const"), "{output}");
         assert!(!output.contains("adt.bytes_const"), "{output}");
         assert!(
-            output.contains("func.call @__tribute_byte_array_from")
-                || output.contains("clif.call @__tribute_byte_array_from"),
+            output.contains("clif.symbol_addr @__tribute_static_bytes_0"),
             "{output}"
         );
         assert!(output.contains("adt.struct_new"), "{output}");
@@ -469,7 +484,7 @@ mod tests {
         );
     }
 
-    fn data_objects(ctx: &IrContext, module: Module) -> Vec<(String, Vec<u8>, u32)> {
+    fn data_objects(ctx: &IrContext, module: Module) -> Vec<(String, Vec<u8>, u32, bool)> {
         module
             .ops(ctx)
             .iter()
@@ -480,9 +495,50 @@ mod tests {
                     data.sym_name(ctx).to_string(),
                     data.bytes(ctx).to_vec(),
                     data.align(ctx),
+                    data.writable(ctx),
                 )
             })
             .collect()
+    }
+
+    #[test]
+    fn static_object_image_is_a_header_and_an_array() {
+        let image = static_byte_array_image(b"ab");
+        assert_eq!(
+            image,
+            [
+                0, 0, 0, 0x80, // refcount 2^31
+                0, 0, 0, 0, // RTTI index 0
+                2, 0, 0, 0, 0, 0, 0, 0, // len
+                b'a', b'b',
+            ]
+        );
+    }
+
+    #[test]
+    fn each_evaluation_retains_the_static_object() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @main() -> core.nil {
+    %first = adt.array_const dense<"0x6669727374"> : adt.array<core.i8>
+    func.return
+  }
+}"#,
+        );
+        let analysis = analyze_consts(&ctx, module);
+
+        lower(&mut ctx, module, &analysis).expect("bytes constants should lower");
+
+        let output = module.op().display(&ctx).to_string();
+        assert!(output.contains("clif.atomic_rmw"), "{output}");
+        assert!(output.contains(r#"bin_op = "add""#), "{output}");
+        assert!(output.contains("tribute_rt.from_raw"), "{output}");
+        assert!(
+            !output.contains("clif.call"),
+            "nothing is allocated: {output}"
+        );
     }
 
     fn symbol_addrs(ctx: &IrContext, module: Module) -> Vec<String> {
@@ -518,29 +574,39 @@ mod tests {
         assert_eq!(
             data_objects(&ctx, module),
             [
-                ("__tribute_rodata_0".to_owned(), b"first".to_vec(), 1),
-                ("__tribute_rodata_1".to_owned(), b"second".to_vec(), 1),
+                (
+                    "__tribute_static_bytes_0".to_owned(),
+                    static_byte_array_image(b"first"),
+                    8,
+                    true
+                ),
+                (
+                    "__tribute_static_bytes_1".to_owned(),
+                    static_byte_array_image(b"second"),
+                    8,
+                    true
+                ),
             ]
         );
         assert_eq!(
             symbol_addrs(&ctx, module),
             [
-                "__tribute_rodata_0",
-                "__tribute_rodata_1",
-                "__tribute_rodata_0"
+                "__tribute_static_bytes_0",
+                "__tribute_static_bytes_1",
+                "__tribute_static_bytes_0"
             ]
         );
     }
 
     #[test]
-    fn lowering_reuses_data_objects_and_avoids_taken_symbols() {
+    fn lowering_declares_its_own_data_objects_and_avoids_taken_symbols() {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  clif.data @__tribute_rodata_0(b"kept") align 1
-  clif.data @aligned(b"wide") align 8
-  func.func @__tribute_rodata_1() -> core.nil {
+  clif.data @kept_object(b"\0\0\0\x80\0\0\0\0\x04\0\0\0\0\0\0\0kept") align 8 attributes {writable = true}
+  clif.data @read_only(b"\0\0\0\x80\0\0\0\0\x04\0\0\0\0\0\0\0wide") align 8
+  func.func @__tribute_static_bytes_0() -> core.nil {
     func.return
   }
   func.func @main() -> core.nil {
@@ -554,17 +620,40 @@ mod tests {
 
         lower(&mut ctx, module, &analysis).expect("bytes constants should lower");
 
+        // Existing objects with the same image are left alone, writable or
+        // not: the program may write them as ordinary data.
         assert_eq!(
             data_objects(&ctx, module),
             [
-                ("__tribute_rodata_0".to_owned(), b"kept".to_vec(), 1),
-                ("aligned".to_owned(), b"wide".to_vec(), 8),
-                ("__tribute_rodata_2".to_owned(), b"wide".to_vec(), 1),
+                (
+                    "kept_object".to_owned(),
+                    static_byte_array_image(b"kept"),
+                    8,
+                    true
+                ),
+                (
+                    "read_only".to_owned(),
+                    static_byte_array_image(b"wide"),
+                    8,
+                    false
+                ),
+                (
+                    "__tribute_static_bytes_1".to_owned(),
+                    static_byte_array_image(b"kept"),
+                    8,
+                    true
+                ),
+                (
+                    "__tribute_static_bytes_2".to_owned(),
+                    static_byte_array_image(b"wide"),
+                    8,
+                    true
+                ),
             ]
         );
         assert_eq!(
             symbol_addrs(&ctx, module),
-            ["__tribute_rodata_0", "__tribute_rodata_2"]
+            ["__tribute_static_bytes_1", "__tribute_static_bytes_2"]
         );
     }
 
