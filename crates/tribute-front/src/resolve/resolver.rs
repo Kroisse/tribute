@@ -467,20 +467,86 @@ impl<'e, 'db> Resolver<'e, 'db> {
         &self,
         name: &UnresolvedName,
     ) -> Result<Option<(Location, &Binding<'db>)>, PathKeywordError> {
-        let sym = name.name();
+        Ok(self.qualified_namespace(name)?.and_then(|namespace| {
+            let binding = self.view().lookup_path(&namespace.child(name.name()))?;
+            Some((namespace, binding))
+        }))
+    }
+
+    /// The location of the namespace of a qualified path, from the current
+    /// scope, continued through the re-exports on it.
+    fn qualified_namespace(
+        &self,
+        name: &UnresolvedName,
+    ) -> Result<Option<Location>, PathKeywordError> {
         let Some(namespace) = name.namespace() else {
             return Ok(None);
         };
-        if let Some(namespace) = self.fixed_location(&namespace)? {
-            let namespace = self.through_exports(namespace);
-            let binding = self.view().lookup_path(&namespace.child(sym));
-            return Ok(binding.map(|binding| (namespace, binding)));
+        let namespace = match self.fixed_location(&namespace)? {
+            Some(namespace) => Some(namespace),
+            None => self.namespace_in_scope(namespace),
+        };
+        Ok(namespace.map(|namespace| self.through_exports(namespace)))
+    }
+
+    /// Where a path to `location`, which names nothing, stops at a private
+    /// `use`: the module on the path whose namespace lacks the next segment
+    /// because the module imports it privately, and that segment. A private
+    /// `use` adds nothing to its module's namespace.
+    fn private_import<'l>(&self, location: &'l Location) -> Option<(Location, &'l Symbol)> {
+        let own = self.view().own();
+        if location.package != *own.package() {
+            return None;
         }
-        Ok(self.namespace_in_scope(namespace).and_then(|namespace| {
-            let namespace = self.through_exports(namespace);
-            let binding = self.view().lookup_qualified(&namespace, &sym)?;
-            Some((namespace, binding))
-        }))
+        let mut module = location.package.at(SymbolPath::root());
+        for segment in location.path.iter() {
+            let next = module.child(segment.clone());
+            if self.lookup_path(&next).is_some() || self.view().has_namespace(&next) {
+                module = next;
+                continue;
+            }
+            let path = own.module_use(&module.path, segment)?;
+            super::module_use_target(self.view(), &module.path, path)?;
+            return Some((module, segment));
+        }
+        None
+    }
+
+    /// Report a reference, written as `written`, to `location`, which names
+    /// nothing: as hidden if a private `use` on its path stops it, else as
+    /// unresolved by `unresolved`.
+    fn report_unreachable(
+        &self,
+        node: NodeId,
+        written: impl std::fmt::Display,
+        location: Option<&Location>,
+        unresolved: impl FnOnce(),
+    ) {
+        let Some((module, name)) = location.and_then(|location| self.private_import(location))
+        else {
+            return unresolved();
+        };
+        NodeDiagnostic::new(
+            self.private_import_message(written, &module, name),
+            node,
+            DiagnosticSeverity::Error,
+            CompilationPhase::NameResolution,
+        )
+        .accumulate(self.db);
+    }
+
+    /// The diagnostic for a reference, written as `written`, that stops
+    /// where `module` imports `name` privately.
+    fn private_import_message(
+        &self,
+        written: impl std::fmt::Display,
+        module: &Location,
+        name: &Symbol,
+    ) -> String {
+        format!(
+            "`{written}` is not visible here: `{}` imports `{name}` privately",
+            self.names().path(&module.identity())
+        )
     }
 
     /// `namespace`, or, when it is not a namespace itself, where it continues
@@ -986,7 +1052,9 @@ impl<'e, 'db> Resolver<'e, 'db> {
                     }
                     _ => {
                         let path = Symbol::new(&segments.iter().format("::").to_string());
-                        self.report_unresolved_annotation(ann.id, &path);
+                        self.report_unreachable(ann.id, &path, location.as_ref(), || {
+                            self.report_unresolved_annotation(ann.id, &path)
+                        });
                         ann.kind = TypeAnnotationKind::Error;
                     }
                 }
@@ -1531,12 +1599,24 @@ impl<'e, 'db> Resolver<'e, 'db> {
                  name, or `::{first}` for the package",
                 u.path.iter().format("::")
             )
-        } else if let Some(target) = self.use_target(&u.path) {
-            self.check_use_visibility(u, &target);
-            // Later phases read the target by its identity.
-            return Some(self.declared_path(&target).to_vec());
         } else {
-            format!("unresolved import `{}`", u.path.iter().format("::"))
+            match self.use_location(&u.path) {
+                Ok(target) => {
+                    self.check_use_visibility(u, &target);
+                    // Later phases read the target by its identity.
+                    return Some(self.declared_path(&target).to_vec());
+                }
+                Err(location) => {
+                    let written = u.path.iter().format("::");
+                    match location
+                        .as_ref()
+                        .and_then(|location| self.private_import(location))
+                    {
+                        Some((module, name)) => self.private_import_message(written, &module, name),
+                        None => format!("unresolved import `{written}`"),
+                    }
+                }
+            }
         };
         NodeDiagnostic::new(
             message,
@@ -1614,6 +1694,13 @@ impl<'e, 'db> Resolver<'e, 'db> {
     /// namespace the prelude supplies or a dependency, unless the module
     /// names its first segment itself.
     fn use_target(&self, path: &[Symbol]) -> Option<Location> {
+        self.use_location(path).ok()
+    }
+
+    /// The location of the definition or module `path` names, as
+    /// [`Self::use_target`] finds it, or else the location the scope reads
+    /// it at, if any, where it names nothing.
+    fn use_location(&self, path: &[Symbol]) -> Result<Location, Option<Location>> {
         let names = |location: &Location| {
             // A package root names that package.
             let Some((last, namespace)) = location.split_last() else {
@@ -1628,38 +1715,43 @@ impl<'e, 'db> Resolver<'e, 'db> {
             };
             found || self.view().has_namespace(location)
         };
-        match self.fixed_location(path) {
-            Ok(Some(location)) => {
-                return names(&location).then_some(location);
+        let found = |location: Location| {
+            if names(&location) {
+                Ok(location)
+            } else {
+                Err(Some(location))
             }
-            Err(_) => return None,
+        };
+        match self.fixed_location(path) {
+            Ok(Some(location)) => return found(location),
+            Err(_) => return Err(None),
             Ok(None) => {}
         }
         if self.module_path.is_empty() {
-            let location = super::root_location(self.view(), path)?;
-            return names(&location).then_some(location);
+            return found(super::root_location(self.view(), path).ok_or(None)?);
         }
         // An inline module's path starts from one of its imports, the module
         // itself, or a namespace the prelude supplies.
-        let (first, rest) = path.split_first()?;
+        let (first, rest) = path.split_first().ok_or(None)?;
         if let Some(target) = self.module_import(first) {
-            let imported = target.join(rest);
-            return names(&imported).then_some(imported);
+            return found(target.join(rest));
         }
         let nested = self.here().join(path);
         if names(&nested) {
-            return Some(nested);
+            return Ok(nested);
         }
         if self.module_names(first) {
-            return None;
+            return Err(Some(nested));
         }
         if let Some(library) = self.library_namespace_path(path)
             && names(&library)
         {
-            return Some(library);
+            return Ok(library);
         }
-        let dependency = self.view().dependency_root(first)?.join(rest);
-        names(&dependency).then_some(dependency)
+        match self.view().dependency_root(first) {
+            Some(root) => found(root.join(rest)),
+            None => Err(Some(nested)),
+        }
     }
 }
 
@@ -1746,8 +1838,23 @@ impl<'r, 'e, 'db> FunctionResolver<'r, 'e, 'db> {
         }
 
         // Not found - emit diagnostic and return unresolved sentinel
-        self.report_unresolved_name(name);
+        self.report_missing_name(name);
         ResolvedRef::local(LocalId::UNRESOLVED, sym)
+    }
+
+    /// Report `name`, which names nothing: as hidden where a qualified path
+    /// stops at a private `use`, else as unresolved.
+    fn report_missing_name(&self, name: &UnresolvedName) {
+        let location = self
+            .module
+            .qualified_namespace(name)
+            .ok()
+            .flatten()
+            .map(|namespace| namespace.child(name.name()));
+        self.module
+            .report_unreachable(name.id, name, location.as_ref(), || {
+                self.report_unresolved_name(name)
+            });
     }
 
     /// The functions an unqualified call or reference `name` may be, by
@@ -1862,7 +1969,7 @@ impl<'r, 'e, 'db> FunctionResolver<'r, 'e, 'db> {
             None if written.is_simple() => {
                 self.module.report_unresolved_method(node, &written.name())
             }
-            None => self.report_unresolved_name(written),
+            None => self.report_missing_name(written),
         }
         None
     }
