@@ -247,7 +247,7 @@ release가 마지막일 수 있기 때문이다. Materialization은 owner의 exa
    **lower**한다.
 4. RC lowering pass가 retain/release를 inline code로 **lower**한다.
 
-Type erasure 전 RC planning은 `heap.box`, `tribute_rt.anyref`,
+Type erasure 전 RC planning은 `heap.box`, `heap.cell`, `tribute_rt.anyref`,
 `tribute_rt.intref`를 타입에 따라 managed로 취급한다.
 [Nominal 값 타입](tribute-dialects.md#nominal-값-타입)은 값이며, ownership 계획에
 닿기 전에 [표현 선택](abi-boundary.md#표현-선택)이 SSA 값으로 쪼개거나 box에 담았다.
@@ -495,8 +495,11 @@ predecessor이며 어떤 값도 갖고 있지 않다. 일부 predecessor만 값�
 block을 만들므로 이런 edge를 만들지 않는다.
 
 `heap.box`는 type 자체로 managed다. Struct, variant, closure, 배열 object가 모두
-그 box로 가리켜지며, [byte 배열](#bytes)의 box도 여기에 든다. `tribute_rt.anyref`/`intref`도
-각자의 typed contract로 분류한다. `adt` 타입을 가진 값은 ownership 계획에 닿지 않는다.
+그 box로 가리켜지며, [byte 배열](#bytes)의 box도 여기에 든다. `heap.cell`도 type
+자체로 managed다. Cell object는 담은 managed 값의 unit 하나를 가지며, `Done` closure가
+capture한 completion cell처럼 cell을 다른 object에 담으면 그 필드가 cell의 unit 하나를
+가진다. `tribute_rt.anyref`/`intref`도 각자의 typed contract로 분류한다. `adt` 타입을
+가진 값은 ownership 계획에 닿지 않는다.
 Unboxed 값은 표현 선택이 leaf로 쪼갰으므로, 그 managed leaf는 다른 managed 값과 같은
 ownership unit이다. 한 unboxed 값을 두 번 쓰면 managed leaf마다 unit을 하나씩 더
 획득한다.

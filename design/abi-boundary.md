@@ -106,7 +106,7 @@ compiler가 값마다 표현을 고른다. 표현 선택은 값 의미론인 [`a
   할당은 표현 선택 뒤의 최적화가 필드 값으로 바꿀 수 있다. 이 최적화는 타입의 표현을
   바꾸지 않으며, 그 할당이 만들 object가 관찰되지 않는다는 사실만 쓴다.
 - **Ownership 계획보다 앞선다.** 표현 선택은 경계 안에서 끝나므로 ownership 계획이
-  보는 managed 값은 `heap.box`, `tribute_rt.anyref`, `tribute_rt.intref`뿐이다.
+  보는 managed 값은 `heap.box`, `heap.cell`, `tribute_rt.anyref`, `tribute_rt.intref`뿐이다.
   Unboxed 값의 leaf는 다른 값과 같은 ownership unit이다.
 - **필드 타입 변환.** 표현 선택은 layout의 필드 타입을 저장 표현으로 바꾼다. Box에
   담는 타입의 필드는 `heap.box`, unboxed 타입의 필드는 그 layout을 inline으로 둔다.
@@ -138,8 +138,8 @@ compiler가 값마다 표현을 고른다. 표현 선택은 값 의미론인 [`a
   경계가 module 내부 물리 callable의 모든 입력에 붙인다. Platform `abi`를 가진
   callable은 표시를 받지 않는다. 표시가 없는 managed 매개변수는 retained 계약을
   가진다.
-- **값의 표현:** 출구의 값은 scalar, `heap.box`, `tribute_rt.anyref`·`intref`, unmanaged
-  포인터 같은 기계 값 하나다. Aggregate 타입을 가진 SSA 값은 없다. Unboxed 값은
+- **값의 표현:** 출구의 값은 scalar, `heap.box`, `heap.cell`, `tribute_rt.anyref`·`intref`,
+  unmanaged 포인터 같은 기계 값 하나다. Aggregate 타입을 가진 SSA 값은 없다. Unboxed 값은
   leaf마다 값 하나로 쪼개져 매개변수, 결과, block 인자에 나란히 놓이고, object의
   필드로는 inline으로 놓인다. 결과를 쪼갠 callable은 결과를 여러 개 가진다.
 - **Closure/frame 저장:** Compiler가 소유하는 runtime layout은 명시적
