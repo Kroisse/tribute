@@ -740,3 +740,110 @@ fn main() -> Nil {
         ]
     );
 }
+
+/// A private `use` imports a name into its module's body alone, not into
+/// the module's namespace. A path through that module stops at the name,
+/// and says the module imports it privately.
+#[salsa_test]
+fn a_path_through_a_private_use_is_not_visible(db: &salsa::DatabaseImpl) {
+    let errors = errors(
+        db,
+        r#"
+mod m {
+    mod inner {
+        pub enum Mode { Quiet }
+        pub fn hello() -> Nat { 1 }
+        pub ability Ping { fn ping() -> Nil }
+    }
+    use inner::Mode
+    use inner::hello
+    use inner::Ping
+}
+
+fn take(mode: m::Mode) -> Nat { 0 }
+
+fn quiet(mode: Nat) -> Nat {
+    case mode {
+        m::Mode::Quiet -> 0
+        _ -> 1
+    }
+}
+
+fn ping() ->{m::Ping} Nil {}
+
+fn main() -> Nil {
+    let _ = m::hello()
+    let _ = m::Mode::Quiet
+}
+"#,
+    );
+    for expected in [
+        "`m::Mode` is not visible here: `m` imports `Mode` privately",
+        "`m::Mode::Quiet` is not visible here: `m` imports `Mode` privately",
+        "`m::Ping` is not visible here: `m` imports `Ping` privately",
+        "`m::hello` is not visible here: `m` imports `hello` privately",
+    ] {
+        assert_hidden(&errors, expected);
+    }
+    assert!(
+        errors.iter().all(|error| !error.starts_with("unresolved")),
+        "{errors:#?}"
+    );
+}
+
+/// A path that names nothing is unresolved, whatever the module it stops
+/// in imports privately.
+#[salsa_test]
+fn a_path_to_nothing_beside_a_private_use_is_unresolved(db: &salsa::DatabaseImpl) {
+    let errors = errors(
+        db,
+        r#"
+mod m {
+    mod inner {
+        pub fn hello() -> Nat { 1 }
+    }
+    use inner::hello
+    use inner::nope
+}
+
+fn main() -> Nil {
+    let _ = m::missing()
+    let _ = m::nope()
+}
+"#,
+    );
+    assert!(
+        errors.contains(&"unresolved name `m::missing`".to_owned())
+            && errors.contains(&"unresolved name `m::nope`".to_owned())
+            && errors.iter().all(|error| !error.contains("privately")),
+        "{errors:#?}"
+    );
+}
+
+/// A `use` outside the module stops at a private `use` the same way.
+#[salsa_test]
+fn a_use_through_a_private_use_is_not_visible(db: &salsa::DatabaseImpl) {
+    let errors = errors(
+        db,
+        r#"
+mod m {
+    mod inner {
+        pub fn hello() -> Nat { 1 }
+    }
+    use inner::hello
+}
+
+use m::hello
+use m::missing
+
+fn main() -> Nil {}
+"#,
+    );
+    assert_eq!(
+        errors,
+        [
+            "`m::hello` is not visible here: `m` imports `hello` privately",
+            "unresolved import `m::missing`",
+        ]
+    );
+}

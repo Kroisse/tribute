@@ -266,6 +266,29 @@ fn use_candidates(
     candidates
 }
 
+/// The location a `use` of `path` in the inline module `module` names,
+/// with what is there: an item, or else a module.
+pub(super) fn module_use_target<'db>(
+    scope: ScopeRef<'_, 'db>,
+    module: &SymbolPath,
+    path: &[Symbol],
+) -> Option<(Location, Binding<'db>)> {
+    use_candidates(scope, module, path, 0)
+        .into_iter()
+        .find_map(|target| {
+            let binding = scope
+                .lookup_path(&target)
+                .cloned()
+                .filter(|b| !matches!(b, Binding::Import { .. }))
+                .or_else(|| {
+                    scope.has_namespace(&target).then(|| Binding::Module {
+                        path: target.identity(),
+                    })
+                })?;
+            Some((target, binding))
+        })
+}
+
 /// Add `export` to its module's namespace if its target resolves.
 fn add_export<'db>(
     env: &mut PackageEnv<'db>,
@@ -273,19 +296,7 @@ fn add_export<'db>(
     export: &Export,
 ) -> bool {
     let scope = ScopeRef::new(env, dependencies);
-    let candidates = use_candidates(scope, &export.module, &export.path, 0);
-    let Some((target, binding)) = candidates.into_iter().find_map(|target| {
-        let binding = scope
-            .lookup_path(&target)
-            .cloned()
-            .filter(|b| !matches!(b, Binding::Import { .. }))
-            .or_else(|| {
-                scope.has_namespace(&target).then(|| Binding::Module {
-                    path: target.identity(),
-                })
-            })?;
-        Some((target, binding))
-    }) else {
+    let Some((target, binding)) = module_use_target(scope, &export.module, &export.path) else {
         return false;
     };
     // An entry under the exported name is visible only where both it and

@@ -341,7 +341,8 @@ fn main() -> Nil {
     assert!(
         errors
             .iter()
-            .any(|error| error.starts_with("unresolved name `outer::one`")),
+            .any(|error| error
+                == "`outer::one` is not visible here: `outer` imports `one` privately"),
         "{errors:#?}"
     );
 }
