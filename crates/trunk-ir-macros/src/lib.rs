@@ -151,6 +151,10 @@ pub fn type_interface(attr: ProcTokenStream, item: ProcTokenStream) -> ProcToken
 /// The flag must be a unit struct. The macro adds the `static`
 /// `trunk_ir::op_flag::OpFlagDef` that identifies it by address and the
 /// `trunk_ir::op_flag::OpFlag` impl that points to it.
+///
+/// `#[op_flag(verify)]` declares a flag whose invariant is checked for every
+/// operation that declares it; it requires `trunk_ir::op_flag::VerifyFlag`
+/// for the flag.
 #[proc_macro_attribute]
 pub fn op_flag(attr: ProcTokenStream, item: ProcTokenStream) -> ProcTokenStream {
     match flag::gen_flag(attr.into(), item.into()) {

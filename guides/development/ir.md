@@ -530,8 +530,8 @@ rule, so it lives with the interface or with the operation.
 
 An operation flag is a property without behavior, such as `Pure` and
 `IsolatedFromAbove` in `trunk_ir::op_flag`. An operation lists its flags in
-`#[flags(..)]`; they are stored in its `OpDef`, so a flag has no `impl` and
-no registry:
+`#[flags(..)]`; they are stored in its `OpDef`, so a flag has no
+per-operation `impl` and no registry:
 
 ```rust
 #[trunk_ir::dialect]
@@ -554,6 +554,24 @@ it by address and its `OpFlag` impl:
 #[op_flag]
 pub struct Pure;
 ```
+
+A flag whose property is an invariant checks it once, for every operation
+that declares it, as an MLIR trait's `verifyTrait` does.
+`#[op_flag(verify)]` requires `op_flag::VerifyFlag` for the flag, and
+`OpDef::verify` runs it after the declarative stages and before the
+operation's `#[verify]` hook, so every caller of `OpDef::verify`, including
+the backend boundaries, checks it. A violation is an `OpViolation::Flag`
+naming the flag. The verifier may walk the operation's regions:
+`IsolatedFromAbove` rejects an operand anywhere in them whose value is
+defined outside the operation, and does not enter a nested operation with
+the flag, which checks itself. `validate_value_integrity` still checks value
+visibility between regions, starting a new scope at each `IsolatedFromAbove`
+operation. The per-pass debug checkpoint (`validate_op_schemas`) runs no
+verifier, including the flags'.
+
+`Pure` states no invariant. `NoTerminator` changes the rule for the blocks
+of operations without it, so it has no verifier, and terminator placement
+stays the flag-driven check below.
 
 `Terminator` marks an operation that must be the last of its block, as
 MLIR's `IsTerminator` does. It says nothing about where control goes, which

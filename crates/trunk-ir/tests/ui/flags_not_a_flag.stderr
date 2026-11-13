@@ -16,8 +16,8 @@ help: the following other types implement trait `OpFlag`
   | #[op_flag]
   | ^^^^^^^^^^ `Pure`
 ...
-  | #[op_flag]
-  | ^^^^^^^^^^ `IsolatedFromAbove`
+  | #[op_flag(verify)]
+  | ^^^^^^^^^^^^^^^^^^ `IsolatedFromAbove`
 ...
   | #[op_flag]
   | ^^^^^^^^^^ `trunk_ir::op_flag::Terminator`

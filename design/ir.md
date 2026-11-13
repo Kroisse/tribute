@@ -132,6 +132,17 @@ Operation flag는 동작 없이 operation 정의가 선언하는 예/아니오 �
 정의한 dialect만 그 operation의 flag를 정할 수 있다. 메서드가 없더라도 다른 crate가
 남의 operation에 붙여야 하는 성질은 flag가 아니라 interface로 정의한다.
 
+Flag가 불변식을 말하면 그 불변식은 operation 이름이 아니라 flag가 검사한다(MLIR
+trait의 `verifyTrait`). `#[op_flag(verify)]`로 선언한 flag는 verifier를 하나 가지며,
+operation 정의의 검증은 그 flag를 선언한 모든 operation에서 이를 실행한다. 새
+operation이 flag를 선언하면 검사도 함께 따라오므로 검사할 이름 목록을 두지 않는다.
+Flag verifier는 operation의 region을 걸어도 된다. `IsolatedFromAbove`는 operation의
+region 어디에서든 operation 밖에서 정의된 값을 operand로 쓰면 거부하며, 같은 flag를
+가진 중첩 operation 안으로는 들어가지 않는다. 그 operation이 스스로 검사한다.
+Region 사이의 값 가시성(형제 region이나 하위 region에서 정의한 값을 쓰지 않는지)은
+flag의 불변식이 아니므로 whole-IR 검증이 맡고, `IsolatedFromAbove` operation마다
+새 scope를 연다.
+
 `Terminator` flag는 operation이 자기 block의 마지막 operation이어야 한다는
 성질이다(MLIR의 `IsTerminator`). 이 flag는 제어가 어디로 가는지 말하지 않는다.
 Callable을 떠나는지는 [`CallableExit`](#선언적-operation-schema), block
@@ -252,7 +263,8 @@ panic하는 대신 진단을 남길 수 있어야 한다.
    단계에서 보고한다.
 4. 투영과 타입 목록 관계. 투영 등식 우변의 투영과 투영끼리의 등식도
    포함한다.
-5. 사용자 정의 로컬 verifier.
+5. 선언한 flag의 verifier([Interface와 flag](#interface와-flag)).
+6. 사용자 정의 로컬 verifier.
 
 진단은 operation, 위치, 필드 이름과 index, 기대 제약, 실제 타입을 포함한다.
 정의 자체의 오류(미선언 변수, 모호하거나 존재하지 않는 투영, 종류 불일치,
