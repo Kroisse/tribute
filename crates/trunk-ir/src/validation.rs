@@ -24,8 +24,8 @@ use derive_more::{Display, Error};
 use super::analysis::AnalysisCache;
 use super::context::IrContext;
 use super::dialect::core;
-use super::op_def::OpDef;
-use super::op_flag::{IsolatedFromAbove, NoTerminator, OpFlag, Terminator};
+use super::op_def::{OpDef, OpViolation};
+use super::op_flag::{IsolatedFromAbove, NoTerminator, OpFlag, Terminator, VerifyFlag};
 use super::op_interface::{
     DynBranch, DynCallableExit, DynCallableOwner, DynRegionBranch, DynRegionBranchTerminator,
     RegionBranchPoint, RegionSuccessor, RegionValueTransfer,
@@ -342,7 +342,7 @@ pub fn validate_operation_verifiers(ctx: &IrContext, module: Module) -> Validati
         }
         let error_count = errors.len();
         validate_scf_if_structure(ctx, op, &mut errors);
-        validate_terminator_position(ctx, op, &mut errors);
+        validate_block_ending(ctx, op, &mut errors);
         validate_func_shapes(ctx, op, &mut errors);
         if errors.len() == error_count {
             validate_branch_interface(ctx, op, &mut errors);
@@ -358,13 +358,13 @@ pub fn validate_operation_verifiers(ctx: &IrContext, module: Module) -> Validati
 /// Check `root` and every operation nested in it against its declarative
 /// schema only.
 ///
-/// It also checks terminator placement: an operation flagged `Terminator` is
-/// the last of its block, and every block ends in one unless its owner
-/// declares `NoTerminator`. Unlike
-/// [`validate_operation_verifiers`], this skips `#[verify]` hooks,
-/// the hand-written operation checks, and interface verification. It is the
-/// debug checkpoint run after each pipeline pass, where the IR must satisfy
-/// the declared constraints again; a pass nested under an operation checks only that
+/// It also checks terminator placement: the verifier of the [`Terminator`]
+/// flag, and that every block ends in a `Terminator` unless its owner
+/// declares `NoTerminator`. Unlike [`validate_operation_verifiers`], this
+/// skips `#[verify]` hooks, the other flags' verifiers, the hand-written
+/// operation checks, and interface verification. It is the debug checkpoint
+/// run after each pipeline pass, where the IR must satisfy the declared
+/// constraints again; a pass nested under an operation checks only that
 /// operation's subtree.
 pub fn validate_op_schemas(ctx: &IrContext, root: OpRef) -> ValidationResult {
     let mut errors = Vec::new();
@@ -372,22 +372,30 @@ pub fn validate_op_schemas(ctx: &IrContext, root: OpRef) -> ValidationResult {
         if let Some(def) = OpDef::of(ctx, op) {
             report_schema_violations(ctx, op, def.schema.verify(ctx, op), &mut errors);
         }
-        validate_terminator_position(ctx, op, &mut errors);
+        if Terminator::is_set(ctx, op)
+            && let Err(error) = <Terminator as VerifyFlag>::verify(ctx, op)
+        {
+            let violation = OpViolation::Flag {
+                flag: Terminator::DEF.name,
+                message: error.to_string(),
+            };
+            errors.push(operation_verifier_error(ctx, op, violation.to_string()));
+        }
+        validate_block_ending(ctx, op, &mut errors);
         std::ops::ControlFlow::Continue(walk::WalkAction::Advance)
     });
     ValidationResult { errors }
 }
 
-/// Check terminator placement under `root`: every operation flagged
-/// [`Terminator`] is the last of its block, and every block ends in one unless
-/// its owner declares [`NoTerminator`].
+/// Check that every block under `root` ends in a [`Terminator`] unless its
+/// owner declares [`NoTerminator`].
 ///
-/// Backend boundaries run it on their target IR, which no other declarative
-/// check covers in release builds.
-pub fn validate_terminator_positions(ctx: &IrContext, root: OpRef) -> ValidationResult {
+/// Backend boundaries run it on their target IR next to each operation's
+/// [`OpDef::verify`], which checks that a `Terminator` ends its block.
+pub fn validate_block_endings(ctx: &IrContext, root: OpRef) -> ValidationResult {
     let mut errors = Vec::new();
     let _ = walk::walk_op::<std::convert::Infallible>(ctx, root, &mut |op| {
-        validate_terminator_position(ctx, op, &mut errors);
+        validate_block_ending(ctx, op, &mut errors);
         std::ops::ControlFlow::Continue(walk::WalkAction::Advance)
     });
     ValidationResult { errors }
@@ -459,25 +467,12 @@ fn validate_type_shapes(ctx: &IrContext, errors: &mut Vec<ValidationError>) {
     }
 }
 
-/// Check terminator placement as MLIR's verifier does: an operation flagged
-/// `Terminator` is the last of its block, and each block of `op`'s regions
-/// ends in one unless `op` declares `NoTerminator`.
+/// Check, as MLIR's verifier does, that each block of `op`'s regions ends in
+/// a `Terminator` unless `op` declares `NoTerminator`.
 ///
 /// An unregistered operation declares nothing, so it is checked neither as
 /// a region owner nor as the last operation of a block.
-fn validate_terminator_position(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
-    if Terminator::is_set(ctx, op)
-        && ctx
-            .op(op)
-            .parent_block
-            .is_none_or(|b| ctx.block(b).ops.last() != Some(&op))
-    {
-        errors.push(operation_verifier_error(
-            ctx,
-            op,
-            "must terminate its block",
-        ));
-    }
+fn validate_block_ending(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
     if OpDef::of(ctx, op).is_none() || NoTerminator::is_set(ctx, op) {
         return;
     }
@@ -3400,7 +3395,7 @@ mod tests {
         for expected in [
             // `cf.br` is a `Terminator`, so the generic check reports it
             // before the `Branch` interface check runs.
-            "cf.br (op1): must terminate its block",
+            "cf.br (op1): Terminator: must terminate its block",
             // The generic block rule reports the empty arm first, too.
             "is empty but must end in a terminator",
             "has no complete owning RegionBranch mapping",

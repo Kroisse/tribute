@@ -899,10 +899,7 @@ fn local_validator_reports_unknown_and_unattached_operations() {
     assert_op_diagnostics(
         &return_result,
         unattached_return.op_ref(),
-        &[
-            "must be attached to a block",
-            "must terminate a tribute_control.func or lambda body",
-        ],
+        &["Terminator: must terminate its block"],
     );
 
     let unattached_yield = Yield::operands(i32_value).build(&mut ctx, loc);
@@ -914,10 +911,7 @@ fn local_validator_reports_unknown_and_unattached_operations() {
     assert_op_diagnostics(
         &yield_result,
         unattached_yield.op_ref(),
-        &[
-            "must be attached to a block",
-            "must terminate a handle body, completion, or arm",
-        ],
+        &["Terminator: must terminate its block"],
     );
 }
 
@@ -1684,7 +1678,7 @@ fn a_trap_ends_a_callable_body_or_an_arm_in_any_position() {
     tribute_control.return %n"#,
     );
     assert!(
-        not_last.contains("must be the final operation in its block"),
+        not_last.contains("Terminator: must terminate its block"),
         "{not_last}"
     );
 

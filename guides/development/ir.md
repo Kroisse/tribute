@@ -323,11 +323,11 @@ schema-violating operation in generic form to exercise a pass. A check
 that reads only the operation itself belongs in its `#[verify]` hook; the
 `tribute_control` local validator reaches each operation's checks on its
 placement and regions through the `LocalValidation` interface.
-Debug builds also run `validate_op_schemas`, the declarative stages without the
-`#[verify]` hook, after every pipeline pass, reporting the pass that left an
-operation in violation. A pass that retypes a value before target type
-conversion inserts `core.unrealized_conversion_cast` back to the type its uses
-declare.
+Debug builds also run `validate_op_schemas`, the declarative stages and
+terminator placement without the `#[verify]` hook, after every pipeline
+pass, reporting the pass that left an operation in violation. A pass that
+retypes a value before target type conversion inserts
+`core.unrealized_conversion_cast` back to the type its uses declare.
 `PatternApplicator` does this for a staged conversion with
 `with_auto_type_conversion(true)` and a `ConversionTarget`. It casts the
 operands only of operations the target declares illegal. Where it retypes a
@@ -568,11 +568,10 @@ defined outside the operation, and does not enter a nested operation with
 the flag, which checks itself. `validate_value_integrity` still checks value
 visibility between regions, starting a new scope at each `IsolatedFromAbove`
 operation. The per-pass debug checkpoint (`validate_op_schemas`) runs no
-verifier, including the flags'.
+verifier except `Terminator`'s, below.
 
 `Pure` states no invariant. `NoTerminator` changes the rule for the blocks
-of operations without it, so it has no verifier, and terminator placement
-stays the flag-driven check below.
+of operations without it, so it has no verifier.
 
 `Terminator` marks an operation that must be the last of its block, as
 MLIR's `IsTerminator` does. It says nothing about where control goes, which
@@ -580,16 +579,20 @@ MLIR's `IsTerminator` does. It says nothing about where control goes, which
 operation implementing one of those, and every unconditional trap, carries
 it, as does `wasm.yield`, which ends a Wasm structured region. A
 conditional branch that may fall through (`wasm.br_if`, `clif.trapnz`)
-does not. The operation verifier, the debug
-schema checkpoint after each pass (`validate_op_schemas`), and both backend
-boundaries reject a flagged operation that some operation follows, so test
-whether an operation ends its block with `Terminator::is_set` rather than a
-list of names.
+does not. Its verifier, as `IsTerminator::verifyTrait` is, rejects a
+flagged operation that is detached or that some operation follows, so every
+caller of `OpDef::verify` checks it; the debug schema checkpoint after each
+pass (`validate_op_schemas`) runs this one verifier too. Test whether an
+operation ends its block with `Terminator::is_set` rather than a list of
+names, and leave its placement to the flag rather than repeating it in a
+dialect validator.
 
-The same checks require every block to end in a `Terminator`, unless the
-operation that owns its region declares `NoTerminator`, as MLIR's
-`NoTerminator` does: `core.module`, `ability.decl`, `clif.data`, and
-`wasm.elem`. A pass that builds a structured
+Every block must end in a `Terminator`, unless the operation that owns its
+region declares `NoTerminator`, as MLIR's `NoTerminator` does:
+`core.module`, `ability.decl`, `clif.data`, and `wasm.elem`. This rule
+concerns operations without a flag, so it stays a structural check, which
+the operation verifier, `validate_op_schemas`, and the backend boundaries
+(`validate_block_endings`) run. A pass that builds a structured
 operation whose every arm leaves the callable puts `func.unreachable` after
 it.
 

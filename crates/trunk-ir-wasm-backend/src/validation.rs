@@ -56,7 +56,7 @@ pub fn validate_wasm_ir(ctx: &IrContext, module: Module) -> CompilationResult<()
     }
     errors.extend(trunk_ir::validation::link_name_conflicts(ctx, module));
     errors.extend(
-        trunk_ir::validation::validate_terminator_positions(ctx, module.op())
+        trunk_ir::validation::validate_block_endings(ctx, module.op())
             .errors
             .iter()
             .map(ToString::to_string),
