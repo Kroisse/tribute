@@ -12,7 +12,6 @@ rustc-hash.workspace = true
 itertools.workspace = true
 derive_more.workspace = true
 tracing.workspace = true
-tribute-core.workspace = true
 tribute-ir.workspace = true
 trunk-ir.workspace = true
 trunk-ir-cranelift-backend.workspace = true
