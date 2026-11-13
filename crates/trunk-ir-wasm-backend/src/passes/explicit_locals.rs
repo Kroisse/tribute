@@ -874,6 +874,36 @@ mod tests {
     }
 
     #[test]
+    fn keeps_the_values_branches_pass_to_an_if_label() {
+        let ir = explicit(
+            r#"core.module @test {
+  wasm.func @pick(%c: core.i32, %a: core.i32, %b: core.i32) -> core.i32 {
+    %r = wasm.if %c -> (core.i32) {
+      wasm.br %a {target = 0}
+    } else {
+      wasm.br %b {target = 0}
+    }
+    wasm.return %r
+  }
+}"#,
+        );
+        assert_eq!(
+            ir,
+            r#"core.module @test {
+  wasm.func @pick(%0: core.i32, %1: core.i32, %2: core.i32) -> core.i32 {
+      %3 = wasm.if %0 -> (core.i32) {
+          wasm.br %1 {target = 0}
+      } else {
+          wasm.br %2 {target = 0}
+      }
+      wasm.return %3
+  }
+}
+"#
+        );
+    }
+
+    #[test]
     fn rejects_a_branch_to_a_loop_with_a_value_short_of_its_arguments() {
         let error = explicit_error(
             r#"core.module @test {

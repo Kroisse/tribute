@@ -4,18 +4,21 @@
 //! dialect's [`StackOperandOrder`](trunk_ir::dialect::wasm::StackOperandOrder).
 //! Which results it leaves on the stack is this backend's representation
 //! rule: a call's `core.nil` result slots, a `wasm.nop` of a type with no Wasm
-//! null, and structured control whose result is `core.nil` or whose regions
-//! yield no value leave nothing (`design/wasm-backend.md`, "명시적 지역
+//! null, structured control whose result is `core.nil`, and a `wasm.if` to
+//! whose label nothing passes a value leave nothing (`design/wasm-backend.md`, "명시적 지역
 //! 변수와 stack 계약"). Where a `wasm.br` or `wasm.yield` passes its values
 //! follows from that (`design/wasm-backend.md`, "분기와 region 끝의 값").
 //! `ExplicitLocals`, the stack contract check, and the emitter all read it
 //! here.
 
+use std::ops::ControlFlow;
+
 use trunk_ir::IrContext;
 use trunk_ir::dialect::wasm;
 use trunk_ir::ops::{DialectOp, DialectType};
-use trunk_ir::refs::{OpRef, RegionRef, TypeRef, ValueDef, ValueRef};
+use trunk_ir::refs::{OpRef, TypeRef, ValueDef, ValueRef};
 use trunk_ir::smallvec::SmallVec;
+use trunk_ir::walk::{WalkAction, walk_region};
 use wasm_encoder::AbstractHeapType;
 
 use crate::emit::helpers::is_nil_type;
@@ -52,9 +55,9 @@ pub(crate) fn is_structured(ctx: &IrContext, op: OpRef) -> bool {
 /// empty when the block type is empty.
 ///
 /// Each result is one Wasm value, except that a single `core.nil` result
-/// leaves nothing. A `wasm.if` has results only when one of its regions
-/// passes values. The other may end the function instead, as an arm ending
-/// in a trap does.
+/// leaves nothing. A `wasm.if` has results only when a `wasm.yield` or
+/// `wasm.br` passes values to its label. The arms that do not may end the
+/// function instead, as an arm ending in a trap does.
 pub(crate) fn structured_result_types(ctx: &IrContext, op: OpRef) -> SmallVec<[TypeRef; 2]> {
     let types = ctx.op_result_types(op);
     let leaves_nothing = match types {
@@ -62,27 +65,29 @@ pub(crate) fn structured_result_types(ctx: &IrContext, op: OpRef) -> SmallVec<[T
         [ty] => is_nil_type(ctx, *ty),
         _ => false,
     };
-    if leaves_nothing
-        || (wasm::If::matches(ctx, op)
-            && !ctx
-                .op_regions(op)
-                .any(|region| !region_result_values(ctx, region).is_empty()))
-    {
+    if leaves_nothing || (wasm::If::matches(ctx, op) && !passes_values_to(ctx, op)) {
         return SmallVec::new();
     }
     types.iter().copied().collect()
 }
 
-/// The values a region passes to its parent: the values of the
-/// `wasm.yield` that ends it.
-pub(crate) fn region_result_values(ctx: &IrContext, region: RegionRef) -> SmallVec<[ValueRef; 2]> {
-    ctx.region(region)
-        .blocks
-        .last()
-        .and_then(|&block| ctx.block(block).ops.last())
-        .and_then(|&op| wasm::Yield::from_op(ctx, op).ok())
-        .map(|yield_op| yield_op.values(ctx).iter().copied().collect())
-        .unwrap_or_default()
+/// Whether a `wasm.yield` or `wasm.br` inside `label` passes values to it.
+fn passes_values_to(ctx: &IrContext, label: OpRef) -> bool {
+    let carries_values = |op: OpRef| {
+        (wasm::Yield::matches(ctx, op) || wasm::Br::matches(ctx, op))
+            && !ctx.op_operands(op).is_empty()
+            && transfer_label(ctx, op) == Some(label)
+    };
+    ctx.op_regions(label).any(|region| {
+        walk_region(ctx, region, &mut |op| {
+            if carries_values(op) {
+                ControlFlow::Break(())
+            } else {
+                ControlFlow::Continue(WalkAction::Advance)
+            }
+        })
+        .is_break()
+    })
 }
 
 /// The abstract heap type of the null a `wasm.nop` of type `ty` pushes, or
@@ -160,13 +165,7 @@ pub(crate) enum ValueTransfer {
 /// inside the structured operation it names (`design/wasm-backend.md`,
 /// "분기와 region 끝의 값").
 pub(crate) fn value_transfer(ctx: &IrContext, op: OpRef) -> Option<ValueTransfer> {
-    let label = if let Ok(br) = wasm::Br::from_op(ctx, op) {
-        (0..=br.target(ctx)).try_fold(op, |inner, _| enclosing_structured(ctx, inner))?
-    } else if wasm::Yield::matches(ctx, op) {
-        enclosing_structured(ctx, op)?
-    } else {
-        return None;
-    };
+    let label = transfer_label(ctx, op)?;
     if wasm::Br::matches(ctx, op)
         && let Ok(loop_op) = wasm::Loop::from_op(ctx, label)
     {
@@ -176,6 +175,18 @@ pub(crate) fn value_transfer(ctx: &IrContext, op: OpRef) -> Option<ValueTransfer
         0 => ValueTransfer::None,
         count => ValueTransfer::Stack(count),
     })
+}
+
+/// The structured operation whose label a `wasm.br` or `wasm.yield` passes
+/// its values to.
+fn transfer_label(ctx: &IrContext, op: OpRef) -> Option<OpRef> {
+    if let Ok(br) = wasm::Br::from_op(ctx, op) {
+        (0..=br.target(ctx)).try_fold(op, |inner, _| enclosing_structured(ctx, inner))
+    } else if wasm::Yield::matches(ctx, op) {
+        enclosing_structured(ctx, op)
+    } else {
+        None
+    }
 }
 
 /// The `wasm.block`, `wasm.loop`, or `wasm.if` whose region holds `op`.
