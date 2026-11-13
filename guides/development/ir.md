@@ -309,7 +309,8 @@ holds the declarative `op_schema::OpSchema` and the hooks its declaration
 opts into, such as `#[verify]` and `#[asm_format]`. `OpSchema::verify` runs
 the declarative stages: counts and attributes, individual type constraints,
 variable bindings, then projections and type lists. `OpDef::verify` adds the
-`#[verify]` hook after them; each stage runs only if the earlier ones passed.
+verifiers of the declared [flags](#operation-flags) and then the `#[verify]`
+hook after them; each stage runs only if the earlier ones passed.
 `validate_operation_verifiers` runs `OpDef::verify` on each operation.
 Remaining operation-specific checks run afterwards and may assume the
 declared shape. The `tribute_control` local validator and the native and Wasm
