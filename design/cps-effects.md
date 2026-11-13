@@ -403,8 +403,8 @@ target identity를 가진 `func_ref`의 convention entry로 각 convention의 �
 
 Lambda capture 목록은 [capture 규칙](tribute-dialects.md#convention-entry)을 따른다. Named
 reference를 새 `func_ref`로 대체하여 사라진 capture는 제거하고, 남는 값은 lexical
-scope와 dominance를 유지하여 중복 없이 전달한다. 이 변환은 RHS 평가를 복제하거나 resume token의 affine capture
-경로를 늘려서는 안 된다.
+scope와 dominance를 유지하여 중복 없이 전달한다. 이 변환은 RHS 평가를 복제하거나 resumption을 운반하는 lambda의
+affine 경로를 늘려서는 안 된다.
 
 Source 타입 검사는 정확한 equality, `Never` 표현식의 방향성 있는 제거, 공통 source
 결과 추론을 구별한다. 분기의 answer를 맞추기 위해 정상 source 값을 `Never`로
@@ -681,13 +681,15 @@ Converter는 region, block suffix, `tribute_control.yield`, 검증된
 operation kind를 추론하거나 case, guard, short-circuit, nested handle 전용 규칙을
 추가해서는 안 된다.
 
-Affine `resume_token`의 type/placement는 operation-local verifier가, use-def와
-closure-capture를 지나는 single static ownership path는 whole-IR verifier가
-검사한다. Static SSA 검사는 capture된 closure의 반복 호출을 막지 못하므로
+`resume`의 위치와 type은 `resume`의 지역 검증이 둘러싼 arm의 type에 대해 검사하고,
+affine 규칙(arm의 `resume`끼리 상호 배타적이고, 그 resumption을 운반하는 lambda의
+값이 arm 안에서만 쓰이는 것)은 whole-IR verifier가 각 arm의 `resume`과 운반
+lambda에서 검사한다. Static 검사는 운반하는 closure의 반복 호출을 막지 못하므로
 `lower_continuation_frames`는 `ability.perform`의 raw resumption을 runtime consumed
-state로 감싸고 두 번째 호출을 continuation 재진입 전에 거부하거나 trap한다. Token은 post-CPS IR에 남지 않는다.
+state로 감싸고 두 번째 호출을 continuation 재진입 전에 거부하거나 trap한다. Resume
+token은 이 적법화가 도입하는 값이며 post-CPS IR에 남지 않는다.
 
-Canonical `core.never`인 source `op -> Never`는 token과 source suffix
+Canonical `core.never`인 source `op -> Never`는 resumption과 source suffix
 continuation을 만들지 않는다. `ability.abort`를 펼칠 때 기존 ABI에는 capture가 없고
 body가 `func.unreachable`인 typed reject continuation을 전달한다.
 이 closure는 dispatch가 요구하는 canonical `Resume<R>` type을 정확히 사용한다.
@@ -705,7 +707,7 @@ named pre-CPS boundary가 아니다.
 성공한 shared conversion은 defining rule이
 `illegal_dialect("tribute_control")`인 partial
 `tribute-control-post-cps` target과 Tribute type walk를 검증한다. 남은
-`tribute_control` operation 또는 `func_sig`/`resume_token` type은 source
+`tribute_control` operation 또는 `func_sig` type은 source
 location에서 conversion failure가 된다. 이 경계에는 일관된 physical
 `func.*`/`closure.*`/`func.func_sig` graph, [추상 frame 표면](#abstract-continuation-frames),
 logical `ability.*` dispatch 표면만 남는다. `lower_continuation_frames`가
@@ -1023,8 +1025,10 @@ Handle 하나는 실행 중 여러 번 설치될 수 있다. 처음 설치한 �
 
 - General arm: `(Evidence, ContinuationFrame<R>, operation argument...,
   resume token, resume token)`. Evidence와 frame은 층의 바깥 evidence와 handle의
-  exit frame이다. Resumptive arm만 token 둘을 받는다. 첫 token은 source의 resume
-  token 값이고 lambda가 capture할 수 있다. 둘째 token은 arm 본문의 `resume`이 쓴다.
+  exit frame이다. Resumptive arm만 token 둘을 받으며, 두 token은 모두 legalization이
+  도입한 값이다. 첫 token은 resumption을 운반하는 lambda가 capture하며
+  legalization이 그 lambda의 capture에 더한다. 둘째 token은 arm 본문의 `resume`이
+  쓴다.
 - `fn` arm: `(Evidence, operation argument...)`. 층의 `tr_dispatch_fn`이 그 층의
   바깥 evidence를 capture해 넘기며, operation을 수행한 지점의 evidence는 쓰지 않는다.
 
