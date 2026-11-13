@@ -1,10 +1,28 @@
 //! Arena-based scf dialect.
 
+use crate::op_flag::Terminator;
+
 #[trunk_ir::dialect]
 mod scf {
-    #[asm_format(cond ("->" "(" type(result)^ ")")? attr_dict region(then_region) "else" region(else_region))]
+    /// A structured two-way branch on a boolean condition, as MLIR's
+    /// `scf.if`.
+    ///
+    /// ```text
+    /// %a, %b = scf.if %c -> (core.i32, core.i32) {
+    ///     scf.yield %x, %y
+    /// } else {
+    ///     scf.yield %y, %x
+    /// }
+    /// ```
+    ///
+    /// - **Shape:** a `core.i1` condition, `then_region`, `else_region`, and
+    ///   any number of results.
+    /// - **Meaning:** runs `then_region` when the condition is 1 and
+    ///   `else_region` when it is 0. Each region ends in `scf.yield`, whose
+    ///   values become the results in order, or in its own terminator.
+    #[asm_format(cond ("->" "(" types(results)^ ")")? attr_dict region(then_region) "else" region(else_region))]
     #[implements(RegionBranch, Fold)]
-    fn r#if(cond: Value<_>) -> Option<Value<_>> {
+    fn r#if(cond: Value<I1>) -> Variadic<_> {
         #[region(then_region)]
         {}
         #[region(else_region)]
@@ -45,13 +63,15 @@ mod scf {
         {}
     }
 
+    #[flags(Terminator)]
     #[implements(RegionBranchTerminator)]
     #[asm_format(values attr_dict_bare)]
     fn r#yield(values: Variadic<_>) {}
 
     /// A loop whose body receives `init` as its entry block arguments on
     /// the first iteration and the values of `scf.continue` on the next.
-    /// `scf.break` leaves it with the optional result.
+    /// `scf.break` leaves it, and its values become the loop's results in
+    /// order.
     ///
     /// ```text
     /// %r = scf.loop(%init) -> (core.i32) {
@@ -59,20 +79,22 @@ mod scf {
     ///     scf.break %acc
     /// }
     /// ```
-    #[asm_format("(" init ")" ("->" "(" type(result)^ ")")? attr_dict region(body))]
+    #[asm_format("(" init ")" ("->" "(" types(results)^ ")")? attr_dict region(body))]
     #[implements(RegionBranch)]
-    fn r#loop(init: Variadic<_>) -> Option<Value<_>> {
+    fn r#loop(init: Variadic<_>) -> Variadic<_> {
         #[region(body)]
         {}
     }
 
+    #[flags(Terminator)]
     #[implements(RegionBranchTerminator)]
     #[asm_format(values attr_dict_bare)]
     fn r#continue(values: Variadic<_>) {}
 
+    #[flags(Terminator)]
     #[implements(RegionBranchTerminator)]
-    #[asm_format(value attr_dict_bare)]
-    fn r#break(value: Value<_>) {}
+    #[asm_format(values attr_dict_bare)]
+    fn r#break(values: Variadic<_>) {}
 }
 
 // =========================================================================
@@ -449,21 +471,12 @@ impl RegionBranchTerminator for Break {
         successor: RegionSuccessor,
     ) -> Result<ForwardedValues, ControlFlowInterfaceError> {
         let op = self.op_ref();
-        if ctx.op_operands(op).len() != 1 {
-            return Err(ControlFlowInterfaceError::new(
-                "scf.break requires exactly one value",
-            ));
-        }
         match successor {
             RegionSuccessor::Parent => {
-                let owner = Loop::enclosing(ctx, op).ok_or_else(|| {
+                Loop::enclosing(ctx, op).ok_or_else(|| {
                     ControlFlowInterfaceError::new("scf.break has no enclosing scf.loop")
                 })?;
-                if ctx.op_results(owner.op_ref()).is_empty() {
-                    Ok(ForwardedValues::default())
-                } else {
-                    Ok(ForwardedValues::new([self.value(ctx)]))
-                }
+                Ok(ForwardedValues::new(self.values(ctx).iter().copied()))
             }
             RegionSuccessor::Region(_) => Err(ControlFlowInterfaceError::new(
                 "scf.break cannot enter a region",
@@ -478,7 +491,7 @@ impl RegionBranchTerminator for Break {
 
 use crate::context::IrContext;
 use crate::dialect::arith::const_int_value;
-use crate::dialect::core::{BoolLike, IntegerOrIndex};
+use crate::dialect::core::{I1, IntegerOrIndex};
 use crate::ops::DialectOp;
 use crate::refs::{OpRef, ValueRef};
 use crate::transforms::canonicalize::{Fold, FoldResult};
@@ -496,23 +509,16 @@ use crate::types::Attribute;
 ///
 /// Multi-block regions are left alone — they only appear
 /// post-`scf_to_cf`, where this pass doesn't run anyway. Bails out on
-/// any structural mismatch (yield arity, non-`i1` const, malformed
+/// any structural mismatch (yield arity, a payload other than 0 or 1, malformed
 /// regions).
 impl Fold for If {
     fn fold(&self, ctx: &IrContext) -> Option<FoldResult> {
         let op = self.op_ref();
         let if_op = self;
         let cond = if_op.cond(ctx);
-        // Guard against malformed IR: only fold when the cond's type is
-        // `core.i1`. Without this, an `arith.constant value=2 : core.i32`
-        // wired into the cond slot would be treated as truthy here,
-        // burning the dead branch before the validator gets to reject it.
-        if !BoolLike::matches(ctx, ctx.value_ty(cond)) {
-            return None;
-        }
         let cond_value = const_int_value(ctx, cond)?;
-        // We've gated on cond's type being `core.i1`; the only valid
-        // payloads are 0 and 1. Reject anything else (e.g.
+        // The schema types cond as `core.i1`, whose only valid payloads
+        // are 0 and 1. Reject anything else (e.g.
         // `arith.constant value=2 : core.i1`) so the validator surfaces the
         // malformed const instead of the fold silently picking a branch.
         let active_region = match cond_value {
@@ -792,30 +798,6 @@ mod canonicalize_tests {
         let input = r#"core.module @test {
   func.func @f(%cond: core.i1, %x: core.i32) -> core.i32 {
     %r = scf.if %cond -> (core.i32) {
-      scf.yield %x
-    } else {
-      scf.yield %x
-    }
-    func.return %r
-  }
-}"#;
-        let mut ctx = IrContext::new();
-        let module = parse_test_module(&mut ctx, input);
-
-        let result = run_scf_patterns(&mut ctx, module);
-        assert_eq!(result.total_changes, 0);
-        assert_eq!(count_ops(&ctx, module, crate::dialect::scf::If::NAME), 1);
-    }
-
-    #[test]
-    fn if_non_i1_const_cond_is_not_folded() {
-        // Malformed IR: the cond slot is wired to a `core.i32` constant
-        // instead of `core.i1`. The fold must bail and leave the op for
-        // validation rather than picking a branch by truthiness.
-        let input = r#"core.module @test {
-  func.func @f(%x: core.i32) -> core.i32 {
-    %bad = arith.constant 2 : core.i32
-    %r = scf.if %bad -> (core.i32) {
       scf.yield %x
     } else {
       scf.yield %x

@@ -12,7 +12,7 @@ use trunk_ir::SymbolPath;
 use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{core, func};
-use trunk_ir::ops::DialectOp;
+use trunk_ir::ops::{DialectOp, VariadicResults};
 use trunk_ir::pass::{Pass, PassRunResult};
 use trunk_ir::refs::OpRef;
 use trunk_ir::rewrite::Module;
@@ -70,7 +70,7 @@ fn lower_call(ctx: &mut IrContext, call: OpRef) {
         .callee(SymbolPath::new([GET_OR_PANIC_FN]))
         .results([result_ty])
         .build(ctx, loc);
-    let value = read.results(ctx)[0];
+    let value = read.result(ctx);
     bytes_intrinsic::replace_call(ctx, call, &[read.op_ref()], value);
 }
 

@@ -1671,7 +1671,7 @@ fn cps_indirect_tail_without_a_provenance_bearing_closure_fails_before_insertion
 }
 
 #[test]
-fn malformed_multi_result_effectful_scf_if_remains_unchanged() {
+fn multi_result_effectful_scf_if_is_rejected_inside_a_cps_callable() {
     let input = r#"core.module @test {
   tribute_cps.func @broken(%input: core.i32, %condition: core.i1) -> core.i32 convention(cps) {
     %left, %right = scf.if %condition -> (core.i32, core.i32) {
@@ -1698,16 +1698,14 @@ fn malformed_multi_result_effectful_scf_if_remains_unchanged() {
         i32_type,
     )];
     tribute_control::declare_operations(&mut ctx, module, &declarations);
-    let before = module.op().display(&ctx).to_string();
     let error = tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default()).unwrap_err();
-    assert_eq!(error.boundary, PRE_CPS_BOUNDARY);
+    assert_eq!(error.boundary, POST_CPS_BOUNDARY, "{error}");
     assert!(
         error
             .to_string()
-            .contains("scf.if (op3): expected 0 to 1 result(s), found 2"),
+            .contains("effectful scf.if requires zero or one result inside a CPS callable"),
         "{error}"
     );
-    assert_eq!(module.op().display(&ctx).to_string(), before);
 }
 
 /// A function reference called through a stronger convention than its
@@ -2526,6 +2524,55 @@ fn textual_scf_switch_arm_may_end_with_a_tail_call() {
     assert_eq!(switch_results, ["core.never"], "{printed}");
     assert!(printed.contains("func.tail_call @callee"), "{printed}");
     assert!(!printed.contains("tribute_control."), "{printed}");
+}
+
+#[test]
+fn a_trap_keeps_its_cause_under_every_convention() {
+    let input = r#"core.module @test {
+  tribute_cps.func @always() -> core.i32 convention(direct) {
+    tribute_control.trap out_of_range
+  }
+  tribute_cps.func @checked(%ok: core.i1, %value: core.i32) -> core.i32 convention(direct) {
+    %found = scf.if %ok -> (core.i32) {
+      scf.yield %value
+    } else {
+      tribute_control.trap out_of_range
+    }
+    %next = arith.addi %found, %value : core.i32
+    tribute_control.return %next
+  }
+  tribute_cps.func @effectful(%ok: core.i1, %value: core.i32) -> core.i32 convention(cps) {
+    %found = scf.if %ok -> (core.i32) {
+      %got = tribute_control.perform op @State @get(%value) : (core.i32) -> core.i32
+      scf.yield %got
+    } else {
+      tribute_control.trap missing_ability
+    }
+    tribute_control.return %found
+  }
+}"#;
+    let (mut ctx, module) = parse(input);
+    let (_, printed) = convert_state_fixture(&mut ctx, module);
+    assert!(!printed.contains("tribute_control."), "{printed}");
+    let lines: Vec<_> = printed.lines().map(str::trim).collect();
+    let traps: Vec<_> = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| line.starts_with("func.trap"))
+        .collect();
+    assert_eq!(
+        traps.iter().map(|(_, line)| **line).collect::<Vec<_>>(),
+        [
+            r#"func.trap "out_of_range""#,
+            r#"func.trap "out_of_range""#,
+            r#"func.trap "missing_ability""#,
+        ],
+        "{printed}"
+    );
+    // Each trap is the last operation of its region.
+    for (index, _) in traps {
+        assert_eq!(lines[index + 1], "}", "{printed}");
+    }
 }
 
 #[test]

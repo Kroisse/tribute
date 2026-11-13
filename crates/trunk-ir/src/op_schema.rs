@@ -1230,8 +1230,24 @@ mod tests {
 }"#,
         );
         assert_eq!(text, "validation passed");
-        assert_eq!(scf::If::DEF.schema.result_count().to_string(), "0 to 1");
         assert_eq!(func::Func::DEF.schema.region_count().to_string(), "0 to 1");
+    }
+
+    #[test]
+    fn if_condition_must_be_i1() {
+        let text = schema_errors(
+            r#"core.module @m {
+  func.func @f(%c: core.i32) {
+    scf.if %c {
+      scf.yield
+    } else {
+      scf.yield
+    }
+    func.return
+  }
+}"#,
+        );
+        assert!(text.contains("expected core.i1, found core.i32"), "{text}");
     }
 
     #[test]

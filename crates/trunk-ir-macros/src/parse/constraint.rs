@@ -1391,12 +1391,12 @@ mod tests {
     #[test]
     fn typed_lists_impl_bounds_and_regions() {
         let op = parse_op(quote! {
-            fn pack<T>(xs: Values<(T, impl IntegerLike + BoolLike, _)>, rest: ()) {}
+            fn pack<T>(xs: Values<(T, impl IntegerLike + ScalarLike, _)>, rest: ()) {}
         });
         assert!(op.is_err(), "a `()` operand is rejected");
 
         let op = parse_op(quote! {
-            fn select(cond: Value<impl BoolLike>, elems: Values<()>) -> Variadic<_> {
+            fn select(cond: Value<impl IntegerLike>, elems: Values<()>) -> Variadic<_> {
                 #[region(body)] {}
             }
         })

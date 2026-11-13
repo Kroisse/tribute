@@ -132,6 +132,30 @@ Operation flag는 동작 없이 operation 정의가 선언하는 예/아니오 �
 정의한 dialect만 그 operation의 flag를 정할 수 있다. 메서드가 없더라도 다른 crate가
 남의 operation에 붙여야 하는 성질은 flag가 아니라 interface로 정의한다.
 
+`Terminator` flag는 operation이 자기 block의 마지막 operation이어야 한다는
+성질이다(MLIR의 `IsTerminator`). 이 flag는 제어가 어디로 가는지 말하지 않는다.
+Callable을 떠나는지는 [`CallableExit`](#선언적-operation-schema), block
+successor는 `Branch`, 부모 operation으로 돌아가는지는 `RegionBranchTerminator`가
+말한다. 그 셋 가운데 하나를 구현하는 operation과 무조건 trap하는 operation은 모두
+`Terminator`다. 조건부 분기처럼 다음 operation으로 이어질 수 있는 operation
+(`wasm.br_if`, `clif.trapnz`)과 다음 operation에 값을 넘기는 표시
+(`wasm.yield`)는 아니다.
+
+MLIR처럼 모든 block은 `Terminator`로 끝난다. 빈 block도 허용하지 않는다.
+Region이 제어 흐름이 아니라 선언을 담는 operation은 `NoTerminator` flag(MLIR의
+`NoTerminator`)를 선언해 이 규칙에서 빠진다. `core.module`, `ability.decl`,
+`clif.data`, `wasm.elem`이 그렇다. Wasm의 `wasm.func`, `wasm.if`, `wasm.block`,
+`wasm.loop`도 `NoTerminator`다. Stack machine의 함수 본문과 region은 마지막 명령어
+뒤에서 암묵적으로 끝나고,
+`wasm.yield`는 뒤따르는 `wasm.br`에 값을 넘기는 표시이므로 terminator가 아니다.
+등록되지 않은 operation은 정의를 읽을 수 없으므로 어느 쪽으로도 검사하지 않는다.
+
+Flag는 operation 정의의 선언이므로 이름을 나열하지 않고 검사한다. Operation
+verifier, 각 pass 뒤의 debug schema 검사, native와 Wasm backend 경계의 검증이
+flag가 있는 operation이 block의 마지막이 아니거나, `NoTerminator`가 아닌
+operation의 block이 `Terminator`로 끝나지 않으면 거부한다. Pass가 이 규칙을 어긴
+IR을 남기면 그 pass의 오류다.
+
 ## 선언적 operation schema
 
 Operation verifier의 로컬 계약은 `#[dialect]` operation 정의에서 선언적으로
@@ -168,7 +192,11 @@ format과 선언적 rewrite 도구는 operation 정의를 중복하지 않고 �
 - 결과는 `-> Value<C>`(accessor `result`) 또는 `-> Variadic<C>` /
   `-> Values<L>`(accessor `results`)로 선언한다. 결과가 0개 또는 1개인
   operation은 `-> Option<Value<C>>`로 선언한다. 결과가 없는 operation과
-  `core.nil` 결과 하나를 가진 operation은 서로 다르다.
+  `core.nil` 결과 하나를 가진 operation은 서로 다르다. 가변 결과를 선언한
+  operation의 wrapper는 MLIR의 `OpTrait::VariadicResults`처럼
+  `ops::VariadicResults`의 `single_result`, `result`, `result_ty`를 가진다.
+  Entity accessor는 wrapper가 구현하는 trait의 메서드와 같은 이름을 쓸 수
+  없다.
 - Region은 선언 순서대로 저장된다. 외부 함수 선언의 body처럼 없을 수 있는
   region은 선택 region으로 선언하며, 마지막 region만 선택일 수 있다.
 - 이름 있는 제네릭 파라미터는 논리적 타입 변수다. 같은 변수가 여러 위치에
@@ -177,7 +205,7 @@ format과 선언적 rewrite 도구는 operation 정의를 중복하지 않고 �
   monomorphization을 뜻하지 않는다.
 - Bound는 교집합이다. Exact bound는 하나의 dialect 타입과 그 wrapper의 내부
   invariant를 요구하며, 한 변수에 서로 다른 exact bound를 둘 수 없다.
-  Category bound는 `IntegerLike`, `IntegerOrIndex`, `BoolLike`, `FloatLike`처럼
+  Category bound는 `IntegerLike`, `IntegerOrIndex`, `FloatLike`처럼
   타입 범주를 요구하며 여러 개를 함께 둘 수 있다. 이 범주들은 `core` 스칼라 타입만 보는
   닫힌 판별이다. 다른 dialect의 타입까지 포함해야 하는 실제 소비자가 생기기
   전에는 dialect 등록형 범주를 두지 않는다.
@@ -321,13 +349,19 @@ continue after its enclosing structured region. It is not a generic
 terminator marker: `scf.yield`, `scf.break`, and `scf.continue` transfer within
 structured control flow and do not satisfy it. Dialects register only their
 verified callable exits, including ordinary `func.return`, proper tail
-transfers, and unreachable control flow. An arm of a result-producing
+transfers, traps, and unreachable control flow. An arm of a result-producing
 operation that selects one region may end with a verified `CallableExit`
 instead of `scf.yield`; such an arm produces no value and the operation's
 results come from its yielding arms. Source `become` ends a tail-position arm
 this way. The typed model and its dynamic query are fallible. An unregistered
 operation, malformed registered operation, or query error is never evidence
 that a region is terminal.
+
+A structured operation whose every arm leaves the callable is not itself a
+terminator. As in MLIR, the block that holds it still ends in a
+`Terminator`: a producer puts `func.unreachable` after it, so code that
+reads where control goes never has to prove that the operation does not
+return. A `core.never` result of such an operation stays unused.
 
 Structured-to-CFG lowering may use `CallableExit` only after preserving its
 own structural rules: the region must have one block, the exit must be that
@@ -345,8 +379,9 @@ region과 SCF operation의 증명 결과를 저장한다. 부모 판정은 저�
 정상적인 분석 결과이며, interface 오류도 terminal 증거로 사용하지 않는다.
 Wasm switch의 지원 타입이나 target conversion 진단은 분석의 책임이 아니다.
 중첩 `scf.if`와 `scf.loop`는 결과가 없거나 미사용 `core.never` 결과 하나만
-가지고, 모든 진입 successor region이 terminal이면 enclosing region의 종료를
-증명한다. Loop 본문 자체가 종료되는 경우만 포함하며 `continue` 순환은 증명하지
+가지고, 모든 진입 successor region이 terminal이면 그 operation 자체가 terminal이다.
+그 뒤에는 `func.unreachable`이 오므로, region의 종료는 마지막 operation인 그
+`CallableExit`가 증명한다. Loop 본문 자체가 종료되는 경우만 포함하며 `continue` 순환은 증명하지
 않는다.
 
 Native와 Wasm lowering은 phase 범위의 `AnalysisCache`에서 분석을 조회하고,
@@ -356,7 +391,10 @@ rewrite는 원래 operation에 대한 변환 전 결정만 소비한다. 보존�
 
 `wasm.if`, `wasm.block`, `wasm.loop`의 typed builder는 명시적인 결과 타입 목록을
 받는다. 빈 목록은 SSA 결과가 없는 제어 연산이며 `core.nil` 결과 하나와 다르다.
-SCF lowering이 지원하는 기존 단일 값 결과의 개수와 타입 변환은 유지한다.
+`scf.if`, `scf.index_switch`, `scf.loop`는 결과를 0개 이상 가지며, region을
+끝내는 `scf.yield`와 `scf.break`는 결과마다 값 하나를 넘긴다. 결과 목록은 tuple
+같은 aggregate 값이 아니다. SCF lowering은 결과의 개수와 순서를 보존하고 각 결과의
+타입을 따로 변환한다.
 미사용 결과를 제거하는 rewrite는 새 결과가 비어 있고 기존 결과에 use가 없음을
 검사하는 명시적 경로를 사용한다. 일반 operation 교체는 결과를 1:1로 대응시킨다.
 
@@ -1070,7 +1108,10 @@ Tribute 고수준 dialect의 규칙은 [tribute-dialects.md](tribute-dialects.md
 ## Mid-Level Dialects
 
 `func.*` represents function definitions, direct calls, indirect calls, function
-references, returns, tail calls, and unreachable control flow.
+references, returns, tail calls, traps, and unreachable control flow.
+`func.trap` is a defined end of the execution that a program may reach, and
+`func.unreachable` marks a point no execution reaches
+([tribute-dialects.md](tribute-dialects.md#trap)).
 `func.call_indirect`와 `func.tail_call_indirect`는 필수 `signature: TypeRef`
 attribute로 exact `func.func_sig` contract를 가지며, callee가 erased pointer나 table
 index로 바뀐 뒤에도 이 contract를 보존한다. 인자 목록과 `func.call_indirect`의 결과
@@ -1456,8 +1497,14 @@ func.func_sig<(Evidence, Frame, core.i32) -> core.never>
 ```
 
 The input list is always parenthesized. An empty result list is printed as
-`()`, and the single supported result is printed without parentheses unless it
-carries parameter attributes. Following the
+`()`, a single result is printed without parentheses unless it carries
+parameter attributes, and several results are a parenthesized list:
+
+```text
+func.func_sig<(core.i32, core.i32) -> (core.i32, core.i32)>
+```
+
+Following the
 [self-delimiting type form](#타입-textual-form), each input or result may carry
 its parameter attributes, and the remaining type attributes follow the results
 as a dictionary after a comma:
@@ -1466,32 +1513,29 @@ as a dictionary after a comma:
 func.func_sig<(core.i32 {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}>
 ```
 
-TrunkIR recognizes a parenthesized multi-result list so it can diagnose it, but
-currently rejects more than one result.
-
 The interned representation is:
 
 ```text
 TypeData {
   dialect: func,
   name: func_sig,
-  params: [input_0, ..., input_n, result_0?],
+  params: [input_0, ..., input_n, result_0, ..., result_m],
   attrs: {
     num_inputs: n,
-    num_results: 0 | 1,
+    num_results: m,
     ...other_type_attributes
   }
 }
 ```
 
 Both counts are mandatory `u32` delimiters and participate in type identity.
-They do not identify an ABI. Their sum must equal `params.len()`, and
-`num_results` must not exceed one. The generic recursive type walk continues to
-visit the entire flat `params` vector. The canonical printer hides only these
-two reserved attributes and preserves every other type attribute; textual type
-attribute dictionaries may not specify either reserved key.
+They do not identify an ABI. Their sum must equal `params.len()`. The generic
+recursive type walk continues to visit the entire flat `params` vector. The
+canonical printer hides only these two reserved attributes and preserves every
+other type attribute; textual type attribute dictionaries may not specify
+either reserved key.
 
-함수 타입의 textual spelling은 `func.func_sig<(inputs...) -> result>`만 사용한다.
+함수 타입의 textual spelling은 `func.func_sig<(inputs...) -> results>`만 사용한다.
 Production code는 검증된
 `func::func_sig` API로 함수 타입을 만들며, 직접 `TypeData`를 만드는 코드는
 malformed-type verifier test에 한정한다.
@@ -1513,15 +1557,24 @@ proper tail transfer is the `func.tail_call`/`func.tail_call_indirect` operation
 itself, and the machine calling convention is the signature's `call_conv`
 attribute.
 
-Shared `func.call` and `func.call_indirect` support zero or one SSA result.
-Calls match complete input/result lists; returns match the enclosing function's
-result list. Proper-tail operations themselves remain resultless, including
-when transferring to a logical `[core.never]` callable, and require matching
+A result list with several entries returns one value per entry; it is not a
+tuple or aggregate value. Lowering that splits one logical value into several
+values (for example, a scalarized struct) produces such a list, and each
+target maps it to its own multi-value returns. A CPS-convention callable keeps
+the logical `[core.never]` and physical `[]` results above; several results
+belong only to direct-return callables.
+
+Shared `func.call` and `func.call_indirect` have one SSA result per callee
+result, zero or more. Calls match complete input/result lists; returns match
+the enclosing function's result list. Proper-tail operations themselves remain
+resultless, including when transferring to a logical `[core.never]` callable,
+and require matching
 caller/callee result lists. Indirect calls require an exact signature, which
 must agree with a typed callee.
 
-Custom `func.func` assembly omits the arrow for zero results and prints `-> T`
-for one result. Absent arrow means zero IR results, never implicit Unit.
+Custom `func.func` assembly omits the arrow for zero results, prints `-> T`
+for one result, and `-> (T, U)` for several. Absent arrow means zero IR
+results, never implicit Unit.
 Generic operation syntax preserves its explicit `type` attribute. Custom
 assembly spells the whole type through its
 [signature codec](#signature-codec): parameter attributes follow their
@@ -1534,8 +1587,8 @@ Each dialect's adapter verifies and decodes its own signature and rebuilds it
 with its own constructor, so the shared traversal selects neither a dialect
 identity nor an ABI.
 Normal `validate_all` combines local operation checks with contextual shared
-function-contract checks. Local checks enforce zero/one ordinary-call results,
-resultless terminators, and exact typed indirect operand/result agreement.
+function-contract checks. Local checks enforce resultless terminators and exact
+typed indirect operand/result agreement.
 Contextual checks verify returns, caller/callee tail result lists, and direct
 calls whose declarations are available. An undeclared runtime callee has no
 inferred signature; it does not exempt other known contracts from validation.

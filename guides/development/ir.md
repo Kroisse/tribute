@@ -127,7 +127,14 @@ where
   attribute is absent, and the builder, the parser, and the printer drop a
   value equal to `v`, so absence is the canonical form. Type attributes take
   no default. Results are `Value<C>` or `Option<Value<C>>` (accessor
-  `result`) or `Variadic<C>` / `Values<L>` (accessor `results`).
+  `result`) or `Variadic<C>` / `Values<L>` (accessor `results`). The macro
+  implements the `ops::VariadicResults` mixin for every wrapper with
+  variadic results, as ODS attaches MLIR's `OpTrait::VariadicResults`:
+  `single_result` returns the result of an operation with exactly one, and
+  `result` expects its producer to have built exactly one. The generated
+  entity accessors deny Clippy's `same_name_method`, so an accessor that
+  would shadow a method of a trait the wrapper implements, such as an
+  operand named `result` on a variadic-result operation, fails the lint.
 - Attribute kinds are Rust types implementing `attr_kind::AttrKind`, resolved
   in the dialect's scope like bounds: primitives (`bool`, `i32`, `i64`, `u32`,
   `u64`, `f32`, `f64`), `String`, the markers
@@ -160,7 +167,7 @@ where
   blocks, and the builder takes them as an iterator.
 - Bounds are Rust types implementing `type_constraint::TypeConstraint`:
   `core` scalar categories (`IntegerLike` for fixed-width integers,
-  `IntegerOrIndex` for those and `core.index`, `BoolLike`, `FloatLike`,
+  `IntegerOrIndex` for those and `core.index`, `FloatLike`,
   `NumericLike`, `ScalarLike`), exact `core` scalars (`I1`–`I64`, `Index`,
   `F32`, `F64`), macro-defined type wrappers
   (projections are their declared parameters), and the `func`/`clif`/`wasm`
@@ -289,7 +296,7 @@ let resumed = Resume::operands(token, value).build(ctx, loc); // `T::Answer`
 The builder infers result types that are fixed types, variables bound by a
 single operand or a required attribute, or projections of such variables;
 `.results(..)` exists only when they are not all inferred, as for
-`-> Value<impl BoolLike>`. Result types,
+`-> Value<impl IntegerLike>`. Result types,
 regions (`.regions(..)`), and successors (`.successors(..)`) are each set in
 one call, in declaration order; variadic successors are passed as an
 iterator. Missing required inputs panic in `build`; the builder does not check
@@ -547,6 +554,24 @@ it by address and its `OpFlag` impl:
 #[op_flag]
 pub struct Pure;
 ```
+
+`Terminator` marks an operation that must be the last of its block, as
+MLIR's `IsTerminator` does. It says nothing about where control goes, which
+`CallableExit`, `Branch`, and `RegionBranchTerminator` describe; every
+operation implementing one of those, and every unconditional trap, carries
+it. A conditional branch that may fall through (`wasm.br_if`,
+`clif.trapnz`) and `wasm.yield` do not. The operation verifier, the debug
+schema checkpoint after each pass (`validate_op_schemas`), and both backend
+boundaries reject a flagged operation that some operation follows, so test
+whether an operation ends its block with `Terminator::is_set` rather than a
+list of names.
+
+The same checks require every block to end in a `Terminator`, unless the
+operation that owns its region declares `NoTerminator`, as MLIR's
+`NoTerminator` does: `core.module`, `ability.decl`, `clif.data`, `wasm.elem`,
+`wasm.func`, and the Wasm structured operations. A pass that builds a structured
+operation whose every arm leaves the callable puts `func.unreachable` after
+it.
 
 ### Type Interfaces
 

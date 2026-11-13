@@ -3,7 +3,7 @@
 use crate::attr_kind::SymbolRef;
 use crate::attr_kind::{Bytes, Type};
 use crate::dialect::core::I32;
-use crate::op_flag::IsolatedFromAbove;
+use crate::op_flag::{IsolatedFromAbove, NoTerminator, Terminator};
 use crate::op_interface::{CallLike, IndirectCallLike};
 use crate::ops::{DialectOp, DialectType};
 use crate::refs::{OpRef, ValueRef};
@@ -28,6 +28,7 @@ mod wasm {
     ///   wasm.br {target = 0}
     /// }
     /// ```
+    #[flags(NoTerminator)]
     #[asm_format(("->" "(" types(results)^ ")")? attr_dict region(body))]
     fn block() -> Variadic<_> {
         #[region(body)]
@@ -49,6 +50,7 @@ mod wasm {
     /// their locals, so the body block arguments have no uses and the Wasm
     /// `loop` takes no parameters (`design/wasm-backend.md`, "명시적 지역
     /// 변수와 stack 계약").
+    #[flags(NoTerminator)]
     #[asm_format("(" init ")" ("->" "(" types(results)^ ")")? attr_dict region(body))]
     #[implements(StackOperandOrder)]
     fn r#loop(init: Variadic<_>) -> Variadic<_> {
@@ -63,6 +65,7 @@ mod wasm {
     ///   wasm.yield %b
     /// }
     /// ```
+    #[flags(NoTerminator)]
     #[asm_format(cond ("->" "(" types(results)^ ")")? attr_dict region(then_region) "else" region(else_region))]
     fn r#if(cond: Value<_>) -> Variadic<_> {
         #[region(then_region)]
@@ -71,6 +74,7 @@ mod wasm {
         {}
     }
 
+    #[flags(Terminator)]
     #[asm_format(attr_dict_bare)]
     fn br(target: Attr<u32>) {}
 
@@ -89,29 +93,32 @@ mod wasm {
     /// ```text
     /// wasm.br_table %index, default 3 [0, 2, 1]
     /// ```
+    #[flags(Terminator)]
     #[asm_format(index "," "default" default targets attr_dict_bare)]
     fn br_table(index: Value<I32>, targets: Attr<[u32]>, default: Attr<u32>) {}
 
+    #[flags(Terminator)]
     #[asm_format(values attr_dict_bare)]
     fn r#return(values: Variadic<_>) {}
-    /// Pass `value` to the enclosing structured operation.
+    /// Pass `values` to the enclosing structured operation.
     ///
     /// ```text
-    /// wasm.yield %v
+    /// wasm.yield %a, %b
     /// ```
     ///
-    /// - **Meaning:** as the last operation of a region whose parent has a
-    ///   result, `value` is that region's result. Followed by a `wasm.br`,
-    ///   `value` is the branch's value, or, for a branch to a `wasm.loop`,
-    ///   the loop's next block arguments.
-    /// - **Value flow:** after `ExplicitLocals`, `value` is either the value
-    ///   the operations before it left on top of the stack, or a function
-    ///   parameter, which emission reads from its local right before the
-    ///   yield. Emission writes no instruction for the yield itself. A yield
-    ///   that passes no value, or that precedes a branch to a loop, does not
-    ///   remain (`design/wasm-backend.md`, "명시적 지역 변수와 stack 계약").
-    #[asm_format(value attr_dict_bare)]
-    fn r#yield(value: Value<_>) {}
+    /// - **Meaning:** as the last operation of a region whose parent has
+    ///   results, `values` are that region's results in order. Followed by
+    ///   a `wasm.br`, `values` are the branch's values, or, for a branch to
+    ///   a `wasm.loop`, the loop's next block arguments.
+    /// - **Value flow:** after `ExplicitLocals`, `values` are the values
+    ///   the operations before it left on top of the stack in order, the
+    ///   last of them possibly function parameters, which emission reads
+    ///   from their locals right before the yield. Emission writes no
+    ///   instruction for the yield itself. A yield that passes no value, or
+    ///   that precedes a branch to a loop, does not remain
+    ///   (`design/wasm-backend.md`, "명시적 지역 변수와 stack 계약").
+    #[asm_format(values attr_dict_bare)]
+    fn r#yield(values: Variadic<_>) {}
     #[asm_format(value attr_dict_bare)]
     fn drop(value: Value<_>) {}
 
@@ -148,6 +155,7 @@ mod wasm {
     ) -> Variadic<_> {
     }
 
+    #[flags(Terminator)]
     #[implements(CallLike)]
     #[asm_format(callee "(" args ")" attr_dict ":" functional_type(args))]
     fn return_call(callee: Attr<SymbolRef>, args: Variadic<_>) {}
@@ -166,6 +174,7 @@ mod wasm {
     ///   signature's results are the enclosing function's.
     /// - **Ownership and value flow:** as `wasm.call_indirect`.
     #[asm_format(callee "(" args ")" ("table" table^)? attr_dict ":" signature(signature))]
+    #[flags(Terminator)]
     #[implements(IndirectCallLike, StackOperandOrder)]
     fn return_call_indirect<S: FuncSig>(
         #[default(0)] table: Attr<u32>,
@@ -175,6 +184,7 @@ mod wasm {
     ) {
     }
 
+    #[flags(Terminator)]
     #[asm_format(attr_dict_bare)]
     fn unreachable() {}
     #[asm_format(attr_dict_bare ":" type(result))]
@@ -198,7 +208,7 @@ mod wasm {
     ///   emitter declares each listed type as its Wasm value type
     ///   (`design/wasm-backend.md`, "명시적 지역 변수와 stack 계약").
     #[asm_format(symbol(sym_name) signature(r#type, body) attr_dict region(body))]
-    #[flags(IsolatedFromAbove)]
+    #[flags(IsolatedFromAbove, NoTerminator)]
     fn func<S: FuncSig>(
         sym_name: Attr<String>,
         r#type: Attr<TypeOf<S>>,
@@ -250,6 +260,7 @@ mod wasm {
     ///   wasm.ref_func @g : wasm.funcref
     /// }
     /// ```
+    #[flags(NoTerminator)]
     #[asm_format(("table" table^)? ("offset" offset^)? attr_dict region(funcs))]
     fn elem(#[default(0)] table: Attr<u32>, #[default(0)] offset: Attr<u32>) {
         #[region(funcs)]

@@ -409,6 +409,7 @@ mod mechanics {
     use super::*;
     use crate::dialect::cf;
     use crate::location::Span;
+    use crate::ops::VariadicResults;
     use crate::*;
     use smallvec::smallvec;
     fn test_ctx() -> (IrContext, Location) {
@@ -801,6 +802,7 @@ mod mechanics {
 mod pass {
     use super::*;
     use crate::location::Span;
+    use crate::ops::VariadicResults;
     use crate::*;
     use smallvec::smallvec;
 

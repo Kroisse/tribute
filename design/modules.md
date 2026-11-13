@@ -169,9 +169,10 @@ lowering이 쓰는 runtime 항목 경로의 집합을 가진다.
 - `std::runtime` 안의 다른 선언은 runtime 항목이 아니다. Runtime 항목이 부르는
   helper일 수 있다.
 - Virtual export한 compiler 소유 타입(`Slots(a)`, `ByteArray`, `Dispatch`)과
-  `std::runtime::Slots`, `std::runtime::ByteArray`의 compiler intrinsic은
-  runtime 항목이 아니다. 그 IR 형태는 compiler가 정하므로 `tribute.types`로 게시하지 않으며, intrinsic은
-  아래 `extern "intrinsic"` directive 규칙을 따른다.
+  `std::runtime::Slots`, `std::runtime::ByteArray`의 compiler intrinsic,
+  [trap intrinsic](#trap-intrinsic)은 runtime 항목이 아니다. 그 IR 형태는
+  compiler가 정하므로 `tribute.types`로 게시하지 않으며, intrinsic은 아래
+  `extern "intrinsic"` directive 규칙을 따른다.
 - Lowering은 runtime 함수를 canonical 경로에서 만든 IR symbol로 찾는다. 패키지
   `std`의 선언 식별자는 사용자 패키지의 선언과 섞이지 않으므로(위
   [Prelude와 패키지 `std`](#prelude와-패키지-std)) 이 symbol은 패키지 `std`의 정의만
@@ -205,6 +206,36 @@ module에서는 처음부터 root가 아니다. Evidence runtime 함수를 부�
 없는 module은 shared lowering 전에 evidence runtime 함수를 제거한다.
 `tribute.types`의 runtime 타입 항목은 타입 식별 metadata로 representation/ABI
 경계 출구 뒤에도 남는다.
+
+#### Trap intrinsic
+
+패키지 `std`의 code가 실행을 trap으로 끝내는 방법은 `std::runtime`의 trap
+intrinsic이다. 원인마다 함수가 하나 있다.
+
+```rust
+// std::runtime
+pub(pkg) extern "intrinsic" fn trap_out_of_range() ->{} Never
+pub(pkg) extern "intrinsic" fn trap_missing_ability() ->{} Never
+```
+
+| Intrinsic | 원인 | Cause keyword |
+| ---- | ---- | ---- |
+| `trap_out_of_range` | 위치나 구간이 대상의 범위 밖이다 | `out_of_range` |
+| `trap_missing_ability` | Evidence에 compiler가 보장한 ability의 marker나 그 dispatch closure가 없다. Compiler bug다 | `missing_ability` |
+
+- 결과 타입이 `Never`이므로 호출은 돌아오지 않는다. 다른 타입의 자리에서는
+  prelude의 [`absurd`](types.md#빈-타입과-명시적-제거)로 감싼다:
+  `False -> absurd(runtime::trap_out_of_range())`. 자리의 타입에 맞추려고 값을
+  만들거나 범위 밖 원소를 읽지 않는다.
+- 원인은 호출하는 함수가 정한다. Trap의 원인은 IR operation의 속성이므로 실행 중에
+  정하는 인자가 될 수 없다. 새 원인은 새 intrinsic과 cause keyword로 추가한다.
+- `pub(pkg)`이므로 사용자 프로그램은 부를 수 없다. Handler가 관찰하거나 복구할 수
+  없으며, 사용자에게 보이는 오류 처리 수단이 아니다.
+- Frontend는 trap intrinsic의 직접 호출을 호출 operation 대신 terminator인
+  [`tribute_control.trap`](tribute-dialects.md#trap)으로 낮추고, 그 뒤의 code를
+  낮추지 않는다. 이 lowering이 identity의 마지막 독자이며, 선언은 다른
+  intrinsic 선언처럼 참조가 없으면 지워진다. Trap intrinsic은 직접 호출로만
+  쓴다. 함수 값으로 참조하지 않는다.
 
 ---
 

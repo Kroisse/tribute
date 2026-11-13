@@ -147,7 +147,28 @@ discriminant 타입과
 범위를 벗어난 case 값은 변환을 시작하기 전에 해당 switch와 이유를 담은
 conversion 오류로 거부한다. 결과가 있는 switch는 각 `wasm.if`가 그 결과 타입을
 선언하고, 안쪽 `wasm.if`의 결과를 바깥 region이 `wasm.yield`로 넘긴다.
-`scf.yield` 변환과 같이 결과는 하나까지만 낮춘다.
+결과는 여럿일 수 있으며, `scf.yield`는 같은 순서의 값을 가진 `wasm.yield`가 된다.
+
+### 구조적 제어의 block type
+
+`scf.if`, `scf.index_switch`, `scf.loop`는 결과를 여럿 가질 수 있고, 각 결과는
+Wasm 값 하나이다. Lowering은 결과를 묶은 aggregate를 만들지 않는다. `wasm.block`,
+`wasm.loop`, `wasm.if`의 Wasm block type은 결과가 없거나 `core.nil` 하나뿐이면 빈
+block type, 결과가 하나이면 그 값 타입이고, 둘 이상이면 type section에 등록한 함수
+타입 `() -> (결과...)`의 인덱스이다(multi-value의 type-indexed block type).
+
+Wasm에서 `core.nil` 값은 null로 stack에 오르지만, `core.nil` 결과 하나뿐인
+구조적 제어는 값을 남기지 않는다. 결과가 여럿인 목록에서는 `core.nil` 결과마다 이
+둘 중 하나를 골라야 하므로, Wasm target은 그런 목록을 지원하지 않는다. IR 계약은
+`(core.nil, core.i32)` 같은 목록을 허용하지만, `scf_to_wasm`은 변환을 시작하기 전에
+`core.nil` 결과가 섞인 다중 결과 `scf.if`, `scf.index_switch`, `scf.loop`를 이유를
+담은 conversion 오류로 거부하고 module을 바꾸지 않는다. 그런 목록을 만드는 lowering은
+Wasm lowering 전에 `core.nil` 결과를 없애야 한다. 지금 frontend가 만드는 구조적 제어는
+결과가 하나 이하이다.
+
+Loop-carried 값은 local로 전달하므로 block type은 매개변수를 갖지 않는다.
+이 함수 타입은 같은 입력과 결과를 가진 signature의 타입 인덱스를 함께 쓴다. Yield
+없이 끝나는 region은 마지막 operation의 결과 전체를 넘긴다.
 
 ### Dense switch의 `br_table` 분기
 
@@ -168,14 +189,16 @@ discriminant는 부호 없는 index로 표 크기 이상이 되어 `br_table`의
 각 case는 자기 label block의 `end` 바로 뒤에 놓이고, 결과를 `wasm.yield`로 표시한
 뒤 `wasm.br`로 탈출 block에 분기한다. Default는 탈출 block의 마지막에 놓여 그
 block의 결과를 그대로 넘긴다. 결과가 없거나 Wasm 값이 없는 `core.nil` 결과의
-switch는 분기에 값을 싣지 않는다. Loop의 `scf.continue`나 `scf.break`로 끝나는
-case는 탈출 block으로 분기하지 않는다. 이 탈출들은 loop를 낮출 때 case label을
-포함한 모든 사이 label을 세어 target을 정한다([Loop 탈출 분기](#loop-탈출-분기)).
+switch는 분기에 값을 싣지 않는다. [`Terminator`](ir.md#interface와-flag)로 끝나는
+case는 탈출 block으로 분기하지 않는다. Loop의 `scf.continue`나 `scf.break`는 loop를
+낮출 때 case label을 포함한 모든 사이 label을 세어 target을 정하고
+([Loop 탈출 분기](#loop-탈출-분기)), `return`, tail call, trap, 그리고 terminal
+structured control 뒤의 `wasm.unreachable`은 탈출 block에 이르지 않는다.
 
 ### Terminal structured-control 결과
 
-`scf_to_wasm`은 결과가 정확히 하나의 `core.never`이고 사용되지 않으며 블록의
-마지막 operation인 `scf.if`, `scf.loop`, `scf.index_switch`를 zero-result Wasm
+`scf_to_wasm`은 결과가 정확히 하나의 `core.never`이고 사용되지 않으며 뒤에
+`func.unreachable`만 오는 `scf.if`, `scf.loop`, `scf.index_switch`를 zero-result Wasm
 제어 연산으로 낮춘다. 모든 진입 successor의 region은 단일 블록이고, 마지막 operation이
 검증된 `CallableExit` 또는 같은 terminal 판정을 만족하는 중첩 if/loop/switch여야
 한다. Native structured-to-CFG lowering과 같은 `RegionBranch`/`CallableExit`
@@ -183,13 +206,13 @@ case는 탈출 block으로 분기하지 않는다. 이 탈출들은 loop를 낮�
 아니다. Loop의 continue 순환이나 임의의 다중 블록 CFG는 분석하지 않는다.
 
 Terminal if는 결과 없는 `wasm.if`, terminal loop는 결과 없는 `wasm.block`과
-`wasm.loop`가 된다. Resultless switch도 블록 마지막에 있고 explicit default를
-포함한 모든 arm이 terminal이면 결과 없는 Wasm 분기 구조를 만든다. Source
+`wasm.loop`가 된다. Resultless switch도 뒤에 `func.unreachable`만 오고 explicit
+default를 포함한 모든 arm이 terminal이면 결과 없는 Wasm 분기 구조를 만든다. Source
 switch에 결과를 추가하지 않으며 일반 fallthrough switch의 계약은 유지한다.
 Wasm 검증기는 각 structured block의 `end` 뒤에 branch 내부의 도달 불가능성을
-전파하지 않는다. 따라서 terminal로 증명된 zero-result if/loop/switch 뒤에는
-명시적인 `wasm.unreachable`을 둔다. 결과가 처음부터 없는 terminal 제어 연산에도
-같은 규칙을 적용하며, 정상 successor가 있는 제어 연산에는 적용하지 않는다.
+전파하지 않는다. Shared IR은 모든 block이 terminator로 끝나야 하므로 terminal
+제어 연산 뒤에 이미 `func.unreachable`을 두며, 이것이 `wasm.unreachable`로 낮아져
+그 자리를 채운다. `scf_to_wasm`이 따로 `wasm.unreachable`을 넣지 않는다.
 
 중첩 pattern이 source operation을 바꾸기 전에 공통 `StructuredControlAnalysis`를
 조회한다. Wasm 소비자는 switch 지원 조건과 `Never` 결과의 적법성을 검사하고,
@@ -279,6 +302,15 @@ operand로 ABI를 재추론하지 않고 이 고정 시그니처를 `wasm.call_i
 따라 소비된다. 사용되지 않은 Nil 값도 stack에 남겨 두지 않는다. 반면 callable의
 Nil result slot은 기존 ABI에서 생략하므로 stack에 값을 남기지 않는다. 이 구분은 Nil을 인자나
 필드로 전달하는 것과 zero-result call을 모두 보존한다.
+
+### Trap
+
+`func_to_wasm`은 [`func.trap`](tribute-dialects.md#trap)과 `func.unreachable`을
+모두 `wasm.unreachable`로 낮춘다. Wasm의 `unreachable` 명령은 operand가 없으므로
+`func.trap`의 `code`는 Wasm module에 남지 않는다. Module은 원인을 알리는 host
+import를 부르지 않으며, host는 trap이 일어났다는 사실만 본다. 값을 내는
+`wasm.if`의 arm이 `wasm.unreachable`로 끝나면 그 arm은 결과를 남기지 않는다.
+`unreachable` 뒤의 stack은 어떤 결과 타입과도 맞는다.
 
 ### 올바른 꼬리 호출 계약
 
@@ -395,8 +427,8 @@ Pass를 거친 IR은 다음 stack 계약을 만족한다.
 - Operation이 stack에 남기는 결과는 같은 block의 뒤쪽 operation이 정확히 한 번
   소비한다. Stack에 값을 남기지 않는 결과에는 사용이 없다. 그 밖의 block argument에도
   사용이 없으며, 그 값은 block argument의 local에서 읽는다.
-- `wasm.yield`는 바로 앞에서 stack 맨 위에 놓인 값을 region의 결과나 뒤따르는
-  `wasm.br`의 값으로 넘긴다. 값을 넘기지 않는 yield는 남기지 않는다.
+- `wasm.yield`는 바로 앞에서 stack 맨 위에 operand 순서대로 놓인 값들을 region의
+  결과나 뒤따르는 `wasm.br`의 값으로 넘긴다. 값을 넘기지 않는 yield는 남기지 않는다.
 - Loop-carried 값은 loop body block argument의 local에 `wasm.local_set`으로
   쓴다. 그래서 `wasm.loop`에는 init operand가 없고, loop로 가는 분기 앞에는 yield가
   없다.
@@ -404,8 +436,9 @@ Pass를 거친 IR은 다음 stack 계약을 만족한다.
   남아도 된다. 그 밖의 block 끝에서 stack은 비어 있다.
 
 Stack에 값을 남기는지는 backend 표현 규칙이 정한다. Call과 indirect call의
-`core.nil` 결과 slot, 결과가 `core.nil`인 structured control, 그리고 then region이
-값을 넘기지 않는 `wasm.if`의 결과는 stack에 값을 남기지 않는다. `wasm.nop`은 결과
+`core.nil` 결과 slot, 결과가 `core.nil`인 structured control, 그리고 어느 region도
+값을 넘기지 않는 `wasm.if`의 결과는 stack에 값을 남기지 않는다. 한 region이 값을
+넘기면 다른 region은 trap이나 return으로 끝나도 되며, 그 `wasm.if`는 결과를 가진다. `wasm.nop`은 결과
 타입이 `wasm.func_sig`, `wasm.funcref`, `wasm.anyref`, `wasm.structref`,
 `core.nil`일 때만 그 `ref.null`을 남기고, 다른 타입이면 값을 남기지 않는다. 이런
 결과를 읽는 곳은 대입되지 않은 그 결과의 local, 즉 local의 기본값을 읽는다.
@@ -434,8 +467,11 @@ LLVM WebAssembly backend의 RegStackify처럼 어떤 값이 local을 거치지 �
   대입되고, loop body block argument의 local은 loop로 가는 분기에서만 다시 대입되며,
   그 분기 뒤로는 사용자에게 이르지 않는다. 그래서 앞당긴 local은 같은 block에서 그 앞에
   정의된 값, block argument, 또는 바깥 region에서 정의된 값의 local뿐이다.
-- `wasm.yield`는 값을 넘길 때 그 값의 사용자이다. Loop로 가는 분기 앞의 yield는 loop의
-  block argument가 하나일 때만 stack의 값을 그 local에 바로 쓴다.
+- `wasm.yield`는 값을 넘길 때 그 값들의 사용자이다. Loop로 가는 분기 앞의 yield는 loop의
+  block argument가 하나일 때만 stack의 값을 그 local에 바로 쓴다. Block argument가
+  여럿이면 넘기는 값을 모두 자기 local에서 읽어 stack에 올린 뒤, 역순으로 대응하는
+  argument의 local에 쓴다. 쓰기 전에 모든 값을 읽으므로 이 대입은 병렬 대입이며,
+  `scf.continue %b, %a`처럼 argument끼리 값을 바꾸는 backedge도 옛 값을 잃지 않는다.
 - Stack에 값을 남기지만 사용이 없는 결과는 local에 쓰지 않고 `wasm.drop`으로 버린다.
   Yield 없이 마지막 operation의 결과를 region 결과로 넘기는 경우는 예외로, 그 결과는
   local에 둔다.

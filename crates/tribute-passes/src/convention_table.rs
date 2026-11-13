@@ -9,7 +9,7 @@ use tribute_ir::calling_convention::{CallingConvention, ConventionBearing, DynCo
 use tribute_ir::dialect::{ability, closure};
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{core, func};
-use trunk_ir::ops::{DialectOp, DialectType};
+use trunk_ir::ops::{DialectOp, DialectType, VariadicResults};
 use trunk_ir::refs::{BlockRef, TypeRef};
 use trunk_ir::types::{AttributeMap, Location};
 use trunk_ir::{Symbol, SymbolPath};

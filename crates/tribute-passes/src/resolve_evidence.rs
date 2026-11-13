@@ -20,7 +20,7 @@ use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::core;
 use trunk_ir::dialect::func;
-use trunk_ir::ops::DialectOp;
+use trunk_ir::ops::{DialectOp, VariadicResults};
 use trunk_ir::pass::{Pass, PassRunResult};
 use trunk_ir::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueDef, ValueRef};
 use trunk_ir::rewrite::{Module, erase_op};
@@ -723,6 +723,7 @@ mod tests {
         default {
           func.unreachable
         }
+        func.unreachable
     }"#,
         );
         let mut ctx = IrContext::new();

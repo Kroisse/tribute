@@ -858,7 +858,7 @@ fn validator_rejects_structure_arity_type_and_terminator_errors() {
         messages.contains("expected at least 2 region(s), found 1"),
         "{messages}"
     );
-    assert!(messages.contains("must terminate with tribute_control.return"));
+    assert!(messages.contains("body must end in tribute_control.return or another callable exit"));
     assert!(messages.contains("expected at least 1 operand(s), found 0"));
 }
 
@@ -1636,6 +1636,85 @@ fn whole_ir_rejects_outer_token_resumed_in_nested_handler() {
         messages(&result).contains("crosses into a different handler"),
         "{result}"
     );
+}
+
+#[test]
+fn a_trap_ends_a_callable_body_or_an_arm_in_any_position() {
+    let validate_body = |body: &str| {
+        let (ctx, module) = parse_fixture(&format!(
+            r#"core.module @test {{
+  tribute_control.func @g(%n: core.i32, %flag: core.i1) -> core.i32 {{
+{body}
+  }}
+}}"#
+        ));
+        messages(&validate_local(&ctx, module))
+    };
+
+    assert_eq!(validate_body("    tribute_control.trap out_of_range"), "");
+    // The arm's operation need not be in tail position.
+    assert_eq!(
+        validate_body(
+            r#"    %value = scf.if %flag -> (core.i32) {
+      tribute_control.trap missing_ability
+    } else {
+      scf.yield %n
+    }
+    %next = arith.addi %value, %n : core.i32
+    tribute_control.return %next"#,
+        ),
+        ""
+    );
+    assert_eq!(
+        validate_body(
+            r#"    %value = scf.index_switch %n : (core.i32) -> core.i32
+    case 0 {
+      tribute_control.trap out_of_range
+    }
+    default {
+      scf.yield %n
+    }
+    tribute_control.return %value"#,
+        ),
+        ""
+    );
+
+    let not_last = validate_body(
+        r#"    tribute_control.trap out_of_range
+    tribute_control.return %n"#,
+    );
+    assert!(
+        not_last.contains("must be the final operation in its block"),
+        "{not_last}"
+    );
+
+    let in_handle = validate_body(
+        r#"    %handled = tribute_control.handle : core.i32 {
+      tribute_control.trap out_of_range
+    } do(%value: core.i32) {
+        tribute_control.yield %value
+    }
+    tribute_control.return %handled"#,
+    );
+    assert!(
+        in_handle
+            .contains("must end a callable body or an arm of an operation that selects one region"),
+        "{in_handle}"
+    );
+}
+
+#[test]
+fn a_trap_cause_is_one_of_its_keywords() {
+    let mut ctx = IrContext::new();
+    let error = trunk_ir::parser::parse_module(
+        &mut ctx,
+        r#"core.module @test {
+  tribute_control.func @g() -> core.i32 {
+    tribute_control.trap elsewhere
+  }
+}"#,
+    );
+    assert!(error.is_err());
 }
 
 #[test]

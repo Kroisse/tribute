@@ -4,7 +4,7 @@ use crate::attr_kind::Bytes;
 use crate::attr_kind::SymbolRef;
 use crate::dialect::arith;
 use crate::dialect::core::{I8, I32, IntegerLike};
-use crate::op_flag::IsolatedFromAbove;
+use crate::op_flag::{IsolatedFromAbove, NoTerminator, Terminator};
 use crate::op_interface::{CallLike, IndirectCallLike};
 use crate::ops::{DialectOp, DialectType};
 use crate::types::{Attribute, AttributeMap, TypeDataBuilder};
@@ -96,6 +96,7 @@ mod clif {
     ///   clif.func_reloc @f at 0
     /// }
     /// ```
+    #[flags(NoTerminator)]
     #[asm_format(symbol(sym_name) "(" bytes ")" "align" align attr_dict region(relocs))]
     fn data(sym_name: Attr<String>, bytes: Attr<Bytes>, align: Attr<u32>) {
         #[region(relocs?)]
@@ -122,6 +123,7 @@ mod clif {
     ) -> Variadic<_> {
     }
 
+    #[flags(Terminator)]
     #[asm_format(values attr_dict_bare)]
     fn r#return(values: Variadic<_>) {}
 
@@ -190,6 +192,7 @@ mod clif {
     fn ushr(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
 
     // Control flow
+    #[flags(Terminator)]
     #[asm_format(cond "[" successor(then_dest) "," successor(else_dest) "]" attr_dict_bare)]
     fn brif(cond: Value<_>) {
         #[successor(then_dest)]
@@ -198,6 +201,7 @@ mod clif {
         {}
     }
 
+    #[flags(Terminator)]
     #[asm_format(args "[" successor(dest) "]" attr_dict_bare)]
     fn jump(args: Variadic<_>) {
         #[successor(dest)]
@@ -213,6 +217,7 @@ mod clif {
     /// ```text
     /// clif.br_table %index, ^default [^first, ^second]
     /// ```
+    #[flags(Terminator)]
     #[asm_format(index "," successor(default) "[" successors(table) "]" attr_dict)]
     fn br_table(index: Value<I32>) {
         #[successor(default)]
@@ -234,6 +239,7 @@ mod clif {
     /// clif.switch %index, ^default [0: ^first, 5: ^second]
     /// ```
     #[verify]
+    #[flags(Terminator)]
     #[asm_format(index "," successor(default) "[" custom(SwitchCases(cases, targets)) "]" attr_dict)]
     fn switch(cases: Attr<[u64]>, index: Value<impl IntegerLike>) {
         #[successor(default)]
@@ -242,6 +248,7 @@ mod clif {
         {}
     }
 
+    #[flags(Terminator)]
     #[asm_format(attr_dict_bare)]
     fn trap(code: Attr<String>) {}
 
@@ -252,10 +259,12 @@ mod clif {
     #[asm_format(cond attr_dict_bare)]
     fn trapnz(code: Attr<String>, cond: Value<impl IntegerLike>) {}
 
+    #[flags(Terminator)]
     #[implements(CallLike)]
     #[asm_format(callee "(" args ")" attr_dict ":" functional_type(args))]
     fn return_call(callee: Attr<SymbolRef>, args: Variadic<_>) {}
 
+    #[flags(Terminator)]
     #[asm_format(callee "(" args ")" attr_dict ":" signature(sig))]
     #[implements(IndirectCallLike)]
     fn return_call_indirect<S: FuncSig>(

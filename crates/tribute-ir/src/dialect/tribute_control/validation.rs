@@ -322,7 +322,7 @@ pub(super) fn validate_callable_body(
     body: RegionRef,
     errors: &mut Vec<ValidationError>,
 ) {
-    let (result_ty, params) =
+    let (_, params) =
         func_sig_parts(ctx, callable_ty).expect("schema-verified tribute_control.func_sig");
     let Some(block) = single_block(ctx, owner, body, "body", errors) else {
         return;
@@ -335,24 +335,19 @@ pub(super) fn validate_callable_body(
         "entry block argument",
         errors,
     );
-    if ctx
+    // Each exit checks its own value against this callable's result: a
+    // `return` its operand, a tail call its callee's result. A trap has none.
+    let ends_in_exit = ctx
         .block(block)
         .ops
         .last()
-        .is_some_and(|&last| is_tail_call(ctx, last))
-    {
-        // The tail call checks its own result against this callable.
-        return;
-    }
-    if let Some(ret) = terminator(ctx, owner, block, Return::DEF, errors)
-        && ctx.op_operands(ret).len() == 1
-        && ctx.value_ty(ctx.op_operands(ret)[0]) != result_ty
-    {
+        .is_some_and(|&last| DynCallableExit::prove(ctx, last).is_ok());
+    if !ends_in_exit {
         push_op_error(
             ctx,
             owner,
             errors,
-            "return operand type does not match callable result type",
+            "body must end in tribute_control.return or another callable exit",
         );
     }
 }

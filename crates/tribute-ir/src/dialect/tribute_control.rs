@@ -9,18 +9,19 @@ use rustc_hash::FxHashSet as HashSet;
 use std::fmt;
 use std::ops::ControlFlow;
 use trunk_ir::attr_kind::SymbolRef;
-use trunk_ir::op_flag::{IsolatedFromAbove, OpFlag, Pure};
+use trunk_ir::op_flag::{IsolatedFromAbove, OpFlag, Pure, Terminator};
 
 use crate::calling_convention::{
     CALLING_CONVENTION_ATTR, CallingConvention, DynPhysicalCallableType,
 };
 use crate::dialect::{adt, tribute_cps};
+use crate::trap::TrapCause;
 use itertools::Itertools;
 use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::dialect::core;
 use trunk_ir::op_def::OpDef;
 use trunk_ir::op_interface::{
-    CallLike, CallableExit, DynRegionBranch, RegionBranchPoint, RegionSuccessor,
+    CallLike, CallableExit, DynCallableExit, DynRegionBranch, RegionBranchPoint, RegionSuccessor,
 };
 use trunk_ir::op_schema::OpSchema;
 use trunk_ir::ops::{DialectOp, DialectType};
@@ -562,6 +563,7 @@ mod tribute_control {
     /// - **Location:** the source span including the `become` keyword and
     ///   the call.
     #[verify]
+    #[flags(Terminator)]
     #[implements(CallLike, CallableExit, LocalValidation)]
     #[asm_format(callee "(" args ")" attr_dict ":" functional_type(args))]
     fn tail_call(
@@ -597,7 +599,7 @@ mod tribute_control {
     ///   the indirect call.
     #[verify]
     #[asm_format(callee "(" args ")" attr_dict ":" signature(callee))]
-    #[flags(SourceTailCallIndirect)]
+    #[flags(SourceTailCallIndirect, Terminator)]
     #[implements(CallableExit, LocalValidation)]
     fn tail_call_indirect<S: FuncSig>(
         evidence_plan: Option<Attr<[EvidenceStep]>>,
@@ -613,15 +615,18 @@ mod tribute_control {
     /// ```
     ///
     /// - **Shape:** takes one source-logical result and has no results,
-    ///   attributes, or regions. It is the terminator of a
-    ///   `tribute_control.func` or `lambda` body and is invalid anywhere else.
+    ///   attributes, or regions. A `Terminator`, registered as a
+    ///   `CallableExit`. It ends a `tribute_control.func` or `lambda` body and
+    ///   is invalid anywhere else, including an arm of a structured
+    ///   operation, where `CallableExit` alone would allow it.
     /// - **Meaning:** returns the enclosing callable's logical result.
     /// - **Local verification:** matches the operand type against the
     ///   enclosing callable's result.
     /// - **Ownership and value flow:** consumes an ordinary SSA value.
     /// - **Location:** the span of the source return or of the implicit
     ///   body-result expression.
-    #[implements(LocalValidation)]
+    #[flags(Terminator)]
+    #[implements(CallableExit, LocalValidation)]
     #[asm_format(value attr_dict_bare)]
     fn r#return(value: Value<_>) {}
 
@@ -867,9 +872,44 @@ mod tribute_control {
     ///   yielded.
     /// - **Location:** the source expression that makes the region result. A
     ///   synthesized identity completion uses the owning `handle` location.
+    #[flags(Terminator)]
     #[implements(LocalValidation)]
     #[asm_format(value attr_dict_bare)]
     fn r#yield(value: Value<_>) {}
+
+    /// Ends the execution with a trap, from a direct call of a trap
+    /// intrinsic (`design/modules.md`, "Trap intrinsic").
+    ///
+    /// ```text
+    /// tribute_control.trap out_of_range
+    /// ```
+    ///
+    /// - **Shape:** the attribute `cause`, a `TrapCause` keyword, and no
+    ///   operand, result, or region. A terminator, registered as a
+    ///   `CallableExit`.
+    /// - **Placement:** it is the last operation of its block. It may end
+    ///   the body of a `tribute_control.func` or `lambda`, and in place of
+    ///   `scf.yield` it may end an arm of an operation that selects one
+    ///   region (`DynRegionBranch::selects_one_region`), in any position.
+    ///   Only the arms that end in `scf.yield` produce that operation's
+    ///   results. It does not end a body, completion, or arm of
+    ///   `tribute_control.handle`, which end in `tribute_control.yield`;
+    ///   inside one it ends an arm of a nested operation.
+    /// - **Meaning:** the execution ends here, whatever the convention of
+    ///   the enclosing callable. No handler observes it, and nothing after
+    ///   it in the callable runs. A program may reach it; it is not a
+    ///   statement that the point is unreachable.
+    /// - **Verification:** the schema checks the cause keyword, and the
+    ///   local verifier checks the placement rule.
+    /// - **Ownership and value flow:** it uses and defines no value. The
+    ///   values live at the trap are not released.
+    /// - **Lowering:** shared legalization replaces it with `func.trap`
+    ///   whose `code` is the cause keyword.
+    /// - **Location:** the source span of the intrinsic call.
+    #[flags(Terminator)]
+    #[implements(CallableExit, LocalValidation)]
+    #[asm_format(cause attr_dict)]
+    fn trap(cause: Attr<TrapCause>) {}
 }
 
 /// Read the exact input and answer types carried by a resume token.

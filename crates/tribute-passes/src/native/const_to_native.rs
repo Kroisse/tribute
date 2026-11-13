@@ -25,7 +25,7 @@ use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::clif;
 use trunk_ir::dialect::core;
-use trunk_ir::ops::DialectOp;
+use trunk_ir::ops::{DialectOp, VariadicResults};
 use trunk_ir::refs::{OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{
     ConversionError, ConversionTarget, Module, OpRewritePattern, PatternApplicator,
@@ -271,7 +271,7 @@ fn emit_byte_array(
         .callee(SymbolPath::new([BYTE_ARRAY_FROM_FN]))
         .results([ptr_ty])
         .build(ctx, loc);
-    let payload = call.results(ctx)[0];
+    let payload = call.result(ctx);
     (
         vec![data_ptr.op_ref(), len.op_ref(), call.op_ref()],
         payload,

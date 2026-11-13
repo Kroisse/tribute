@@ -399,6 +399,10 @@ source마다 하나뿐이다. Source가 선택된 liveness view에서 branch 뒤
 destination만 unit을 받는다. Unit을 받지 못한 destination마다 branch 직전에 새
 unit을 획득한다.
 
+`func.return`도 결과 위치마다 unit 하나를 caller에게 넘긴다. 한 source를 여러 결과
+위치로 돌려주면 첫 위치만 source의 unit을 받고, 나머지 위치마다 return 직전에 새
+unit을 획득한다. Borrowed source는 모든 위치에서 새 unit을 획득한다.
+
 Aggregate field로의 저장(`adt.struct_new`, `adt.variant_new`, `adt.struct_set`의
 값, `adt.array_of`와 `adt.array_splice`의 `elements`, `adt.array_set`의 값)과
 ordinary call의 consumed 매개변수는 독립된 unit을 받는 자리다. 기준 동작은 그
