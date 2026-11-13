@@ -25,10 +25,12 @@ mod wasm {
     // Control flow
     /// ```text
     /// %r = wasm.block -> (core.i32) {
-    ///   wasm.br {target = 0}
+    ///   wasm.br %v {target = 0}
     /// }
     /// ```
-    #[flags(NoTerminator)]
+    ///
+    /// A branch to the block's label carries its results, as does the
+    /// `wasm.yield` that ends the body when control reaches its end.
     #[asm_format(("->" "(" types(results)^ ")")? attr_dict region(body))]
     fn block() -> Variadic<_> {
         #[region(body)]
@@ -38,19 +40,20 @@ mod wasm {
     /// ```text
     /// wasm.loop(%init) {
     ///   ^body(%acc: core.i32):
-    ///     wasm.br {target = 0}
+    ///     wasm.br %next {target = 0}
     /// }
     /// ```
     ///
     /// Each `init` value initializes the body block argument at its
-    /// position, and a `wasm.yield` before a `wasm.br` to the loop's label
-    /// sets every body block argument to the yielded value. Emission's
-    /// `ExplicitLocals` pass writes both as `wasm.local_set`s to the
-    /// arguments' locals, removes `init`, and reads the arguments from
-    /// their locals, so the body block arguments have no uses and the Wasm
-    /// `loop` takes no parameters (`design/wasm-backend.md`, "명시적 지역
-    /// 변수와 stack 계약").
-    #[flags(NoTerminator)]
+    /// position. A `wasm.br` to the loop's label carries either one value
+    /// for each body block argument, in order, or none, which leaves the
+    /// arguments as they are. A `wasm.yield` that ends the body leaves the
+    /// loop with its results. Emission's `ExplicitLocals` pass writes `init`
+    /// and the branch values as `wasm.local_set`s to the arguments' locals,
+    /// removes them as operands, and reads the arguments from their locals,
+    /// so the body block arguments have no uses and the Wasm `loop` takes
+    /// no parameters (`design/wasm-backend.md`, "분기와 region 끝의 값" and
+    /// "명시적 지역 변수와 stack 계약").
     #[asm_format("(" init ")" ("->" "(" types(results)^ ")")? attr_dict region(body))]
     #[implements(StackOperandOrder)]
     fn r#loop(init: Variadic<_>) -> Variadic<_> {
@@ -65,7 +68,9 @@ mod wasm {
     ///   wasm.yield %b
     /// }
     /// ```
-    #[flags(NoTerminator)]
+    ///
+    /// A branch to the `if`'s label carries its results, as does the
+    /// `wasm.yield` that ends a region when control reaches its end.
     #[asm_format(cond ("->" "(" types(results)^ ")")? attr_dict region(then_region) "else" region(else_region))]
     fn r#if(cond: Value<_>) -> Variadic<_> {
         #[region(then_region)]
@@ -74,10 +79,38 @@ mod wasm {
         {}
     }
 
+    /// Branch to the label `target` enclosing labels out, carrying `values`.
+    ///
+    /// ```text
+    /// wasm.br %v {target = 1}
+    /// ```
+    ///
+    /// - **Shape:** `target` is the relative label depth, counting the
+    ///   enclosing `wasm.block`, `wasm.loop`, and `wasm.if` labels from 0
+    ///   for the innermost.
+    /// - **Meaning:** Wasm's `br`; nothing after it in its block runs. To a
+    ///   `wasm.block` or `wasm.if` label, `values` are that operation's
+    ///   results. To a `wasm.loop` label, they are the loop body's next
+    ///   block arguments, one for each in order, or none, which leaves the
+    ///   arguments as they are.
+    /// - **Value flow:** a value reaches the label on the stack only when
+    ///   the label's operation leaves its result there. Emission's
+    ///   `ExplicitLocals` pass removes every other value as an operand, and
+    ///   writes the values of a branch to a loop to the loop's argument
+    ///   locals before it (`design/wasm-backend.md`, "분기와 region 끝의 값").
     #[flags(Terminator)]
-    #[asm_format(attr_dict_bare)]
-    fn br(target: Attr<u32>) {}
+    #[asm_format(values attr_dict_bare)]
+    fn br(target: Attr<u32>, values: Variadic<_>) {}
 
+    /// Branch to the label `target` enclosing labels out when `cond` is
+    /// nonzero, as Wasm's `br_if`, and continue otherwise.
+    ///
+    /// ```text
+    /// wasm.br_if %cond {target = 1}
+    /// ```
+    ///
+    /// The branch carries no values, so its label takes none from the
+    /// stack, and a loop's body block arguments stay as they are.
     #[asm_format(cond attr_dict_bare)]
     fn br_if(target: Attr<u32>, cond: Value<_>) {}
 
@@ -88,7 +121,7 @@ mod wasm {
     /// number of targets. Depths count enclosing `wasm.block`, `wasm.loop`,
     /// and `wasm.if` labels as `wasm.br` does. Like `wasm.br`, it ends its
     /// block: nothing after it runs. The branch carries no values, so every
-    /// label it names takes no branch operands.
+    /// label it names takes none from the stack.
     ///
     /// ```text
     /// wasm.br_table %index, default 3 [0, 2, 1]
@@ -100,23 +133,28 @@ mod wasm {
     #[flags(Terminator)]
     #[asm_format(values attr_dict_bare)]
     fn r#return(values: Variadic<_>) {}
-    /// Pass `values` to the enclosing structured operation.
+    /// End a region of a `wasm.block`, `wasm.loop`, or `wasm.if`, passing
+    /// `values` as the parent's results.
     ///
     /// ```text
     /// wasm.yield %a, %b
+    /// wasm.yield
     /// ```
     ///
-    /// - **Meaning:** as the last operation of a region whose parent has
-    ///   results, `values` are that region's results in order. Followed by
-    ///   a `wasm.br`, `values` are the branch's values, or, for a branch to
-    ///   a `wasm.loop`, the loop's next block arguments.
-    /// - **Value flow:** after `ExplicitLocals`, `values` are the values
-    ///   the operations before it left on top of the stack in order, the
-    ///   last of them possibly function parameters, which emission reads
-    ///   from their locals right before the yield. Emission writes no
-    ///   instruction for the yield itself. A yield that passes no value, or
-    ///   that precedes a branch to a loop, does not remain
-    ///   (`design/wasm-backend.md`, "명시적 지역 변수와 stack 계약").
+    /// - **Meaning:** control reaches the end of the region, and so the end
+    ///   of its parent, whose results are `values` in order; a loop's body
+    ///   leaves the loop. A region whose parent takes no results ends in a
+    ///   yield without values.
+    /// - **Value flow:** the values reach the parent's end on the stack only
+    ///   when the parent leaves its results there; emission's
+    ///   `ExplicitLocals` pass removes them as operands otherwise. After
+    ///   that pass, `values` are the values the operations before it left
+    ///   on top of the stack in order, the last of them possibly function
+    ///   parameters, which emission reads from their locals right before
+    ///   the yield. Emission writes no instruction for the yield itself
+    ///   (`design/wasm-backend.md`, "분기와 region 끝의 값" and "명시적 지역
+    ///   변수와 stack 계약").
+    #[flags(Terminator)]
     #[asm_format(values attr_dict_bare)]
     fn r#yield(values: Variadic<_>) {}
     #[asm_format(value attr_dict_bare)]
@@ -207,8 +245,10 @@ mod wasm {
     ///   `ExplicitLocals` pass sets it when it assigns the locals, and the
     ///   emitter declares each listed type as its Wasm value type
     ///   (`design/wasm-backend.md`, "명시적 지역 변수와 stack 계약").
+    /// - **Exit:** the body ends in a callable exit such as `wasm.return`,
+    ///   a tail call, or `wasm.unreachable`, never in a `wasm.yield`.
     #[asm_format(symbol(sym_name) signature(r#type, body) attr_dict region(body))]
-    #[flags(IsolatedFromAbove, NoTerminator)]
+    #[flags(IsolatedFromAbove)]
     fn func<S: FuncSig>(
         sym_name: Attr<String>,
         r#type: Attr<TypeOf<S>>,

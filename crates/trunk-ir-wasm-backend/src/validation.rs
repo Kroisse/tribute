@@ -19,7 +19,9 @@ use trunk_ir::refs::{OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::symbol_table::{SymbolTable, qualified_name};
 use trunk_ir::walk::{WalkAction, walk_op};
 
-use crate::stack_effect::{ends_block, parameter_local, pushed_results, trailing_parameters};
+use crate::stack_effect::{
+    ValueTransfer, ends_block, parameter_local, pushed_results, trailing_parameters, value_transfer,
+};
 use crate::{CompilationError, CompilationResult};
 
 /// Validation error details.
@@ -131,6 +133,19 @@ fn validate_stack_region(
                     "@{func}: {} has operands it does not take from the stack",
                     name.display(ctx)
                 ));
+            }
+            if let Some(transfer) = value_transfer(ctx, op) {
+                let takes = match transfer {
+                    ValueTransfer::Stack(count) => count,
+                    ValueTransfer::LoopArguments(_) | ValueTransfer::None => 0,
+                };
+                let carried = ctx.op_operands(op).len();
+                if carried != takes {
+                    errors.push(format!(
+                        "@{func}: {} carries {carried} value(s) to a label that takes {takes} from the stack",
+                        name.display(ctx)
+                    ));
+                }
             }
             // The trailing parameters are read right before the operation.
             let on_stack = &operands[..operands.len() - trailing_parameters(ctx, op).len()];

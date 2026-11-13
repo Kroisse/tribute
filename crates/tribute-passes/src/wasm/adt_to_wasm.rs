@@ -786,7 +786,7 @@ fn yielding_region(
     loc: trunk_ir::types::Location,
     ops: impl IntoIterator<Item = OpRef>,
 ) -> trunk_ir::RegionRef {
-    let region = super::intrinsic_to_wasm::empty_region(ctx, loc);
+    let region = super::intrinsic_to_wasm::unterminated_region(ctx, loc);
     let block = ctx.region(region).blocks[0];
     let mut last = None;
     for op in ops {

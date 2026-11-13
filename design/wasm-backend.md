@@ -122,6 +122,32 @@ operand/result 타입이나 상위 함수의 return으로 대체 시그니처를
 담지 않고 emitter가 signature를 등록한 결과에서 얻는다.
 Wasm 코드 생성기는 함수 본문이나 테이블 인덱스에서 CPS 여부를 추론하지 않는다.
 
+### 분기와 region 끝의 값
+
+Wasm dialect의 구조적 제어(`wasm.block`, `wasm.loop`, `wasm.if`)에서는 MLIR의
+`cf.br`처럼 값을 넘기는 operation이 그 값을 operand로 싣는다. 다른 operation의
+위치로 값을 표시하지 않는다.
+
+- 제어가 region 끝에 이르는 region은 `wasm.yield`로 끝난다. Yield는 그 region을
+  끝내는 `Terminator`이고, 부모 operation의 결과를 operand로 싣는다. 부모가 결과를
+  받지 않으면 operand가 없는 yield이다. `wasm.loop` body의 yield는 loop를 빠져나가
+  loop의 결과를 넘긴다.
+- `wasm.br`은 대상 label이 받는 값을 operand로 싣는다. `wasm.block`이나 `wasm.if`
+  label로 가는 분기는 그 operation의 결과를, `wasm.loop` label로 가는 분기는 loop
+  body block argument의 다음 값을 싣는다. Loop로 가는 분기는 block argument마다
+  하나씩 순서대로 값을 싣거나, 아무 값도 싣지 않고 argument를 그대로 둔다.
+- `wasm.br_if`와 `wasm.br_table`은 값을 싣지 않는다. 이들이 가리키는 label은 분기
+  값을 stack에서 받지 않아야 하며, loop label이면 block argument는 그대로이다.
+- Label이 [stack에 값을 남기지 않는](#명시적-지역-변수와-stack-계약) 구조적 제어이면,
+  즉 결과가 없거나 결과 하나가 `core.nil`이면 yield와 분기가 실은 값은 stack에
+  놓이지 않는다. 그 밖의 label에는 실은 값이 결과마다 하나씩 순서대로 stack에
+  놓인다.
+- `wasm.func` 본문은 `wasm.return`, 꼬리 호출, `wasm.unreachable` 같은 callable
+  exit로 끝나며 `wasm.yield`로 끝나지 않는다.
+
+그래서 Wasm 구조적 제어의 모든 block은 [`Terminator`](ir.md#interface와-flag)로
+끝나고, 이 operation들은 `NoTerminator`가 아니다.
+
 ### Loop 탈출 분기
 
 `scf_to_wasm`은 `scf.loop`를 탈출 label이 되는 `wasm.block` 안의 `wasm.loop`로
@@ -132,7 +158,10 @@ Wasm 구조이고, 안쪽 loop의 탈출은 그 loop가 맡는다.
 `scf.continue`는 가장 가까운 `wasm.loop`까지의 label 수를, `scf.break`는
 그보다 하나 바깥인 탈출 `wasm.block`까지의 label 수를 `wasm.br`의 target으로
 쓴다. 따라서 탈출 분기는 loop 본문 바로 아래뿐 아니라 중첩된 if나 switch arm
-안에 있어도 된다.
+안에 있어도 된다. `scf.continue`의 operand는 그 `wasm.br`이 loop body block
+argument의 다음 값으로 싣고, `scf.break`의 operand는 탈출 block의 결과로 싣는다.
+Loop를 감싼 탈출 block은 `wasm.loop`의 결과를 `wasm.yield`로 넘긴다. Loop body는
+분기로 끝나므로 이 yield에는 제어가 이르지 않는다.
 
 ### Switch 지원 조건
 
@@ -186,11 +215,13 @@ case의 label을 가리키고, 어떤 case도 갖지 않는 값은 default label
 discriminant는 부호 없는 index로 표 크기 이상이 되어 `br_table`의 default로
 간다. 따라서 별도의 범위 검사를 두지 않는다.
 
-각 case는 자기 label block의 `end` 바로 뒤에 놓이고, 결과를 `wasm.yield`로 표시한
-뒤 `wasm.br`로 탈출 block에 분기한다. Default는 탈출 block의 마지막에 놓여 그
-block의 결과를 그대로 넘긴다. 결과가 없거나 Wasm 값이 없는 `core.nil` 결과의
-switch는 분기에 값을 싣지 않는다. [`Terminator`](ir.md#interface와-flag)로 끝나는
-case는 탈출 block으로 분기하지 않는다. Loop의 `scf.continue`나 `scf.break`는 loop를
+각 case는 자기 label block의 `end` 바로 뒤에 놓이고, case region을 끝내던 yield
+대신 그 결과를 operand로 싣는 `wasm.br`로 탈출 block에 분기한다. Default는 탈출
+block의 마지막에 놓여 그 block의 결과를 `wasm.yield`로 넘긴다. 결과가 없거나 Wasm
+값이 없는 `core.nil` 결과의 switch에서는 분기에 실린 값이 stack에 놓이지 않는다
+([분기와 region 끝의 값](#분기와-region-끝의-값)). Yield가 아닌
+[`Terminator`](ir.md#interface와-flag)로 끝나는 case는 탈출 block으로 분기하지
+않는다. Loop의 `scf.continue`나 `scf.break`는 loop를
 낮출 때 case label을 포함한 모든 사이 label을 세어 target을 정하고
 ([Loop 탈출 분기](#loop-탈출-분기)), `return`, tail call, trap, 그리고 terminal
 structured control 뒤의 `wasm.unreachable`은 탈출 block에 이르지 않는다.
@@ -433,18 +464,21 @@ Pass를 거친 IR은 다음 stack 계약을 만족한다.
 - Operation이 stack에 남기는 결과는 같은 block의 뒤쪽 operation이 정확히 한 번
   소비한다. Stack에 값을 남기지 않는 결과에는 사용이 없다. 그 밖의 block argument에도
   사용이 없으며, 그 값은 block argument의 local에서 읽는다.
-- `wasm.yield`는 바로 앞에서 stack 맨 위에 operand 순서대로 놓인 값들을 region의
-  결과나 뒤따르는 `wasm.br`의 값으로 넘긴다. 값을 넘기지 않는 yield는 남기지 않는다.
+- `wasm.yield`와 `wasm.br`은 stack에 놓이는 값만 operand로 남기며, 그 값들을 다른
+  operation처럼 stack 맨 위에서 operand 순서대로 소비해 region의 결과나 label의
+  값으로 넘긴다. Stack에 놓이지 않는 값은 operand에서 뺀다.
 - Loop-carried 값은 loop body block argument의 local에 `wasm.local_set`으로
-  쓴다. 그래서 `wasm.loop`에는 init operand가 없고, loop로 가는 분기 앞에는 yield가
-  없다.
+  쓴다. 그래서 `wasm.loop`에는 init operand가 없고, loop로 가는 분기에도 operand가
+  없다. 분기가 실었던 값은 모두 stack에 놓인 뒤 마지막 argument부터 차례로 local에
+  쓰이므로, 한 argument의 새 값이 다른 argument의 이전 값을 읽어도 된다.
 - 무조건 분기, return, tail call, `wasm.unreachable` 뒤에서는 block 끝에 값이
   남아도 된다. 그 밖의 block 끝에서 stack은 비어 있다.
 
 Stack에 값을 남기는지는 backend 표현 규칙이 정한다. Call과 indirect call의
-`core.nil` 결과 slot, 결과가 `core.nil`인 structured control, 그리고 어느 region도
-값을 넘기지 않는 `wasm.if`의 결과는 stack에 값을 남기지 않는다. 한 region이 값을
-넘기면 다른 region은 trap이나 return으로 끝나도 되며, 그 `wasm.if`는 결과를 가진다. `wasm.nop`은 결과
+`core.nil` 결과 slot, 결과가 `core.nil`인 structured control, 그리고 어떤
+`wasm.yield`나 `wasm.br`도 label로 값을 넘기지 않는 `wasm.if`의 결과는 stack에
+값을 남기지 않는다. 한 arm이 yield나 분기로 값을 넘기면 다른 arm은 trap이나
+return으로 끝나도 되며, 그 `wasm.if`는 결과를 가진다. `wasm.nop`은 결과
 타입이 `wasm.func_sig`, `wasm.funcref`, `wasm.anyref`, `wasm.structref`,
 `core.nil`일 때만 그 `ref.null`을 남기고, 다른 타입이면 값을 남기지 않는다. 이런
 결과를 읽는 곳은 대입되지 않은 그 결과의 local, 즉 local의 기본값을 읽는다.
@@ -473,14 +507,12 @@ LLVM WebAssembly backend의 RegStackify처럼 어떤 값이 local을 거치지 �
   대입되고, loop body block argument의 local은 loop로 가는 분기에서만 다시 대입되며,
   그 분기 뒤로는 사용자에게 이르지 않는다. 그래서 앞당긴 local은 같은 block에서 그 앞에
   정의된 값, block argument, 또는 바깥 region에서 정의된 값의 local뿐이다.
-- `wasm.yield`는 값을 넘길 때 그 값들의 사용자이다. Loop로 가는 분기 앞의 yield는 loop의
-  block argument가 하나일 때만 stack의 값을 그 local에 바로 쓴다. Block argument가
-  여럿이면 넘기는 값을 모두 자기 local에서 읽어 stack에 올린 뒤, 역순으로 대응하는
-  argument의 local에 쓴다. 쓰기 전에 모든 값을 읽으므로 이 대입은 병렬 대입이며,
-  `scf.continue %b, %a`처럼 argument끼리 값을 바꾸는 backedge도 옛 값을 잃지 않는다.
+- `wasm.yield`와 `wasm.br`은 stack에 놓이는 값을 넘길 때 그 값들의 사용자이다.
+  Loop로 가는 분기는 실은 값 모두의 사용자이며, 그 값들을 stack에 올린 뒤 역순으로
+  대응하는 block argument의 local에 쓴다. 쓰기 전에 모든 값을 읽으므로 이 대입은
+  병렬 대입이며, `scf.continue %b, %a`처럼 argument끼리 값을 바꾸는 backedge도 옛
+  값을 잃지 않는다.
 - Stack에 값을 남기지만 사용이 없는 결과는 local에 쓰지 않고 `wasm.drop`으로 버린다.
-  Yield 없이 마지막 operation의 결과를 region 결과로 넘기는 경우는 예외로, 그 결과는
-  local에 둔다.
 - `wasm.loop`의 init 값은 stack에 남기지 않고 local에서 읽는다.
 
 ---

@@ -10,8 +10,8 @@
 //! moved the read; each result it leaves on the stack is stored with
 //! `wasm.local_set`, stays there, or is dropped with `wasm.drop`.
 //! Loop-carried values are written to the loop body's argument locals, and a
-//! `wasm.yield` that passes a value takes it from the top of the stack. The
-//! result satisfies the stack contract of `design/wasm-backend.md`, "명시적
+//! `wasm.br` or `wasm.yield` keeps as operands only the values its label
+//! takes from the top of the stack. The result satisfies the stack contract of `design/wasm-backend.md`, "명시적
 //! 지역 변수와 stack 계약".
 
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
@@ -26,8 +26,7 @@ use trunk_ir::{
 };
 
 use crate::stack_effect::{
-    YieldTransfer, parameter_local, pushed_results, stack_operand_slots, structured_result_types,
-    yield_transfer,
+    ValueTransfer, parameter_local, pushed_results, stack_operand_slots, value_transfer,
 };
 use crate::stackify::Stackify;
 use crate::{CompilationError, CompilationResult};
@@ -52,40 +51,6 @@ impl Pass for ExplicitLocals {
         let stackify = analyses.require::<Stackify>(ctx, func.op_ref());
         explicit_locals(ctx, func, &stackify)?;
         Ok(())
-    }
-}
-
-/// The enclosing structured operations of a region, innermost last: the
-/// locals of a loop's body block arguments, or `None`.
-#[derive(Default)]
-struct Labels {
-    loop_locals: Vec<Option<Vec<u32>>>,
-    loop_args: Vec<Option<usize>>,
-}
-
-impl Labels {
-    fn push(&mut self, loop_locals: Option<Vec<u32>>) {
-        self.loop_args.push(loop_locals.as_ref().map(Vec::len));
-        self.loop_locals.push(loop_locals);
-    }
-
-    fn pop(&mut self) {
-        self.loop_args.pop();
-        self.loop_locals.pop();
-    }
-
-    /// The argument locals of the loop the `wasm.br` after `position`
-    /// continues.
-    fn continued_loop(&self, ctx: &IrContext, ops: &[OpRef], position: usize) -> &[u32] {
-        ops.get(position + 1)
-            .and_then(|&next| wasm::Br::from_op(ctx, next).ok())
-            .and_then(|br| {
-                self.loop_locals
-                    .len()
-                    .checked_sub(br.target(ctx) as usize + 1)
-            })
-            .and_then(|label| self.loop_locals[label].as_deref())
-            .unwrap_or(&[])
     }
 }
 
@@ -142,7 +107,7 @@ fn explicit_locals(
         stackify,
         hoisted: HashSet::default(),
     };
-    rewrite.region(ctx, body, &mut Labels::default(), false)?;
+    rewrite.region(ctx, body)?;
 
     if !locals.types.is_empty() {
         let types = locals.types.iter().map(|&ty| Attribute::Type(ty)).collect();
@@ -190,67 +155,19 @@ struct Rewrite<'a> {
 }
 
 impl Rewrite<'_> {
-    /// Rewrite one region. `passes_result` tells whether the parent takes
-    /// this region's value.
-    fn region(
-        &mut self,
-        ctx: &mut IrContext,
-        region: RegionRef,
-        labels: &mut Labels,
-        passes_result: bool,
-    ) -> CompilationResult<()> {
+    /// Rewrite one region.
+    fn region(&mut self, ctx: &mut IrContext, region: RegionRef) -> CompilationResult<()> {
         let block = single_block(ctx, region)?;
         let ops = ctx.block(block).ops.clone();
         let mut rewritten = OpList::new();
-        let mut erased = Vec::new();
 
-        for (position, &op) in ops.iter().enumerate() {
+        for &op in &ops {
             let location = ctx.op(op).location;
             self.read_hoisted(ctx, op, location, &mut rewritten)?;
 
-            if let Ok(yield_op) = wasm::Yield::from_op(ctx, op) {
-                let values = yield_op.values(ctx).to_vec();
-                match yield_transfer(ctx, &ops, position, &labels.loop_args, passes_result) {
-                    YieldTransfer::Stack => {
-                        self.read_stack_operands(ctx, op, location, &mut rewritten)?;
-                        rewritten.push(op);
-                    }
-                    YieldTransfer::LoopArgument | YieldTransfer::LoopArguments(_) => {
-                        let arg_locals = labels.continued_loop(ctx, &ops, position).to_vec();
-                        if values.len() != arg_locals.len() {
-                            return Err(CompilationError::invalid_module(
-                                "wasm.yield before a branch to a loop passes a value per loop argument",
-                            ));
-                        }
-                        // The arguments are assigned together, as in a
-                        // parallel copy: every value is read before any
-                        // argument local is written, so a value read from
-                        // another argument's local keeps its old value.
-                        let mut sources = Vec::with_capacity(values.len());
-                        for &value in &values {
-                            let source = if self.stackify.is_stacked(value)
-                                || parameter_local(ctx, value).is_some()
-                            {
-                                value
-                            } else {
-                                let get = local_get(
-                                    ctx,
-                                    self.locals.of(ctx, value, op)?,
-                                    ctx.value_ty(value),
-                                    location,
-                                );
-                                rewritten.push(get);
-                                ctx.op_result(get, 0)
-                            };
-                            sources.push(source);
-                        }
-                        for (&source, &arg_local) in sources.iter().zip(&arg_locals).rev() {
-                            rewritten.push(local_set(ctx, arg_local, source, location));
-                        }
-                        erased.push(op);
-                    }
-                    YieldTransfer::None => erased.push(op),
-                }
+            if let Some(transfer) = value_transfer(ctx, op) {
+                self.transfer_values(ctx, op, transfer, location, &mut rewritten)?;
+                rewritten.push(op);
                 continue;
             }
 
@@ -273,20 +190,11 @@ impl Rewrite<'_> {
             }
 
             let pushed = pushed_results(ctx, op);
-            let label = match wasm::Loop::from_op(ctx, op) {
-                Ok(loop_op) => Some(loop_arg_locals(ctx, loop_op, self.locals)?),
-                Err(_) => None,
-            };
-            let region_passes_result = !structured_result_types(ctx, op).is_empty();
             rewritten.push(op);
 
             let regions: RegionList = ctx.op_regions(op).collect();
-            if !regions.is_empty() {
-                labels.push(label);
-                for nested in regions {
-                    self.region(ctx, nested, labels, region_passes_result)?;
-                }
-                labels.pop();
+            for nested in regions {
+                self.region(ctx, nested)?;
             }
 
             for &result in pushed.iter().rev() {
@@ -303,32 +211,51 @@ impl Rewrite<'_> {
             }
         }
 
-        // A region whose last operation is not a yield passes that
-        // operation's results.
-        if passes_result
-            && let Some(&last) = ops.last()
-            && !wasm::Yield::matches(ctx, last)
-            && !ctx.op_results(last).is_empty()
-        {
-            let location = ctx.op(last).location;
-            let mut values = Vec::new();
-            for result in ctx.op_results(last).to_vec() {
-                let get = local_get(
-                    ctx,
-                    self.locals.of(ctx, result, last)?,
-                    ctx.value_ty(result),
-                    location,
-                );
-                rewritten.push(get);
-                values.push(ctx.op_result(get, 0));
-            }
-            let yield_op = wasm::Yield::operands(values).build(ctx, location);
-            rewritten.push(yield_op.op_ref());
-        }
-
         ctx.set_block_ops(block, rewritten);
-        for op in erased {
-            ctx.remove_op(op);
+        Ok(())
+    }
+
+    /// Lay out the values of a `wasm.br` or `wasm.yield` for `transfer`: the
+    /// one value its label leaves on the stack, read like any operand, or
+    /// the values of a branch to a loop, all read before any is written to
+    /// its argument local, from the last. Every value that stays off the
+    /// stack is removed as an operand.
+    fn transfer_values(
+        &mut self,
+        ctx: &mut IrContext,
+        op: OpRef,
+        transfer: ValueTransfer,
+        location: Location,
+        rewritten: &mut OpList,
+    ) -> CompilationResult<()> {
+        let count = ctx.op_operands(op).len();
+        match transfer {
+            ValueTransfer::Stack(takes) => {
+                if count != takes {
+                    return Err(CompilationError::invalid_module(format!(
+                        "{} carries {count} values to a label that takes {takes}",
+                        ctx.op(op).name.display(ctx)
+                    )));
+                }
+                return self.read_stack_operands(ctx, op, location, rewritten);
+            }
+            ValueTransfer::LoopArguments(loop_op) => {
+                let arg_locals = loop_arg_locals(ctx, loop_op, self.locals)?;
+                if count != 0 && count != arg_locals.len() {
+                    return Err(CompilationError::invalid_module(
+                        "a wasm.br to a loop carries a number of values other than its body block arguments",
+                    ));
+                }
+                self.read_stack_operands(ctx, op, location, rewritten)?;
+                let values = ctx.op_operands(op).to_vec();
+                for (&value, &arg_local) in values.iter().zip(&arg_locals).rev() {
+                    rewritten.push(local_set(ctx, arg_local, value, location));
+                }
+            }
+            ValueTransfer::None => {}
+        }
+        for index in (0..count).rev() {
+            ctx.remove_op_operand(op, index as u32);
         }
         Ok(())
     }
@@ -576,14 +503,13 @@ mod tests {
           wasm.if %small {
             %one = wasm.i32_const 1 : core.i32
             %next = wasm.i32_add %i, %one : core.i32
-            wasm.yield %next
-            wasm.br {target = 1}
+            wasm.br %next {target = 1}
           } else {
             %zero = wasm.i32_const 0 : core.i32
+            wasm.yield
           }
           %sum = wasm.i32_add %i, %k : core.i32
-          wasm.yield %sum
-          wasm.br {target = 1}
+          wasm.br %sum {target = 1}
       }
       wasm.unreachable
     }
@@ -617,10 +543,10 @@ mod tests {
               } else {
                   %11 = wasm.i32_const 0 : core.i32
                   wasm.drop %11
+                  wasm.yield
               }
               %12 = wasm.i32_add %3, %4 : core.i32
-              wasm.yield %12
-              wasm.br {target = 1}
+              wasm.br %12 {target = 1}
           }
           wasm.unreachable
       }
@@ -825,9 +751,9 @@ mod tests {
       wasm.loop(%n) {
         ^body(%i: core.i32):
           %next = wasm.i32_sub %i, %n : core.i32
-          wasm.yield %next
-          wasm.br {target = 0}
+          wasm.br %next {target = 0}
       }
+      wasm.yield
     }
     wasm.return
   }
@@ -846,11 +772,156 @@ mod tests {
               wasm.local_set %3 {index = 1}
               wasm.br {target = 0}
           }
+          wasm.yield
       }
       wasm.return
   }
 }
 "#
+        );
+    }
+
+    /// A branch that swaps two loop arguments reads both before it writes
+    /// either.
+    const LOOP_ARGUMENT_SWAP: &str = r#"core.module @test {
+  wasm.func @swap(%a: core.i32, %b: core.i32, %n: core.i32) -> core.i32 {
+    %r = wasm.block -> (core.i32) {
+      wasm.loop(%a, %b, %n) {
+        ^body(%x: core.i32, %y: core.i32, %i: core.i32):
+          %zero = wasm.i32_const 0 : core.i32
+          %done = wasm.i32_eq %i, %zero : core.i32
+          wasm.if %done {
+            wasm.br %x {target = 2}
+          } else {
+            wasm.yield
+          }
+          %one = wasm.i32_const 1 : core.i32
+          %next = wasm.i32_sub %i, %one : core.i32
+          wasm.br %y, %x, %next {target = 0}
+      }
+      wasm.unreachable
+    }
+    wasm.return %r
+  }
+  wasm.export_func @swap as "swap"
+}"#;
+
+    #[test]
+    fn writes_every_loop_argument_after_reading_the_branch_values() {
+        let ir = explicit(LOOP_ARGUMENT_SWAP);
+        assert_eq!(
+            ir,
+            r#"core.module @test {
+  wasm.func @swap(%0: core.i32, %1: core.i32, %2: core.i32) -> core.i32 attributes {locals = [core.i32, core.i32, core.i32]} {
+      %3 = wasm.block -> (core.i32) {
+          wasm.local_set %0 {index = 3}
+          wasm.local_set %1 {index = 4}
+          wasm.local_set %2 {index = 5}
+          wasm.loop() {
+            ^bb2(%4: core.i32, %5: core.i32, %6: core.i32):
+              %7 = wasm.local_get {index = 5} : core.i32
+              %8 = wasm.i32_const 0 : core.i32
+              %9 = wasm.i32_eq %7, %8 : core.i32
+              wasm.if %9 {
+                  %10 = wasm.local_get {index = 3} : core.i32
+                  wasm.br %10 {target = 2}
+              } else {
+                  wasm.yield
+              }
+              %11 = wasm.local_get {index = 4} : core.i32
+              %12 = wasm.local_get {index = 3} : core.i32
+              %13 = wasm.local_get {index = 5} : core.i32
+              %14 = wasm.i32_const 1 : core.i32
+              %15 = wasm.i32_sub %13, %14 : core.i32
+              wasm.local_set %15 {index = 5}
+              wasm.local_set %12 {index = 4}
+              wasm.local_set %11 {index = 3}
+              wasm.br {target = 0}
+          }
+          wasm.unreachable
+      }
+      wasm.return %3
+  }
+  wasm.export_func @swap as "swap"
+}
+"#
+        );
+    }
+
+    #[test]
+    fn a_loop_argument_swap_executes_in_wasmtime() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, LOOP_ARGUMENT_SWAP);
+        let bytes = crate::emit_module_to_wasm(&mut ctx, module)
+            .expect("the loop emits")
+            .bytes;
+        let file = tempfile::NamedTempFile::new().expect("temporary Wasm file");
+        std::fs::write(file.path(), bytes).expect("write Wasm module");
+        for (n, expected) in [("0", "3\n"), ("1", "4\n"), ("2", "3\n")] {
+            let output = std::process::Command::new("wasmtime")
+                .args(["-W", "gc=y", "--invoke", "swap"])
+                .arg(file.path())
+                .args(["3", "4", n])
+                .output()
+                .expect("Wasmtime CLI is required");
+            assert!(
+                output.status.success(),
+                "Wasmtime failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(String::from_utf8_lossy(&output.stdout), expected);
+        }
+    }
+
+    #[test]
+    fn keeps_the_values_branches_pass_to_an_if_label() {
+        let ir = explicit(
+            r#"core.module @test {
+  wasm.func @pick(%c: core.i32, %a: core.i32, %b: core.i32) -> core.i32 {
+    %r = wasm.if %c -> (core.i32) {
+      wasm.br %a {target = 0}
+    } else {
+      wasm.br %b {target = 0}
+    }
+    wasm.return %r
+  }
+}"#,
+        );
+        assert_eq!(
+            ir,
+            r#"core.module @test {
+  wasm.func @pick(%0: core.i32, %1: core.i32, %2: core.i32) -> core.i32 {
+      %3 = wasm.if %0 -> (core.i32) {
+          wasm.br %1 {target = 0}
+      } else {
+          wasm.br %2 {target = 0}
+      }
+      wasm.return %3
+  }
+}
+"#
+        );
+    }
+
+    #[test]
+    fn rejects_a_branch_to_a_loop_with_a_value_short_of_its_arguments() {
+        let error = explicit_error(
+            r#"core.module @test {
+  wasm.func @f(%n: core.i32) -> core.nil {
+    wasm.block {
+      wasm.loop(%n, %n) {
+        ^body(%i: core.i32, %j: core.i32):
+          wasm.br %i {target = 0}
+      }
+      wasm.yield
+    }
+    wasm.return
+  }
+}"#,
+        );
+        assert!(
+            error.contains("other than its body block arguments"),
+            "{error}"
         );
     }
 
@@ -862,9 +933,9 @@ mod tests {
     %x, %y = wasm.block -> (core.i32, core.i32) {
       %l, %m = wasm.loop(%a, %b) -> (core.i32, core.i32) {
         ^body(%p: core.i32, %q: core.i32):
-          wasm.yield %q, %p
-          wasm.br {target = 0}
+          wasm.br %q, %p {target = 0}
       }
+      wasm.yield %l, %m
     }
     wasm.return %y
   }

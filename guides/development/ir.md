@@ -559,8 +559,9 @@ pub struct Pure;
 MLIR's `IsTerminator` does. It says nothing about where control goes, which
 `CallableExit`, `Branch`, and `RegionBranchTerminator` describe; every
 operation implementing one of those, and every unconditional trap, carries
-it. A conditional branch that may fall through (`wasm.br_if`,
-`clif.trapnz`) and `wasm.yield` do not. The operation verifier, the debug
+it, as does `wasm.yield`, which ends a Wasm structured region. A
+conditional branch that may fall through (`wasm.br_if`, `clif.trapnz`)
+does not. The operation verifier, the debug
 schema checkpoint after each pass (`validate_op_schemas`), and both backend
 boundaries reject a flagged operation that some operation follows, so test
 whether an operation ends its block with `Terminator::is_set` rather than a
@@ -568,8 +569,8 @@ list of names.
 
 The same checks require every block to end in a `Terminator`, unless the
 operation that owns its region declares `NoTerminator`, as MLIR's
-`NoTerminator` does: `core.module`, `ability.decl`, `clif.data`, `wasm.elem`,
-`wasm.func`, and the Wasm structured operations. A pass that builds a structured
+`NoTerminator` does: `core.module`, `ability.decl`, `clif.data`, and
+`wasm.elem`. A pass that builds a structured
 operation whose every arm leaves the callable puts `func.unreachable` after
 it.
 

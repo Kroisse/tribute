@@ -20,7 +20,6 @@ use trunk_ir::context::{BlockData, IrContext, OpList, RegionData};
 use trunk_ir::dialect::core;
 use trunk_ir::dialect::scf;
 use trunk_ir::dialect::wasm as wasm_dialect;
-use trunk_ir::op_flag::{OpFlag, Terminator};
 use trunk_ir::op_interface::DynRegionBranch;
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{OpRef, RegionRef, TypeRef, ValueRef};
@@ -391,13 +390,7 @@ impl OpRewritePattern for ScfSwitchPattern<'_> {
         ctx.detach_region(arms.default);
 
         if arms.cases.is_empty() {
-            let terminator = default_yield(ctx, arms.default).filter(|_| has_result);
-            let values = terminator.map_or_else(Vec::new, |last| ctx.op_operands(last).to_vec());
             let mut children = take_region_ops(ctx, arms.default);
-            if let Some(terminator) = terminator {
-                children.pop();
-                ctx.remove_op(terminator);
-            }
             // A terminal switch leaves the default's ops in a block of their
             // own: they end in an exit, and the callable exit that already
             // follows the switch still ends the enclosing block.
@@ -409,6 +402,18 @@ impl OpRewritePattern for ScfSwitchPattern<'_> {
                     .build(ctx, loc);
                 assert!(rewriter.replace_op_dropping_unused_results(ctx, op, block.op_ref()));
                 return Some(());
+            }
+            // Inline, the default's ops continue the enclosing block, so its
+            // yield goes, and the switch's result is the yielded value.
+            let mut values = Vec::new();
+            if let Some(&last) = children.last()
+                && (scf::Yield::matches(ctx, last) || wasm_dialect::Yield::matches(ctx, last))
+            {
+                if has_result {
+                    values = ctx.op_operands(last).to_vec();
+                }
+                children.pop();
+                ctx.remove_op(last);
             }
             for child in children {
                 rewriter.insert_op(child);
@@ -509,13 +514,11 @@ impl JumpTable {
 ///           wasm.br_table %i, default n [..]
 ///         }
 ///         <first case>
-///         wasm.yield %v
-///         wasm.br {target = n}       // to the exit
+///         wasm.br %v {target = n}    // to the exit
 ///       ...
 ///     }
 ///     <last case>
-///     wasm.yield %v
-///     wasm.br {target = 1}
+///     wasm.br %v {target = 1}
 ///   }
 ///   <default>
 ///   wasm.yield %v
@@ -555,11 +558,6 @@ fn lower_jump_table(
         .build(ctx, loc);
     ops.push(dispatch.op_ref());
 
-    // A case's result reaches the exit as the branch's operand, which a
-    // result without a Wasm value does not have.
-    let carries_value = result_types
-        .first()
-        .is_some_and(|&ty| !core::Nil::matches(ctx, ty));
     for (position, &(_, body)) in arms.cases.iter().enumerate() {
         let label = wasm_dialect::Block::operands()
             .results(Vec::<TypeRef>::new())
@@ -567,22 +565,18 @@ fn lower_jump_table(
             .build(ctx, loc);
         ops = vec![label.op_ref()];
         ops.extend(take_region_ops(ctx, body));
-        if !carries_value
-            && let Some(&last) = ops.last()
-            && wasm_dialect::Yield::matches(ctx, last)
-        {
-            ops.pop();
-            ctx.remove_op(last);
-        }
-        // A case that ends its block never reaches the exit: it leaves through
-        // its loop's `scf.continue` or `scf.break`, or leaves the function.
-        if ops
-            .last()
-            .is_some_and(|&last| Terminator::is_set(ctx, last))
-        {
+        // A case whose control reaches its end branches to the exit with
+        // the values it yielded. Any other case ends in an exit of its own:
+        // its loop's `scf.continue` or `scf.break`, or one that leaves the
+        // function.
+        let Some(&last) = ops.last() else { continue };
+        if !(scf::Yield::matches(ctx, last) || wasm_dialect::Yield::matches(ctx, last)) {
             continue;
         }
-        let to_exit = wasm_dialect::Br::operands()
+        let values = ctx.op_operands(last).to_vec();
+        ops.pop();
+        ctx.remove_op(last);
+        let to_exit = wasm_dialect::Br::operands(values)
             .target(case_count - position as u32)
             .build(ctx, loc);
         ops.push(to_exit.op_ref());
@@ -652,14 +646,16 @@ fn lower_comparison_chain(
         if index + 1 == case_count {
             outer_ops = Some((ops, branch.op_ref()));
         } else {
-            if has_result {
-                let values = ctx.op_results(branch.op_ref()).to_vec();
-                ops.push(
-                    wasm_dialect::Yield::operands(values)
-                        .build(ctx, loc)
-                        .op_ref(),
-                );
-            }
+            let values = if has_result {
+                ctx.op_results(branch.op_ref()).to_vec()
+            } else {
+                vec![]
+            };
+            ops.push(
+                wasm_dialect::Yield::operands(values)
+                    .build(ctx, loc)
+                    .op_ref(),
+            );
             next = region_with_ops(ctx, loc, ops);
         }
     }
@@ -769,7 +765,8 @@ impl OpRewritePattern for ScfLoopPattern<'_> {
             .regions(body)
             .build(ctx, loc);
 
-        // Create a block containing just the wasm.loop, to serve as the break target
+        // The block around the loop is the break target. Its body yields
+        // the loop's results, which the body's branches never reach.
         let block_body_block = ctx.create_block(BlockData {
             location: loc,
             args: vec![],
@@ -777,6 +774,9 @@ impl OpRewritePattern for ScfLoopPattern<'_> {
             parent_region: None,
         });
         ctx.push_op(block_body_block, wasm_loop.op_ref());
+        let loop_results = ctx.op_results(wasm_loop.op_ref()).to_vec();
+        let yield_results = wasm_dialect::Yield::operands(loop_results).build(ctx, loc);
+        ctx.push_op(block_body_block, yield_results.op_ref());
 
         let block_body = ctx.create_region(RegionData {
             location: loc,
@@ -793,15 +793,8 @@ impl OpRewritePattern for ScfLoopPattern<'_> {
     }
 }
 
-/// Pattern for `scf.yield` -> `wasm.yield`
-///
-/// In wasm, block results are implicit - the last value on the stack is the result.
-/// We convert scf.yield to wasm.yield to track which value should be the region's
-/// result. This is especially important for handler dispatch where the result value
-/// may be defined outside the region (e.g., the scrutinee in `{ result } -> result`).
-///
-/// At emit time, wasm.yield is handled specially: its operand is emitted as a
-/// local.get, and the wasm.yield itself produces no Wasm instruction.
+/// Pattern for `scf.yield` -> `wasm.yield`, which ends the region and carries
+/// its result, or nothing for a region without one.
 struct ScfYieldPattern;
 
 impl OpRewritePattern for ScfYieldPattern {
@@ -814,15 +807,7 @@ impl OpRewritePattern for ScfYieldPattern {
         rewriter: &mut PatternRewriter<'_>,
     ) -> Option<()> {
         let op = yield_op.op_ref();
-        // Get yield values (variadic operands)
         let operands = ctx.op_operands(op).to_vec();
-
-        if operands.is_empty() {
-            // No value to yield - just erase
-            rewriter.erase_op(vec![]);
-            return Some(());
-        }
-
         let loc = ctx.op(op).location;
         let new_op = wasm_dialect::Yield::operands(operands).build(ctx, loc);
         rewriter.replace_op(new_op.op_ref());
@@ -879,9 +864,9 @@ fn collect_loop_exits(ctx: &IrContext, body: RegionRef) -> Option<Vec<LoopExit>>
 
 /// Replace each exit with `wasm.br`. Inside the body, `wasm.loop` is one
 /// label past the exit's enclosing labels and the `wasm.block` around it,
-/// the break target, is one more. A carried value is marked by `wasm.yield`
-/// before the branch: the emitter stores a continue's value into the loop
-/// argument and leaves a break's value on the stack for the block.
+/// the break target, is one more. The branch carries the exit's values: a
+/// continue's are the loop's next block arguments, and a break's are the
+/// block's results.
 fn lower_loop_exits(ctx: &mut IrContext, exits: &[LoopExit]) {
     for exit in exits {
         let loc = ctx.op(exit.op).location;
@@ -895,11 +880,9 @@ fn lower_loop_exits(ctx: &mut IrContext, exits: &[LoopExit]) {
             exit.labels
         };
         let values = ctx.op_operands(exit.op).to_vec();
-        if !values.is_empty() {
-            let yield_op = wasm_dialect::Yield::operands(values).build(ctx, loc);
-            ctx.insert_op_before(block, exit.op, yield_op.op_ref());
-        }
-        let br = wasm_dialect::Br::operands().target(target).build(ctx, loc);
+        let br = wasm_dialect::Br::operands(values)
+            .target(target)
+            .build(ctx, loc);
         ctx.insert_op_before(block, exit.op, br.op_ref());
         trunk_ir::rewrite::erase_op(ctx, exit.op);
     }
@@ -1382,11 +1365,11 @@ mod tests {
             "{output}"
         );
         assert!(
-            output.contains("wasm.yield %7, %8\n") && output.contains("wasm.br {target = 2}"),
+            output.contains("wasm.br %7, %8 {target = 2}"),
             "the break passes both values to the exit block:\n{output}"
         );
         assert!(
-            output.contains("wasm.yield %8, %7\n") && output.contains("wasm.br {target = 0}"),
+            output.contains("wasm.br %8, %7 {target = 0}"),
             "the continue passes both values to the loop:\n{output}"
         );
         assert!(output.contains("func.return %3, %4"), "{output}");
@@ -1523,8 +1506,9 @@ mod tests {
     fn br_targets(output: &str) -> Vec<&str> {
         output
             .lines()
-            .filter_map(|line| line.trim().strip_prefix("wasm.br {target = "))
-            .map(|rest| rest.trim_end_matches('}'))
+            .filter(|line| line.trim().starts_with("wasm.br "))
+            .filter_map(|line| line.split_once("{target = "))
+            .map(|(_, rest)| rest.trim_end_matches('}'))
             .collect()
     }
 
@@ -2068,8 +2052,11 @@ mod tests {
         )
         .unwrap();
         crate::passes::func_to_wasm::lower(&mut ctx, module, TypeConverter::new());
-        let bytes = crate::emit_module_to_wasm(&mut ctx, module).unwrap().bytes;
-        assert!(wasmparser::Validator::new().validate_all(&bytes).is_err());
+        let Err(error) = crate::emit_module_to_wasm(&mut ctx, module) else {
+            panic!("a function body that falls off its end is rejected");
+        };
+        let error = error.to_string();
+        assert!(error.contains("must end in a terminator"), "{error}");
     }
 
     #[test]
