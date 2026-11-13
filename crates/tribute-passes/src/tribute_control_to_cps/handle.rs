@@ -196,16 +196,10 @@ impl Converter<'_> {
                 (arm.installed, evidence, plan)
             }
             None => {
-                let resumption =
-                    DynResumptionRegions::enclosing(self.ctx, source).ok_or_else(|| {
-                        TributeControlToCpsError::post_op(
-                            source,
-                            location,
-                            "resume has no enclosing resumptive handler arm",
-                        )
-                    })?;
+                let resumption = DynResumptionRegions::enclosing(self.ctx, source)
+                    .expect("pre-CPS validation places every resume in a resumptive arm");
                 (
-                    self.arm_token(source, &resumption)?,
+                    self.arm_token(&resumption),
                     self.current_evidence(source, flow)?,
                     evidence_plan_of(self.ctx, source),
                 )

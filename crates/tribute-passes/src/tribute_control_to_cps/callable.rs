@@ -79,7 +79,7 @@ impl Converter<'_> {
         // A lambda that carries the resumption of its enclosing arm reaches
         // the arm's first token from its bodies.
         if let Some(resumption) = DynResumptionRegions::carried_by(self.ctx, source) {
-            captures.push(self.arm_token(source, &resumption)?);
+            captures.push(self.arm_token(&resumption));
         }
         let physical_ty = self.convert_type(logical_ty);
         let signatures: Vec<_> = conventions

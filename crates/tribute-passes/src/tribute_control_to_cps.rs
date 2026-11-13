@@ -178,23 +178,12 @@ impl<'a> Converter<'a> {
         }
     }
 
-    /// The first converted token of the arm whose resumption `source`
-    /// consumes or carries.
-    fn arm_token(
-        &self,
-        source: OpRef,
-        resumption: &tribute_control::Resumption,
-    ) -> Result<ValueRef, TributeControlToCpsError> {
-        self.arm_tokens
+    /// The first converted token of the arm that provides `resumption`.
+    fn arm_token(&self, resumption: &tribute_control::Resumption) -> ValueRef {
+        *self
+            .arm_tokens
             .get(&resumption.arm)
-            .copied()
-            .ok_or_else(|| {
-                TributeControlToCpsError::post_op(
-                    source,
-                    self.ctx.op(source).location,
-                    "the handler arm that provides the resumption was not converted",
-                )
-            })
+            .expect("a resumptive handler arm is converted before the operations inside it")
     }
 
     /// Make the convention tables if they do not exist yet.
