@@ -825,8 +825,9 @@ storage 확정은 다음 변환을 함께 적용한다.
   바꾸는 `heap.cast` 하나와 capture 필드 읽기가 된다. 이 cast는 위의 복원 규칙을
   따르며, Wasm에서는 `ref.cast`, native에서는 pointer 그대로다.
 - `closure.closure<S>`는 모든 type-bearing surface에서 `S`의 base의 box가 된다.
-- Capture 필드의 타입은 capture 값의 `adt` 값 타입이다. [표현 선택](abi-boundary.md#표현-선택)이
-  다른 layout의 필드처럼 그 저장 표현을 정한다.
+- Capture 필드의 타입은 capture 값의 타입이다. `adt` 값 타입이면
+  [표현 선택](abi-boundary.md#표현-선택)이 다른 layout의 필드처럼 그 저장 표현을 정하고,
+  `heap.cell`처럼 이미 참조인 값은 그 타입 그대로다.
 - Closure 값이 일반 reference erasure 자리(boxed source value, effect payload 등)를
   지날 수 있지만, 거기서 closure로 돌아오는 cast는 exact base를 결과 타입으로
   명시한다.
@@ -957,8 +958,10 @@ Struct 이름은 IR에서 nominal layout을 해석하는 단계까지만 의미�
 Nominal layout은 두 수준을 거친다.
 
 - 표현 선택부터 descriptor 번호가 정해질 때까지 object의 layout은
-  [`heap.box<L>`](#heap)의 `L`인 `adt` layout이다. Descriptor는 nominal identity로
-  정하므로 이 구간에서 `L`은 nominal layout이어야 한다. 재귀 layout은 식별 타입의
+  [`heap.box<L>`](#heap)의 `L`인 `adt` layout이다. Descriptor는
+  [`(layout 타입, tag)`](runtime-types.md#ir에서의-표현)로 정하므로 이 구간에서 `L`은
+  descriptor를 정하는 `adt` layout 타입이어야 한다. 선언한 nominal layout, closure의
+  base와 capture 같은 literal layout, `adt.array`가 모두 그렇다. 재귀 layout은 식별 타입의
   키로 자기를 가리키고, enum layout의 box는 그 enum의 어느 variant object든 가리킨다.
   구조적인 저수준 struct로는 이 셋을 나타낼 수 없다.
 - 번호를 할당에 새긴 뒤에는 이름이 필요 없다. 그 아래에서 object 접근은 이름 없는
@@ -1240,8 +1243,9 @@ Object는 두 종류다. `heap.box`가 가리키는 object는 만든 뒤 내용�
   Compiler가 쓰는 [cell](#heapcell)과 [closure 저장](#closure-저장-layout)이 그렇다. 이
   구간에서 `adt`와 `heap`은 함께 쓰인다.
 - Representation/ABI 경계 출구 뒤에는 `adt` 타입을 가진 값과 `adt`의 값 operation이
-  없다. `adt` layout은 `heap.box`의 매개변수, `heap` operation의 layout 속성,
-  [nominal 선언](#nominal-선언) 안에만 남는다. Object 접근은 모두 `heap` operation이며
+  없다. `adt` layout은 `heap.box`의 매개변수, inline 값을 담는 `heap.cell`의
+  매개변수, `heap` operation의 layout 속성, [nominal 선언](#nominal-선언) 안에만
+  남는다. Object 접근은 모두 `heap` operation이며
   target lowering이 이를 내린다.
 - `Bytes`와 `String` literal(`adt.bytes_const`, `adt.string_const`)은 표현 선택보다
   앞에서 `adt` 값으로 펼친다([string.md](string.md#constant-lowering)). 배열 상수
