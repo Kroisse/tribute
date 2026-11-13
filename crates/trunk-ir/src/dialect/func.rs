@@ -40,6 +40,20 @@ pub trait TailCallLike: CallLike {
 
 #[trunk_ir::dialect]
 mod func {
+    /// A function `sym_name` of signature `type`, or its declaration when
+    /// it has no body.
+    ///
+    /// ```text
+    /// func.func @f(%a: core.i32) -> core.i32 {
+    ///     func.return %a
+    /// }
+    /// ```
+    ///
+    /// - **Shape:** the attributes `sym_name` and `type`, a
+    ///   `func.func_sig`, and the optional region `body`.
+    /// - **Verification:** a body has an entry block whose arguments have
+    ///   the signature's input types, in order.
+    #[verify]
     #[asm_format(symbol(sym_name) signature(r#type, body) attr_dict region(body))]
     #[implements(CallableOwner, op_interface::SymbolDefinition)]
     #[flags(IsolatedFromAbove)]
@@ -690,6 +704,38 @@ impl IndirectCallLike for CallIndirect {
 
     fn set_exact_signature(&self, ctx: &mut crate::IrContext, signature: crate::TypeRef) -> bool {
         set_indirect_call_signature(ctx, self.op_ref(), signature)
+    }
+}
+
+impl crate::ops::Verify for Func {
+    /// A body's entry block arguments have the signature's input types.
+    fn verify(&self, ctx: &crate::IrContext) -> Result<(), crate::ops::VerificationError> {
+        let Some(body) = ctx.op_region(self.op_ref(), 0) else {
+            return Ok(());
+        };
+        let Some(&entry) = ctx.region(body).blocks.first() else {
+            return Err("body requires an entry block".into());
+        };
+        let signature =
+            FuncSig::from_type_ref(ctx, self.r#type(ctx)).expect("schema-verified func.func_sig");
+        let inputs = signature.inputs(ctx);
+        let args = ctx.block_args(entry);
+        if args.len() != inputs.len() {
+            return Err(format!(
+                "entry argument count mismatch: expected {}, found {}",
+                inputs.len(),
+                args.len()
+            )
+            .into());
+        }
+        if let Some(index) = args
+            .iter()
+            .zip(inputs)
+            .position(|(&arg, &ty)| ctx.value_ty(arg) != ty)
+        {
+            return Err(format!("entry argument #{index} type mismatch").into());
+        }
+        Ok(())
     }
 }
 
@@ -1363,6 +1409,10 @@ mod owner_identity_tests {
 
 #[cfg(test)]
 mod normal_validation_regressions {
+    use super::Func;
+    use crate::ops::DialectOp;
+    use crate::parser::parse_test_module;
+
     #[test]
     fn normal_validation_rejects_known_contract_mismatches() {
         for (body, expected) in [
@@ -1387,6 +1437,37 @@ mod normal_validation_regressions {
                 "{expected}: {result}"
             );
         }
+    }
+
+    #[test]
+    fn function_body_entry_must_take_the_signature_inputs() {
+        let verify = |body: &str| {
+            let input = format!(
+                "core.module @m {{\n  \"func.func\"() ({body}) \
+                 {{sym_name = \"f\", type = func.func_sig<(core.i32) -> ()>}}\n}}"
+            );
+            let mut ctx = crate::IrContext::new();
+            let module = parse_test_module(&mut ctx, &input);
+            let func = module.ops(&ctx)[0];
+            Func::DEF
+                .verify(&ctx, func)
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            verify("{\n  ^bb0(%a: core.i32):\n    func.return\n  }"),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            verify("{\n  ^bb0(%a: core.i64):\n    func.return\n  }"),
+            ["entry argument #0 type mismatch"]
+        );
+        assert_eq!(
+            verify("{\n  ^bb0:\n    func.return\n  }"),
+            ["entry argument count mismatch: expected 1, found 0"]
+        );
+        assert_eq!(verify("{\n  }"), ["body requires an entry block"]);
     }
 
     #[test]

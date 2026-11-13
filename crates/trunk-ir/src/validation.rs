@@ -27,8 +27,8 @@ use super::dialect::core;
 use super::op_def::{OpDef, OpViolation};
 use super::op_flag::{IsolatedFromAbove, NoTerminator, OpFlag, Terminator, VerifyFlag};
 use super::op_interface::{
-    DynBranch, DynCallableExit, DynCallableOwner, DynRegionBranch, DynRegionBranchTerminator,
-    RegionBranchPoint, RegionSuccessor, RegionValueTransfer,
+    DynBranch, DynCallableOwner, DynRegionBranch, DynRegionBranchTerminator, RegionBranchPoint,
+    RegionSuccessor, RegionValueTransfer,
 };
 use super::ops::{DialectOp, DialectType};
 use super::pass::{Pass, PassRunResult};
@@ -341,9 +341,7 @@ pub fn validate_operation_verifiers(ctx: &IrContext, module: Module) -> Validati
             return std::ops::ControlFlow::Continue(walk::WalkAction::Advance);
         }
         let error_count = errors.len();
-        validate_scf_if_structure(ctx, op, &mut errors);
         validate_block_ending(ctx, op, &mut errors);
-        validate_func_shapes(ctx, op, &mut errors);
         if errors.len() == error_count {
             validate_branch_interface(ctx, op, &mut errors);
             validate_region_branch_interface(ctx, op, &mut errors);
@@ -496,43 +494,6 @@ fn validate_block_ending(ctx: &IrContext, op: OpRef, errors: &mut Vec<Validation
                     ))
                 }
                 Some(_) => {}
-            }
-        }
-    }
-}
-
-fn validate_func_shapes(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
-    use crate::dialect::func;
-    use crate::ops::DialectOp;
-    if func::Func::matches(ctx, op) {
-        let Some(signature) = ctx
-            .op_attrs(op)
-            .get_type("type")
-            .and_then(|ty| func::FuncSig::from_type_ref(ctx, ty))
-        else {
-            errors.push(operation_verifier_error(
-                ctx,
-                op,
-                "requires valid func.func_sig type",
-            ));
-            return;
-        };
-        if let Some(region) = ctx.op_region(op, 0) {
-            if let Some(&entry) = ctx.region(region).blocks.first() {
-                check_value_types(
-                    ctx,
-                    op,
-                    ctx.block_args(entry),
-                    signature.inputs(ctx),
-                    "entry argument",
-                    errors,
-                );
-            } else {
-                errors.push(operation_verifier_error(
-                    ctx,
-                    op,
-                    "body requires an entry block",
-                ));
             }
         }
     }
@@ -1092,133 +1053,57 @@ pub fn is_proper_tail_terminator(ctx: &IrContext, op: OpRef) -> bool {
         || name.is(ctx, "effect.dispatch_cps")
 }
 
-fn validate_scf_if_structure(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
-    if !crate::dialect::scf::If::matches(ctx, op) {
-        return;
-    }
-
-    // The schema guarantees one condition operand and two regions.
-    for (region_name, region) in ["then_region", "else_region"]
-        .into_iter()
-        .zip(ctx.op_regions(op))
-    {
-        let blocks = &ctx.region(region).blocks;
-        let [block] = blocks.as_slice() else {
-            errors.push(operation_verifier_error(
-                ctx,
-                op,
-                format!("{region_name} expects 1 block, found {}", blocks.len()),
-            ));
-            continue;
-        };
-
-        let Some((&yield_op, _body_ops)) = ctx.block(*block).ops.split_last() else {
-            errors.push(operation_verifier_error(
-                ctx,
-                op,
-                format!("{region_name} must terminate with scf.yield"),
-            ));
-            continue;
-        };
-
-        if !crate::dialect::scf::Yield::matches(ctx, yield_op) {
-            let never_result = match ctx.op_result_types(op) {
-                [ty] => crate::dialect::core::Never::matches(ctx, *ty),
-                _ => false,
-            };
-            if never_result && is_proper_tail_terminator(ctx, yield_op) {
-                continue;
-            }
-            // An arm may leave the callable instead of yielding; the result
-            // then comes from the arms that yield.
-            if !ctx.op_results(op).is_empty() && DynCallableExit::prove(ctx, yield_op).is_ok() {
-                continue;
-            }
-            errors.push(operation_verifier_error(
-                ctx,
-                op,
-                format!("{region_name} must terminate with scf.yield"),
-            ));
-            continue;
-        }
-    }
-}
-
 // ============================================================================
 // Call arity validation
 // ============================================================================
 
-/// Whether `op` is a `func`, `wasm` or `clif` function definition.
-fn is_arity_checked_function(ctx: &IrContext, op: OpRef) -> bool {
-    crate::dialect::func::Func::matches(ctx, op)
-        || crate::dialect::wasm::Func::matches(ctx, op)
-        || crate::dialect::clif::Func::matches(ctx, op)
-}
-
-/// The parameter count of the function definition `op`.
-fn parameter_count(ctx: &IrContext, op: OpRef) -> Option<usize> {
-    if !is_arity_checked_function(ctx, op) {
-        return None;
+/// The nearest symbol definition enclosing `op`, for a diagnostic.
+fn enclosing_definition_name(ctx: &IrContext, mut op: OpRef) -> Option<SymbolPath> {
+    loop {
+        let block = ctx.op(op).parent_block?;
+        op = ctx.region(ctx.block(block).parent_region?).parent_op?;
+        if let Some(name) = qualified_name(ctx, op) {
+            return Some(name);
+        }
     }
-    let func_ty = ctx.op_attrs(op).get_type("type")?;
-    let func_ty = crate::dialect::func::FuncSig::from_type_ref(ctx, func_ty)?;
-    Some(func_ty.inputs(ctx).len())
-}
-
-/// Walk all operations in a region tree and check call arity.
-fn check_call_arity_in_region(
-    ctx: &IrContext,
-    region: RegionRef,
-    symbols: &SymbolTable,
-    enclosing_fn: &SymbolPath,
-) {
-    walk::walk_region::<std::convert::Infallible>(ctx, region, &mut |op| {
-        let is_call = crate::dialect::func::Call::matches(ctx, op);
-        let is_tail_call = crate::dialect::func::TailCall::matches(ctx, op);
-        if !is_call && !is_tail_call {
-            return std::ops::ControlFlow::Continue(walk::WalkAction::Advance);
-        }
-
-        let Some(callee_sym) = ctx.op_attrs(op).get_symbol_ref("callee") else {
-            return std::ops::ControlFlow::Continue(walk::WalkAction::Advance);
-        };
-
-        if let Some(expected) = symbols
-            .resolve(ctx, op, callee_sym)
-            .and_then(|callee| parameter_count(ctx, callee))
-        {
-            let actual = ctx.op_operands(op).len();
-            if actual != expected {
-                ctx.report_warning(
-                    ctx.op(op).location.span,
-                    format!(
-                        "arity mismatch in '{}': call to '{}' has {} argument(s), expected {}",
-                        enclosing_fn, callee_sym, actual, expected,
-                    ),
-                );
-            }
-        }
-
-        std::ops::ControlFlow::Continue(walk::WalkAction::Advance)
-    });
 }
 
 /// Validate that all `func.call` and `func.tail_call` operations have the
-/// correct number of arguments matching the callee's function signature.
+/// correct number of arguments matching their `func.func` callee's
+/// signature.
 ///
 /// Arity mismatches are reported as warnings via `ctx.report_warning`.
 fn validate_call_arity(ctx: &IrContext, module: Module) {
+    use crate::dialect::func;
     let symbols = SymbolTable::collect(ctx, module);
     let _ = walk::walk_op::<std::convert::Infallible>(ctx, module.op(), &mut |op| {
-        if !is_arity_checked_function(ctx, op) {
+        let callee_sym = if let Ok(call) = func::Call::from_op(ctx, op) {
+            call.callee(ctx)
+        } else if let Ok(call) = func::TailCall::from_op(ctx, op) {
+            call.callee(ctx)
+        } else {
             return std::ops::ControlFlow::Continue(walk::WalkAction::Advance);
+        };
+        let expected = symbols
+            .resolve(ctx, op, callee_sym)
+            .and_then(|callee| func::Func::from_op(ctx, callee).ok())
+            .and_then(|callee| func::FuncSig::from_type_ref(ctx, callee.r#type(ctx)))
+            .map(|signature| signature.inputs(ctx).len());
+        let actual = ctx.op_operands(op).len();
+        if let Some(expected) = expected
+            && actual != expected
+        {
+            let caller = enclosing_definition_name(ctx, op)
+                .map_or_else(|| "<module>".to_owned(), |name| name.to_string());
+            ctx.report_warning(
+                ctx.op(op).location.span,
+                format!(
+                    "arity mismatch in '{caller}': call to '{callee_sym}' has {actual} \
+                     argument(s), expected {expected}",
+                ),
+            );
         }
-        if let Some(name) = qualified_name(ctx, op) {
-            for func_region in ctx.op_regions(op) {
-                check_call_arity_in_region(ctx, func_region, &symbols, &name);
-            }
-        }
-        std::ops::ControlFlow::Continue(walk::WalkAction::Skip)
+        std::ops::ControlFlow::Continue(walk::WalkAction::Advance)
     });
 }
 
