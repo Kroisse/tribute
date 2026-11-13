@@ -107,13 +107,6 @@ impl Converter<'_> {
             self.converted_types.insert(ty, converted);
             return converted;
         }
-        if tribute_control::ResumeToken::matches(self.ctx, ty) && data.params.len() == 2 {
-            let input = self.convert_type(data.params[0]);
-            let answer = self.convert_type(data.params[1]);
-            let converted = self.resumption_type(input, answer);
-            self.converted_types.insert(ty, converted);
-            return converted;
-        }
         // A tuple layout is named by its element types, so converting them
         // renames it, and tuples that differed only in rows become one
         // (`design/tribute-dialects.md` § "Nominal layout의 게시").

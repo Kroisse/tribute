@@ -125,10 +125,11 @@ fn main() -> Nil { }
     assert_resume_shape(checked_logical_function(ir_text, "run"));
 }
 
-/// Resume materializes an erased literal to the token input and returns the
-/// token answer, rather than using the literal or source-expression type.
+/// Resume materializes an erased literal to the arm's operation result type and
+/// returns the handle's answer, rather than using the literal or
+/// source-expression type.
 #[salsa_test]
-fn resume_uses_exact_token_input_and_answer_types(db: &salsa::DatabaseImpl) {
+fn resume_uses_exact_arm_input_and_answer_types(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
         db,
         "test.trb",
@@ -154,8 +155,8 @@ fn main() -> Nil { }
     let ir = run_ast_pipeline_with_ir(db, source);
     let run = checked_logical_function(ir, "run");
     assert!(
-        run.contains("resume_token<tribute_rt.anyref, core.i32>"),
-        "handler token must retain its exact input and answer types:\n{run}"
+        run.contains("@read() : tribute_rt.anyref {"),
+        "handler arm must retain its exact operation result type:\n{run}"
     );
     assert_in_order(run, &["adt.string_const", "tribute_control.resume"]);
     let resume = run

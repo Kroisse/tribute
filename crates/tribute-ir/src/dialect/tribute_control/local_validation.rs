@@ -242,14 +242,6 @@ pub(super) fn validate_handle(ctx: &IrContext, op: OpRef, errors: &mut Vec<Valid
     }
 }
 
-fn region_contains_resume(ctx: &IrContext, region: RegionRef) -> bool {
-    let mut found = false;
-    walk_region_ops(ctx, region, &mut |op| {
-        found |= Resume::matches(ctx, op);
-    });
-    found
-}
-
 /// The checks of one arm of the handle `op`, whose result is
 /// `handle_result`.
 fn validate_arm(
@@ -269,51 +261,6 @@ fn validate_arm(
         .and_then(|yield_op| ctx.op_operands(yield_op).first().copied())
         .map(|value| ctx.value_ty(value));
     let operation_result = binding.operation_result_type;
-    let last_token = ctx
-        .block_args(block)
-        .last()
-        .copied()
-        .and_then(|value| resume_token_parts(ctx, ctx.value_ty(value)));
-    if binding.is_resumptive(ctx) {
-        let Some((token_input, token_answer)) = last_token else {
-            push_op_error(
-                ctx,
-                op,
-                errors,
-                format!("resumptive op arm {name} requires a final resume_token block argument"),
-            );
-            return;
-        };
-        if token_input != operation_result
-            || handle_result.is_some_and(|answer| token_answer != answer)
-        {
-            push_op_error(
-                ctx,
-                op,
-                errors,
-                format!(
-                    "resume token input/answer types of arm {name} do not match operation and handle results"
-                ),
-            );
-        }
-    } else {
-        if last_token.is_some() {
-            push_op_error(
-                ctx,
-                op,
-                errors,
-                format!("fn and op -> core.never arm {name} must not receive a resume token"),
-            );
-        }
-        if binding.kind == OperationKind::Op && region_contains_resume(ctx, arm) {
-            push_op_error(
-                ctx,
-                op,
-                errors,
-                format!("op -> core.never arm {name} must not contain tribute_control.resume"),
-            );
-        }
-    }
     let expected = match binding.kind {
         OperationKind::Fn => Some(operation_result),
         OperationKind::Op => handle_result,
@@ -332,11 +279,6 @@ fn validate_arm(
 
 pub(super) fn validate_yield(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
     validate_return_or_yield_shape(ctx, op, errors);
-    if let Some(&value) = ctx.op_operands(op).first()
-        && ResumeToken::matches(ctx, ctx.value_ty(value))
-    {
-        push_op_error(ctx, op, errors, "must not yield a resume token");
-    }
     let valid_owner = parent_op(ctx, op).is_some_and(|owner| Handle::matches(ctx, owner));
     if !valid_owner {
         push_op_error(
@@ -344,6 +286,40 @@ pub(super) fn validate_yield(ctx: &IrContext, op: OpRef, errors: &mut Vec<Valida
             op,
             errors,
             "must terminate a handle body, completion, or arm",
+        );
+    }
+}
+
+pub(super) fn validate_resume(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
+    let Some(resumption) = DynResumptionRegions::enclosing(ctx, op) else {
+        push_op_error(
+            ctx,
+            op,
+            errors,
+            "must be inside a resumptive op arm of a tribute_control.handle, not behind a \
+             function, a fn arm, or an op -> core.never arm",
+        );
+        return;
+    };
+    let (Some(&value), Some(&result)) =
+        (ctx.op_operands(op).first(), ctx.op_result_types(op).first())
+    else {
+        return;
+    };
+    if ctx.value_ty(value) != resumption.input {
+        push_op_error(
+            ctx,
+            op,
+            errors,
+            "operand type does not match the operation result type of the enclosing arm",
+        );
+    }
+    if result != resumption.answer {
+        push_op_error(
+            ctx,
+            op,
+            errors,
+            "result type does not match the result type of the enclosing handle",
         );
     }
 }

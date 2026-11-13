@@ -14,6 +14,7 @@ use tribute_ir::callable_abi::CallableAbi;
 use tribute_ir::calling_convention::{
     CallingConvention, cps_completion_type, cps_resume_exact_type, physical_closure_type,
 };
+use tribute_ir::dialect::tribute_control::DynResumptionRegions;
 use tribute_ir::dialect::{ability, adt, closure, effect, tribute_control, tribute_cps};
 use trunk_ir::OpList;
 use trunk_ir::analysis::AnalysisCache;
@@ -89,13 +90,15 @@ struct Converter<'a> {
     /// The convention tables, made with the converted evidence type when
     /// first needed.
     tables: Option<ConventionTables<AbstractFrames>>,
+    /// The first token of each converted resumptive arm, by its source
+    /// region. A `resume` that is not in the arm's own body, and a lambda
+    /// that carries the resumption, reach the arm through it.
+    arm_tokens: HashMap<RegionRef, ValueRef>,
 }
 
 /// How a `resume` in the body of a handler arm reaches its continuation.
 #[derive(Clone)]
 struct ArmResume {
-    /// The source resume token of the arm.
-    token: ValueRef,
     /// The token that installs the arm's handle again on the evidence it is
     /// called with and resumes under it.
     installed: ValueRef,
@@ -171,7 +174,27 @@ impl<'a> Converter<'a> {
             converted_types: HashMap::default(),
             helper_index: 0,
             tables: None,
+            arm_tokens: HashMap::default(),
         }
+    }
+
+    /// The first converted token of the arm whose resumption `source`
+    /// consumes or carries.
+    fn arm_token(
+        &self,
+        source: OpRef,
+        resumption: &tribute_control::Resumption,
+    ) -> Result<ValueRef, TributeControlToCpsError> {
+        self.arm_tokens
+            .get(&resumption.arm)
+            .copied()
+            .ok_or_else(|| {
+                TributeControlToCpsError::post_op(
+                    source,
+                    self.ctx.op(source).location,
+                    "the handler arm that provides the resumption was not converted",
+                )
+            })
     }
 
     /// Make the convention tables if they do not exist yet.

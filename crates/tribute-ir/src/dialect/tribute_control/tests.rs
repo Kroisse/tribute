@@ -136,13 +136,11 @@ fn builder_fixture() -> ValidFixture {
     ctx.push_op(completion_block, completion_yield.op_ref());
     let completion = region(&mut ctx, loc, completion_block);
 
-    let token_ty = ResumeToken::params(i32_ty, i32_ty)
-        .intern(&mut ctx)
-        .as_type_ref();
-    let handler_block = block(&mut ctx, loc, &[i32_ty, token_ty]);
+    let handler_block = block(&mut ctx, loc, &[i32_ty]);
     let operation_arg = ctx.block_arg(handler_block, 0);
-    let token = ctx.block_arg(handler_block, 1);
-    let resume_op = Resume::operands(token, operation_arg).build(&mut ctx, loc);
+    let resume_op = Resume::operands(operation_arg)
+        .results(i32_ty)
+        .build(&mut ctx, loc);
     ctx.push_op(handler_block, resume_op.op_ref());
     let resumed_value = resume_op.result(&ctx);
     let handler_yield = Yield::operands(resumed_value).build(&mut ctx, loc);
@@ -209,8 +207,8 @@ const VALID_CONTROL_MODULE: &str = r#"core.module @test {
       tribute_control.yield %performed
     } do(%completed: core.i32) {
         tribute_control.yield %completed
-    } op @State @get(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>) : core.i32 {
-        %resumed = tribute_control.resume %token, %argument : core.i32
+    } op @State @get(%argument: core.i32) : core.i32 {
+        %resumed = tribute_control.resume %argument : core.i32
         tribute_control.yield %resumed
     }
     tribute_control.return %handled
@@ -263,7 +261,7 @@ fn valid_fixture() -> ValidFixture {
         binding.ability,
         binding.op_name,
         kind,
-        parameter_types[..parameter_types.len() - 1].iter().copied(),
+        parameter_types.iter().copied(),
         binding.operation_result_type,
     )];
 
@@ -405,17 +403,13 @@ fn assert_op_diagnostics(result: &ValidationResult, op: OpRef, expected: &[&str]
 }
 
 #[test]
-fn callable_and_resume_token_accessors_are_exact() {
+fn callable_accessors_are_exact() {
     let mut ctx = IrContext::new();
     let i32_ty = core::I32::type_ref(&mut ctx);
 
     let ty = FuncSig::params([i32_ty], i32_ty).intern(&mut ctx);
     assert_eq!(ty.result(&ctx), i32_ty);
     assert_eq!(ty.inputs(&ctx), &[i32_ty]);
-
-    let token = ResumeToken::params(i32_ty, i32_ty).intern(&mut ctx);
-    assert_eq!(token.input(&ctx), i32_ty);
-    assert_eq!(token.answer(&ctx), i32_ty);
 }
 
 #[test]
@@ -931,7 +925,7 @@ fn local_validator_checks_handle_and_handler_region_contracts() {
       tribute_control.yield %body_value
   } do(%value: core.i1, %extra: core.i32) {
       tribute_control.yield %value
-  } op @State @get(%argument: core.i32, %token: tribute_control.resume_token<core.i1, core.i1>) : core.i32 {
+  } op @State @get(%argument: core.i32) : core.i32 {
       %wrong = arith.constant false : core.i1
       tribute_control.yield %wrong
   }
@@ -945,7 +939,6 @@ fn local_validator_checks_handle_and_handler_region_contracts() {
             "completion block must have exactly one argument",
             "completion argument type must match the body yield type",
             "completion yield type must match handle result type",
-            "resume token input/answer types of arm State::get do not match operation and handle results",
             "arm State::get yield type does not match its kind-specific result",
         ],
     );
@@ -957,7 +950,7 @@ fn local_validator_checks_handle_and_handler_region_contracts() {
     tribute_control.yield %body_value
   } do(%value: core.i32) {
       tribute_control.yield %value
-  } fn @State @get(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>) : core.i1 {
+  } fn @State @get(%argument: core.i32) : core.i1 {
       tribute_control.yield %argument
   }
 }"#,
@@ -965,10 +958,7 @@ fn local_validator_checks_handle_and_handler_region_contracts() {
     let local = validate_local(&ctx, fn_module);
     assert_diagnostics(
         &local,
-        &[
-            "fn and op -> core.never arm State::get must not receive a resume token",
-            "arm State::get yield type does not match its kind-specific result",
-        ],
+        &["arm State::get yield type does not match its kind-specific result"],
     );
 
     let mut ctx = IrContext::new();
@@ -1103,13 +1093,12 @@ fn whole_ir_resolves_references_in_the_nearest_module() {
 }
 
 #[test]
-fn whole_ir_reports_symbol_declaration_capture_and_token_contracts() {
+fn whole_ir_reports_symbol_declaration_and_capture_contracts() {
     let (mut ctx, module) = parse_fixture(
         r#"core.module @test {
   !direct = tribute_control.func_sig<(core.i32) -> core.i32>
   !cps = tribute_control.func_sig<(core.i32) -> core.i32>
   !different = tribute_control.func_sig<() -> core.i1>
-  !token = tribute_control.resume_token<core.i32, core.i32>
 
   tribute_control.func @id(%value: core.i32) -> core.i32
   tribute_control.func @id(%value: core.i32) -> core.i32
@@ -1126,11 +1115,6 @@ fn whole_ir_reports_symbol_declaration_capture_and_token_contracts() {
   %bad_perform = tribute_control.perform fn @State @get(%false) : (core.i1) -> core.i1
   %duplicate_capture = tribute_control.lambda() -> core.i1 captures [%false, %false] {
     tribute_control.return %false
-  }
-  %token_result = "test.token_result"() : !token
-  tribute_control.func @token_param(%token_arg: !token) -> core.i32 {
-    %zero = arith.constant 0 : core.i32
-    tribute_control.return %zero
   }
 }"#,
     );
@@ -1166,8 +1150,6 @@ fn whole_ir_reports_symbol_declaration_capture_and_token_contracts() {
             "operation_kind does not match the resolved declaration",
             "operation argument types do not match the logical signature",
             "operation result type does not match the resolved declaration",
-            "resume_token must not be produced as an operation result",
-            "resume_token block arguments are allowed only as the final argument of a handle arm",
         ],
     );
 }
@@ -1182,11 +1164,11 @@ fn whole_ir_rejects_duplicate_and_declaration_mismatched_handlers() {
     tribute_control.yield %performed
   } do(%value: core.i32) {
       tribute_control.yield %value
-  } op @State @get(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>) : core.i32 {
-      %resumed = tribute_control.resume %token, %argument : core.i32
+  } op @State @get(%argument: core.i32) : core.i32 {
+      %resumed = tribute_control.resume %argument : core.i32
       tribute_control.yield %resumed
-  } op @State @get(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>) : core.i32 {
-      %resumed = tribute_control.resume %token, %argument : core.i32
+  } op @State @get(%argument: core.i32) : core.i32 {
+      %resumed = tribute_control.resume %argument : core.i32
       tribute_control.yield %resumed
   }
 }"#,
@@ -1213,7 +1195,7 @@ fn whole_ir_rejects_duplicate_and_declaration_mismatched_handlers() {
 }
 
 #[test]
-fn whole_ir_rejects_multiple_resume_token_paths() {
+fn whole_ir_rejects_two_resumes_of_one_arm() {
     let (ctx, module) = parse_fixture(
         r#"core.module @test {
   %handled = tribute_control.handle : core.i32 {
@@ -1221,15 +1203,237 @@ fn whole_ir_rejects_multiple_resume_token_paths() {
     tribute_control.yield %body
   } do(%value: core.i32) {
       tribute_control.yield %value
-  } op @State @get(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>) : core.i32 {
-      %first = tribute_control.resume %token, %argument : core.i32
-      %second = tribute_control.resume %token, %argument : core.i32
+  } op @State @get(%argument: core.i32) : core.i32 {
+      %first = tribute_control.resume %argument : core.i32
+      %second = tribute_control.resume %argument : core.i32
       tribute_control.yield %first
   }
 }"#,
     );
     let result = validate_whole_ir(&ctx, module, &[]);
     assert!(messages(&result).contains("more than one tribute_control.resume"));
+}
+
+#[test]
+fn whole_ir_rejects_a_direct_resume_and_a_resume_in_a_lambda() {
+    let (ctx, module) = parse_fixture(
+        r#"core.module @test {
+  %handled = tribute_control.handle : core.i32 {
+    %body = arith.constant 0 : core.i32
+    tribute_control.yield %body
+  } do(%value: core.i32) {
+      tribute_control.yield %value
+  } op @State @get(%argument: core.i32) : core.i32 {
+      %direct = tribute_control.resume %argument : core.i32
+      %later = tribute_control.lambda() -> core.i32 captures [%argument] {
+        %resumed = tribute_control.resume %argument : core.i32
+        tribute_control.return %resumed
+      }
+      %called = tribute_control.call_indirect %later() : () -> core.i32
+      tribute_control.yield %direct
+  }
+}"#,
+    );
+    let result = validate_whole_ir(&ctx, module, &[]);
+    assert!(
+        messages(&result).contains("more than one tribute_control.resume"),
+        "{result}"
+    );
+}
+
+#[test]
+fn whole_ir_accepts_mutually_exclusive_resumes_in_scf_branches() {
+    let (ctx, module) = parse_fixture(
+        r#"core.module @test {
+  %handled = tribute_control.handle : core.i32 {
+    %body = arith.constant 0 : core.i32
+    tribute_control.yield %body
+  } do(%value: core.i32) {
+      tribute_control.yield %value
+  } op @State @get(%argument: core.i32) : core.i32 {
+      %flag = arith.constant true : core.i1
+      %answer = scf.if %flag -> (core.i32) {
+        %left = tribute_control.resume %argument : core.i32
+        scf.yield %left
+      } else {
+        %right = tribute_control.resume %argument : core.i32
+        scf.yield %right
+      }
+      tribute_control.yield %answer
+  }
+}"#,
+    );
+    let result = validate_whole_ir(&ctx, module, &[]);
+    assert!(
+        !messages(&result).contains("tribute_control.resume"),
+        "{result}"
+    );
+    let local = validate_local(&ctx, module);
+    assert!(local.is_ok(), "{local}");
+}
+
+#[test]
+fn a_resume_in_a_nested_handle_body_binds_to_the_outer_arm() {
+    let (ctx, module) = parse_fixture(
+        r#"core.module @test {
+  %outer = tribute_control.handle : core.i32 {
+    %body = arith.constant 0 : core.i32
+    tribute_control.yield %body
+  } do(%value: core.i32) {
+      tribute_control.yield %value
+  } op @State @get(%argument: core.i32) : core.i32 {
+      %nested = tribute_control.handle : core.i32 {
+        %resumed = tribute_control.resume %argument : core.i32
+        tribute_control.yield %resumed
+      } do(%inner: core.i32) {
+          tribute_control.yield %inner
+      }
+      tribute_control.yield %nested
+  }
+}"#,
+    );
+    let outer = control_ops(&ctx, module, Handle::NAME)[0];
+    let resume = control_op(&ctx, module, Resume::NAME);
+    let resumption = DynResumptionRegions::enclosing(&ctx, resume).expect("a resumption");
+    assert_eq!(resumption.handle, outer);
+    assert_eq!(
+        resumption.arm,
+        ctx.op_regions(outer).nth(2).expect("the outer arm")
+    );
+    let local = validate_local(&ctx, module);
+    assert!(local.is_ok(), "{local}");
+    let whole = validate_whole_ir(&ctx, module, &[]);
+    assert!(
+        !messages(&whole).contains("tribute_control.resume"),
+        "{whole}"
+    );
+}
+
+#[test]
+fn a_resume_in_a_lambda_in_an_arm_makes_the_lambda_a_carrier() {
+    let (ctx, module) = parse_fixture(
+        r#"core.module @test {
+  %handled = tribute_control.handle : core.i32 {
+    %body = arith.constant 0 : core.i32
+    tribute_control.yield %body
+  } do(%value: core.i32) {
+      tribute_control.yield %value
+  } op @State @get(%argument: core.i32) : core.i32 {
+      %continuation = tribute_control.lambda() -> core.i32 captures [%argument] {
+        %resumed = tribute_control.resume %argument : core.i32
+        tribute_control.return %resumed
+      }
+      %plain = tribute_control.lambda() -> core.i32 captures [%argument] {
+        tribute_control.return %argument
+      }
+      %answer = tribute_control.call_indirect %continuation() : () -> core.i32
+      tribute_control.yield %answer
+  }
+}"#,
+    );
+    let lambdas = control_ops(&ctx, module, Lambda::NAME);
+    let [continuation, plain] = lambdas[..] else {
+        panic!("two lambdas");
+    };
+    let handle = control_op(&ctx, module, Handle::NAME);
+    let carried = DynResumptionRegions::carried_by(&ctx, continuation).expect("a carrier");
+    assert_eq!(carried.handle, handle);
+    assert_eq!(DynResumptionRegions::carried_by(&ctx, plain), None);
+    let local = validate_local(&ctx, module);
+    assert!(local.is_ok(), "{local}");
+    let whole = validate_whole_ir(&ctx, module, &[]);
+    assert!(!messages(&whole).contains("resumption carrier"), "{whole}");
+}
+
+#[test]
+fn local_validation_checks_the_resume_types_against_the_arm() {
+    let wrong_value = r#"core.module @test {
+  %handled = tribute_control.handle : core.i32 {
+    %body = arith.constant 0 : core.i32
+    tribute_control.yield %body
+  } do(%value: core.i32) {
+      tribute_control.yield %value
+  } op @State @get(%argument: core.i32) : core.i32 {
+      %flag = arith.constant false : core.i1
+      %resumed = tribute_control.resume %flag : core.i32
+      tribute_control.yield %resumed
+  }
+}"#;
+    let (ctx, module) = parse_fixture(wrong_value);
+    let local = validate_local(&ctx, module);
+    assert_diagnostics(
+        &local,
+        &["operand type does not match the operation result type of the enclosing arm"],
+    );
+
+    let wrong_answer = r#"core.module @test {
+  %handled = tribute_control.handle : core.i32 {
+    %body = arith.constant 0 : core.i32
+    tribute_control.yield %body
+  } do(%value: core.i32) {
+      tribute_control.yield %value
+  } op @State @get(%argument: core.i32) : core.i32 {
+      %resumed = tribute_control.resume %argument : core.i1
+      %fixed = arith.constant 0 : core.i32
+      tribute_control.yield %fixed
+  }
+}"#;
+    let (ctx, module) = parse_fixture(wrong_answer);
+    let local = validate_local(&ctx, module);
+    assert_diagnostics(
+        &local,
+        &["result type does not match the result type of the enclosing handle"],
+    );
+}
+
+#[test]
+fn local_validation_rejects_a_resume_without_a_resumptive_arm() {
+    for (name, fixture) in [
+        (
+            "in a func body",
+            r#"core.module @test {
+  tribute_control.func @run(%value: core.i32) -> core.i32 {
+    %resumed = tribute_control.resume %value : core.i32
+    tribute_control.return %resumed
+  }
+}"#,
+        ),
+        (
+            "in a fn arm",
+            r#"core.module @test {
+  %handled = tribute_control.handle : core.i32 {
+    %body = arith.constant 0 : core.i32
+    tribute_control.yield %body
+  } do(%value: core.i32) {
+      tribute_control.yield %value
+  } fn @State @get(%argument: core.i32) : core.i32 {
+      %resumed = tribute_control.resume %argument : core.i32
+      tribute_control.yield %resumed
+  }
+}"#,
+        ),
+        (
+            "in an op -> Never arm",
+            r#"core.module @test {
+  %handled = tribute_control.handle : core.i32 {
+    %body = arith.constant 0 : core.i32
+    tribute_control.yield %body
+  } do(%value: core.i32) {
+      tribute_control.yield %value
+  } op @State @get(%argument: core.i32) : core.never {
+      %resumed = tribute_control.resume %argument : core.i32
+      tribute_control.yield %resumed
+  }
+}"#,
+        ),
+    ] {
+        let (ctx, module) = parse_fixture(fixture);
+        let local = validate_local(&ctx, module);
+        assert!(
+            messages(&local).contains("must be inside a resumptive op arm"),
+            "{name}: {local}"
+        );
+    }
 }
 
 #[test]
@@ -1241,16 +1445,16 @@ fn whole_ir_rejects_branching_and_escape_at_each_affine_carrier() {
     tribute_control.yield %body
   } do(%value: core.i32) {
       tribute_control.yield %value
-  } op @State @get(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>) : core.i32 {
-      %inner = tribute_control.lambda() -> core.i32 captures [%token, %argument] {
-        %resumed = tribute_control.resume %token, %argument : core.i32
+  } op @State @get(%argument: core.i32) : core.i32 {
+      %inner = tribute_control.lambda() -> core.i32 captures [%argument] {
+        %resumed = tribute_control.resume %argument : core.i32
         tribute_control.return %resumed
       }
       %wrapper = tribute_control.lambda() -> core.i32 captures [%inner] {
         %called = tribute_control.call_indirect %inner() : () -> core.i32
         tribute_control.return %called
       }
-      %escape = tribute_control.call @id(%wrapper) : (tribute_control.func_sig<() -> core.i32>) -> core.i32
+      %escape =tribute_control.call @id(%wrapper) : (tribute_control.func_sig<() -> core.i32>) -> core.i32
       %first_capture = tribute_control.lambda() -> core.i32 captures [%wrapper] {
         %called = tribute_control.call_indirect %wrapper() : () -> core.i32
         tribute_control.return %called
@@ -1269,15 +1473,40 @@ fn whole_ir_rejects_branching_and_escape_at_each_affine_carrier() {
     assert_diagnostics(
         &result,
         &[
-            "resume-token carrier escapes through",
-            "resume-token carrier branches into multiple lambda captures",
-            "resume-token carrier call is outside its capture path",
+            "resumption carrier escapes through",
+            "resumption carrier branches into multiple lambda captures",
+            "resumption carrier call is outside its capture path",
         ],
     );
 }
 
 #[test]
-fn whole_ir_rejects_sibling_token_capture_paths() {
+fn whole_ir_rejects_a_carrier_lambda_yielded_out_of_its_arm() {
+    let (ctx, module) = parse_fixture(
+        r#"core.module @test {
+  %handled = tribute_control.handle : tribute_control.func_sig<() -> core.i32> {
+    %body = tribute_control.lambda() -> core.i32 captures [] {
+      %zero = arith.constant 0 : core.i32
+      tribute_control.return %zero
+    }
+    tribute_control.yield %body
+  } do(%value: tribute_control.func_sig<() -> core.i32>) {
+      tribute_control.yield %value
+  } op @State @get(%argument: core.i32) : core.i32 {
+      %continuation = tribute_control.lambda() -> core.i32 captures [%argument] {
+        %resumed = tribute_control.resume %argument : core.i32
+        tribute_control.return %resumed
+      }
+      tribute_control.yield %continuation
+  }
+}"#,
+    );
+    let result = validate_whole_ir(&ctx, module, &[]);
+    assert_diagnostics(&result, &["resumption carrier escapes through"]);
+}
+
+#[test]
+fn whole_ir_rejects_sibling_carrier_lambdas() {
     let (ctx, module) = parse_fixture(
         r#"core.module @test {
   %handled = tribute_control.handle : core.i32 {
@@ -1285,13 +1514,13 @@ fn whole_ir_rejects_sibling_token_capture_paths() {
     tribute_control.yield %body
   } do(%value: core.i32) {
       tribute_control.yield %value
-  } op @State @get(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>) : core.i32 {
-      %first = tribute_control.lambda() -> core.i32 captures [%token, %argument] {
-        %resumed = tribute_control.resume %token, %argument : core.i32
+  } op @State @get(%argument: core.i32) : core.i32 {
+      %first = tribute_control.lambda() -> core.i32 captures [%argument] {
+        %resumed = tribute_control.resume %argument : core.i32
         tribute_control.return %resumed
       }
-      %second = tribute_control.lambda() -> core.i32 captures [%token, %argument] {
-        %resumed = tribute_control.resume %token, %argument : core.i32
+      %second = tribute_control.lambda() -> core.i32 captures [%argument] {
+        %resumed = tribute_control.resume %argument : core.i32
         tribute_control.return %resumed
       }
       tribute_control.yield %argument
@@ -1299,10 +1528,7 @@ fn whole_ir_rejects_sibling_token_capture_paths() {
 }"#,
     );
     let result = validate_whole_ir(&ctx, module, &[]);
-    assert_diagnostics(
-        &result,
-        &["resume token is copied into multiple capture paths"],
-    );
+    assert_diagnostics(&result, &["more than one tribute_control.resume"]);
 }
 
 #[test]
@@ -1314,18 +1540,18 @@ fn whole_ir_allows_mutually_exclusive_lambda_capture_and_terminal_paths() {
     tribute_control.yield %body
   } do(%value: core.i32) {
       tribute_control.yield %value
-  } op @State @get(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>) : core.i32 {
+  } op @State @get(%argument: core.i32) : core.i32 {
       %flag = arith.constant true : core.i1
       %value = scf.if %flag -> (core.i32) {
-        %left = tribute_control.lambda() -> core.i32 captures [%token, %argument] {
-          %resumed = tribute_control.resume %token, %argument : core.i32
+        %left = tribute_control.lambda() -> core.i32 captures [%argument] {
+          %resumed = tribute_control.resume %argument : core.i32
           tribute_control.return %resumed
         }
         %called = tribute_control.call_indirect %left() : () -> core.i32
         scf.yield %called
       } else {
-        %right = tribute_control.lambda() -> core.i32 captures [%token, %argument] {
-          %resumed = tribute_control.resume %token, %argument : core.i32
+        %right = tribute_control.lambda() -> core.i32 captures [%argument] {
+          %resumed = tribute_control.resume %argument : core.i32
           tribute_control.return %resumed
         }
         %called = tribute_control.call_indirect %right() : () -> core.i32
@@ -1337,12 +1563,7 @@ fn whole_ir_allows_mutually_exclusive_lambda_capture_and_terminal_paths() {
     );
     let result = validate_whole_ir(&ctx, module, &[]);
     let diagnostics = messages(&result);
-    for forbidden in [
-        "resume token is copied into multiple capture paths",
-        "resume token capture does not form a single path to resume",
-        "resume-token carrier branches into multiple lambda captures",
-        "resume-token carrier has multiple static terminal uses",
-    ] {
+    for forbidden in ["more than one tribute_control.resume", "resumption carrier"] {
         assert!(!diagnostics.contains(forbidden), "{result}");
     }
 }
@@ -1356,20 +1577,20 @@ fn whole_ir_allows_mutually_exclusive_switch_capture_paths() {
     tribute_control.yield %body
   } do(%value: core.i32) {
       tribute_control.yield %value
-  } op @State @get(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>) : core.i32 {
+  } op @State @get(%argument: core.i32) : core.i32 {
       %choice = arith.constant 0 : core.i32
       scf.index_switch %choice : (core.i32) -> ()
       case 0 {
-        %left = tribute_control.lambda() -> core.i32 captures [%token, %argument] {
-          %left_resumed = tribute_control.resume %token, %argument : core.i32
+        %left = tribute_control.lambda() -> core.i32 captures [%argument] {
+          %left_resumed = tribute_control.resume %argument : core.i32
           tribute_control.return %left_resumed
         }
         %left_called = tribute_control.call_indirect %left() : () -> core.i32
         scf.yield
       }
       case 1 {
-        %right = tribute_control.lambda() -> core.i32 captures [%token, %argument] {
-          %right_resumed = tribute_control.resume %token, %argument : core.i32
+        %right = tribute_control.lambda() -> core.i32 captures [%argument] {
+          %right_resumed = tribute_control.resume %argument : core.i32
           tribute_control.return %right_resumed
         }
         %right_called = tribute_control.call_indirect %right() : () -> core.i32
@@ -1384,12 +1605,7 @@ fn whole_ir_allows_mutually_exclusive_switch_capture_paths() {
     );
     let result = validate_whole_ir(&ctx, module, &[]);
     let diagnostics = messages(&result);
-    for forbidden in [
-        "resume token is copied into multiple capture paths",
-        "resume token capture does not form a single path to resume",
-        "resume-token carrier branches into multiple lambda captures",
-        "resume-token carrier has multiple static terminal uses",
-    ] {
+    for forbidden in ["more than one tribute_control.resume", "resumption carrier"] {
         assert!(!diagnostics.contains(forbidden), "{result}");
     }
 
@@ -1419,9 +1635,9 @@ fn whole_ir_rejects_same_path_lambda_carrier_terminals() {
     tribute_control.yield %body
   } do(%value: core.i32) {
       tribute_control.yield %value
-  } op @State @get(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>) : core.i32 {
-      %continuation = tribute_control.lambda() -> core.i32 captures [%token, %argument] {
-        %resumed = tribute_control.resume %token, %argument : core.i32
+  } op @State @get(%argument: core.i32) : core.i32 {
+      %continuation = tribute_control.lambda() -> core.i32 captures [%argument] {
+        %resumed = tribute_control.resume %argument : core.i32
         tribute_control.return %resumed
       }
       %first = tribute_control.call_indirect %continuation() : () -> core.i32
@@ -1436,25 +1652,9 @@ fn whole_ir_rejects_same_path_lambda_carrier_terminals() {
         "{result}"
     );
 }
-#[test]
-fn validators_reject_resume_token_escape_and_never_clause_capability() {
-    let (ctx, module) = parse_fixture(
-        r#"core.module @test {
-  %handled = tribute_control.handle : core.i32 {
-    %body = arith.constant 0 : core.i32
-    tribute_control.yield %body
-  } do(%value: core.i32) {
-      tribute_control.yield %value
-  } op @State @get(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>) : core.i32 {
-      tribute_control.yield %token
-  }
-}"#,
-    );
-    let local = validate_local(&ctx, module);
-    assert!(messages(&local).contains("must not yield a resume token"));
-    let whole = validate_whole_ir(&ctx, module, &[]);
-    assert!(messages(&whole).contains("forbidden use"));
 
+#[test]
+fn a_resume_in_an_op_never_arm_is_rejected_where_it_stands() {
     let (ctx, module) = parse_fixture(
         r#"core.module @test {
   %handled = tribute_control.handle : core.i32 {
@@ -1462,30 +1662,77 @@ fn validators_reject_resume_token_escape_and_never_clause_capability() {
     tribute_control.yield %body
   } do(%value: core.i32) {
       tribute_control.yield %value
-  } op @State @get(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>) : core.never {
-      %resumed = tribute_control.resume %token, %argument : core.i32
+  } op @State @get(%argument: core.i32) : core.never {
+      %resumed = tribute_control.resume %argument : core.i32
       tribute_control.yield %resumed
   }
 }"#,
     );
+    let resume = control_op(&ctx, module, Resume::NAME);
     let result = validate_local(&ctx, module);
-    let messages = messages(&result);
-    assert!(messages.contains("must not receive a resume token"));
-    assert!(messages.contains("must not contain tribute_control.resume"));
+    assert_eq!(result.errors.len(), 1, "{result}");
+    assert_op_diagnostics(&result, resume, &["must be inside a resumptive op arm"]);
 }
 
 #[test]
-fn resume_token_components_are_checked_recursively() {
+fn a_nested_handles_fn_arm_is_a_barrier_to_the_outer_resumption() {
     let (ctx, module) = parse_fixture(
         r#"core.module @test {
-  !physical = func.func_sig<() -> core.i32>
-  !wrapper = core.tuple<!physical>
-  !token = tribute_control.resume_token<!wrapper, core.i32>
+  %outer = tribute_control.handle : core.i32 {
+    %body = arith.constant 0 : core.i32
+    tribute_control.yield %body
+  } do(%value: core.i32) {
+      tribute_control.yield %value
+  } op @State @get(%argument: core.i32) : core.i32 {
+      %nested = tribute_control.handle : core.i32 {
+        tribute_control.yield %argument
+      } do(%value: core.i32) {
+          tribute_control.yield %value
+      } fn @State @get(%inner_argument: core.i32) : core.i32 {
+          %crossed = tribute_control.resume %inner_argument : core.i32
+          tribute_control.yield %crossed
+      }
+      tribute_control.yield %nested
+  }
 }"#,
     );
+    let resume = control_op(&ctx, module, Resume::NAME);
+    assert_eq!(DynResumptionRegions::enclosing(&ctx, resume), None);
+    let local = validate_local(&ctx, module);
+    assert_op_diagnostics(&local, resume, &["must be inside a resumptive op arm"]);
+}
 
-    let result = validate_local(&ctx, module);
-    assert!(messages(&result).contains("is not a resolved logical value type"));
+#[test]
+fn a_carrier_lambda_used_in_another_handlers_arm_is_rejected() {
+    let (ctx, module) = parse_fixture(
+        r#"core.module @test {
+  %outer = tribute_control.handle : core.i32 {
+    %body = arith.constant 0 : core.i32
+    tribute_control.yield %body
+  } do(%value: core.i32) {
+      tribute_control.yield %value
+  } op @State @get(%argument: core.i32) : core.i32 {
+      %continuation = tribute_control.lambda() -> core.i32 captures [%argument] {
+        %resumed = tribute_control.resume %argument : core.i32
+        tribute_control.return %resumed
+      }
+      %nested = tribute_control.handle : core.i32 {
+        tribute_control.yield %argument
+      } do(%value: core.i32) {
+          tribute_control.yield %value
+      } op @Log @write(%inner_argument: core.i32) : core.i32 {
+          %crossed = tribute_control.call_indirect %continuation() : () -> core.i32
+          tribute_control.yield %crossed
+      }
+      tribute_control.yield %nested
+  }
+}"#,
+    );
+    let result = validate_whole_ir(&ctx, module, &[]);
+    assert!(
+        messages(&result).contains("resumption carrier crosses into a different handler arm"),
+        "{result}"
+    );
 }
 
 #[test]
@@ -1531,51 +1778,28 @@ fn callable_components_accept_source_logical_types() {
 }
 
 #[test]
-fn validator_reports_malformed_resume_token_uses_without_panicking() {
-    let (ctx, module) = parse_fixture(
+fn validator_reports_a_resume_under_a_malformed_binding_without_panicking() {
+    let (mut ctx, module) = parse_fixture(
         r#"core.module @test {
-  !malformed = tribute_control.resume_token<core.i32>
   %handled = tribute_control.handle : core.i32 {
     %body = arith.constant 0 : core.i32
     tribute_control.yield %body
   } do(%completed: core.i32) {
     tribute_control.yield %completed
-  } op @State @get(%value: core.i32, %token: !malformed) : core.i32 {
-    %resumed = tribute_control.resume %token, %value : core.i32
+  } op @State @get(%value: core.i32) : core.i32 {
+    %resumed = tribute_control.resume %value : core.i32
     tribute_control.yield %resumed
   }
 }"#,
     );
-    let handler = control_op(&ctx, module, Handle::NAME);
+    let handle = control_op(&ctx, module, Handle::NAME);
     let resume = control_op(&ctx, module, Resume::NAME);
-    let result = validate_local(&ctx, module);
-    assert!(
-        result.errors.iter().any(|error| {
-            error.op.is_none()
-                && error
-                    .message
-                    .contains("resume_token requires exactly input and answer types")
-        }),
-        "{result}"
-    );
-    assert!(
-        result.errors.iter().any(|error| {
-            error.op == Some(handler)
-                && error
-                    .message
-                    .contains("requires a final resume_token block argument")
-        }),
-        "{result}"
-    );
-    assert!(
-        result.errors.iter().any(|error| {
-            error.op == Some(resume)
-                && error
-                    .message
-                    .contains("expected T: tribute_control.resume_token, found")
-        }),
-        "{result}"
-    );
+    ctx.op_attrs_mut(handle)
+        .insert("handlers", Attribute::List(Vec::new()));
+    assert_eq!(DynResumptionRegions::enclosing(&ctx, resume), None);
+    let local = validate_local(&ctx, module);
+    assert_op_diagnostics(&local, resume, &["must be inside a resumptive op arm"]);
+    let _ = validate_whole_ir(&ctx, module, &[]);
 }
 
 #[test]
@@ -1587,16 +1811,16 @@ fn whole_ir_rejects_branch_after_transitive_lambda_transfer() {
     tribute_control.yield %body
   } do(%value: core.i32) {
       tribute_control.yield %value
-  } op @State @get(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>) : core.i32 {
-      %inner = tribute_control.lambda() -> core.i32 captures [%token, %argument] {
-        %resumed = tribute_control.resume %token, %argument : core.i32
+  } op @State @get(%argument: core.i32) : core.i32 {
+      %inner = tribute_control.lambda() -> core.i32 captures [%argument] {
+        %resumed = tribute_control.resume %argument : core.i32
         tribute_control.return %resumed
       }
       %wrapper = tribute_control.lambda() -> core.i32 captures [%inner] {
         %called = tribute_control.call_indirect %inner() : () -> core.i32
         tribute_control.return %called
       }
-      %first = tribute_control.call_indirect %wrapper() : () -> core.i32
+      %first =tribute_control.call_indirect %wrapper() : () -> core.i32
       %second = tribute_control.call_indirect %wrapper() : () -> core.i32
       tribute_control.yield %first
   }
@@ -1605,35 +1829,6 @@ fn whole_ir_rejects_branch_after_transitive_lambda_transfer() {
     let result = validate_whole_ir(&ctx, module, &[]);
     assert!(
         messages(&result).contains("multiple static terminal uses"),
-        "{result}"
-    );
-}
-
-#[test]
-fn whole_ir_rejects_outer_token_resumed_in_nested_handler() {
-    let (ctx, module) = parse_fixture(
-        r#"core.module @test {
-  %outer = tribute_control.handle : core.i32 {
-    %body = arith.constant 0 : core.i32
-    tribute_control.yield %body
-  } do(%value: core.i32) {
-      tribute_control.yield %value
-  } op @State @get(%argument: core.i32, %outer_token: tribute_control.resume_token<core.i32, core.i32>) : core.i32 {
-      %nested = tribute_control.handle : core.i32 {
-        tribute_control.yield %argument
-      } do(%value: core.i32) {
-          tribute_control.yield %value
-      } fn @State @get(%inner_argument: core.i32) : core.i32 {
-          %crossed = tribute_control.resume %outer_token, %inner_argument : core.i32
-          tribute_control.yield %crossed
-      }
-      tribute_control.yield %nested
-  }
-}"#,
-    );
-    let result = validate_whole_ir(&ctx, module, &[]);
-    assert!(
-        messages(&result).contains("crosses into a different handler"),
         "{result}"
     );
 }
@@ -2204,9 +2399,9 @@ fn handled_callable_module(op_yield: &str) -> String {
   }} do(%k: core.i32) {{
       %done = tribute_control.func_ref @inc : !F
       tribute_control.yield %done
-  }} op @Gen @next(%token: tribute_control.resume_token<core.i32, !F>) : core.i32 {{
+  }} op @Gen @next() : core.i32 {{
       %resumed_value = arith.constant 40 : core.i32
-      %g = tribute_control.resume %token, %resumed_value : !F
+      %g = tribute_control.resume %resumed_value : !F
       %called = tribute_control.call_indirect %g(%resumed_value) : (core.i32) -> core.i32
       %zero = arith.constant 0 : core.i32
       %bad = core.unrealized_conversion_cast %zero : core.i32 to !F
@@ -2248,18 +2443,19 @@ fn handle_result_needs_every_yield_to_have_callable_provenance() {
 }
 
 #[test]
-fn resume_result_needs_a_handler_resume_token() {
+fn resume_result_needs_an_enclosing_resumptive_arm() {
     let (ctx, module) = parse_fixture(
         r#"core.module @test {
   !F = tribute_control.func_sig<(core.i32) -> core.i32>
-  !Token = tribute_control.resume_token<core.i32, !F>
-  tribute_control.func @caller(%token: !Token, %raw: core.ptr, %value: core.i32) -> core.i32 {
-    %from_parameter = tribute_control.resume %token, %value : !F
-    %first = tribute_control.call_indirect %from_parameter(%value) : (core.i32) -> core.i32
-    %cast_token = core.unrealized_conversion_cast %raw : core.ptr to !Token
-    %from_cast = tribute_control.resume %cast_token, %first : !F
-    %second = tribute_control.call_indirect %from_cast(%first) : (core.i32) -> core.i32
-    tribute_control.return %second
+  tribute_control.func @caller(%value: core.i32) -> core.i32 {
+    %from_func = tribute_control.resume %value : !F
+    %first = tribute_control.call_indirect %from_func(%value) : (core.i32) -> core.i32
+    %from_lambda = tribute_control.lambda() -> core.i32 captures [%first] {
+      %again = tribute_control.resume %first : !F
+      %called = tribute_control.call_indirect %again(%first) : (core.i32) -> core.i32
+      tribute_control.return %called
+    }
+    tribute_control.return %first
   }
 }"#,
     );
@@ -2373,7 +2569,7 @@ fn a_value_withdrawn_twice_is_not_evaluated_again() {
   } do(%k: core.i32) {
       %done = core.unrealized_conversion_cast %k : core.i32 to !F
       tribute_control.yield %done
-  } op @Gen @next(%token: tribute_control.resume_token<core.i32, !F>) : core.i32 {
+  } op @Gen @next() : core.i32 {
       %zero = arith.constant 0 : core.i32
       %bad = core.unrealized_conversion_cast %zero : core.i32 to !F
       tribute_control.yield %bad
@@ -2602,8 +2798,8 @@ fn evidence_plan_module(call: &str, handle: &str) -> String {
             ),
         )
         .replace(
-            "%token, %argument : core.i32",
-            "%token, %argument {evidence_plan = [{mask = @Log}]} : core.i32",
+            "tribute_control.resume %argument : core.i32",
+            "tribute_control.resume %argument {evidence_plan = [{mask = @Log}]} : core.i32",
         )
 }
 

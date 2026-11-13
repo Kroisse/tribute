@@ -1,4 +1,4 @@
-//! Whole-IR validation of returns, declaration uses, and resume tokens.
+//! Whole-IR validation of returns, declaration uses, and resumptions.
 
 use super::*;
 
@@ -153,19 +153,6 @@ fn op_is_within_region(ctx: &IrContext, op: OpRef, target: RegionRef) -> bool {
     false
 }
 
-/// The innermost handle arm that contains `op`.
-fn nearest_enclosing_arm(ctx: &IrContext, op: OpRef) -> Option<RegionRef> {
-    let mut region = parent_region(ctx, op);
-    while let Some(current) = region {
-        let owner = ctx.region(current).parent_op?;
-        if Handle::matches(ctx, owner) && ctx.op_regions(owner).skip(2).any(|arm| arm == current) {
-            return Some(current);
-        }
-        region = parent_region(ctx, owner);
-    }
-    None
-}
-
 pub(super) fn direct_call_reenters_enclosing_func(ctx: &IrContext, op: OpRef) -> bool {
     if !Call::matches(ctx, op) {
         return false;
@@ -198,26 +185,21 @@ fn validate_affine_lambda_carrier(
     visited: &mut HashSet<ValueRef>,
     errors: &mut Vec<ValidationError>,
 ) {
+    // A carrier reached by two paths was validated by the first.
     if !visited.insert(carrier) {
-        push_op_error(
-            ctx,
-            handle,
-            errors,
-            "resume-token carrier path contains a cycle",
-        );
         return;
     }
 
     let mut captures = Vec::new();
     let mut terminals = Vec::new();
     for use_ in ctx.uses(carrier) {
-        if nearest_enclosing_arm(ctx, use_.user) != Some(arm) {
+        if DynResumptionRegions::enclosing(ctx, use_.user).map(|r| r.arm) != Some(arm) {
             push_op_error(
                 ctx,
                 handle,
                 errors,
                 format!(
-                    "resume-token carrier crosses into a different handler at {}",
+                    "resumption carrier crosses into a different handler arm at {}",
                     use_.user
                 ),
             );
@@ -226,7 +208,7 @@ fn validate_affine_lambda_carrier(
         if SourceLambda::is_set(ctx, use_.user) {
             captures.push(use_.user);
         } else if (SourceCallIndirect::is_set(ctx, use_.user) && use_.operand_index == 0)
-            // A captured resumption may be passed to the enclosing source
+            // A carrier may be passed to the enclosing source
             // function's recursive logical call (for example
             // `run_state(fn() { resume value }, value)`). Other direct calls
             // are rejected: their parameter ownership is not yet proven.
@@ -239,7 +221,7 @@ fn validate_affine_lambda_carrier(
                 handle,
                 errors,
                 format!(
-                    "resume-token carrier escapes through {} at operand {}",
+                    "resumption carrier escapes through {} at operand {}",
                     use_.user, use_.operand_index
                 ),
             );
@@ -251,7 +233,7 @@ fn validate_affine_lambda_carrier(
             ctx,
             handle,
             errors,
-            "resume-token carrier branches into multiple lambda captures",
+            "resumption carrier branches into multiple lambda captures",
         );
     }
     if has_nonexclusive_pair(ctx, &terminals) {
@@ -259,7 +241,7 @@ fn validate_affine_lambda_carrier(
             ctx,
             handle,
             errors,
-            "resume-token carrier has multiple static terminal uses",
+            "resumption carrier has multiple static terminal uses",
         );
     }
 
@@ -275,7 +257,7 @@ fn validate_affine_lambda_carrier(
                     ctx,
                     handle,
                     errors,
-                    "resume-token carrier call is outside its capture path",
+                    "resumption carrier call is outside its capture path",
                 );
             }
         }
@@ -286,7 +268,7 @@ fn validate_affine_lambda_carrier(
                 ctx,
                 handle,
                 errors,
-                "lambda capture carrying a resume token must produce one callable value",
+                "lambda carrying a resumption must produce one callable value",
             );
             return;
         };
@@ -294,94 +276,47 @@ fn validate_affine_lambda_carrier(
     }
 }
 
-fn validate_token_path(
+/// The affine use of the resumption `arm` of `handle` owns: every `resume`
+/// that consumes it is on a different branch, and each lambda that carries it
+/// stays inside the arm.
+fn validate_arm_resumption(
     ctx: &IrContext,
     handle: OpRef,
     arm: RegionRef,
-    token_value: ValueRef,
     errors: &mut Vec<ValidationError>,
 ) {
     let mut resumes = Vec::new();
-    let mut captures = Vec::new();
-    for use_ in ctx.uses(token_value) {
-        if nearest_enclosing_arm(ctx, use_.user) != Some(arm) {
-            push_op_error(
-                ctx,
-                handle,
-                errors,
-                format!(
-                    "resume token crosses into a different handler at {}",
-                    use_.user
-                ),
-            );
-            continue;
+    let mut carriers = Vec::new();
+    walk_region_ops(ctx, arm, &mut |op| {
+        let owns = |resumption: Option<Resumption>| resumption.is_some_and(|r| r.arm == arm);
+        if Resume::matches(ctx, op) {
+            if owns(DynResumptionRegions::enclosing(ctx, op)) {
+                resumes.push(op);
+            }
+        } else if owns(DynResumptionRegions::carried_by(ctx, op)) {
+            carriers.push(op);
         }
-        if Resume::matches(ctx, use_.user) && use_.operand_index == 0 {
-            resumes.push(use_.user);
-        } else if SourceLambda::is_set(ctx, use_.user) {
-            captures.push(use_.user);
-        } else {
-            push_op_error(
-                ctx,
-                handle,
-                errors,
-                format!(
-                    "resume token has forbidden use by {} at operand {}",
-                    use_.user, use_.operand_index
-                ),
-            );
-        }
-    }
+    });
     if has_nonexclusive_pair(ctx, &resumes) {
         push_op_error(
             ctx,
             handle,
             errors,
-            "resume token reaches more than one tribute_control.resume",
+            "the resumption of an arm reaches more than one tribute_control.resume",
         );
     }
-    for (left, right) in captures.iter().copied().tuple_combinations() {
-        let left_region = ctx.op_region(left, 0);
-        let right_region = ctx.op_region(right, 0);
-        let comparable = left_region.is_some_and(|region| op_is_within_region(ctx, right, region))
-            || right_region.is_some_and(|region| op_is_within_region(ctx, left, region));
-        if !comparable && !ops_are_mutually_exclusive(ctx, left, right) {
-            push_op_error(
-                ctx,
-                handle,
-                errors,
-                "resume token is copied into multiple capture paths",
-            );
-        }
-    }
-    for capture in &captures {
-        let Some(region) = ctx.op_region(*capture, 0) else {
-            continue;
-        };
-        if !resumes
-            .iter()
-            .any(|resume| op_is_within_region(ctx, *resume, region))
-        {
-            push_op_error(
-                ctx,
-                handle,
-                errors,
-                "resume token capture does not form a single path to resume",
-            );
-        }
-    }
     let mut visited = HashSet::default();
-    for capture in captures {
-        if let Some(&closure_value) = ctx.op_results(capture).first() {
+    for carrier in carriers {
+        if let Some(&closure_value) = ctx.op_results(carrier).first() {
             validate_affine_lambda_carrier(ctx, handle, arm, closure_value, &mut visited, errors);
         }
     }
 }
 
-/// A handler token may have one affine resume on each branch of an ordinary
-/// structured conditional: exactly one branch executes at runtime.  Static
-/// use counting alone would reject a source `case` whose exhaustive arms each
-/// resume the same handler-owned token.
+/// An arm's resumption may have one affine resume on each branch of an
+/// ordinary structured conditional: exactly one branch executes at runtime.
+/// Static use counting alone would reject a source `case` whose exhaustive
+/// arms each resume.
 fn has_nonexclusive_pair(ctx: &IrContext, ops: &[OpRef]) -> bool {
     ops.iter()
         .copied()
@@ -423,58 +358,15 @@ pub(super) fn validate_resume_ownership(
     errors: &mut Vec<ValidationError>,
 ) {
     walk_region_ops(ctx, body, &mut |op| {
-        if !Handle::matches(ctx, op) {
+        let Ok(handle) = Handle::from_op(ctx, op) else {
             return;
-        }
-        for arm in ctx.op_regions(op).skip(2) {
-            let Some(&block) = ctx.region(arm).blocks.first() else {
-                continue;
-            };
-            let Some(&token) = ctx.block_args(block).last() else {
-                continue;
-            };
-            if ResumeToken::matches(ctx, ctx.value_ty(token)) {
-                validate_token_path(ctx, op, arm, token, errors);
-            }
-        }
-    });
-}
-
-pub(super) fn validate_token_placements(
-    ctx: &IrContext,
-    body: RegionRef,
-    errors: &mut Vec<ValidationError>,
-) {
-    walk_region_ops(ctx, body, &mut |op| {
-        for ty in ctx.op_result_types(op) {
-            if ResumeToken::matches(ctx, *ty) {
-                push_op_error(
-                    ctx,
-                    op,
-                    errors,
-                    "resume_token must not be produced as an operation result",
-                );
-            }
-        }
-        for region in ctx.op_regions(op) {
-            for block in ctx.region(region).blocks.iter().copied() {
-                for (index, arg) in ctx.block_args(block).iter().copied().enumerate() {
-                    if !ResumeToken::matches(ctx, ctx.value_ty(arg)) {
-                        continue;
-                    }
-                    let allowed = Handle::matches(ctx, op)
-                        && ctx.op_regions(op).skip(2).any(|arm| arm == region)
-                        && ctx.region(region).blocks.first() == Some(&block)
-                        && index + 1 == ctx.block_args(block).len();
-                    if !allowed {
-                        push_op_error(
-                            ctx,
-                            op,
-                            errors,
-                            "resume_token block arguments are allowed only as the final argument of a handle arm",
-                        );
-                    }
-                }
+        };
+        for arm in handle.arms(ctx) {
+            if matches!(
+                handle.resumption_scope(ctx, arm),
+                ResumptionScope::Provides { .. }
+            ) {
+                validate_arm_resumption(ctx, op, arm, errors);
             }
         }
     });

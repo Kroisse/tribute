@@ -46,9 +46,9 @@ pub struct IrLoweringCtx<'db> {
     span_map: SpanMaps<'db>,
     /// Stack of scopes, each mapping LocalId to (name, SSA value).
     scopes: Vec<HashMap<LocalId, (Symbol, ValueRef)>>,
-    /// Scoped tags identifying locals whose SSA value is a suspended handler
-    /// continuation rather than a source value.
-    resume_scopes: Vec<HashSet<LocalId>>,
+    /// Scoped resumptions of the enclosing handler arms, keyed by the arm's
+    /// synthetic continuation local, as `(input, answer)` logical types.
+    resume_scopes: Vec<HashMap<LocalId, (TypeRef, TypeRef)>>,
     /// Function type schemes from type checking, keyed by function name.
     function_types: HashMap<SymbolPath, TypeScheme<'db>>,
     /// Nominal layouts, row binders, and the conversion of source types.
@@ -105,7 +105,7 @@ impl<'db> IrLoweringCtx<'db> {
             source_paths: HashMap::default(),
             span_map,
             scopes: vec![HashMap::default()],
-            resume_scopes: vec![HashSet::default()],
+            resume_scopes: vec![HashMap::default()],
             function_types,
             nominal: NominalTypes::new(db),
             logical_generated_signatures: HashMap::default(),
@@ -265,7 +265,7 @@ impl<'db> IrLoweringCtx<'db> {
     /// Enter a new scope (internal — use `scope()` guard instead).
     fn enter_scope(&mut self) {
         self.scopes.push(HashMap::default());
-        self.resume_scopes.push(HashSet::default());
+        self.resume_scopes.push(HashMap::default());
     }
 
     /// Exit the current scope (internal — use `scope()` guard instead).
@@ -281,20 +281,20 @@ impl<'db> IrLoweringCtx<'db> {
         }
     }
 
-    pub(crate) fn bind_resume(&mut self, local_id: LocalId, name: Symbol, value: ValueRef) {
-        self.bind(local_id, name, value);
+    /// Bind the continuation local of a resumptive arm to the logical types of
+    /// its resumption.
+    pub(crate) fn bind_resume(&mut self, local_id: LocalId, input: TypeRef, answer: TypeRef) {
         if let Some(scope) = self.resume_scopes.last_mut() {
-            scope.insert(local_id);
+            scope.insert(local_id, (input, answer));
         }
     }
 
-    pub(crate) fn lookup_resume(&self, local_id: LocalId) -> Option<ValueRef> {
+    /// The `(input, answer)` types of the resumption `local_id` names.
+    pub(crate) fn lookup_resume(&self, local_id: LocalId) -> Option<(TypeRef, TypeRef)> {
         self.resume_scopes
             .iter()
             .rev()
-            .any(|scope| scope.contains(&local_id))
-            .then(|| self.lookup(local_id))
-            .flatten()
+            .find_map(|scope| scope.get(&local_id).copied())
     }
 
     /// Look up a function's type scheme by name.
@@ -667,18 +667,6 @@ mod tests {
             ctx.convert_logical_type(&mut ir, never),
             core::Never::params().intern(&mut ir).as_type_ref()
         );
-
-        let resume = AstType::new(
-            &db,
-            TypeKind::Continuation {
-                arg: int,
-                result: int,
-                effect,
-            },
-        );
-        let resume = ctx.convert_logical_type(&mut ir, resume);
-        let resume_data = ir.get_type(resume);
-        assert!(resume_data.name.is(&ir, "tribute_control.resume_token"));
 
         let tuple = AstType::new(&db, TypeKind::Tuple(vec![callable, never]));
         let tuple_ir = ctx.convert_logical_type(&mut ir, tuple);

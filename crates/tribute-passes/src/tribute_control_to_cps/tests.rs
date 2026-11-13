@@ -1007,7 +1007,7 @@ fn post_boundary_rejects_a_convention_on_an_operation_that_cannot_carry_one() {
 #[test]
 fn post_boundary_rejects_recursively_nested_control_types() {
     let input = r#"core.module @test {
-  !nested = core.tuple<closure.closure<func.func_sig<(tribute_control.resume_token<core.i32, core.i32>) -> core.i32>>>
+  !nested = core.tuple<closure.closure<func.func_sig<(tribute_control.func_sig<(core.i32) -> core.i32>) -> core.i32>>>
 }"#;
     let (ctx, module) = parse(input);
     let error = verify_tribute_control_post_cps(&ctx, module, &mut Default::default()).unwrap_err();
@@ -1218,8 +1218,8 @@ fn textual_resumptive_handle_emits_one_resultless_delimiter() {
       tribute_control.yield %performed
     } do(%value: core.i32) {
         tribute_control.yield %value
-    } op @State @get(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>) : core.i32 {
-        %resumed = tribute_control.resume %token, %argument : core.i32
+    } op @State @get(%argument: core.i32) : core.i32 {
+        %resumed = tribute_control.resume %argument : core.i32
         tribute_control.yield %resumed
     }
     tribute_control.return %handled
@@ -1359,10 +1359,10 @@ fn multiple_arms_for_one_ability_emit_one_dispatcher() {
       tribute_control.yield %performed
     } do(%value: core.i32) {
         tribute_control.yield %value
-    } op @State @get(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>) : core.i32 {
-        %resumed = tribute_control.resume %token, %argument : core.i32
+    } op @State @get(%argument: core.i32) : core.i32 {
+        %resumed = tribute_control.resume %argument : core.i32
         tribute_control.yield %resumed
-    } op @State @set(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>) : core.i32 {
+    } op @State @set(%argument: core.i32) : core.i32 {
         %fallback = arith.constant 9 : core.i32
         tribute_control.yield %fallback
     }
@@ -2089,16 +2089,16 @@ fn nested_same_ability_resumes_rebuild_the_dynamic_frame_dispatcher() {
         tribute_control.yield %performed
       } do(%value: core.i32) {
           tribute_control.yield %value
-      } op @State @get(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>) : core.i32 {
-          %resumed = tribute_control.resume %token, %argument : core.i32
+      } op @State @get(%argument: core.i32) : core.i32 {
+          %resumed = tribute_control.resume %argument : core.i32
           tribute_control.yield %resumed
       }
       %performed = tribute_control.perform op @State @get(%inner) : (core.i32) -> core.i32
       tribute_control.yield %performed
     } do(%value: core.i32) {
         tribute_control.yield %value
-    } op @State @get(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>) : core.i32 {
-        %resumed = tribute_control.resume %token, %argument : core.i32
+    } op @State @get(%argument: core.i32) : core.i32 {
+        %resumed = tribute_control.resume %argument : core.i32
         tribute_control.yield %resumed
     }
     tribute_control.return %outer
@@ -2126,16 +2126,16 @@ fn nested_cross_ability_resumes_rebuild_the_dynamic_frame_dispatcher() {
         tribute_control.yield %performed
       } do(%value: core.i32) {
           tribute_control.yield %value
-      } op @Console @read(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>) : core.i32 {
-          %resumed = tribute_control.resume %token, %argument : core.i32
+      } op @Console @read(%argument: core.i32) : core.i32 {
+          %resumed = tribute_control.resume %argument : core.i32
           tribute_control.yield %resumed
       }
       %performed = tribute_control.perform op @State @get(%inner) : (core.i32) -> core.i32
       tribute_control.yield %performed
     } do(%value: core.i32) {
         tribute_control.yield %value
-    } op @State @get(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>) : core.i32 {
-        %resumed = tribute_control.resume %token, %argument : core.i32
+    } op @State @get(%argument: core.i32) : core.i32 {
+        %resumed = tribute_control.resume %argument : core.i32
         tribute_control.yield %resumed
     }
     tribute_control.return %outer
@@ -2712,8 +2712,8 @@ fn a_handle_in_a_direct_callable_runs_under_a_value_delimiter() {
       tribute_control.yield %performed
     } do(%value: core.i32) {
         tribute_control.yield %value
-    } op @State @get(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>) : core.i32 {
-        %resumed = tribute_control.resume %token, %argument : core.i32
+    } op @State @get(%argument: core.i32) : core.i32 {
+        %resumed = tribute_control.resume %argument : core.i32
         tribute_control.yield %resumed
     }
     tribute_control.return %handled
@@ -2932,4 +2932,224 @@ fn a_lambda_with_two_bodies_lifts_an_entry_per_body() {
     crate::closure_lower::lower_prepared_closures(&mut ctx, module).unwrap();
     let lowered = module.op().display(&ctx).to_string();
     assert!(!lowered.contains("closure.new"), "{lowered}");
+}
+
+/// The converted resumptive arm of the one `ability.handle` in `module` with
+/// its two tokens, first and installed.
+fn converted_resumptive_arm(ctx: &IrContext, module: Module) -> (OpRef, ValueRef, ValueRef) {
+    let mut handle = None;
+    let _ = trunk_ir::walk::walk_op::<()>(ctx, module.op(), &mut |op| {
+        if ability::Handle::matches(ctx, op) {
+            assert!(handle.replace(op).is_none(), "expected one ability.handle");
+        }
+        std::ops::ControlFlow::Continue(trunk_ir::walk::WalkAction::Advance)
+    });
+    let handle = handle.expect("a converted ability.handle");
+    let arm = ability::Handle::from_op(ctx, handle)
+        .unwrap()
+        .arms(ctx)
+        .first()
+        .copied()
+        .expect("a handler arm");
+    let trunk_ir::ValueDef::OpResult(lambda, _) = ctx.value_def(arm) else {
+        panic!("an arm is a closure.lambda result");
+    };
+    let block = ctx.region(ctx.op_regions(lambda).next().unwrap()).blocks[0];
+    let args = ctx.block_args(block);
+    let [.., first, installed] = args else {
+        panic!("a resumptive arm has two tokens");
+    };
+    assert_eq!(ctx.value_ty(*first), ctx.value_ty(*installed));
+    (lambda, *first, *installed)
+}
+
+/// The `closure.lambda`s strictly under `root` that capture exactly
+/// `capture`, outermost first.
+fn lambdas_capturing(ctx: &IrContext, root: OpRef, capture: ValueRef) -> Vec<OpRef> {
+    let mut lambdas = Vec::new();
+    let _ = trunk_ir::walk::walk_op::<()>(ctx, root, &mut |op| {
+        if op != root && closure::Lambda::matches(ctx, op) && ctx.op_operands(op) == [capture] {
+            lambdas.push(op);
+        }
+        std::ops::ControlFlow::Continue(trunk_ir::walk::WalkAction::Advance)
+    });
+    lambdas
+}
+
+/// The `func.tail_call_indirect`s under `root` that enter `callee`.
+fn transfers_into(ctx: &IrContext, root: OpRef, callee: ValueRef) -> usize {
+    let mut count = 0;
+    let _ = trunk_ir::walk::walk_op::<()>(ctx, root, &mut |op| {
+        if let Ok(transfer) = func::TailCallIndirect::from_op(ctx, op)
+            && transfer.callee(ctx) == callee
+        {
+            count += 1;
+        }
+        std::ops::ControlFlow::Continue(trunk_ir::walk::WalkAction::Advance)
+    });
+    count
+}
+
+fn convert_state_get(input: &str) -> (IrContext, Module) {
+    let (mut ctx, module) = parse(input);
+    let declarations = operation_declarations(&mut ctx, &[("State", "get")]);
+    tribute_control::declare_operations(&mut ctx, module, &declarations);
+    tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default()).unwrap();
+    (ctx, module)
+}
+
+#[test]
+fn a_resume_in_the_arm_body_enters_the_installed_token() {
+    let input = r#"core.module @test {
+  tribute_cps.func @run(%input: core.i32) -> core.i32 convention(cps) {
+    %handled = tribute_control.handle : core.i32 {
+      %performed = tribute_control.perform op @State @get(%input) : (core.i32) -> core.i32
+      tribute_control.yield %performed
+    } do(%value: core.i32) {
+        tribute_control.yield %value
+    } op @State @get(%argument: core.i32) : core.i32 {
+        %resumed = tribute_control.resume %argument : core.i32
+        tribute_control.yield %resumed
+    }
+    tribute_control.return %handled
+  }
+}"#;
+    let (ctx, module) = convert_state_get(input);
+    let (arm, first, installed) = converted_resumptive_arm(&ctx, module);
+    assert_ne!(first, installed);
+    assert_eq!(transfers_into(&ctx, arm, installed), 1);
+    assert_eq!(transfers_into(&ctx, arm, first), 0);
+}
+
+#[test]
+fn a_lambda_carrying_the_resumption_captures_the_first_token() {
+    let input = r#"core.module @test {
+  tribute_cps.func @run(%input: core.i32) -> core.i32 convention(cps) {
+    %handled = tribute_control.handle : core.i32 {
+      %performed = tribute_control.perform op @State @get(%input) : (core.i32) -> core.i32
+      tribute_control.yield %performed
+    } do(%value: core.i32) {
+        tribute_control.yield %value
+    } op @State @get(%argument: core.i32) : core.i32 {
+        %thunk = tribute_cps.lambda(%v: core.i32) -> core.i32 captures [] entries {
+          cps {
+            %resumed = tribute_control.resume %v : core.i32
+            tribute_control.return %resumed
+          }
+        }
+        %answer = tribute_cps.call_indirect %thunk(%argument) attributes {convention = "cps"} : (core.i32) -> core.i32
+        tribute_control.yield %answer
+    }
+    tribute_control.return %handled
+  }
+}"#;
+    let (ctx, module) = convert_state_get(input);
+    let (arm, first, installed) = converted_resumptive_arm(&ctx, module);
+    let [lambda] = lambdas_capturing(&ctx, arm, first)[..] else {
+        panic!(
+            "one lambda captures the token: {}",
+            module.op().display(&ctx)
+        );
+    };
+    assert_eq!(transfers_into(&ctx, lambda, first), 1);
+    assert_eq!(transfers_into(&ctx, lambda, installed), 0);
+}
+
+#[test]
+fn nested_lambdas_carrying_the_resumption_each_capture_the_first_token() {
+    let input = r#"core.module @test {
+  tribute_cps.func @run(%input: core.i32) -> core.i32 convention(cps) {
+    %handled = tribute_control.handle : core.i32 {
+      %performed = tribute_control.perform op @State @get(%input) : (core.i32) -> core.i32
+      tribute_control.yield %performed
+    } do(%value: core.i32) {
+        tribute_control.yield %value
+    } op @State @get(%argument: core.i32) : core.i32 {
+        %outer = tribute_cps.lambda(%v: core.i32) -> core.i32 captures [] entries {
+          cps {
+            %inner = tribute_cps.lambda(%w: core.i32) -> core.i32 captures [] entries {
+              cps {
+                %resumed = tribute_control.resume %w : core.i32
+                tribute_control.return %resumed
+              }
+            }
+            %called = tribute_cps.call_indirect %inner(%v) attributes {convention = "cps"} : (core.i32) -> core.i32
+            tribute_control.return %called
+          }
+        }
+        %answer = tribute_cps.call_indirect %outer(%argument) attributes {convention = "cps"} : (core.i32) -> core.i32
+        tribute_control.yield %answer
+    }
+    tribute_control.return %handled
+  }
+}"#;
+    let (ctx, module) = convert_state_get(input);
+    let (arm, first, _) = converted_resumptive_arm(&ctx, module);
+    let lambdas = lambdas_capturing(&ctx, arm, first);
+    let [_outer, inner] = lambdas[..] else {
+        panic!(
+            "two lambdas capture the token: {}",
+            module.op().display(&ctx)
+        );
+    };
+    assert_eq!(transfers_into(&ctx, inner, first), 1);
+}
+
+#[test]
+fn a_resume_in_a_nested_handle_body_binds_to_the_outer_arm() {
+    let input = r#"core.module @test {
+  tribute_cps.func @run(%input: core.i32) -> core.i32 convention(cps) {
+    %handled = tribute_control.handle : core.i32 {
+      %performed = tribute_control.perform op @State @get(%input) : (core.i32) -> core.i32
+      tribute_control.yield %performed
+    } do(%value: core.i32) {
+        tribute_control.yield %value
+    } op @State @get(%argument: core.i32) : core.i32 {
+        %nested = tribute_control.handle : core.i32 {
+          %resumed = tribute_control.resume %argument : core.i32
+          tribute_control.yield %resumed
+        } do(%done: core.i32) {
+            tribute_control.yield %done
+        } op @State @get(%inner_argument: core.i32) : core.i32 {
+            tribute_control.yield %inner_argument
+        }
+        tribute_control.yield %nested
+    }
+    tribute_control.return %handled
+  }
+}"#;
+    let (ctx, module) = convert_state_get(input);
+    let mut handles = Vec::new();
+    let _ = trunk_ir::walk::walk_op::<()>(&ctx, module.op(), &mut |op| {
+        if ability::Handle::matches(&ctx, op) {
+            handles.push(op);
+        }
+        std::ops::ControlFlow::Continue(trunk_ir::walk::WalkAction::Advance)
+    });
+    // The outer handle follows its arms, which hold the inner one.
+    let [_inner, outer] = handles[..] else {
+        panic!("two converted handles");
+    };
+    let outer = ability::Handle::from_op(&ctx, outer).unwrap();
+    let trunk_ir::ValueDef::OpResult(arm, _) = ctx.value_def(outer.arms(&ctx)[0]) else {
+        panic!("an arm is a closure.lambda result");
+    };
+    let block = ctx.region(ctx.op_regions(arm).next().unwrap()).blocks[0];
+    let installed = *ctx.block_args(block).last().unwrap();
+    let mut plans = Vec::new();
+    let _ = trunk_ir::walk::walk_op::<()>(&ctx, arm, &mut |op| {
+        if let Ok(transfer) = func::TailCallIndirect::from_op(&ctx, op)
+            && transfer.callee(&ctx) == installed
+        {
+            plans.push(
+                ctx.op_attrs(op)
+                    .get(tribute_control::EVIDENCE_PLAN_ATTR)
+                    .is_some(),
+            );
+        }
+        std::ops::ControlFlow::Continue(trunk_ir::walk::WalkAction::Advance)
+    });
+    assert_eq!(plans, [true], "{}", module.op().display(&ctx));
+    let printed = module.op().display(&ctx).to_string();
+    assert!(printed.contains("{outer = @State}"), "{printed}");
 }
