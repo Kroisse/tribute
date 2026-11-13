@@ -664,9 +664,10 @@ branch, guard, 오른쪽 항만 실행한다.
 3. Resumptive general `op` arm은 affine resumption을 받는다.
    `tribute_control.resume`은 수행된 operation result를 공급하고 capture한 body
    continuation을 실행한 뒤, 반환된 handle answer로 arm-local suffix를 실행한다.
-   Source `op -> Never` arm은 resumption을 받지 않고 `resume`을 포함할 수 없으며
-   yield type은 enclosing handle result type과 같아야 한다. Converter는 rewrite
-   전에 verifier와 같은 조건을 확인한다.
+   Source `op -> Never` arm은 resumption을 받지 않고 바깥 arm의 resumption도
+   가리므로, 그 안의 `resume`은 더 안쪽에 중첩된 resumptive arm의 것만 될 수
+   있다. 이 arm의 yield type은 enclosing handle result type과 같아야 한다.
+   Converter는 rewrite 전에 verifier와 같은 조건을 확인한다.
 4. Resume하지 않고 yield하는 general arm은 해당 handle을 직접 완료한다. 포기된
    performed-computation suffix와 completion region을 건너뛴다.
 5. Nested handle은 같은 delimiter를 재귀적으로 만든다. Resumed path는 perform과
