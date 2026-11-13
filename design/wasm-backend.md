@@ -648,8 +648,10 @@ descriptor](runtime-types.md#wasm-배치) index를 두어 runtime identity를 �
   `Described`로의 cast는 실패할 수 있다.
 - `heap.box`가 가리키는 object는 만든 뒤 바뀌지 않으므로 사용자 struct와 variant의
   필드도 immutable이다. Wasm에는 refcount가 없으므로 `heap.struct_update`와
-  `heap.array_set`은 언제나 새 GC object를 만든다. `heap.cell<T>`는 mutable 필드 하나를
-  가진 GC struct이며, `heap.cell_set`은 그 필드의 `struct.set`이다.
+  `heap.array_set`은 언제나 새 GC object를 만든다. `heap.cell<T>`는 `T`의 leaf마다
+  mutable 필드 하나를 가진 GC struct다. `heap.cell_get`은 leaf마다 `struct.get`,
+  `heap.cell_set`은 leaf마다 `struct.set`이며, 그 사이에 다른 코드가 cell을 읽지 않으므로
+  여러 필드에 나눠 써도 한 번의 쓰기로 보인다.
 - Variant 판별은 descriptor 필드를 비교한다. Enum 참조를 `Described`로 cast해
   descriptor를 읽고 그 variant의 descriptor 번호와 비교한다. Variant마다 별개의 GC
   타입 index를 두고 `ref.test`로 구별하지 않는다. 프로그램이 할당하지 않는 variant는

@@ -1196,8 +1196,12 @@ Object는 두 종류다. `heap.box`가 가리키는 object는 만든 뒤 내용�
 
 - `heap.cell<T>`는 `T` 값 하나를 담은 가변 object에 대한 managed 참조다. ML의 `ref`와
   같다. `T`는 표현 선택 뒤의 저장 표현이며, managed 값이면 cell이 그 unit 하나를 가진다.
+  Cell의 값 자리는 다른 object의 필드와 같다. Unboxed 타입의 값은 cell 안에 inline으로
+  놓이고, leaf마다 가변 필드 하나가 된다.
 - `heap.cell_new`가 초기값으로 cell을 만들고, `heap.cell_get`이 현재 값을 읽고,
   `heap.cell_set`이 값을 바꾼다. 같은 cell을 가리키는 모든 참조가 바뀐 값을 본다.
+  값이 inline이면 세 operation은 그 leaf들을 받거나 내며, `heap.cell_set`은 모든 leaf를
+  한 번에 바꾼다.
 - Cell의 descriptor는 값 하나를 필드로 가진 compiler 소유 값의 descriptor다.
 - 소스 언어에는 cell이 없다. Compiler가 쓰는 cell은
   [값 delimiter](cps-effects.md#값-delimiter)의 completion cell과 one-shot resumption의

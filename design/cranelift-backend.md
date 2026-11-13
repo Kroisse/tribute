@@ -388,9 +388,9 @@ struct 할당과 함께 낮춘다. [할당 크기](rc.md#array)로 `__tribute_al
   layout의 정적 할당 크기다.
 - `heap.array_get`, `heap.array_set`, `heap.array_len`은 `len`과 원소 자리의
   `clif.load`/`clif.store`가 된다. 원소 자리는 `payload + 8 + index × stride`다.
-- `heap.cell<T>`는 `T` 필드 하나를 가진 RC object다. `heap.cell_get`과
-  `heap.cell_set`은 그 필드의 `clif.load`/`clif.store`이며, `heap.cell_set`은 이전
-  값에 replaced-field release를 적용한다.
+- `heap.cell<T>`는 `T`의 leaf마다 필드 하나를 가진 RC object다. `heap.cell_get`과
+  `heap.cell_set`은 그 필드들의 `clif.load`/`clif.store`이며, `heap.cell_set`은 이전
+  값의 managed leaf에 replaced-field release를 적용한다.
 
 `heap.array_new`와 `heap.array_splice`가 원소를 채우거나 복사하는 반복은 배열
 descriptor마다 한 번 만드는 helper `clif.func`가 맡는다. `heap.array_splice`의

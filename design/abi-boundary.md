@@ -84,7 +84,8 @@ compiler가 값마다 표현을 고른다. 표현 선택은 값 의미론인 [`a
   빌린 읽기가 되며, `adt.struct_update`와 `adt.array_set`은 source box를 소비하는
   `heap` 갱신이 된다. Unboxed 값의 갱신은 바뀌는 leaf만 바꿔 끼운다.
 - **Cell은 표현 선택의 대상이 아니다.** Compiler가 쓰는 [`heap.cell`](tribute-dialects.md#heapcell)은
-  표현 선택 전부터 object다.
+  표현 선택 전부터 object다. Cell이 담은 값은 다른 object의 필드처럼 저장 표현을
+  따르므로, unboxed 값은 cell 안에 inline으로 놓인다.
 - **강제 위치에서는 언제나 box에 담는다.** Unboxed로 고른 타입도 이 위치를 지날 때는
   필드 값으로 object를 할당하고, 거기서 나올 때는 필드를 읽는다.
   - 배열의 원소. Target이 원소를 inline으로 저장하지 못하는 동안이다.
