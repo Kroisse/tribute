@@ -53,12 +53,27 @@ impl OpDef {
         self.flags.iter().any(|flag| std::ptr::eq(*flag, F::DEF))
     }
 
-    /// Run the declarative schema stages and then the `#[verify]` hook,
-    /// stopping after the first stage that reports a violation.
+    /// Run the declarative schema stages, then the verifier of each declared
+    /// flag, then the `#[verify]` hook, stopping after the first stage that
+    /// reports a violation.
     pub fn verify(&self, ctx: &IrContext, op: OpRef) -> Vec<OpViolation> {
         let violations = self.schema.verify(ctx, op);
         if !violations.is_empty() {
             return violations.into_iter().map(OpViolation::Schema).collect();
+        }
+        let violations: Vec<_> = self
+            .flags
+            .iter()
+            .filter_map(|flag| {
+                let error = (flag.verifier?)(ctx, op).err()?;
+                Some(OpViolation::Flag {
+                    flag: flag.name,
+                    message: error.to_string(),
+                })
+            })
+            .collect();
+        if !violations.is_empty() {
+            return violations;
         }
         match self.verifier.map(|verifier| verifier(ctx, op)) {
             Some(Err(error)) => vec![OpViolation::Verifier(error.to_string())],
@@ -93,6 +108,9 @@ pub enum OpViolation {
     /// The operation violates its declarative schema.
     #[display("{_0}")]
     Schema(SchemaViolation),
+    /// The verifier of a flag the operation declares rejected it.
+    #[display("{flag}: {message}")]
+    Flag { flag: &'static str, message: String },
     /// The operation's `#[verify]` hook rejected it.
     #[display("{_0}")]
     Verifier(String),

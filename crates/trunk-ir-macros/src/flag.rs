@@ -8,9 +8,14 @@ use quote::quote;
 
 /// Expand `#[op_flag]` on a unit struct.
 pub fn gen_flag(attr: TokenStream, item: TokenStream) -> Result<TokenStream, String> {
-    if !attr.is_empty() {
-        return Err("`#[op_flag]` takes no arguments".into());
-    }
+    let verify = {
+        let mut args = attr.into_iter();
+        match (args.next(), args.next()) {
+            (None, _) => false,
+            (Some(TokenTree::Ident(arg)), None) if arg == "verify" => true,
+            _ => return Err("`#[op_flag]` takes no arguments other than `verify`".into()),
+        }
+    };
     let mut tokens = item.clone().into_iter().peekable();
     while matches!(tokens.peek(), Some(TokenTree::Punct(p)) if p.as_char() == '#') {
         tokens.next();
@@ -47,11 +52,21 @@ pub fn gen_flag(attr: TokenStream, item: TokenStream) -> Result<TokenStream, Str
 
     let krate = quote!(::trunk_ir);
     let name_str = name.to_string();
+    let verifier = if verify {
+        quote!(::core::option::Option::Some(
+            <#name as #krate::op_flag::VerifyFlag>::verify
+        ))
+    } else {
+        quote!(::core::option::Option::None)
+    };
     Ok(quote! {
         #item
 
         const _: () = {
-            static DEF: #krate::op_flag::OpFlagDef = #krate::op_flag::OpFlagDef { name: #name_str };
+            static DEF: #krate::op_flag::OpFlagDef = #krate::op_flag::OpFlagDef {
+                name: #name_str,
+                verifier: #verifier,
+            };
 
             impl #krate::op_flag::OpFlag for #name {
                 const DEF: &'static #krate::op_flag::OpFlagDef = &DEF;
@@ -78,12 +93,25 @@ mod tests {
         assert!(out.contains("pub struct Pure ;"), "got: {out}");
         assert!(
             out.contains(
-                "static DEF : :: trunk_ir :: op_flag :: OpFlagDef = :: trunk_ir :: op_flag :: OpFlagDef { name : \"Pure\" }"
+                "static DEF : :: trunk_ir :: op_flag :: OpFlagDef = :: trunk_ir :: op_flag :: OpFlagDef { name : \"Pure\" , verifier : :: core :: option :: Option :: None , }"
             ),
             "got: {out}"
         );
         assert!(
             out.contains("impl :: trunk_ir :: op_flag :: OpFlag for Pure"),
+            "got: {out}"
+        );
+    }
+
+    #[test]
+    fn verify_points_to_the_verify_flag_impl() {
+        let out = gen_flag(quote!(verify), quote! { pub struct Isolated; })
+            .unwrap()
+            .to_string();
+        assert!(
+            out.contains(
+                "verifier : :: core :: option :: Option :: Some (< Isolated as :: trunk_ir :: op_flag :: VerifyFlag > :: verify)"
+            ),
             "got: {out}"
         );
     }
@@ -102,10 +130,12 @@ mod tests {
             let err = gen_flag(TokenStream::new(), item).unwrap_err();
             assert!(err.contains(expected), "unexpected error: {err}");
         }
-        assert!(
-            gen_flag(quote!(x), quote! { struct Pure; })
-                .unwrap_err()
-                .contains("takes no arguments")
-        );
+        for args in [quote!(x), quote!(verify, verify)] {
+            assert!(
+                gen_flag(args, quote! { struct Pure; })
+                    .unwrap_err()
+                    .contains("takes no arguments other than `verify`")
+            );
+        }
     }
 }

@@ -90,16 +90,18 @@ smallest layer that can state an invariant precisely.
 
 | Layer | Responsibility | Failure timing | Examples |
 | ---- | ---- | ---- | ---- |
-| Operation verifier | Local invariants of one operation: operand/result/successor counts, operand/result/type-attribute type constraints and their equality or projection relations, required attributes, attribute domains, region shape, and terminator requirements that can be checked without global analysis. | At explicit operation validation checkpoints. Parsers, raw builders, and intermediate rewrites may temporarily violate schema constraints; only checks outside the schema, such as custom assembly parsing, may also fail at parse time. | `arith.cmpf` accepts only the predicates its kind lists; an op with regions requires the expected region count and terminator form. |
+| Operation verifier | Local invariants of one operation: operand/result/successor counts, operand/result/type-attribute type constraints and their equality or projection relations, required attributes, attribute domains, region shape, terminator requirements, and the invariants of its declared flags (which may walk the operation's own regions) that can be checked without global analysis. | At explicit operation validation checkpoints. Parsers, raw builders, and intermediate rewrites may temporarily violate schema constraints; only checks outside the schema, such as custom assembly parsing, may also fail at parse time. | `arith.cmpf` accepts only the predicates its kind lists; an op with regions requires the expected region count and terminator form; an `IsolatedFromAbove` op uses no value defined outside it. |
 | Conversion target | Dialect and type legality at a named lowering boundary. | Immediately after a pass or pass group claims a conversion boundary. Partial conversion rejects explicitly illegal operations; full conversion also rejects unknown operations. | Ability lowering leaves no `ability.perform`; backend-ready native IR contains only `clif.*` plus allowed infrastructure ops. |
-| Pass-manager verifier | Whole-IR consistency after transformations, with the offending pass identified. | After each pass registered in a `PassManager` when a verifier hook is installed. | SSA use-chain consistency, value visibility across isolated regions, or other graph-wide invariants. |
+| Pass-manager verifier | Whole-IR consistency after transformations, with the offending pass identified. | After each pass registered in a `PassManager` when a verifier hook is installed. | SSA use-chain consistency, value visibility between sibling and nested regions, or other graph-wide invariants. |
 | Operation interface and flag | Shared behavior or property queried generically across dialects. | At the consumer that needs dialect-independent behavior. Interfaces and flags should be introduced only for multiple concrete consumers or one generic transform. | `CallLike` for direct callees; the `Pure` flag for DCE removability; the `IsolatedFromAbove` flag for nested pass-manager anchoring. |
 
 Local operation verifiers must not depend on conversion state or pass ordering.
 Conversion targets must not duplicate local semantic checks. Pass-manager
 verifiers should remain responsible for graph-wide invariants that require
-walking use-def chains, symbol tables, or nested region relationships. Operation
-interfaces and flags describe behavior and properties, not validation phases.
+walking use-def chains, symbol tables, or region relationships beyond one
+operation's own invariants. Operation interfaces and flags describe behavior and
+properties, not validation phases; a flag that states an invariant checks it as
+part of the operation verifier.
 
 ## Interface와 flag
 
@@ -127,10 +129,21 @@ interface와 같다. Type interface의 메서드는 그 타입의 wrapper로 호
 
 Operation flag는 동작 없이 operation 정의가 선언하는 예/아니오 성질이다
 (`Pure`, `IsolatedFromAbove`). 어느 crate든 `#[op_flag]`를 붙인 unit struct로 flag를
-선언한다. Flag는 구현을 갖지 않고 operation definition에 직접 들어가므로 registry
-없이 조회한다. Interface와 달리 닫혀 있어서, operation을
+선언한다. Flag는 operation마다의 구현을 갖지 않고 operation definition에 직접
+들어가므로 registry 없이 조회한다. Interface와 달리 닫혀 있어서, operation을
 정의한 dialect만 그 operation의 flag를 정할 수 있다. 메서드가 없더라도 다른 crate가
 남의 operation에 붙여야 하는 성질은 flag가 아니라 interface로 정의한다.
+
+Flag가 불변식을 말하면 그 불변식은 operation 이름이 아니라 flag가 검사한다(MLIR
+trait의 `verifyTrait`). `#[op_flag(verify)]`로 선언한 flag는 verifier를 하나 가지며,
+operation 정의의 검증은 그 flag를 선언한 모든 operation에서 이를 실행한다. 새
+operation이 flag를 선언하면 검사도 함께 따라오므로 검사할 이름 목록을 두지 않는다.
+Flag verifier는 operation의 region을 걸어도 된다. `IsolatedFromAbove`는 operation의
+region 어디에서든 operation 밖에서 정의된 값을 operand로 쓰면 거부하며, 같은 flag를
+가진 중첩 operation 안으로는 들어가지 않는다. 그 operation이 스스로 검사한다.
+Region 사이의 값 가시성(형제 region이나 하위 region에서 정의한 값을 쓰지 않는지)은
+flag의 불변식이 아니므로 whole-IR 검증이 맡고, `IsolatedFromAbove` operation마다
+새 scope를 연다.
 
 `Terminator` flag는 operation이 자기 block의 마지막 operation이어야 한다는
 성질이다(MLIR의 `IsTerminator`). 이 flag는 제어가 어디로 가는지 말하지 않는다.
@@ -252,7 +265,8 @@ panic하는 대신 진단을 남길 수 있어야 한다.
    단계에서 보고한다.
 4. 투영과 타입 목록 관계. 투영 등식 우변의 투영과 투영끼리의 등식도
    포함한다.
-5. 사용자 정의 로컬 verifier.
+5. 선언한 flag의 verifier([Interface와 flag](#interface와-flag)).
+6. 사용자 정의 로컬 verifier.
 
 진단은 operation, 위치, 필드 이름과 index, 기대 제약, 실제 타입을 포함한다.
 정의 자체의 오류(미선언 변수, 모호하거나 존재하지 않는 투영, 종류 불일치,

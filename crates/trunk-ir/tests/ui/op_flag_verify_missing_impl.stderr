@@ -1,0 +1,17 @@
+error[E0277]: `#[op_flag(verify)]` requires `VerifyFlag` for `Checked`
+ --> tests/ui/op_flag_verify_missing_impl.rs:2:12
+  |
+2 | pub struct Checked;
+  |            ^^^^^^^ unsatisfied trait bound
+  |
+help: the trait `VerifyFlag` is not implemented for `Checked`
+ --> tests/ui/op_flag_verify_missing_impl.rs:2:1
+  |
+2 | pub struct Checked;
+  | ^^^^^^^^^^^^^^^^^^
+  = note: add `impl VerifyFlag for Checked { fn verify(ctx: &IrContext, op: OpRef) -> Result<(), VerificationError> { .. } }`
+help: the trait `VerifyFlag` is implemented for `IsolatedFromAbove`
+ --> src/op_flag.rs
+  |
+  | impl VerifyFlag for IsolatedFromAbove {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

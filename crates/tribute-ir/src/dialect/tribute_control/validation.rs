@@ -383,32 +383,6 @@ pub(super) fn walk_region_ops(
     }
 }
 
-pub(super) fn validate_func_isolation(
-    ctx: &IrContext,
-    op: OpRef,
-    body: RegionRef,
-    errors: &mut Vec<ValidationError>,
-) {
-    let mut defined = HashSet::default();
-    collect_region_values(ctx, body, &mut defined);
-    let mut invalid = Vec::new();
-    walk_region_ops(ctx, body, &mut |nested| {
-        for operand in ctx.op_operands(nested).iter().copied() {
-            if !defined.contains(&operand) {
-                invalid.push((nested, operand));
-            }
-        }
-    });
-    for (consumer, value) in invalid {
-        push_op_error(
-            ctx,
-            op,
-            errors,
-            format!("isolated func body operation {consumer} references external value {value}"),
-        );
-    }
-}
-
 pub(super) fn validate_return_or_yield_shape(
     ctx: &IrContext,
     op: OpRef,

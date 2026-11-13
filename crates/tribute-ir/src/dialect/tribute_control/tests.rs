@@ -1802,7 +1802,12 @@ fn local_validator_rejects_external_reference_in_isolated_func() {
     );
 
     let result = validate_local(&ctx, module);
-    assert!(messages(&result).contains("references external value"));
+    let messages = messages(&result);
+    assert!(
+        messages.contains("IsolatedFromAbove: operand #0 of tribute_control.return uses")
+            && messages.contains("defined outside this isolated operation"),
+        "{messages}"
+    );
 }
 
 #[test]

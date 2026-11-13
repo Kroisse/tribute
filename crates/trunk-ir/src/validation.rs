@@ -3,9 +3,9 @@
 //! Arena IR uses mutable `IrContext` with explicit use-chains. This module
 //! provides two kinds of validation:
 //!
-//! 1. **Scope validation**: Checks that every operand in a function references
-//!    a value defined within that function's region tree (block args + op results).
-//!    This mirrors the Salsa-based `validation.rs`.
+//! 1. **Scope validation**: Checks that every operand references a value
+//!    visible from its region, without crossing an `IsolatedFromAbove`
+//!    operation.
 //!
 //! 2. **Use-chain consistency**: Checks that the use-chain stored in `IrContext`
 //!    exactly matches the actual operands of all operations. This is unique to
@@ -148,7 +148,8 @@ fn describe_value(ctx: &IrContext, v: ValueRef) -> String {
 /// checking operands, and the extended set is propagated into nested
 /// sub-regions. Values defined inside sub-regions are **never** added back
 /// to the outer set, enforcing directional visibility across region
-/// boundaries.
+/// boundaries. The regions of an [`IsolatedFromAbove`] operation start a new
+/// scope with nothing visible.
 fn check_operands_in_region(
     ctx: &IrContext,
     region: RegionRef,
@@ -172,65 +173,38 @@ fn check_operands_in_region(
                     });
                 }
             }
-            // Propagate the extended visible set into nested regions.
-            for nested_region in ctx.op_regions(op) {
-                check_operands_in_region(ctx, nested_region, &visible, function_name, errors);
-            }
-        }
-    }
-}
-
-/// Validate value integrity for all `func.func` and `wasm.func` operations in a module.
-///
-/// For each function, checks that every operand references a value defined
-/// within that function's region tree.
-pub fn validate_value_integrity(ctx: &IrContext, module: Module) -> ValidationResult {
-    let mut errors = Vec::new();
-
-    let body = match module.body(ctx) {
-        Some(r) => r,
-        None => {
-            return ValidationResult { errors };
-        }
-    };
-
-    validate_functions_in_region(ctx, body, &mut errors);
-
-    ValidationResult { errors }
-}
-
-fn validate_functions_in_region(
-    ctx: &IrContext,
-    region: RegionRef,
-    errors: &mut Vec<ValidationError>,
-) {
-    for &block in &ctx.region(region).blocks {
-        for &op in &ctx.block(block).ops {
-            let is_function = crate::dialect::func::Func::matches(ctx, op)
-                || crate::dialect::wasm::Func::matches(ctx, op);
-            if is_function {
-                // This is a func.func or wasm.func
-                let fn_name = ctx.op_attrs(op).get_str("sym_name").unwrap_or("<unnamed>");
-
-                // Check operands with visibility-based scoping.
-                // No values from outside the function body are visible.
-                for func_region in ctx.op_regions(op) {
-                    check_operands_in_region(
-                        ctx,
-                        func_region,
-                        &HashSet::default(),
-                        fn_name,
-                        errors,
-                    );
+            if IsolatedFromAbove::is_set(ctx, op) {
+                let name = ctx.op_attrs(op).get_str("sym_name").unwrap_or("<unnamed>");
+                for nested_region in ctx.op_regions(op) {
+                    check_operands_in_region(ctx, nested_region, &HashSet::default(), name, errors);
+                }
+            } else {
+                // Propagate the extended visible set into nested regions.
+                for nested_region in ctx.op_regions(op) {
+                    check_operands_in_region(ctx, nested_region, &visible, function_name, errors);
                 }
             }
-
-            // Recurse into nested regions (e.g., nested core.module)
-            for nested_region in ctx.op_regions(op) {
-                validate_functions_in_region(ctx, nested_region, errors);
-            }
         }
     }
+}
+
+/// Validate value visibility in a module.
+///
+/// Every operand must reference a value defined in its own region or an
+/// enclosing one, without crossing an [`IsolatedFromAbove`] operation, whose
+/// regions see no value from outside it. The flag's verifier checks the
+/// isolation alone; this check also rejects a value defined in a sibling or
+/// nested region.
+pub fn validate_value_integrity(ctx: &IrContext, module: Module) -> ValidationResult {
+    let mut errors = Vec::new();
+    if let Some(body) = module.body(ctx) {
+        let name = ctx
+            .op_attrs(module.op())
+            .get_str("sym_name")
+            .unwrap_or("<module>");
+        check_operands_in_region(ctx, body, &HashSet::default(), name, &mut errors);
+    }
+    ValidationResult { errors }
 }
 
 // ============================================================================
@@ -341,7 +315,9 @@ pub fn validate_use_chains(ctx: &IrContext, module: Module) -> ValidationResult 
 /// Operation verifiers are for constraints that can be checked from one
 /// operation and its immediate shape: required attributes, supported attribute
 /// values, operand/result arity, region count, and terminator requirements.
-/// They must not encode conversion-boundary legality or graph-wide invariants.
+/// The verifier of a declared flag also runs here; it may walk the
+/// operation's regions, as `IsolatedFromAbove`'s does. They must not encode
+/// conversion-boundary legality or graph-wide invariants.
 pub fn validate_operation_verifiers(ctx: &IrContext, module: Module) -> ValidationResult {
     let mut errors = Vec::new();
 

@@ -45,7 +45,6 @@ pub(crate) fn validate_func(ctx: &IrContext, op: OpRef, errors: &mut Vec<Validat
         .expect("schema-verified source function");
     if let Some(body) = ctx.op_region(op, 0) {
         validate_callable_body(ctx, op, ty, body, errors);
-        validate_func_isolation(ctx, op, body, errors);
     }
 }
 
