@@ -184,7 +184,10 @@ WasmGC 객체에는 header가 없으므로 객체가 descriptor를 필드로 가
   범위 다음부터 할당 순서대로 정한다. 단, enum은 처음 할당되는 variant의 순서에서
   선언된 variant 수만큼 연속된 번호를 선언 순서대로 받는다. 따라서 variant의
   선언 위치는 그 번호에서 enum의 첫 번호를 뺀 값이다. 할당되지 않는 variant의
-  번호는 비워 둔다. Closure를 제외한 builtin layout은 layout마다 필드와
+  번호는 비워 둔다. Object로 할당되지 않고 inline 값 필드로만 쓰이는 struct도
+  바깥 descriptor가 가리켜야 하므로 번호를 받는다. Descriptor를 모을 때 inline 값
+  필드의 layout도 함께 모으며, 그 번호도 할당 descriptor와 같이 처음 나타나는
+  순서대로 정한다. Closure를 제외한 builtin layout은 layout마다 필드와
   해제 동작이 하나로 고정되어 있으므로 descriptor도 layout마다 하나다.
 - Closure는 capture layout마다 GC 타입이 다르다. Wasm은 해제 정보가 필요 없고
   capture는 runtime 검사 대상이 아니므로, capture layout마다 descriptor를 두지 않고

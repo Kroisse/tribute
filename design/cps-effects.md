@@ -946,10 +946,13 @@ delimiter 밖으로 나갈 수 있다. 재개된 계산은 재개한 지점이 �
 **구성.** Delimiter는 다음을 소유한다.
 
 - 답을 담는 completion cell. [`heap.cell`](tribute-dialects.md#heapcell)이다. 답은
-  region이 끝나야 생기므로 cell은 답 없이 만들어진다. 그래서 `R`이 `core.nil`이면
-  `heap.cell<core.nil>`이고 nil로 시작하며, 그 밖에는 `R`을
-  `tribute_rt.anyref`로 지워 담는 `heap.cell<tribute_rt.anyref>`이고 null로 시작한다.
-  `Done<R>`는 답을 지워 쓰고, delimiter는 region이 끝난 뒤 읽은 값을 `R`로 되돌린다.
+  region이 끝나야 생기므로 cell은 답 없이 만들어진다. Cell의 값은 완료 표시
+  `core.i1`과 답 slot을 필드로 가진 compiler 소유 struct이며, cell 안에 inline으로
+  놓인다. 답 slot은 `R`이 `core.nil`이면 `core.nil`이고, 그 밖에는 `R`을 지운
+  `tribute_rt.anyref`다. Cell은 완료 표시 `false`와 빈 slot(nil 또는 null)으로 시작한다.
+  `Done<R>`는 완료 표시를 읽어 이미 `true`이면 trap하고, 아니면 완료 표시를 `true`로,
+  slot을 지운 답으로 함께 쓴다. 완료 표시가 slot과 따로 있으므로 `core.nil` 답의 두 번째
+  쓰기도 구별한다. Delimiter는 region이 끝난 뒤 slot을 읽어 `R`로 되돌린다.
 - cell에 정확히 한 번 쓰는 terminal `Done<R>`
 - 도달할 수 없는 terminal `Dispatch<R>`. 도달하면 trap한다
 - 이 둘을 담은 exact `ContinuationFrame<R>`
