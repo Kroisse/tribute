@@ -128,6 +128,8 @@ fn push_one_shot_resume(
         .regions(reject_region, enter_region)
         .build(ctx, location);
     ctx.push_op(wrapper_block, guard.op_ref());
+    let end = func::Unreachable::operands().build(ctx, location);
+    ctx.push_op(wrapper_block, end.op_ref());
     let region = single_block_region(ctx, location, wrapper_block);
     let wrapper = closure_over(ctx, location, region, resume_type, CallingConvention::Cps);
     ctx.push_op(block, wrapper.op_ref());

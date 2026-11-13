@@ -437,8 +437,9 @@ Cps`, callee ability row는 caller row에 포함) 조합은 다음 셋이다:
 꼬리 위치 structured arm 안의 `become`은 그 operation을 terminal로 만든다. 값을 내는
 arm(`scf.yield`)은 operation 뒤에 남은 suffix(감싼 callable의 `return` 또는 바깥 꼬리
 arm의 `scf.yield`)를 arm 안으로 복제해 이어 legalize하고, tail call로 끝나는 arm은
-그대로 callable을 떠난다. 그래서 legalized operation은 `core.never` 결과를 가지며 그
-뒤에 operation이 남지 않는다. Suffix에 넘길 evidence와 `ContinuationFrame<R>`는
+그대로 callable을 떠난다. 그래서 legalized operation은 미사용 `core.never` 결과를
+가지며, 그 뒤에는 block을 끝내는 `func.unreachable`만 남는다
+([block terminator](ir.md#interface와-flag)). Suffix에 넘길 evidence와 `ContinuationFrame<R>`는
 arm이 감싼 callable의 것을 그대로 쓴다.
 
 `func_table`이 `Direct`/`EvidenceDirect` entry마다 만드는 entry 함수는

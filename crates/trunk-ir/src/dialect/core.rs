@@ -1,11 +1,11 @@
 //! Arena-based core dialect.
 
 use crate::IrContext;
-use crate::op_flag::{IsolatedFromAbove, Pure};
+use crate::op_flag::{IsolatedFromAbove, NoTerminator, Pure};
 
 #[trunk_ir::dialect]
 mod core {
-    #[flags(IsolatedFromAbove)]
+    #[flags(IsolatedFromAbove, NoTerminator)]
     fn module(sym_name: Attr<String>) {
         #[region(body)]
         {}

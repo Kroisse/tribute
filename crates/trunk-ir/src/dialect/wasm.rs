@@ -3,7 +3,7 @@
 use crate::attr_kind::SymbolRef;
 use crate::attr_kind::{Bytes, Type};
 use crate::dialect::core::I32;
-use crate::op_flag::{IsolatedFromAbove, Terminator};
+use crate::op_flag::{IsolatedFromAbove, NoTerminator, Terminator};
 use crate::op_interface::{CallLike, IndirectCallLike};
 use crate::ops::{DialectOp, DialectType};
 use crate::refs::{OpRef, ValueRef};
@@ -28,6 +28,7 @@ mod wasm {
     ///   wasm.br {target = 0}
     /// }
     /// ```
+    #[flags(NoTerminator)]
     #[asm_format(("->" "(" types(results)^ ")")? attr_dict region(body))]
     fn block() -> Variadic<_> {
         #[region(body)]
@@ -49,6 +50,7 @@ mod wasm {
     /// their locals, so the body block arguments have no uses and the Wasm
     /// `loop` takes no parameters (`design/wasm-backend.md`, "명시적 지역
     /// 변수와 stack 계약").
+    #[flags(NoTerminator)]
     #[asm_format("(" init ")" ("->" "(" types(results)^ ")")? attr_dict region(body))]
     #[implements(StackOperandOrder)]
     fn r#loop(init: Variadic<_>) -> Variadic<_> {
@@ -63,6 +65,7 @@ mod wasm {
     ///   wasm.yield %b
     /// }
     /// ```
+    #[flags(NoTerminator)]
     #[asm_format(cond ("->" "(" types(results)^ ")")? attr_dict region(then_region) "else" region(else_region))]
     fn r#if(cond: Value<_>) -> Variadic<_> {
         #[region(then_region)]
@@ -205,7 +208,7 @@ mod wasm {
     ///   emitter declares each listed type as its Wasm value type
     ///   (`design/wasm-backend.md`, "명시적 지역 변수와 stack 계약").
     #[asm_format(symbol(sym_name) signature(r#type, body) attr_dict region(body))]
-    #[flags(IsolatedFromAbove)]
+    #[flags(IsolatedFromAbove, NoTerminator)]
     fn func<S: FuncSig>(
         sym_name: Attr<String>,
         r#type: Attr<TypeOf<S>>,
@@ -257,6 +260,7 @@ mod wasm {
     ///   wasm.ref_func @g : wasm.funcref
     /// }
     /// ```
+    #[flags(NoTerminator)]
     #[asm_format(("table" table^)? ("offset" offset^)? attr_dict region(funcs))]
     fn elem(#[default(0)] table: Attr<u32>, #[default(0)] offset: Attr<u32>) {
         #[region(funcs)]

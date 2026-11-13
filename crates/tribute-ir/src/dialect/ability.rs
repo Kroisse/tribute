@@ -9,7 +9,7 @@ pub use syntax::{Dispatchers, HandlerArms};
 
 use super::closure::Closure;
 use super::tribute_control::EvidenceStep;
-use trunk_ir::op_flag::Terminator;
+use trunk_ir::op_flag::{NoTerminator, Terminator};
 
 #[trunk_ir::dialect]
 mod ability {
@@ -58,6 +58,7 @@ mod ability {
     ///   naming the instance remains. The target's evidence lowering consumes
     ///   the last reference and removes the declaration. A declaration is not
     ///   a callable definition, so global DCE does not remove it.
+    #[flags(NoTerminator)]
     #[asm_format(symbol(sym_name) attr_dict region(operations))]
     fn decl(sym_name: Attr<String>) {
         #[region(operations)]

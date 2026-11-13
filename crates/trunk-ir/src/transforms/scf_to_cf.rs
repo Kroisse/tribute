@@ -185,6 +185,7 @@ fn lower_terminal_never_if(
         .position(|&candidate| candidate == block)
         .and_then(|index| blocks.get(index + 1).copied());
 
+    remove_dead_exit(ctx, block, scf_op);
     ctx.detach_op(scf_op);
     let then_blocks = inline_region_blocks(ctx, then_region, parent_region, insert_before);
     let else_blocks = inline_region_blocks(ctx, else_region, parent_region, insert_before);
@@ -198,6 +199,21 @@ fn lower_terminal_never_if(
     for &branch in then_blocks.iter().chain(&else_blocks) {
         transform_block(ctx, branch, plan);
     }
+}
+
+/// Remove the callable exit that terminates `block` after `scf_op`, whose
+/// arms all leave the callable. The branch that replaces `scf_op` ends the
+/// block instead, so the exit would only follow it as dead code.
+fn remove_dead_exit(ctx: &mut IrContext, block: BlockRef, scf_op: OpRef) {
+    let ops = &ctx.block(block).ops;
+    let Some(position) = ops.iter().position(|&op| op == scf_op) else {
+        return;
+    };
+    let &[exit] = &ops[position + 1..] else {
+        panic!("a terminal structured operation is followed by exactly one callable exit");
+    };
+    ctx.detach_op(exit);
+    ctx.remove_op(exit);
 }
 
 /// Lower `scf.if` to cf.cond_br + then/else/merge blocks.
@@ -367,6 +383,7 @@ fn lower_terminal_switch(
         .position(|&candidate| candidate == block)
         .and_then(|index| blocks.get(index + 1).copied());
 
+    remove_dead_exit(ctx, block, scf_op);
     ctx.detach_op(scf_op);
     let mut case_entries = Vec::new();
     let mut all_inlined = Vec::new();
@@ -1262,6 +1279,7 @@ mod tests {
     } else {
       func.tail_call_indirect %callee(%unit) attributes {test.marker = 2} : (core.nil) -> core.never
     }
+    func.unreachable
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -1275,6 +1293,15 @@ mod tests {
         let body = func_op.body(&ctx);
         let names = collect_op_names(&ctx, body);
         assert!(!names.iter().any(|name| name.starts_with("scf.")));
+        // The branch replaces the control, so the exit after it is dead and
+        // goes; the arm's own `func.unreachable` stays.
+        assert_eq!(
+            names
+                .iter()
+                .filter(|name| name.as_str() == "func.unreachable")
+                .count(),
+            1
+        );
         assert_eq!(
             names
                 .iter()
@@ -1321,6 +1348,7 @@ mod tests {
     default {
       func.tail_call_indirect %callee(%unit) attributes {test.marker = 2} : (core.nil) -> core.never
     }
+    func.unreachable
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -1367,6 +1395,7 @@ mod tests {
     default {
       func.return %second
     }
+    func.unreachable
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -1401,6 +1430,7 @@ mod tests {
     default {
       func.return %second
     }
+    func.unreachable
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -1433,10 +1463,12 @@ mod tests {
       default {
         func.return %second
       }
+      func.unreachable
     }
     default {
       func.return %third
     }
+    func.unreachable
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -1471,6 +1503,7 @@ mod tests {
     default {
       func.unreachable
     }
+    func.unreachable
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -1503,6 +1536,7 @@ mod tests {
     default {
       func.unreachable
     }
+    func.unreachable
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -1642,10 +1676,12 @@ mod tests {
       } else {
         func.tail_call_indirect %callee(%unit) attributes {test.marker = 2} : (core.nil) -> core.never
       }
+      func.unreachable
     }
     default {
       func.tail_call_indirect %callee(%unit) attributes {test.marker = 2} : (core.nil) -> core.never
     }
+    func.unreachable
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -1691,10 +1727,12 @@ mod tests {
       default {
         func.tail_call_indirect %callee(%unit) attributes {test.marker = 2} : (core.nil) -> core.never
       }
+      func.unreachable
     }
     default {
       func.tail_call_indirect %callee(%unit) attributes {test.marker = 2} : (core.nil) -> core.never
     }
+    func.unreachable
   }
 }"#;
         let mut ctx = IrContext::new();

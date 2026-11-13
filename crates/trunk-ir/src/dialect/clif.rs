@@ -4,7 +4,7 @@ use crate::attr_kind::Bytes;
 use crate::attr_kind::SymbolRef;
 use crate::dialect::arith;
 use crate::dialect::core::{I8, I32, IntegerLike};
-use crate::op_flag::{IsolatedFromAbove, Terminator};
+use crate::op_flag::{IsolatedFromAbove, NoTerminator, Terminator};
 use crate::op_interface::{CallLike, IndirectCallLike};
 use crate::ops::{DialectOp, DialectType};
 use crate::types::{Attribute, AttributeMap, TypeDataBuilder};
@@ -96,6 +96,7 @@ mod clif {
     ///   clif.func_reloc @f at 0
     /// }
     /// ```
+    #[flags(NoTerminator)]
     #[asm_format(symbol(sym_name) "(" bytes ")" "align" align attr_dict region(relocs))]
     fn data(sym_name: Attr<String>, bytes: Attr<Bytes>, align: Attr<u32>) {
         #[region(relocs?)]
