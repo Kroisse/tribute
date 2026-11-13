@@ -1219,7 +1219,7 @@ fn textual_resumptive_handle_emits_one_resultless_delimiter() {
     } do(%value: core.i32) {
         tribute_control.yield %value
     } op @State @get(%argument: core.i32) : core.i32 {
-        %resumed = tribute_control.resume %argument : core.i32
+        %resumed = tribute_control.resume %argument : core.i32 -> core.i32
         tribute_control.yield %resumed
     }
     tribute_control.return %handled
@@ -1360,7 +1360,7 @@ fn multiple_arms_for_one_ability_emit_one_dispatcher() {
     } do(%value: core.i32) {
         tribute_control.yield %value
     } op @State @get(%argument: core.i32) : core.i32 {
-        %resumed = tribute_control.resume %argument : core.i32
+        %resumed = tribute_control.resume %argument : core.i32 -> core.i32
         tribute_control.yield %resumed
     } op @State @set(%argument: core.i32) : core.i32 {
         %fallback = arith.constant 9 : core.i32
@@ -2090,7 +2090,7 @@ fn nested_same_ability_resumes_rebuild_the_dynamic_frame_dispatcher() {
       } do(%value: core.i32) {
           tribute_control.yield %value
       } op @State @get(%argument: core.i32) : core.i32 {
-          %resumed = tribute_control.resume %argument : core.i32
+          %resumed = tribute_control.resume %argument : core.i32 -> core.i32
           tribute_control.yield %resumed
       }
       %performed = tribute_control.perform op @State @get(%inner) : (core.i32) -> core.i32
@@ -2098,7 +2098,7 @@ fn nested_same_ability_resumes_rebuild_the_dynamic_frame_dispatcher() {
     } do(%value: core.i32) {
         tribute_control.yield %value
     } op @State @get(%argument: core.i32) : core.i32 {
-        %resumed = tribute_control.resume %argument : core.i32
+        %resumed = tribute_control.resume %argument : core.i32 -> core.i32
         tribute_control.yield %resumed
     }
     tribute_control.return %outer
@@ -2127,7 +2127,7 @@ fn nested_cross_ability_resumes_rebuild_the_dynamic_frame_dispatcher() {
       } do(%value: core.i32) {
           tribute_control.yield %value
       } op @Console @read(%argument: core.i32) : core.i32 {
-          %resumed = tribute_control.resume %argument : core.i32
+          %resumed = tribute_control.resume %argument : core.i32 -> core.i32
           tribute_control.yield %resumed
       }
       %performed = tribute_control.perform op @State @get(%inner) : (core.i32) -> core.i32
@@ -2135,7 +2135,7 @@ fn nested_cross_ability_resumes_rebuild_the_dynamic_frame_dispatcher() {
     } do(%value: core.i32) {
         tribute_control.yield %value
     } op @State @get(%argument: core.i32) : core.i32 {
-        %resumed = tribute_control.resume %argument : core.i32
+        %resumed = tribute_control.resume %argument : core.i32 -> core.i32
         tribute_control.yield %resumed
     }
     tribute_control.return %outer
@@ -2713,7 +2713,7 @@ fn a_handle_in_a_direct_callable_runs_under_a_value_delimiter() {
     } do(%value: core.i32) {
         tribute_control.yield %value
     } op @State @get(%argument: core.i32) : core.i32 {
-        %resumed = tribute_control.resume %argument : core.i32
+        %resumed = tribute_control.resume %argument : core.i32 -> core.i32
         tribute_control.yield %resumed
     }
     tribute_control.return %handled
@@ -3008,7 +3008,7 @@ fn a_resume_in_the_arm_body_enters_the_installed_token() {
     } do(%value: core.i32) {
         tribute_control.yield %value
     } op @State @get(%argument: core.i32) : core.i32 {
-        %resumed = tribute_control.resume %argument : core.i32
+        %resumed = tribute_control.resume %argument : core.i32 -> core.i32
         tribute_control.yield %resumed
     }
     tribute_control.return %handled
@@ -3033,7 +3033,7 @@ fn a_lambda_carrying_the_resumption_captures_the_first_token() {
     } op @State @get(%argument: core.i32) : core.i32 {
         %thunk = tribute_cps.lambda(%v: core.i32) -> core.i32 captures [] entries {
           cps {
-            %resumed = tribute_control.resume %v : core.i32
+            %resumed = tribute_control.resume %v : core.i32 -> core.i32
             tribute_control.return %resumed
           }
         }
@@ -3069,7 +3069,7 @@ fn nested_lambdas_carrying_the_resumption_each_capture_the_first_token() {
           cps {
             %inner = tribute_cps.lambda(%w: core.i32) -> core.i32 captures [] entries {
               cps {
-                %resumed = tribute_control.resume %w : core.i32
+                %resumed = tribute_control.resume %w : core.i32 -> core.i32
                 tribute_control.return %resumed
               }
             }
@@ -3106,7 +3106,7 @@ fn a_resume_in_a_nested_handle_body_binds_to_the_outer_arm() {
         tribute_control.yield %value
     } op @State @get(%argument: core.i32) : core.i32 {
         %nested = tribute_control.handle : core.i32 {
-          %resumed = tribute_control.resume %argument : core.i32
+          %resumed = tribute_control.resume %argument : core.i32 -> core.i32
           tribute_control.yield %resumed
         } do(%done: core.i32) {
             tribute_control.yield %done

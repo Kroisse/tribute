@@ -208,7 +208,7 @@ const VALID_CONTROL_MODULE: &str = r#"core.module @test {
     } do(%completed: core.i32) {
         tribute_control.yield %completed
     } op @State @get(%argument: core.i32) : core.i32 {
-        %resumed = tribute_control.resume %argument : core.i32
+        %resumed = tribute_control.resume %argument : core.i32 -> core.i32
         tribute_control.yield %resumed
     }
     tribute_control.return %handled
@@ -1165,10 +1165,10 @@ fn whole_ir_rejects_duplicate_and_declaration_mismatched_handlers() {
   } do(%value: core.i32) {
       tribute_control.yield %value
   } op @State @get(%argument: core.i32) : core.i32 {
-      %resumed = tribute_control.resume %argument : core.i32
+      %resumed = tribute_control.resume %argument : core.i32 -> core.i32
       tribute_control.yield %resumed
   } op @State @get(%argument: core.i32) : core.i32 {
-      %resumed = tribute_control.resume %argument : core.i32
+      %resumed = tribute_control.resume %argument : core.i32 -> core.i32
       tribute_control.yield %resumed
   }
 }"#,
@@ -1204,8 +1204,8 @@ fn whole_ir_rejects_two_resumes_of_one_arm() {
   } do(%value: core.i32) {
       tribute_control.yield %value
   } op @State @get(%argument: core.i32) : core.i32 {
-      %first = tribute_control.resume %argument : core.i32
-      %second = tribute_control.resume %argument : core.i32
+      %first = tribute_control.resume %argument : core.i32 -> core.i32
+      %second = tribute_control.resume %argument : core.i32 -> core.i32
       tribute_control.yield %first
   }
 }"#,
@@ -1224,9 +1224,9 @@ fn whole_ir_rejects_a_direct_resume_and_a_resume_in_a_lambda() {
   } do(%value: core.i32) {
       tribute_control.yield %value
   } op @State @get(%argument: core.i32) : core.i32 {
-      %direct = tribute_control.resume %argument : core.i32
+      %direct = tribute_control.resume %argument : core.i32 -> core.i32
       %later = tribute_control.lambda() -> core.i32 captures [%argument] {
-        %resumed = tribute_control.resume %argument : core.i32
+        %resumed = tribute_control.resume %argument : core.i32 -> core.i32
         tribute_control.return %resumed
       }
       %called = tribute_control.call_indirect %later() : () -> core.i32
@@ -1253,10 +1253,10 @@ fn whole_ir_accepts_mutually_exclusive_resumes_in_scf_branches() {
   } op @State @get(%argument: core.i32) : core.i32 {
       %flag = arith.constant true : core.i1
       %answer = scf.if %flag -> (core.i32) {
-        %left = tribute_control.resume %argument : core.i32
+        %left = tribute_control.resume %argument : core.i32 -> core.i32
         scf.yield %left
       } else {
-        %right = tribute_control.resume %argument : core.i32
+        %right = tribute_control.resume %argument : core.i32 -> core.i32
         scf.yield %right
       }
       tribute_control.yield %answer
@@ -1283,7 +1283,7 @@ fn a_resume_in_a_nested_handle_body_binds_to_the_outer_arm() {
       tribute_control.yield %value
   } op @State @get(%argument: core.i32) : core.i32 {
       %nested = tribute_control.handle : core.i32 {
-        %resumed = tribute_control.resume %argument : core.i32
+        %resumed = tribute_control.resume %argument : core.i32 -> core.i32
         tribute_control.yield %resumed
       } do(%inner: core.i32) {
           tribute_control.yield %inner
@@ -1320,7 +1320,7 @@ fn a_resume_in_a_lambda_in_an_arm_makes_the_lambda_a_carrier() {
       tribute_control.yield %value
   } op @State @get(%argument: core.i32) : core.i32 {
       %continuation = tribute_control.lambda() -> core.i32 captures [%argument] {
-        %resumed = tribute_control.resume %argument : core.i32
+        %resumed = tribute_control.resume %argument : core.i32 -> core.i32
         tribute_control.return %resumed
       }
       %plain = tribute_control.lambda() -> core.i32 captures [%argument] {
@@ -1355,7 +1355,7 @@ fn local_validation_checks_the_resume_types_against_the_arm() {
       tribute_control.yield %value
   } op @State @get(%argument: core.i32) : core.i32 {
       %flag = arith.constant false : core.i1
-      %resumed = tribute_control.resume %flag : core.i32
+      %resumed = tribute_control.resume %flag : core.i1 -> core.i32
       tribute_control.yield %resumed
   }
 }"#;
@@ -1373,7 +1373,7 @@ fn local_validation_checks_the_resume_types_against_the_arm() {
   } do(%value: core.i32) {
       tribute_control.yield %value
   } op @State @get(%argument: core.i32) : core.i32 {
-      %resumed = tribute_control.resume %argument : core.i1
+      %resumed = tribute_control.resume %argument : core.i32 -> core.i1
       %fixed = arith.constant 0 : core.i32
       tribute_control.yield %fixed
   }
@@ -1393,7 +1393,7 @@ fn local_validation_rejects_a_resume_without_a_resumptive_arm() {
             "in a func body",
             r#"core.module @test {
   tribute_control.func @run(%value: core.i32) -> core.i32 {
-    %resumed = tribute_control.resume %value : core.i32
+    %resumed = tribute_control.resume %value : core.i32 -> core.i32
     tribute_control.return %resumed
   }
 }"#,
@@ -1407,7 +1407,7 @@ fn local_validation_rejects_a_resume_without_a_resumptive_arm() {
   } do(%value: core.i32) {
       tribute_control.yield %value
   } fn @State @get(%argument: core.i32) : core.i32 {
-      %resumed = tribute_control.resume %argument : core.i32
+      %resumed = tribute_control.resume %argument : core.i32 -> core.i32
       tribute_control.yield %resumed
   }
 }"#,
@@ -1421,7 +1421,7 @@ fn local_validation_rejects_a_resume_without_a_resumptive_arm() {
   } do(%value: core.i32) {
       tribute_control.yield %value
   } op @State @get(%argument: core.i32) : core.never {
-      %resumed = tribute_control.resume %argument : core.i32
+      %resumed = tribute_control.resume %argument : core.i32 -> core.i32
       tribute_control.yield %resumed
   }
 }"#,
@@ -1447,7 +1447,7 @@ fn whole_ir_rejects_branching_and_escape_at_each_affine_carrier() {
       tribute_control.yield %value
   } op @State @get(%argument: core.i32) : core.i32 {
       %inner = tribute_control.lambda() -> core.i32 captures [%argument] {
-        %resumed = tribute_control.resume %argument : core.i32
+        %resumed = tribute_control.resume %argument : core.i32 -> core.i32
         tribute_control.return %resumed
       }
       %wrapper = tribute_control.lambda() -> core.i32 captures [%inner] {
@@ -1494,7 +1494,7 @@ fn whole_ir_rejects_a_carrier_lambda_yielded_out_of_its_arm() {
       tribute_control.yield %value
   } op @State @get(%argument: core.i32) : core.i32 {
       %continuation = tribute_control.lambda() -> core.i32 captures [%argument] {
-        %resumed = tribute_control.resume %argument : core.i32
+        %resumed = tribute_control.resume %argument : core.i32 -> core.i32
         tribute_control.return %resumed
       }
       tribute_control.yield %continuation
@@ -1516,11 +1516,11 @@ fn whole_ir_rejects_sibling_carrier_lambdas() {
       tribute_control.yield %value
   } op @State @get(%argument: core.i32) : core.i32 {
       %first = tribute_control.lambda() -> core.i32 captures [%argument] {
-        %resumed = tribute_control.resume %argument : core.i32
+        %resumed = tribute_control.resume %argument : core.i32 -> core.i32
         tribute_control.return %resumed
       }
       %second = tribute_control.lambda() -> core.i32 captures [%argument] {
-        %resumed = tribute_control.resume %argument : core.i32
+        %resumed = tribute_control.resume %argument : core.i32 -> core.i32
         tribute_control.return %resumed
       }
       tribute_control.yield %argument
@@ -1544,14 +1544,14 @@ fn whole_ir_allows_mutually_exclusive_lambda_capture_and_terminal_paths() {
       %flag = arith.constant true : core.i1
       %value = scf.if %flag -> (core.i32) {
         %left = tribute_control.lambda() -> core.i32 captures [%argument] {
-          %resumed = tribute_control.resume %argument : core.i32
+          %resumed = tribute_control.resume %argument : core.i32 -> core.i32
           tribute_control.return %resumed
         }
         %called = tribute_control.call_indirect %left() : () -> core.i32
         scf.yield %called
       } else {
         %right = tribute_control.lambda() -> core.i32 captures [%argument] {
-          %resumed = tribute_control.resume %argument : core.i32
+          %resumed = tribute_control.resume %argument : core.i32 -> core.i32
           tribute_control.return %resumed
         }
         %called = tribute_control.call_indirect %right() : () -> core.i32
@@ -1582,7 +1582,7 @@ fn whole_ir_allows_mutually_exclusive_switch_capture_paths() {
       scf.index_switch %choice : (core.i32) -> ()
       case 0 {
         %left = tribute_control.lambda() -> core.i32 captures [%argument] {
-          %left_resumed = tribute_control.resume %argument : core.i32
+          %left_resumed = tribute_control.resume %argument : core.i32 -> core.i32
           tribute_control.return %left_resumed
         }
         %left_called = tribute_control.call_indirect %left() : () -> core.i32
@@ -1590,7 +1590,7 @@ fn whole_ir_allows_mutually_exclusive_switch_capture_paths() {
       }
       case 1 {
         %right = tribute_control.lambda() -> core.i32 captures [%argument] {
-          %right_resumed = tribute_control.resume %argument : core.i32
+          %right_resumed = tribute_control.resume %argument : core.i32 -> core.i32
           tribute_control.return %right_resumed
         }
         %right_called = tribute_control.call_indirect %right() : () -> core.i32
@@ -1637,7 +1637,7 @@ fn whole_ir_rejects_same_path_lambda_carrier_terminals() {
       tribute_control.yield %value
   } op @State @get(%argument: core.i32) : core.i32 {
       %continuation = tribute_control.lambda() -> core.i32 captures [%argument] {
-        %resumed = tribute_control.resume %argument : core.i32
+        %resumed = tribute_control.resume %argument : core.i32 -> core.i32
         tribute_control.return %resumed
       }
       %first = tribute_control.call_indirect %continuation() : () -> core.i32
@@ -1663,7 +1663,7 @@ fn a_resume_in_an_op_never_arm_is_rejected_where_it_stands() {
   } do(%value: core.i32) {
       tribute_control.yield %value
   } op @State @get(%argument: core.i32) : core.never {
-      %resumed = tribute_control.resume %argument : core.i32
+      %resumed = tribute_control.resume %argument : core.i32 -> core.i32
       tribute_control.yield %resumed
   }
 }"#,
@@ -1689,7 +1689,7 @@ fn a_resumptive_arm_nested_in_an_op_never_arm_provides_its_own_resumption() {
       } do(%value: core.i32) {
           tribute_control.yield %value
       } op @State @get(%inner_argument: core.i32) : core.i32 {
-          %resumed = tribute_control.resume %inner_argument : core.i32
+          %resumed = tribute_control.resume %inner_argument : core.i32 -> core.i32
           tribute_control.yield %resumed
       }
       tribute_control.yield %nested
@@ -1722,7 +1722,7 @@ fn a_nested_handles_fn_arm_is_a_barrier_to_the_outer_resumption() {
       } do(%value: core.i32) {
           tribute_control.yield %value
       } fn @State @get(%inner_argument: core.i32) : core.i32 {
-          %crossed = tribute_control.resume %inner_argument : core.i32
+          %crossed = tribute_control.resume %inner_argument : core.i32 -> core.i32
           tribute_control.yield %crossed
       }
       tribute_control.yield %nested
@@ -1746,7 +1746,7 @@ fn a_carrier_lambda_used_in_another_handlers_arm_is_rejected() {
       tribute_control.yield %value
   } op @State @get(%argument: core.i32) : core.i32 {
       %continuation = tribute_control.lambda() -> core.i32 captures [%argument] {
-        %resumed = tribute_control.resume %argument : core.i32
+        %resumed = tribute_control.resume %argument : core.i32 -> core.i32
         tribute_control.return %resumed
       }
       %nested = tribute_control.handle : core.i32 {
@@ -1820,7 +1820,7 @@ fn validator_reports_a_resume_under_a_malformed_binding_without_panicking() {
   } do(%completed: core.i32) {
     tribute_control.yield %completed
   } op @State @get(%value: core.i32) : core.i32 {
-    %resumed = tribute_control.resume %value : core.i32
+    %resumed = tribute_control.resume %value : core.i32 -> core.i32
     tribute_control.yield %resumed
   }
 }"#,
@@ -1846,7 +1846,7 @@ fn whole_ir_rejects_branch_after_transitive_lambda_transfer() {
       tribute_control.yield %value
   } op @State @get(%argument: core.i32) : core.i32 {
       %inner = tribute_control.lambda() -> core.i32 captures [%argument] {
-        %resumed = tribute_control.resume %argument : core.i32
+        %resumed = tribute_control.resume %argument : core.i32 -> core.i32
         tribute_control.return %resumed
       }
       %wrapper = tribute_control.lambda() -> core.i32 captures [%inner] {
@@ -2434,7 +2434,7 @@ fn handled_callable_module(op_yield: &str) -> String {
       tribute_control.yield %done
   }} op @Gen @next() : core.i32 {{
       %resumed_value = arith.constant 40 : core.i32
-      %g = tribute_control.resume %resumed_value : !F
+      %g = tribute_control.resume %resumed_value : core.i32 -> !F
       %called = tribute_control.call_indirect %g(%resumed_value) : (core.i32) -> core.i32
       %zero = arith.constant 0 : core.i32
       %bad = core.unrealized_conversion_cast %zero : core.i32 to !F
@@ -2481,10 +2481,10 @@ fn resume_result_needs_an_enclosing_resumptive_arm() {
         r#"core.module @test {
   !F = tribute_control.func_sig<(core.i32) -> core.i32>
   tribute_control.func @caller(%value: core.i32) -> core.i32 {
-    %from_func = tribute_control.resume %value : !F
+    %from_func = tribute_control.resume %value : core.i32 -> !F
     %first = tribute_control.call_indirect %from_func(%value) : (core.i32) -> core.i32
     %from_lambda = tribute_control.lambda() -> core.i32 captures [%first] {
-      %again = tribute_control.resume %first : !F
+      %again = tribute_control.resume %first : core.i32 -> !F
       %called = tribute_control.call_indirect %again(%first) : (core.i32) -> core.i32
       tribute_control.return %called
     }
@@ -2831,8 +2831,8 @@ fn evidence_plan_module(call: &str, handle: &str) -> String {
             ),
         )
         .replace(
-            "tribute_control.resume %argument : core.i32",
-            "tribute_control.resume %argument {evidence_plan = [{mask = @Log}]} : core.i32",
+            "tribute_control.resume %argument : core.i32 -> core.i32",
+            "tribute_control.resume %argument {evidence_plan = [{mask = @Log}]} : core.i32 -> core.i32",
         )
 }
 
@@ -2861,6 +2861,34 @@ fn evidence_plans_validate_and_round_trip() {
         printed.contains("evidence_plan = [{mask = @State}, {dup = @Log}]"),
         "{printed}"
     );
+}
+
+#[test]
+fn a_resume_with_a_function_typed_operand_round_trips() {
+    let (ctx, module) = parse_fixture(
+        r#"core.module @test {
+  !F = tribute_control.func_sig<(core.i32) -> core.i32>
+  tribute_control.func @inc(%n: core.i32) -> core.i32 {
+    tribute_control.return %n
+  }
+  %f = tribute_control.handle : !F {
+    %body = tribute_control.perform op @Gen @next() : () -> !F
+    tribute_control.yield %body
+  } do(%k: !F) {
+      tribute_control.yield %k
+  } op @Gen @next() : !F {
+      %inc = tribute_control.func_ref @inc : !F
+      %g = tribute_control.resume %inc : !F -> !F
+      tribute_control.yield %g
+  }
+}"#,
+    );
+    let result = validate_local(&ctx, module);
+    assert!(result.is_ok(), "{result}");
+
+    let printed = assert_round_trip(&ctx, module);
+    assert!(printed.contains(" = tribute_control.resume %"), "{printed}");
+    assert!(printed.contains(" : !F -> !F\n"), "{printed}");
 }
 
 #[test]

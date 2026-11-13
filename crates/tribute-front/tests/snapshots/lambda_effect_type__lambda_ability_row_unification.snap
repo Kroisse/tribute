@@ -22,7 +22,7 @@ core.module @test {
           tribute_control.yield %4
       } op @"ability_2_10_pkg::State_3_nat" @get() : core.i32 {
           %5 = tribute_control.lambda() -> core.i32 row(@"ability_2_10_pkg::State_3_nat" | 'a0) captures [%1] {
-              %6 = tribute_control.resume %1 : core.i32
+              %6 = tribute_control.resume %1 : core.i32 -> core.i32
               tribute_control.return %6
           }
           %7 = tribute_control.call @"pkg::with_state$Nat$Nat"(%5, %1) attributes {row_args = [{tail = 0}]} : (!t0, core.i32) -> core.i32
@@ -30,7 +30,7 @@ core.module @test {
       } op @"ability_2_10_pkg::State_3_nat" @set(%8: core.i32) : core.nil {
           %9 = tribute_control.lambda() -> core.i32 row(@"ability_2_10_pkg::State_3_nat" | 'a0) captures [] {
               %10 = core.nil_value : core.nil
-              %11 = tribute_control.resume %10 : core.i32
+              %11 = tribute_control.resume %10 : core.nil -> core.i32
               tribute_control.return %11
           }
           %12 = tribute_control.call @"pkg::with_state$Nat$Nat"(%9, %8) attributes {row_args = [{tail = 0}]} : (!t0, core.i32) -> core.i32

@@ -163,7 +163,7 @@ fn main() -> Nil { }
         .lines()
         .find(|line| line.contains("= tribute_control.resume "))
         .expect("source-logical resume");
-    assert!(resume.contains(": core.i32"), "{run}");
+    assert!(resume.contains(": tribute_rt.anyref -> core.i32"), "{run}");
 }
 
 #[salsa_test]

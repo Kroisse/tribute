@@ -711,7 +711,7 @@ mod tribute_control {
     ///   tribute_control.yield %answer_value
     /// } op @State @get(%arg: ArgType) : ResultType {
     ///   ...
-    ///   %resumed = tribute_control.resume %value : AnswerType
+    ///   %resumed = tribute_control.resume %value : ResultType -> AnswerType
     ///   tribute_control.yield %resumed
     /// } fn @State @peek() : ResultType {
     ///   ...
@@ -824,7 +824,7 @@ mod tribute_control {
     /// consumes, so its result is a callable origin when that result is.
     ///
     /// ```text
-    /// %answer = tribute_control.resume %value : AnswerType
+    /// %answer = tribute_control.resume %value : ResultType -> AnswerType
     /// ```
     ///
     /// - **Operands:** exactly one, `%value`.
@@ -860,7 +860,7 @@ mod tribute_control {
     /// - **Location:** the source `resume` expression.
     #[verify]
     #[implements(CallableResultOrigin, LocalValidation)]
-    #[asm_format(value attr_dict_bare ":" type(result))]
+    #[asm_format(value attr_dict_bare ":" type(value) "->" type(result))]
     fn resume(evidence_plan: Option<Attr<[EvidenceStep]>>, value: Value<_>) -> Value<_> {}
 
     /// End an executable `tribute_control` region with a logical value.
