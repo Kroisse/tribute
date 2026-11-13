@@ -20,6 +20,11 @@ mod scf {
     /// - **Meaning:** runs `then_region` when the condition is 1 and
     ///   `else_region` when it is 0. Each region ends in `scf.yield`, whose
     ///   values become the results in order, or in its own terminator.
+    /// - **Verification:** each region is one block ending in `scf.yield`.
+    ///   An arm of an operation with results may instead end in a callable
+    ///   exit, and an arm of an operation whose one result is `core.never`
+    ///   in a proper tail terminator.
+    #[verify]
     #[asm_format(cond ("->" "(" types(results)^ ")")? attr_dict region(then_region) "else" region(else_region))]
     #[implements(RegionBranch, Fold)]
     fn r#if(cond: Value<I1>) -> Variadic<_> {
@@ -281,6 +286,44 @@ impl IndexSwitch {
         let mut regions: crate::RegionList = self.case_regions(ctx).collect();
         regions.push(self.default_region(ctx));
         regions
+    }
+}
+
+impl crate::ops::Verify for If {
+    /// Each region is one block ending in `scf.yield` or a permitted exit.
+    fn verify(&self, ctx: &IrContext) -> Result<(), crate::ops::VerificationError> {
+        use crate::ops::DialectType;
+        let results = ctx.op_result_types(self.op_ref());
+        let never_result =
+            matches!(results, [ty] if crate::dialect::core::Never::matches(ctx, *ty));
+        let mut failures = Vec::new();
+        for (name, region) in [
+            ("then_region", self.then_region(ctx)),
+            ("else_region", self.else_region(ctx)),
+        ] {
+            let blocks = &ctx.region(region).blocks;
+            let [block] = blocks.as_slice() else {
+                failures.push(format!("{name} expects 1 block, found {}", blocks.len()));
+                continue;
+            };
+            let last = ctx.block(*block).ops.last().copied();
+            let ends_well = last.is_some_and(|last| {
+                Yield::matches(ctx, last)
+                    || (never_result && crate::validation::is_proper_tail_terminator(ctx, last))
+                    // An arm may leave the callable instead of yielding; the
+                    // result then comes from the arms that yield.
+                    || (!results.is_empty()
+                        && crate::op_interface::DynCallableExit::prove(ctx, last).is_ok())
+            });
+            if !ends_well {
+                failures.push(format!("{name} must terminate with scf.yield"));
+            }
+        }
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            Err(failures.join("; ").into())
+        }
     }
 }
 
