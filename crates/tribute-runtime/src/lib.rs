@@ -200,19 +200,6 @@ fn byte_array_of(bytes: &[u8]) -> *mut ByteArray {
     array
 }
 
-/// Copy `len` bytes at `data` into a new byte array, as a byte literal does.
-///
-/// # Safety
-///
-/// `data` must be readable for `len` bytes.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn __tribute_byte_array_from(data: *const u8, len: u64) -> *mut ByteArray {
-    if len == 0 {
-        return byte_array_of(&[]);
-    }
-    byte_array_of(unsafe { core::slice::from_raw_parts(data, len as usize) })
-}
-
 fn write_stdout_all(bytes: &[u8]) {
     let _ = write_all_with(bytes, |remaining| {
         let written = unsafe {
@@ -688,7 +675,6 @@ mod tests {
             u32,
             u32,
         ) -> *mut ByteArray = __tribute_byte_array_concat;
-        let _: unsafe extern "C" fn(*const u8, u64) -> *mut ByteArray = __tribute_byte_array_from;
     }
 
     fn header(array: *const ByteArray) -> &'static tribute_rc::RcBox<ByteArray> {
@@ -697,7 +683,7 @@ mod tests {
 
     #[test]
     fn byte_arrays_use_the_array_layout_and_reserved_descriptor() {
-        let array = unsafe { __tribute_byte_array_from(b"abc".as_ptr(), 3) };
+        let array = byte_array_of(b"abc");
         assert_eq!(unsafe { bytes_contents(array) }, b"abc");
         assert_eq!(unsafe { (*array).len }, 3);
         // The bytes follow the 8-byte length, as an `adt.array` element does.
@@ -710,7 +696,7 @@ mod tests {
         assert_eq!(header(array).refcount.load(Ordering::Relaxed), 1);
         unsafe { dealloc_test_bytes(array) };
 
-        let empty = unsafe { __tribute_byte_array_from(core::ptr::null(), 0) };
+        let empty = byte_array_of(&[]);
         assert_eq!(unsafe { (*empty).len }, 0);
         unsafe { dealloc_test_bytes(empty) };
     }

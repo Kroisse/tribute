@@ -83,7 +83,10 @@ mod clif {
         {}
     }
 
-    /// A module-local read-only data object that `symbol_addr` can reference.
+    /// A module-local data object that `symbol_addr` can reference, holding
+    /// `bytes` when the program starts. It is read-only unless `writable`,
+    /// which places it where the program may store into it, as a static RC
+    /// object's refcount needs (`design/rc.md` § "정적 객체").
     ///
     /// The optional `relocs` region lists `func_reloc` declarations, like
     /// cranelift-module's `DataDescription::function_relocs`. Their
@@ -95,10 +98,16 @@ mod clif {
     /// clif.data @table(b"\0\0\0\0\0\0\0\0") align 8 {
     ///   clif.func_reloc @f at 0
     /// }
+    /// clif.data @cell(b"\0\0\0\0") align 4 attributes {writable = true}
     /// ```
     #[flags(NoTerminator)]
     #[asm_format(symbol(sym_name) "(" bytes ")" "align" align attr_dict region(relocs))]
-    fn data(sym_name: Attr<String>, bytes: Attr<Bytes>, align: Attr<u32>) {
+    fn data(
+        sym_name: Attr<String>,
+        bytes: Attr<Bytes>,
+        align: Attr<u32>,
+        #[default(false)] writable: Attr<bool>,
+    ) {
         #[region(relocs?)]
         {}
     }

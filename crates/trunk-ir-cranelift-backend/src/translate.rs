@@ -124,7 +124,7 @@ fn emit_module_impl(ctx: &IrContext, module: Module) -> CompilationResult<Vec<u8
     // 3b. Declare runtime functions
     declare_runtime_functions(&mut obj_module, &mut func_ids, call_conv)?;
 
-    // 3d. Declare and define the module's read-only data objects
+    // 3d. Declare and define the module's data objects
     let mut data_ids: HashMap<SymbolPath, cranelift_module::DataId> = HashMap::default();
     for data in collect_clif_data(ctx, module) {
         // References name data objects by root-qualified path, like functions.
@@ -134,7 +134,7 @@ fn emit_module_impl(ctx: &IrContext, module: Module) -> CompilationResult<Vec<u8
             .declare_data(
                 &symbol.to_string(),
                 Linkage::Local,
-                false, // not writable
+                data.writable(ctx),
                 false, // not TLS
             )
             .map_err(|e| CompilationError::codegen(format!("{e}")))?;
