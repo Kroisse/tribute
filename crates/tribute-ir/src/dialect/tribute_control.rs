@@ -376,7 +376,7 @@ mod tribute_control {
         LocalValidation,
         SourceCallable
     )]
-    fn lambda(quantified_rows: Option<Attr<[u32]>>, captures: Variadic<_>) -> Value<impl FuncSig> {
+    fn lambda(quantified_rows: Option<Attr<[u32]>>) -> Value<impl FuncSig> {
         #[region(body)]
         {}
     }

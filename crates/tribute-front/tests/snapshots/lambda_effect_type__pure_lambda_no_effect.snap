@@ -11,7 +11,7 @@ core.module @test {
   }
   tribute_control.func @"std::Int::+"(%arg0: core.i32, %arg1: core.i32) -> core.i32
   tribute_control.func @"pkg::answer"['a0]() -> core.i32 row(| 'a0) inferred {
-      %0 = tribute_control.lambda(%1: core.i32) -> core.i32 row(| 'a0) captures [] {
+      %0 = tribute_control.lambda(%1: core.i32) -> core.i32 row(| 'a0) {
           %2 = arith.constant 1 : core.i32
           %3 = tribute_control.call @"std::Int::+"(%1, %2) : (core.i32, core.i32) -> core.i32
           tribute_control.return %3

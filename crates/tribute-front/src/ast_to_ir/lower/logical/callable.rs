@@ -981,7 +981,6 @@ pub(super) fn lower_lambda<'db>(
         blocks: trunk_ir::smallvec::smallvec![entry],
         parent_op: None,
     });
-    let captures = local_callables::captures(builder.ctx, builder.ir, region);
     let callable = tribute_control::FuncSig::params(param_types, result_type)
         .row(row)
         .intern(builder.ir)
@@ -991,7 +990,7 @@ pub(super) fn lower_lambda<'db>(
         builder.block,
         location,
         tribute_control::Lambda::DEF,
-        |builder| builder.operands(captures).result(callable).region(region),
+        |builder| builder.result(callable).region(region),
     );
     Some(result(builder.ir, lambda))
 }

@@ -13,7 +13,7 @@ core.module @test {
   }
   tribute_control.func @"std::Nat::+"(%arg0: core.i32, %arg1: core.i32) -> core.i32
   tribute_control.func @"pkg::test"['a0]() -> core.i32 row(| 'a0) inferred {
-      %0 = tribute_control.lambda() -> core.i32 row(| 'a0) captures [] {
+      %0 = tribute_control.lambda() -> core.i32 row(| 'a0) {
           %1 = arith.constant 2 : core.i32
           tribute_control.return %1
       }

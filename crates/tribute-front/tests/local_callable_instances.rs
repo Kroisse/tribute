@@ -46,9 +46,9 @@ fn entry() ->{} Int {
 }
 
 /// A lambda that uses a named-function alias references the function in its
-/// body, so it captures nothing.
+/// body, so the alias needs no cast.
 #[salsa_test]
-fn a_named_alias_inside_a_lambda_captures_nothing(db: &salsa::DatabaseImpl) {
+fn a_named_alias_inside_a_lambda_needs_no_cast(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
         db,
         "named_capture.trb",
@@ -64,7 +64,6 @@ fn entry() ->{} Int {
 "#,
     );
     let ir = common::run_ast_pipeline_with_ir(db, source);
-    assert!(ir.contains("captures []"), "{ir}");
     assert!(!ir.contains("unrealized_conversion_cast"), "{ir}");
 }
 

@@ -140,7 +140,6 @@ mod tribute_cps {
     fn lambda(
         conventions: Attr<[CallingConvention]>,
         quantified_rows: Option<Attr<[u32]>>,
-        captures: Variadic<_>,
     ) -> Value<impl FuncSig> {
         #[regions(bodies)]
         {}

@@ -221,10 +221,6 @@ fn validate_affine_lambda_carrier(
             }
             current = owner;
         }
-        // A capture list names the carrier the body's uses already reach.
-        if SourceLambda::is_set(ctx, use_.user) {
-            continue;
-        }
         if (SourceCallIndirect::is_set(ctx, use_.user) && use_.operand_index == 0)
             // A carrier may be passed to the enclosing source
             // function's recursive logical call (for example

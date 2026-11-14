@@ -522,13 +522,13 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   tribute_cps.func @direct(%y: core.i32) -> core.i32 convention(direct) {
-    %f = tribute_cps.lambda(%x: core.i32) -> core.i32 captures [%y] entries {
+    %f = tribute_cps.lambda(%x: core.i32) -> core.i32 entries {
       direct {
         %sum = arith.addi %x, %y : core.i32
         tribute_control.return %sum
       }
     }
-    %g = tribute_cps.lambda(%x: core.i32) -> core.i32 captures [] entries {
+    %g = tribute_cps.lambda(%x: core.i32) -> core.i32 entries {
       direct {
         tribute_control.return %x
       }
@@ -538,7 +538,7 @@ mod tests {
     tribute_control.return %b
   }
   tribute_cps.func @evidence(%y: core.i32) -> core.i32 convention(evidence_direct) {
-    %h = tribute_cps.lambda(%x: core.i32) -> core.i32 captures [] entries {
+    %h = tribute_cps.lambda(%x: core.i32) -> core.i32 entries {
       evidence_direct {
         tribute_control.return %x
       }

@@ -60,7 +60,7 @@ core.module @test {
       tribute_control.tail_call_indirect %0(%1) : (core.i32) -> core.i32 row(| 'a0)
   }
   tribute_control.func @"pkg::countdown"['a0, local 'a1](%0: core.i32) -> core.i32 row(| 'a0) inferred {
-      %1 = tribute_control.lambda['a1](%2: core.i32) -> core.i32 row(| 'a1) captures [] {
+      %1 = tribute_control.lambda['a1](%2: core.i32) -> core.i32 row(| 'a1) {
           %3 = arith.constant 0 : core.i32
           %4 = tribute_control.call @"std::Int::=="(%2, %3) : (core.i32, core.i32) -> core.i1
           %5 = arith.constant true : core.i1
