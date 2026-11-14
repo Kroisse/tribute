@@ -2382,19 +2382,24 @@ mod tests {
 }"#;
         let mut ctx = IrContext::new();
         let module = crate::parser::parse_test_module(&mut ctx, input);
-        let result = validate_operation_verifiers(&ctx, module);
-        let misplaced: Vec<_> = result
-            .errors
-            .iter()
-            .map(ToString::to_string)
-            .filter(|error| error.contains("must terminate its block"))
-            .collect();
-        assert_eq!(misplaced.len(), 3, "{result}");
-        for (error, name) in misplaced
-            .iter()
-            .zip(["func.trap", "func.unreachable", "cf.br"])
-        {
-            assert!(error.contains(&format!("for {name} (")), "{error}");
+        // The per-pass schema checkpoint runs the same flag verifier.
+        for result in [
+            validate_operation_verifiers(&ctx, module),
+            validate_op_schemas(&ctx, module.op()),
+        ] {
+            let misplaced: Vec<_> = result
+                .errors
+                .iter()
+                .map(ToString::to_string)
+                .filter(|error| error.contains("Terminator: must terminate its block"))
+                .collect();
+            assert_eq!(misplaced.len(), 3, "{result}");
+            for (error, name) in misplaced
+                .iter()
+                .zip(["func.trap", "func.unreachable", "cf.br"])
+            {
+                assert!(error.contains(&format!("for {name} (")), "{error}");
+            }
         }
     }
 
