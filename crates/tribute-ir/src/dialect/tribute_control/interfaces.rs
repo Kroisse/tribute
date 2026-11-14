@@ -312,7 +312,6 @@ impl CallableExit for Trap {}
 impl LocalValidation for Trap {
     fn validate(&self, ctx: &IrContext, errors: &mut Vec<ValidationError>) {
         let op = self.op_ref();
-        validate_return_or_yield_shape(ctx, op, errors);
         let valid_owner = parent_op(ctx, op).is_some_and(|owner| {
             DynSourceCallable::is_implemented(ctx, owner)
                 || DynRegionBranch::selects_one_region(ctx, owner)

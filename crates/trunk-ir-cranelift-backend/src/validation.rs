@@ -53,7 +53,7 @@ pub fn validate_clif_ir(ctx: &IrContext, module: Module) -> CompilationResult<()
         .map(|op| format!("{} in boundary {}", op, NATIVE_BACKEND_READY_BOUNDARY))
         .collect();
     errors.extend(
-        trunk_ir::validation::validate_terminator_positions(ctx, module.op())
+        trunk_ir::validation::validate_block_endings(ctx, module.op())
             .errors
             .iter()
             .map(ToString::to_string),

@@ -163,11 +163,15 @@ region은 `wasm.yield`로 끝난다
 ([분기와 region 끝의 값](wasm-backend.md#분기와-region-끝의-값)).
 등록되지 않은 operation은 정의를 읽을 수 없으므로 어느 쪽으로도 검사하지 않는다.
 
-Flag는 operation 정의의 선언이므로 이름을 나열하지 않고 검사한다. Operation
-verifier, 각 pass 뒤의 debug schema 검사, native와 Wasm backend 경계의 검증이
-flag가 있는 operation이 block의 마지막이 아니거나, `NoTerminator`가 아닌
-operation의 block이 `Terminator`로 끝나지 않으면 거부한다. Pass가 이 규칙을 어긴
-IR을 남기면 그 pass의 오류다.
+Flag는 operation 정의의 선언이므로 이름을 나열하지 않고 검사한다. `Terminator`가
+block의 마지막이어야 한다는 성질은 flag verifier가 검사하므로(MLIR의
+`IsTerminator::verifyTrait`) operation 정의의 검증을 거치는 모든 곳이 이를
+거부하고, 각 pass 뒤의 debug schema 검사도 이 verifier는 실행한다. Dialect
+validator는 이 위치를 따로 다시 검사하지 않는다. `NoTerminator`가 아닌
+operation의 block이 `Terminator`로 끝나야 한다는 규칙은 flag가 없는 operation에
+대한 것이므로 구조 검사로 남고, operation verifier, debug schema 검사, native와
+Wasm backend 경계의 검증이 이를 실행한다. Pass가 이 규칙을 어긴 IR을 남기면 그
+pass의 오류다.
 
 ## 선언적 operation schema
 
