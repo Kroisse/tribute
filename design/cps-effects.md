@@ -899,7 +899,7 @@ Evidence 배열 참조와 두 closure 입력은 canonical 타입 동일성을 �
 다른 배열 표기는 evidence 배열이 아니며, 일반 `wasm.structref`는 공통 closure
 layout이 아니다. Payload 슬롯만 [물리적 참조 할당 가능성](wasm-backend.md)을
 받아들인다. Payload packing의 `anyref` upcast가 no-op이면 concrete 참조가 남으므로,
-등록된 struct·array 참조, `adt.array` 표기, 소거된 ADT 표기가 `anyref` 슬롯을
+등록된 struct·array 참조, `heap.box` 표기, 소거된 ADT 표기가 `anyref` 슬롯을
 만족한다. 고정 ABI의 입력 개수와 순서, 그리고 `answer_type`에서 독립적으로
 구성되는 signature는 이 완화와 무관하게 유지한다.
 
@@ -948,7 +948,14 @@ delimiter 밖으로 나갈 수 있다. 재개된 계산은 재개한 지점이 �
 
 **구성.** Delimiter는 다음을 소유한다.
 
-- 답 타입 `R`의 completion cell
+- 답을 담는 completion cell. [`heap.cell`](tribute-dialects.md#heapcell)이다. 답은
+  region이 끝나야 생기므로 cell은 답 없이 만들어진다. Cell의 값은 완료 표시
+  `core.i1`과 답 slot을 필드로 가진 compiler 소유 struct이며, cell 안에 inline으로
+  놓인다. 답 slot은 `R`이 `core.nil`이면 `core.nil`이고, 그 밖에는 `R`을 지운
+  `tribute_rt.anyref`다. Cell은 완료 표시 `false`와 빈 slot(nil 또는 null)으로 시작한다.
+  `Done<R>`는 완료 표시를 읽어 이미 `true`이면 trap하고, 아니면 완료 표시를 `true`로,
+  slot을 지운 답으로 함께 쓴다. 완료 표시가 slot과 따로 있으므로 `core.nil` 답의 두 번째
+  쓰기도 구별한다. Delimiter는 region이 끝난 뒤 slot을 읽어 `R`로 되돌린다.
 - cell에 정확히 한 번 쓰는 terminal `Done<R>`
 - 도달할 수 없는 terminal `Dispatch<R>`. 도달하면 trap한다
 - 이 둘을 담은 exact `ContinuationFrame<R>`
@@ -1406,8 +1413,8 @@ struct 위의 `wasm.func`로 compile된다.
 Marker는 `outer: Slots(Marker)`로 자기 배열을 담으므로 그대로 쓰면 재귀 GC 타입이
 된다. Wasm target은 원소가 참조인 배열을 struct field에 `arrayref`로 저장하고 읽을
 때 구체 배열로 cast하며([GC 배열 표현][wasm-gc-arrays]), evidence 배열의 원소는
-`structref`로 저장한다. Evidence 값은 `adt` 연산이 모두 Wasm 연산으로 바뀔 때까지
-`adt.array` 타입을 유지하고, 그 뒤 한 번에 `wasm_gc.array<wasm.structref>`로
+`structref`로 저장한다. Evidence 값은 `heap` 연산이 모두 Wasm 연산으로 바뀔 때까지
+`heap.box<adt.array<..>>` 타입을 유지하고, 그 뒤 한 번에 `wasm_gc.array<wasm.structref>`로
 바뀐다.
 
 [wasm-gc-arrays]: wasm-backend.md#structural-gc-타입과-descriptor-필드

@@ -399,6 +399,11 @@ ability Display {
   (field $len i32))))
 ```
 
+위의 `$bytes`는 `Bytes` 값이 box에 담길 때의 GC 타입이다.
+[표현 선택](abi-boundary.md#표현-선택)이 `Bytes`를 unboxed로 고르면 `Bytes` 값은
+`data`, `start`, `len` 세 값으로 쪼개지고, 다른 struct의 필드로는 그 세 필드가 바깥
+GC struct에 inline으로 놓인다. 아래 `String`의 `Leaf`도 그렇다.
+
 원소가 scalar인 배열은 erased `arrayref`가 되지 않으므로
 ([GC 타입 표현](wasm-backend.md#structural-gc-타입과-descriptor-필드)) byte를
 읽는 곳은 cast 없이 `array.get_u`로 읽는다.
@@ -411,7 +416,9 @@ ability Display {
 ;; reserved builtin indices.
 (type $string (sub (struct)))
 
-;; Leaf: UTF-8 bytes
+;; Leaf: UTF-8 bytes. Shown with Bytes boxed; when Bytes is unboxed, the
+;; Leaf holds (field $data (ref $byte_array)) (field $start i32)
+;; (field $len i32) inline instead of a reference to $bytes.
 (type $string_leaf (sub $string (struct
   (field $bytes (ref $bytes)))))
 
@@ -426,7 +433,8 @@ ability Display {
 
 Frontend는 `b"..."`를 `Bytes` 값을 내는 `adt.bytes_const` 하나로, `"..."`를
 `String` 값을 내는 `adt.string_const` 하나로 낸다. Frontend는 byte 배열이나 `Repr`의
-field를 다루지 않는다. Target의 constant lowering이 두 operation을 펼친다. Byte 배열은
+field를 다루지 않는다. [표현 선택](abi-boundary.md#표현-선택)보다 앞에서 constant
+lowering이 두 operation을 `adt` 값으로 펼친다. Byte 배열은
 배열 상수 `adt.array_const`이고, `b"..."`는 그 배열 전체를 보는 `Repr`, `"..."`는
 그것을 다시 `String::Leaf`로 감싼 값이다. `Bytes`의 IR 타입은 `Repr`의 IR 타입이므로
 `Repr`의 field는 `adt.bytes_const` 결과 타입의 선언에서 이름으로 찾는다.
@@ -445,11 +453,13 @@ target의 선택은 서로 달라도 된다. Target은 배열 상수를 다음�
 - Wasm은 평가할 때마다 passive data segment에서 `array.new_data`로 새 배열을
   만든다. `array.new_data`는 상수식이 아니므로 global 초기화식으로 쓸 수 없다.
 
-`Bytes` 표현 struct는 두 target 모두 평가마다 일반 할당이다. Wasm에서 모든
-`adt.array_const`는 같은 passive data-segment index 공간을 사용하며, 동일한
-payload는 `String`과 `Bytes` 리터럴 사이에서도 data segment를
-재사용할 수 있다. Constant lowering은 자신이 참조하는 data segment를 같은 단계에서 모듈에
-선언한다([모듈 수준 자원의 선언][wasm-resources]). `String::Leaf` 생성은 target의
+`Bytes` 표현 struct 값의 표현은 두 target 모두
+[표현 선택](abi-boundary.md#표현-선택)이 정하며, box에 담길 때만 평가마다
+할당한다. 배열 상수는 배열이므로 표현 선택이 `heap.array_const`로 바꾼다.
+Wasm에서 모든 `heap.array_const`는 같은 passive data-segment index 공간을
+사용하며, 동일한 payload는 `String`과 `Bytes` 리터럴 사이에서도 data segment를
+재사용할 수 있다. Constant lowering은 자신이 참조하는 data segment를 같은 단계에서
+모듈에 선언한다([모듈 수준 자원의 선언][wasm-resources]). `String::Leaf` 생성은 target의
 일반 enum/variant lowering보다 먼저 일어나고, 그 이후에는 source에서 작성한
 `.Leaf(bytes)`와 똑같은 ADT 경로를 따른다.
 

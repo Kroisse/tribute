@@ -172,8 +172,12 @@ EnterTarget         value integrity check, global DCE (runtime functions
                     physicalization (physical signatures, root entry bridge,
                     value delimiters), closure lowering, target evidence
                     lowering
-ExitBoundary        closure storage layout, value integrity check, global
-                    DCE, canonicalization, boundary exit verification
+ExitBoundary        closure storage layout, literal expansion (Bytes and
+                    String literals to adt values over adt.array_const),
+                    representation selection (adt values to SSA leaves,
+                    inline fields, or heap.box),
+                    value integrity check, global DCE, canonicalization,
+                    boundary exit verification
 ── target dialect lowering ──
 LowerTarget         Wasm or native lowering (next two sections)
 ```
@@ -248,8 +252,8 @@ scf_to_wasm
 func_to_wasm
 ```
 
-`adt` is a Tribute dialect, so `adt_to_wasm` belongs to `tribute-passes`, not
-to this pass group.
+`heap` is a Tribute dialect, so its Wasm lowering (`adt_to_wasm`) belongs to
+`tribute-passes`, not to this pass group.
 
 Expected boundary: backend-ready Wasm IR contains `wasm.*` plus explicitly
 allowed infrastructure operations.

@@ -447,7 +447,8 @@ Generic struct의 spread는 생성할 타입과 같은 선언 및 일치하는 �
 쓰는 고정 길이 불변 배열이다. 패키지 `std` 밖에서는 보이지 않으며 사용자 언어의
 collection이 아니다. 타입 identity는 compiler 소유이며 같은 이름의 source 선언과
 구별된다. IR에서는 원소 타입이 `a`인 [`adt.array`](tribute-dialects.md#adt-배열)다. 원소가
-aggregate이면 배열은 그 object에 대한 managed 참조를 담는다.
+aggregate이면 [표현 선택](abi-boundary.md#표현-선택)이 원소를 object에 담고, 배열은
+그 object의 `heap.box`를 원소로 가진다.
 
 연산은 `std::runtime::Slots`의 compiler intrinsic이며 각각 `adt` 배열 operation
 하나로 낮춘다. 위치와 길이는 `Nat`이고 lowering이 `arith.index_castui`로
@@ -460,7 +461,7 @@ aggregate이면 배열은 그 object에 대한 managed 참조를 담는다.
 | `get(slots: Slots(a), at: Nat) -> a` | `at`번째 원소 | `adt.array_get` |
 | `insert(slots: Slots(a), at: Nat, value: a) -> Slots(a)` | `at` 앞에 `value`를 넣은 새 배열 | `adt.array_splice` (`start = end = at`) |
 | `remove(slots: Slots(a), at: Nat) -> Slots(a)` | `at`번째 원소를 뺀 새 배열 | `adt.array_splice` (`end = at + 1`, 원소 없음) |
-| `replace(slots: Slots(a), at: Nat, value: a) -> Slots(a)` | `at`번째 원소를 `value`로 바꾼 새 배열 | `adt.array_splice` (`end = at + 1`) |
+| `replace(slots: Slots(a), at: Nat, value: a) -> Slots(a)` | `at`번째 원소를 `value`로 바꾼 새 배열 | `adt.array_set` |
 
 `Slots`를 만든 뒤 바꾸는 연산은 없다. `insert`, `remove`, `replace`는 원래 배열을
 그대로 두고 새 배열을 만든다. `get`, `remove`, `replace`는 `at < len`을,

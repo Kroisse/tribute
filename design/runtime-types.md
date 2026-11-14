@@ -47,8 +47,9 @@ runtime 정보를 정한다. 그런 기능의 문법과 출력 형식은 이 문
   표현을 고를 수 있다. 값이 `anyref`로 지워지는 자리에서는 compiler가 그 값을
   descriptor를 가진 object로 감싼다. 그래서 지워진 값도 위 설계 원칙대로 자기
   모양을 알린다.
-- 모든 struct와 variant를 RC object로 두는 현재 표현은 이 자유 안에서 고른 하나의
-  선택이다. 계약이 아니다.
+- 표현은 representation/ABI 경계의 [표현 선택](abi-boundary.md#표현-선택)이 타입마다
+  정한다. 값은 object에 담기거나(boxed), SSA 값으로 쪼개지고 다른 object 안에
+  inline으로 놓인다(unboxed). 어느 쪽이든 한 타입의 layout은 하나다.
 - 제네릭 코드를 인스턴스 사이에 공유하는 compilation 전략도 이 원칙 안에 머문다.
   그런 전략이 균일한 boxing을 요구하더라도 compiler 내부의 선택으로 남으며, 소스에
   드러나는 규칙이 되지 않는다.
@@ -62,7 +63,9 @@ Identity를 관찰하게 만드는 기능은 이 원칙을 깬다. 포인터 동
 
 ## Descriptor 단위
 
-Descriptor는 runtime에 할당되는 값의 종류마다 하나다.
+Descriptor는 runtime에 할당되는 값의 종류마다 하나다. Unboxed로 고른 struct도
+descriptor를 가진다. 그 값이 다른 object 안에 inline으로 놓일 때 바깥 descriptor가 이
+descriptor를 가리키며, 강제 위치에서 object에 담길 때도 같은 descriptor를 쓴다.
 
 - 소스 struct의 인스턴스마다 하나. 특수화된 제네릭 struct는 특수화 인자마다
   별개의 descriptor를 가진다. 타입 자신의 row 인자는
@@ -110,13 +113,21 @@ Descriptor는 runtime에 할당되는 값의 종류마다 하나다.
 | managed 참조 | 가리키는 값의 descriptor를 따라간다 | release |
 | unmanaged 포인터 | 따라가지 않는다 | 하지 않음 |
 | 동적 값 | 값에서 descriptor를 찾는다. Boxing된 scalar도 여기에 든다 | release |
+| inline 값 | 필드 자리에 다른 struct 값이 펼쳐져 있다. 그 struct의 descriptor를 가리키며, 그 descriptor의 필드가 이 자리부터 이어진다 | 가리키는 descriptor의 해제 정보를 따른다 |
 
 필드 이름이 없는 compiler 소유 값은 필드 이름 없이 필드 종류만 가진다.
+
+Inline 값 필드는 값의 모양을 보존한다. `String`의 `Leaf`가 `Bytes` 값을 inline으로
+담으면, `Leaf`의 descriptor에는 `Bytes` descriptor를 가리키는 필드 하나가 있고 runtime은
+그 자리를 `Bytes` 값으로 읽는다. Inline 값의 offset과 크기는 가리키는 descriptor의
+필드에서 같은 정렬 규칙으로 정한다. Compiler가 만드는 해제 함수는 inline 값의 managed
+leaf를 컴파일할 때 펼쳐 직접 release하므로, 해제가 descriptor를 재귀로 따라가지 않는다.
 
 ## IR에서의 표현
 
 Nominal IR에는 descriptor 선언이 없다. Descriptor의 identity는 할당 operation이
-가리키는 nominal layout 타입과 variant tag(선언 순서의 variant 위치)의 쌍이다. Source가 선언한 타입의 이름,
+가리키는 nominal layout 타입과 variant tag(선언 순서의 variant 위치)의 쌍이다. Inline
+값 필드가 가리키는 descriptor의 identity는 그 필드의 layout 타입이다. Source가 선언한 타입의 이름,
 필드 이름, variant 이름의 출처는 그 타입의
 [nominal 선언](tribute-dialects.md#nominal-선언)이다.
 
@@ -124,8 +135,8 @@ Nominal IR에는 descriptor 선언이 없다. Descriptor의 identity는 할당 o
   경계는 `(layout 타입, tag)`마다 번호와 필드 종류를 정해 module 수준
   `tribute_rtti.layout` 선언으로 남긴다. Native 배열의 descriptor는
   `(adt.array 타입, tag 없음)`이다. `adt.array<core.i8>`의 번호는 이 경계가 정하지
-  않고 예약 번호를 그대로 쓴다. 할당 operation(`adt.struct_new`,
-  `adt.variant_new`, native에서 배열을 만드는 [`adt` 배열 operation](tribute-dialects.md#adt-배열))을
+  않고 예약 번호를 그대로 쓴다. 할당 operation(`heap.struct_new`,
+  `heap.variant_new`, native에서 배열을 만드는 [`heap` 배열 operation](tribute-dialects.md#heap))을
   내리는 pass는 번호를 스스로 정하지 않고 이 선언에서 읽어 할당에 새긴 뒤 선언을
   지운다. Native는 RC header의 RTTI index, Wasm은 사용자 struct와 variant 객체의
   첫 필드에 새긴다.
@@ -173,7 +184,10 @@ WasmGC 객체에는 header가 없으므로 객체가 descriptor를 필드로 가
   범위 다음부터 할당 순서대로 정한다. 단, enum은 처음 할당되는 variant의 순서에서
   선언된 variant 수만큼 연속된 번호를 선언 순서대로 받는다. 따라서 variant의
   선언 위치는 그 번호에서 enum의 첫 번호를 뺀 값이다. 할당되지 않는 variant의
-  번호는 비워 둔다. Closure를 제외한 builtin layout은 layout마다 필드와
+  번호는 비워 둔다. Object로 할당되지 않고 inline 값 필드로만 쓰이는 struct도
+  바깥 descriptor가 가리켜야 하므로 번호를 받는다. Descriptor를 모을 때 inline 값
+  필드의 layout도 함께 모으며, 그 번호도 할당 descriptor와 같이 처음 나타나는
+  순서대로 정한다. Closure를 제외한 builtin layout은 layout마다 필드와
   해제 동작이 하나로 고정되어 있으므로 descriptor도 layout마다 하나다.
 - Closure는 capture layout마다 GC 타입이 다르다. Wasm은 해제 정보가 필요 없고
   capture는 runtime 검사 대상이 아니므로, capture layout마다 descriptor를 두지 않고
@@ -193,7 +207,7 @@ WasmGC 객체에는 header가 없으므로 객체가 descriptor를 필드로 가
   비교한다. Payload에는 tag 필드를 두지 않고, variant 객체는 자기 필드만 가진다.
 - 프로그램이 할당하지 않는 variant는 descriptor 번호가 없으며, 그 variant에 대한
   판별은 두 target 모두에서 항상 거짓이다.
-- 값의 variant가 enum 선언에서 몇 번째인지(`adt.variant_tag`)도 descriptor로
+- 값의 variant가 enum 선언에서 몇 번째인지(`heap.variant_tag`)도 descriptor로
   구한다. Wasm은 descriptor 필드에서 enum의 첫 번호를 뺀다. Native는
   [RTTI table](rc.md#rtti-table)에서 그 descriptor 레코드의 `tag_index`를 읽는다.
   두 target 모두 할당 여부와 관계없이 선언 위치를 낸다.
@@ -205,7 +219,9 @@ WasmGC 객체에는 header가 없으므로 객체가 descriptor를 필드로 가
 
 - Runtime에 할당되는 모든 값은 descriptor를 가진다. Native에서는 RC header를 가진
   모든 객체, Wasm에서는 모든 사용자 struct와 variant 객체와 builtin layout 값이다.
-  예외는 [Wasm 배치](#wasm-배치)가 정한 Wasm 배열 하나다.
+  예외는 [Wasm 배치](#wasm-배치)가 정한 Wasm 배열 하나다. Inline으로 놓인 값은 자기
+  header나 descriptor 필드를 갖지 않고, 바깥 descriptor의 inline 값 필드가 그 모양을
+  알린다.
 - Descriptor의 필드 종류와 layout 필드의 물리 표현은 일치한다. Managed 참조
   필드는 managed 참조 표현을, scalar 필드는 해당 폭의 scalar 표현을 쓴다.
 - Descriptor 번호는 전체 프로그램 컴파일을 전제로 한 프로그램 내부 번호다. 따로
