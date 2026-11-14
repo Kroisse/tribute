@@ -157,7 +157,8 @@ pub struct Resumption {
     pub arm: RegionRef,
     /// The type of the value a `resume` supplies.
     pub input: TypeRef,
-    /// The type of the value a `resume` returns.
+    /// The type of the value a `resume` returns: the result type of the
+    /// body of `handle`.
     pub answer: TypeRef,
 }
 
@@ -209,8 +210,9 @@ impl DynResumptionRegions {
 
 impl ResumptionRegions for Handle {
     /// `body` and `completion` are transparent; a resumptive `op` arm
-    /// provides the resumption of its operation into the handle's result;
-    /// any other arm is a barrier.
+    /// provides the resumption of its operation into the rest of the body,
+    /// whose result type is the completion argument's; any other arm is a
+    /// barrier.
     fn resumption_scope(&self, ctx: &IrContext, region: RegionRef) -> ResumptionScope {
         let op = self.op_ref();
         let Some(index) = ctx.op_regions(op).position(|candidate| candidate == region) else {
@@ -219,10 +221,12 @@ impl ResumptionRegions for Handle {
         if index < 2 {
             return ResumptionScope::Transparent;
         }
-        let (Some(binding), Some(answer)) = (
-            self.binding_of(ctx, region),
-            ctx.op_result_types(op).first().copied(),
-        ) else {
+        let body_result = ctx
+            .op_region(op, 1)
+            .and_then(|completion| ctx.region(completion).blocks.first().copied())
+            .and_then(|entry| ctx.block(entry).args.first())
+            .map(|arg| arg.ty);
+        let (Some(binding), Some(answer)) = (self.binding_of(ctx, region), body_result) else {
             return ResumptionScope::Barrier;
         };
         if binding.is_resumptive(ctx) {

@@ -290,33 +290,37 @@ pub fn runes(s: String) ->{Stream(Rune)} Nil {
 ```rust
 // 모든 rune 순회
 fn count_vowels(s: String) -> Nat {
-    let count = 0
-    handle s.runes() {
+    count_vowels_in(fn() s.runes(), 0)
+}
+
+// 재개된 계산의 emit도 받도록 handler를 다시 설치한다
+fn count_vowels_in(runes: fn() ->{Stream(Rune)} Nil, count: Nat) -> Nat {
+    handle runes() {
+        do _ { count }
         op Stream::emit(r) {
             case "aeiouAEIOU".contains(r.to_string()) {
-                True -> resume({ count = count + 1; Nil })
-                False -> resume(Nil)
+                True -> count_vowels_in(fn() resume Nil, count + 1)
+                False -> count_vowels_in(fn() resume Nil, count)
             }
         }
     }
-    count
 }
 
 // Early termination: 첫 공백 전까지만
 fn first_word(s: String) -> String {
-    let result = String::empty()
-    handle s.runes() {
+    first_word_in(fn() s.runes(), String::empty())
+}
+
+fn first_word_in(runes: fn() ->{Stream(Rune)} Nil, word: String) -> String {
+    handle runes() {
+        do _ { word }
         op Stream::emit(r) {
             case r.is_whitespace() {
-                True -> result       // resume 안 함 → 중단
-                False -> {
-                    result = result <> String::from_rune(r)
-                    resume(Nil)
-                }
+                True -> word         // resume 안 함 → 중단
+                False -> first_word_in(fn() resume Nil, word <> String::from_rune(r))
             }
         }
     }
-    result
 }
 ```
 

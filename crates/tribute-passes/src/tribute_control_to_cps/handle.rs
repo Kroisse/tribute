@@ -27,7 +27,6 @@ impl Converter<'_> {
             void_exit_k: None,
             answer_type: flow.answer_type,
             preserve_scf_yield: false,
-            arm: flow.arm.clone(),
             tail_join: flow.tail_join.clone(),
         };
         self.convert_sequence(
@@ -173,38 +172,13 @@ impl Converter<'_> {
         }
         let location = self.ctx.op(source).location;
         let value_source = self.ctx.op_operands(source)[0];
-        // A resume in the arm body continues under the arm's own handle; any
-        // other resume passes the evidence of the lambda it is in.
-        // The selection yields the evidence the resumed computation's handle
-        // is installed on, or its own evidence when resumed from a lambda.
-        let (token, evidence, plan) = match flow.arm.clone() {
-            Some(arm) => {
-                let (evidence, plan) = match arm.evidence {
-                    ArmEvidence::Flow => (self.current_evidence(source, flow)?, None),
-                    // Leave the nested handles innermost first.
-                    ArmEvidence::Outside(instances) => (
-                        self.current_evidence(source, flow)?,
-                        tribute_control::EvidenceStep::plan_attribute(
-                            self.ctx,
-                            instances
-                                .into_iter()
-                                .rev()
-                                .map(tribute_control::EvidenceStep::Outer),
-                        ),
-                    ),
-                };
-                (arm.installed, evidence, plan)
-            }
-            None => {
-                let resumption = DynResumptionRegions::enclosing(self.ctx, source)
-                    .expect("pre-CPS validation places every resume in a resumptive arm");
-                (
-                    self.arm_token(&resumption),
-                    self.current_evidence(source, flow)?,
-                    evidence_plan_of(self.ctx, source),
-                )
-            }
-        };
+        // The resumed computation runs with the evidence of the scope the
+        // resume is written in, wherever that is in the arm.
+        let resumption = DynResumptionRegions::enclosing(self.ctx, source)
+            .expect("pre-CPS validation places every resume in a resumptive arm");
+        let token = self.arm_token(&resumption);
+        let evidence = self.current_evidence(source, flow)?;
+        let plan = evidence_plan_of(self.ctx, source);
         let value = mapping.get(&value_source).copied().unwrap_or(value_source);
         let resume_frame =
             self.push_suffix_frame(source, rest, block, mapping, flow, plan.clone())?;
@@ -227,7 +201,7 @@ impl Converter<'_> {
         binding: ability::HandlerBinding,
         source_region: RegionRef,
         outer_mapping: &HashMap<ValueRef, ValueRef>,
-        handle_answer: TypeRef,
+        (handle_answer, body_answer): (TypeRef, TypeRef),
     ) -> Result<(closure::Lambda, ability::HandlerBinding), TributeControlToCpsError> {
         let location = self.ctx.op(source).location;
         let general = binding.kind == ability::OperationKind::Op;
@@ -246,9 +220,8 @@ impl Converter<'_> {
             CallingConvention::EvidenceDirect
         };
         // A general arm receives the outer evidence and exit frame of the
-        // layer that dispatched to it. A resumptive arm ends with two tokens:
-        // the first resumes from a lambda, the second resumes under the arm's
-        // own handle.
+        // layer that dispatched to it. A resumptive arm ends with the token of
+        // its resumption, which resumes the body to its end.
         let mut params = vec![evidence_type];
         if general {
             params.push(self.frame_type(handle_answer));
@@ -257,8 +230,7 @@ impl Converter<'_> {
         params.extend_from_slice(&converted_args);
         if resumptive {
             let input = self.convert_type(operation_result);
-            let token_type = self.resumption_type(input, handle_answer);
-            params.extend([token_type, token_type]);
+            params.push(self.resumption_type(input, body_answer));
         }
         let block = make_block(self.ctx, location, &params);
         let block_args = self.ctx.block_args(block).to_vec();
@@ -272,13 +244,11 @@ impl Converter<'_> {
         }
         let evidence = block_args[0];
         let handle_exit = general.then(|| block_args[1]);
-        let arm = resumptive.then(|| ArmResume {
-            installed: *block_args.last().expect("resumptive arm has a token"),
-            evidence: ArmEvidence::Flow,
-        });
         if resumptive {
-            self.arm_tokens
-                .insert(source_region, block_args[block_args.len() - 2]);
+            self.arm_tokens.insert(
+                source_region,
+                *block_args.last().expect("resumptive arm has a token"),
+            );
         }
         let flow = Flow {
             convention,
@@ -288,7 +258,6 @@ impl Converter<'_> {
             void_exit_k: None,
             answer_type: handle_answer,
             preserve_scf_yield: false,
-            arm,
             tail_join: None,
         };
         self.convert_sequence(
@@ -357,22 +326,27 @@ impl Converter<'_> {
             .handlers(self.ctx)
             .zip(source_handle.arms(self.ctx))
             .collect();
-        let mut arms = Vec::new();
-        let mut handlers = Vec::new();
-        for (binding, source_arm) in source_arms {
-            let (arm, binding) =
-                self.lower_handler_arm(source, binding, source_arm, mapping, handle_answer)?;
-            self.ctx.push_op(block, arm.op_ref());
-            arms.push(arm.result(self.ctx));
-            handlers.push(binding);
-        }
-
         let completion_input = self.convert_type(
             self.ctx.value_ty(
                 self.ctx
                     .block_args(self.ctx.region(completion_source).blocks[0])[0],
             ),
         );
+        let mut arms = Vec::new();
+        let mut handlers = Vec::new();
+        for (binding, source_arm) in source_arms {
+            let (arm, binding) = self.lower_handler_arm(
+                source,
+                binding,
+                source_arm,
+                mapping,
+                (handle_answer, completion_input),
+            )?;
+            self.ctx.push_op(block, arm.op_ref());
+            arms.push(arm.result(self.ctx));
+            handlers.push(binding);
+        }
+
         // The arms and the `do` arm run with the evidence the handle is
         // installed on, not with the body's extended evidence.
         let outer_evidence = self.current_evidence(source, flow)?;
@@ -391,24 +365,8 @@ impl Converter<'_> {
             void_exit_k: None,
             answer_type: handle_answer,
             preserve_scf_yield: false,
-            arm: flow.arm.clone(),
             tail_join: flow.tail_join.clone(),
         };
-        // Inside the body, an enclosing arm's evidence is the evidence this
-        // handle is installed on. A handle that handles nothing installs no
-        // marker and leaves the evidence as it is.
-        let handled = handlers.first().map(|binding| binding.ability.clone());
-        let body_arm = flow.arm.clone().map(|arm| ArmResume {
-            evidence: match (arm.evidence, handled) {
-                (evidence, None) => evidence,
-                (ArmEvidence::Flow, Some(instance)) => ArmEvidence::Outside(vec![instance]),
-                (ArmEvidence::Outside(mut instances), Some(instance)) => {
-                    instances.push(instance);
-                    ArmEvidence::Outside(instances)
-                }
-            },
-            ..arm
-        });
         let (completion_op, completion_k) = self.build_completion_continuation(
             completion_source,
             &body_mapping,
@@ -417,7 +375,6 @@ impl Converter<'_> {
         )?;
         self.ctx.push_op(block, completion_op);
         let body_flow = Flow {
-            arm: body_arm,
             evidence: Some(extended_evidence),
             exit_k: Some(body_frame),
             root_exit_k: Some(body_frame),

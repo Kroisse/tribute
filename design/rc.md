@@ -885,12 +885,13 @@ managed 참조는 항상 그 저장보다 먼저 만들어진 object를 가리�
 - **Managed field를 덮어쓰는 곳은 compiler가 소유한 completion cell뿐이다.**
   [값 delimiter](cps-effects.md#값-delimiter)의 completion cell은 region의 답을 한 번
   쓴다. 답에서 그 cell이나 cell을 가진 `Done`으로 가는 경로가 없다는 근거는 둘이다.
-  - Resume token은 lambda capture로만 옮길 수 있고, token을 담은 closure를 struct나
-    variant에 저장하면 whole-IR 검증이 거부한다. Handle의 답 타입이 그 handle을 재개하는
-    closure를 담으려면 명목 타입을 거쳐야 하므로, 지금은 답이 token을 담지 못한다.
-  - 답이 token을 담더라도 재개된 계산은 재개한 지점이 준 frame으로 handle 층을 다시
-    만들고 이미 끝난 delimiter의 frame으로 돌아가지 않는다. 이 규칙은 token의 저장
-    제한이 풀려도 유지되어야 한다.
+  - Resumption을 운반하는 lambda는 arm이 받는 resume token 하나를 capture한다.
+    그 lambda를 struct나 variant에 저장하면 whole-IR 검증이 거부한다. Handle의 답
+    타입이 그 handle을 재개하는 closure를 담으려면 명목 타입을 거쳐야 하므로, 지금은
+    답이 token을 담지 못한다.
+  - 답이 token을 담더라도 재개된 계산은 재개한 지점이 준 frame에서 끝나고 이미 끝난
+    delimiter의 frame으로 돌아가지 않는다. 이 규칙은 token의 저장 제한이 풀려도
+    유지되어야 한다.
 
   Root `main`의 delimiter는 `Nil`을 답으로 받으므로 managed 참조를 쓰지 않는다.
   One-shot resumption이 소비 여부를 표시하는 쓰기는 unmanaged flag를 쓴다. 두 cell의

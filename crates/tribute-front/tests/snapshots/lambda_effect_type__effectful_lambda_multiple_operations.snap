@@ -12,13 +12,21 @@ core.module @test {
       } do(%3: core.i32) {
           tribute_control.yield %3
       } op @"ability_2_10_pkg::State_3_int" @get() : core.i32 {
-          %4 = arith.constant 0 : core.i32
-          %5 = tribute_control.resume %4 : core.i32 -> core.i32
-          tribute_control.yield %5
-      } op @"ability_2_10_pkg::State_3_int" @set(%6: core.i32) : core.nil {
-          %7 = core.nil_value : core.nil
-          %8 = tribute_control.resume %7 : core.nil -> core.i32
-          tribute_control.yield %8
+          %4 = tribute_control.lambda() -> core.i32 row(@"ability_2_10_pkg::State_3_int") captures [] {
+              %5 = arith.constant 0 : core.i32
+              %6 = tribute_control.resume %5 : core.i32 -> core.i32
+              tribute_control.return %6
+          }
+          %7 = tribute_control.call @"pkg::run_with_state"(%4) attributes {row_args = [{tail = 0}]} : (!t0) -> core.i32
+          tribute_control.yield %7
+      } op @"ability_2_10_pkg::State_3_int" @set(%8: core.i32) : core.nil {
+          %9 = tribute_control.lambda() -> core.i32 row(@"ability_2_10_pkg::State_3_int") captures [] {
+              %10 = core.nil_value : core.nil
+              %11 = tribute_control.resume %10 : core.nil -> core.i32
+              tribute_control.return %11
+          }
+          %12 = tribute_control.call @"pkg::run_with_state"(%9) attributes {row_args = [{tail = 0}]} : (!t0) -> core.i32
+          tribute_control.yield %12
       }
       tribute_control.return %1
   }

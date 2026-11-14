@@ -93,14 +93,13 @@ pub fn lower_continuation_frames(
     let adapters = build_dispatch_adapters(ctx, module, module_block, &frames)?;
     let suffix_expansion = SuffixExpansion {
         frames: frames.clone(),
-        adapters: adapters.clone(),
+        adapters,
     };
     PatternApplicator::new(TypeConverter::new())
         .add_pattern(ExpandSuffixFrames(&suffix_expansion))
         .add_pattern(ExpandExits(&suffix_expansion))
         .add_pattern(ExpandHandles {
             frames: frames.clone(),
-            adapters,
             handles: number_handles(ctx, module),
         })
         .add_pattern(ExpandDispatches { frames })

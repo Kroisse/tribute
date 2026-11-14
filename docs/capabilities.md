@@ -265,11 +265,15 @@ Native **native-run**, WasmGC **wasm-run**.
   `tests/integration/e2e_ability_handler.rs`.
 - Wasm: `test_execute_cps_dispatch_ability` in `wasm_compilation.rs` runs
   `op` arms that resume once with Wasmtime and asserts its output.
+- `resume` is shallow: it runs the rest of the handled computation without its
+  handle, so an arm keeps handling by reinstalling the handler around `resume`
+  (a recursive handler function), and a `resume` with no handler around it
+  performs the handled ability from the handle expression itself.
 - Both targets: an `op` arm that reinstalls its own handler around `resume`,
   as in a state-passing `run_state`, runs in
   `test_nested_handler_same_ability_same_type_shadowing` in
   `tests/integration/e2e_ability_nested.rs`. Handler arms run outside their
-  handle: `test_op_arm_operations_reach_the_outer_handler`,
+  handle: `test_op_arm_and_resumed_operations_reach_the_outer_handler`,
   `test_do_arm_operations_reach_the_outer_handler`, and
   `test_fn_arm_operations_reach_the_outer_handler` in
   `tests/integration/e2e_ability_row_evidence.rs`.
@@ -304,8 +308,9 @@ Native **native-run**, WasmGC **wasm-run**.
   handlers, alternating operations of two reinstalling handlers, and a
   `resume` written in a handle nested in an arm run in
   `tests/integration/e2e_ability_row_evidence.rs`;
-  `test_nested_resume_restores_the_handler_a_nested_handle_hid` covers a handle
-  nested in an arm that handles an instance the arm's row also names.
+  `test_nested_handler_does_not_handle_the_resumed_computation` covers a handle
+  nested in an arm that handles an instance the arm's row also names, which
+  does not handle the resumed computation.
 
 ### Module-qualified ability paths in inline modules
 

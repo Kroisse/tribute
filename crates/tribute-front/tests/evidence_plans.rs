@@ -130,8 +130,8 @@ fn counter(comp: fn() ->{e, State(Nat)} a) ->{e, State(Nat)} a {
 fn tail_only(comp: fn() ->{e, State(Nat)} a) ->{e} a {
     handle comp() {
         do result { result }
-        op State::get() { resume 0 }
-        op State::set(v) { resume Nil }
+        op State::get() { tail_only(fn() resume 0) }
+        op State::set(v) { tail_only(fn() resume Nil) }
     }
 }
 "#
@@ -243,4 +243,58 @@ fn stateful(f: fn() ->{e1, State(Nat)} Nil, g: fn() ->{e2} Nil) ->{e1, e2, State
     );
     let plans = plans(db, &source);
     assert_eq!(plans, ["f(): select 0, push State", "g(): select 1"]);
+}
+
+const PING: &str = r#"
+ability Ping { op ping() -> Nat }
+ability Other { op other() -> Nil }
+"#;
+
+/// A `resume` passes the evidence of the scope it is written in, wherever
+/// that is: the resumed body takes its handlers from there.
+#[salsa_test]
+fn resume_selects_from_the_scope_it_is_written_in(db: &salsa::DatabaseImpl) {
+    let resumes = [
+        // The arm runs with the handle's outer evidence, which already holds
+        // the handled label for the resumed body.
+        ("resume 0", Vec::<&str>::new()),
+        ("let k = fn() { resume 0 }\n        k()", vec![]),
+        // A handler around the `resume` that the resumed body does not name
+        // must not catch what reaches it through the body's row tail.
+        (
+            "handle { Other::other()\n resume 0 } { op Other::other() { 0 } }",
+            vec!["resume 0: mask Other"],
+        ),
+        (
+            "let k = fn() { Other::other()\n resume 0 }\n        handle k() { op Other::other() { 0 } }",
+            vec!["resume 0: mask Other"],
+        ),
+    ];
+    for (resume, expected) in resumes {
+        let source = format!(
+            r#"{PING}
+fn handled(comp: fn() ->{{e, Ping}} Nat) ->{{e, Ping}} Bool {{
+    handle comp() {{
+        do n {{ False }}
+        op Ping::ping() {{
+            case {{ {resume} }} {{
+                0 -> True
+                _ -> False
+            }}
+        }}
+    }}
+}}
+"#
+        );
+        let (handle, plans): (Vec<_>, Vec<_>) = plans(db, &source)
+            .into_iter()
+            .partition(|plan| plan.starts_with("handle comp()"));
+        // The handled label is explicit in the outer row, so the handle
+        // hides the outer handler from its body.
+        assert!(
+            matches!(handle.as_slice(), [plan] if plan.ends_with(": mask Ping")),
+            "{resume}: {handle:?}"
+        );
+        assert_eq!(plans, expected, "{resume}");
+    }
 }

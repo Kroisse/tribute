@@ -126,10 +126,10 @@ fn main() -> Nil { }
 }
 
 /// Resume materializes an erased literal to the arm's operation result type and
-/// returns the handle's answer, rather than using the literal or
-/// source-expression type.
+/// returns the handle body's result, rather than using the literal or
+/// source-expression type or the handle's answer.
 #[salsa_test]
-fn resume_uses_exact_arm_input_and_answer_types(db: &salsa::DatabaseImpl) {
+fn resume_uses_exact_arm_input_and_body_result_types(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
         db,
         "test.trb",
@@ -138,12 +138,15 @@ ability Read {
     op read() -> String
 }
 
-fn run() -> Int {
-    handle Read::read() {
+fn run() ->{Read} Int {
+    handle {
+        let _ = Read::read()
+        True
+    } {
         do result { +0 }
         op Read::read() {
-            let answer = resume "resumed"
-            answer + +1
+            let resumed = resume "resumed"
+            +1
         }
     }
 }
@@ -163,7 +166,9 @@ fn main() -> Nil { }
         .lines()
         .find(|line| line.contains("= tribute_control.resume "))
         .expect("source-logical resume");
-    assert!(resume.contains(": tribute_rt.anyref -> core.i32"), "{run}");
+    // The resumed computation ends with the body's `Bool`, before the `do`
+    // arm turns it into the handle's `Int`.
+    assert!(resume.contains(": tribute_rt.anyref -> core.i1"), "{run}");
 }
 
 #[salsa_test]
@@ -227,7 +232,7 @@ ability State {
     op get() -> Int
 }
 
-fn run() -> Int {
+fn run() ->{State} Int {
     handle State::get() {
         op State::missing() { resume 0 }
     }
@@ -249,7 +254,7 @@ ability State {
     op get(value: Int) -> Int
 }
 
-fn run() -> Int {
+fn run() ->{State} Int {
     handle State::get(0) {
         op State::get() { resume 0 }
     }
@@ -789,7 +794,7 @@ fn read() ->{State(Int)} Int {
     State::get()
 }
 
-fn run() -> Int {
+fn run() ->{State(Int)} Int {
     handle read() + +1 {
         do result { result }
         op State::get() { resume +41 }
@@ -824,7 +829,7 @@ fn read_log() ->{Log} Int {
     Log::value()
 }
 
-fn run() ->{Log} Int {
+fn run() ->{Log, State(Int)} Int {
     handle State::get() {
         do result { result }
         op State::get() {
@@ -949,7 +954,7 @@ ability Log {
 
 fn read_log() ->{Log} Nat { Log::value() }
 
-fn run() ->{Log} Nat {
+fn run() ->{Log, State} Nat {
     handle State::get() {
         do result { result }
         op State::get() {
@@ -990,7 +995,7 @@ fn get_state() ->{State(Int)} Int {
     State::get()
 }
 
-fn run() -> Int {
+fn run() ->{State(Int)} Int {
     handle get_state() {
         do result { result }
         op State::get() { resume +42 }
@@ -1062,7 +1067,7 @@ fn consume(value: Boxed(Int)) -> Int {
     case value { .Boxed(result) -> result }
 }
 
-fn run() -> Int {
+fn run() ->{State(Int)} Int {
     consume(.Boxed(handle read() {
         do result { result }
         op State::get() { resume +41 }
@@ -1095,7 +1100,7 @@ ability Trace {
 
 fn read() ->{State(Int)} Int { State::get() }
 
-fn run() ->{Trace} Int {
+fn run() ->{Trace, State(Int)} Int {
     Trace::before()
     handle read() {
         do result { result }
@@ -1111,8 +1116,9 @@ fn main() -> Nil { }
     assert_nested_handle_shape(checked_logical_function(ir_text, "run"));
 }
 
-/// A handler arm may continue after `resume`: the delimited answer becomes the
-/// resume expression's source value before the arm-local strict consumer runs.
+/// A handler arm may continue after `resume`: the resumed body's result becomes
+/// the resume expression's source value before the arm-local strict consumer
+/// runs.
 #[salsa_test]
 fn test_strict_consumer_after_resume_uses_arm_continuation(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
@@ -1123,7 +1129,7 @@ ability State(s) {
     op get() -> s
 }
 
-fn run() -> Int {
+fn run() ->{State(Int)} Int {
     handle State::get() {
         do result { result }
         op State::get() {
@@ -1142,7 +1148,7 @@ fn main() -> Nil { }
 }
 
 /// A lambda created in an `op` arm captures the tagged resume local and still
-/// invokes the arm-local continuation after the resume answer is recovered.
+/// invokes the arm-local continuation after the resume result is recovered.
 #[salsa_test]
 fn test_handler_lambda_captures_resume_for_strict_consumer(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
@@ -1633,7 +1639,7 @@ ability Flag {
 
 fn allowed() ->{Flag} Bool { Flag::read() }
 
-fn run() ->{Flag} Nat {
+fn run() ->{Flag, State} Nat {
     handle State::get() {
         do result { result }
         op State::get() {

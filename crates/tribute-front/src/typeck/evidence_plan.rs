@@ -76,7 +76,6 @@ enum EvidenceSite<'db> {
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct SavedEvidenceScope {
     current: Option<usize>,
-    resume_from: Option<usize>,
 }
 
 /// Evidence scopes and call sites of one function body.
@@ -84,9 +83,6 @@ pub(crate) struct SavedEvidenceScope {
 pub(crate) struct EvidenceTracker<'db> {
     scopes: Vec<EvidenceScope<'db>>,
     current: Option<usize>,
-    /// The scope a `resume` passes evidence from: the handle body for a
-    /// resume in an arm body, the lambda for a resume in a lambda in the arm.
-    resume_from: Option<usize>,
     /// The handle body each continuation local resumes.
     continuations: HashMap<LocalId, usize>,
     sites: HashMap<NodeId, EvidenceSite<'db>>,
@@ -108,14 +104,12 @@ impl<'db> EvidenceTracker<'db> {
     fn save(&self) -> SavedEvidenceScope {
         SavedEvidenceScope {
             current: self.current,
-            resume_from: self.resume_from,
         }
     }
 
     /// Restore the scope that was current before a nested scope.
     pub(crate) fn restore(&mut self, saved: SavedEvidenceScope) {
         self.current = saved.current;
-        self.resume_from = saved.resume_from;
     }
 
     /// Enter a function or lambda body. The row may be supplied later with
@@ -128,10 +122,6 @@ impl<'db> EvidenceTracker<'db> {
         let scope = self.scopes.len();
         self.scopes.push(EvidenceScope::Callable(row));
         self.current = Some(scope);
-        // A resume in a lambda passes the lambda's own evidence.
-        if self.resume_from.is_some() {
-            self.resume_from = Some(scope);
-        }
         (scope, saved)
     }
 
@@ -166,15 +156,6 @@ impl<'db> EvidenceTracker<'db> {
         }
     }
 
-    /// Enter an `op` arm body of the handle whose body is `body`. The arm's
-    /// own operations and calls keep the enclosing scope; its resumes pass the
-    /// handle body's evidence.
-    pub(crate) fn enter_op_arm(&mut self, body: usize) -> SavedEvidenceScope {
-        let saved = self.save();
-        self.resume_from = Some(body);
-        saved
-    }
-
     /// Bind the continuation local of an `op` arm to the handle body it resumes.
     pub(crate) fn bind_continuation(&mut self, local: LocalId, body: usize) {
         self.continuations.insert(local, body);
@@ -199,12 +180,13 @@ impl<'db> EvidenceTracker<'db> {
         }
     }
 
-    /// Record a resume of the continuation bound to `local`.
+    /// Record a resume of the continuation bound to `local`. It passes the
+    /// evidence of the scope it is written in, as a call does.
     pub(crate) fn record_resume(&mut self, resume: NodeId, local: LocalId) {
-        let Some(body) = self.continuations.get(&local).copied() else {
+        let (Some(body), Some(scope)) = (self.continuations.get(&local).copied(), self.current)
+        else {
             return;
         };
-        let scope = self.resume_from.unwrap_or(body);
         self.sites
             .entry(resume)
             .or_insert(EvidenceSite::Resume { scope, body });
@@ -244,13 +226,12 @@ impl<'db> EvidenceTracker<'db> {
                     }
                     plan
                 }
-                EvidenceSite::Resume { scope, body } if scope != body => {
+                EvidenceSite::Resume { scope, body } => {
                     let (caller, tail) = self.explicit(db, *scope, &resolve, &mut explicit);
                     let (body, body_tail) = self.explicit(db, *body, &resolve, &mut explicit);
                     // The handle body takes each of its instances once.
                     call_plan(&caller, &body, opens_into(body_tail, tail))
                 }
-                EvidenceSite::Resume { .. } => Vec::new(),
                 EvidenceSite::Handle { body } => {
                     let EvidenceScope::HandleBody { parent, handled } = &self.scopes[*body] else {
                         unreachable!("a handle site names a handle body scope");

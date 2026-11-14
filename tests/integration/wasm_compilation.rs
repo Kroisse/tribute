@@ -380,16 +380,16 @@ fn bump() ->{State(Int)} Int {
     n
 }
 
-fn run_state() -> Int {
-    handle bump() {
+fn run_state(comp: fn() ->{e, State(Int)} Int) ->{e} Int {
+    handle comp() {
         do result { result }
-        op State::get() { resume +41 }
-        op State::set(value) { resume Nil }
+        op State::get() { run_state(fn() { resume +41 }) }
+        op State::set(value) { run_state(fn() { resume Nil }) }
     }
 }
 
 fn main() ->{std::io::Io} Nil {
-    case run_state() {
+    case run_state(fn() bump()) {
         +41 -> std::io::print_line("ok")
         _ -> std::io::print_line("unexpected")
     }

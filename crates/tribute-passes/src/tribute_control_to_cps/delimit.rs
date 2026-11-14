@@ -59,7 +59,6 @@ impl Converter<'_> {
             void_exit_k: None,
             answer_type: answer,
             preserve_scf_yield: false,
-            arm: None,
             tail_join: None,
         };
         // The exit is conversion input only; it must not keep a use of the

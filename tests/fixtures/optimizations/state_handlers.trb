@@ -11,32 +11,44 @@ fn bump() ->{State(Int)} Int {
     n
 }
 
-fn run_state() -> Int {
-    handle bump() {
+fn handle_state(comp: fn() ->{e, State(Int)} Int) ->{e} Int {
+    handle comp() {
         do result { result }
-        op State::get() { resume +10 }
-        op State::set(value) { resume Nil }
+        op State::get() { handle_state(fn() { resume +10 }) }
+        op State::set(value) { handle_state(fn() { resume Nil }) }
     }
+}
+
+fn run_state() ->{} Int {
+    handle_state(fn() bump())
 }
 
 // These independently lowered source handles make the baseline profile emit
 // multiple equivalent non-capturing identity helpers. The production profile
 // must share exactly one helper; the general-arm Escape closures are not part
 // of this optimization because they capture their dynamic owner tag.
-fn run_state_again() -> Int {
-    handle bump() {
+fn handle_state_again(comp: fn() ->{e, State(Int)} Int) ->{e} Int {
+    handle comp() {
         do result { result }
-        op State::get() { resume +10 }
-        op State::set(value) { resume Nil }
+        op State::get() { handle_state_again(fn() { resume +10 }) }
+        op State::set(value) { handle_state_again(fn() { resume Nil }) }
     }
 }
 
-fn run_state_once_more() -> Int {
-    handle bump() {
+fn run_state_again() ->{} Int {
+    handle_state_again(fn() bump())
+}
+
+fn handle_state_once_more(comp: fn() ->{e, State(Int)} Int) ->{e} Int {
+    handle comp() {
         do result { result }
-        op State::get() { resume +10 }
-        op State::set(value) { resume Nil }
+        op State::get() { handle_state_once_more(fn() { resume +10 }) }
+        op State::set(value) { handle_state_once_more(fn() { resume Nil }) }
     }
+}
+
+fn run_state_once_more() ->{} Int {
+    handle_state_once_more(fn() bump())
 }
 
 fn main() ->{Io} Nil {

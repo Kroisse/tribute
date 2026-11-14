@@ -55,11 +55,6 @@ mod effect {
     #[asm_format(ability evidence attr_dict ":" type(result))]
     fn dup<E: Evidence>(ability: Attr<SymbolRef>, evidence: Value<E>) -> Value<E> {}
 
-    /// The evidence the top handler of one ability was installed on.
-    #[flags(Pure)]
-    #[asm_format(ability evidence attr_dict ":" type(result))]
-    fn outer<E: Evidence>(ability: Attr<SymbolRef>, evidence: Value<E>) -> Value<E> {}
-
     /// The evidence of the row tail `index` of the callable that received
     /// `evidence`, or `evidence` itself when it holds no such row tail.
     #[flags(Pure)]

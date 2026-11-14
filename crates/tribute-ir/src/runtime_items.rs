@@ -44,15 +44,13 @@ pub mod evidence {
     pub const EXTEND: &[&str] = &["std", "runtime", "evidence", "extend"];
     pub const MASK: &[&str] = &["std", "runtime", "evidence", "mask"];
     pub const DUP: &[&str] = &["std", "runtime", "evidence", "dup"];
-    pub const OUTER: &[&str] = &["std", "runtime", "evidence", "outer"];
     pub const TAIL: &[&str] = &["std", "runtime", "evidence", "tail"];
     pub const WITH_TAIL: &[&str] = &["std", "runtime", "evidence", "with_tail"];
     pub const PUSH: &[&str] = &["std", "runtime", "evidence", "push"];
 
     /// The evidence functions.
-    pub const FUNCTIONS: [&[&str]; 9] = [
-        LOOKUP, LOOKUP_TR, EXTEND, MASK, DUP, OUTER, TAIL, WITH_TAIL, PUSH,
-    ];
+    pub const FUNCTIONS: [&[&str]; 8] =
+        [LOOKUP, LOOKUP_TR, EXTEND, MASK, DUP, TAIL, WITH_TAIL, PUSH];
 }
 
 const fn function(path: &'static [&'static str]) -> RuntimeItem {
@@ -73,7 +71,6 @@ pub const RUNTIME_ITEMS: &[RuntimeItem] = &[
     function(evidence::EXTEND),
     function(evidence::MASK),
     function(evidence::DUP),
-    function(evidence::OUTER),
     function(evidence::TAIL),
     function(evidence::WITH_TAIL),
     function(evidence::PUSH),

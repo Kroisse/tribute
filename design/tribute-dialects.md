@@ -117,16 +117,22 @@ interface로 자신이 `resume`에게 무엇인지 답한다:
 
 - `tribute_control.handle`의 `body`와 `completion`은 투과한다. Resumptive `op`
   arm(`operation_kind = "op"`이고 logical result가 `core.never`가 아닌 arm)은
-  resumption을 제공한다. 그 입력 type은 operation의 logical result type이고 답
-  type은 `handle`의 result type이다. `fn` arm과 logical result가 `Never`인 `op`
-  arm은 resumption을 만들지 않으며 탐색을 멈춘다.
+  resumption을 제공한다. 그 입력 type은 operation의 logical result type이고 결과
+  type은 `handle` body의 result type, 곧 `completion` 인자의 type이다. `fn` arm과
+  logical result가 `Never`인 `op` arm은 resumption을 만들지 않으며 탐색을 멈춘다.
 - `IsolatedFromAbove`를 가진 operation(`func`)의 region은 탐색을 멈춘다.
 - 그 밖의 operation은 `tribute_control.lambda`와 `tribute_cps.lambda`, `scf.*`를
   포함해 투과한다.
 
 제공하는 arm을 찾지 못한 `resume`은 잘못된 IR이다. `resume`의 값 type은 제공된
-입력 type과, result type은 답 type과 같아야 하며, 이는 `resume`의 지역 검증이
-확인한다.
+입력 type과, result type은 제공된 결과 type과 같아야 하며, 이는 `resume`의 지역
+검증이 확인한다.
+
+Resumption은 중단된 `perform`부터 `handle`의 body가 값을 yield할 때까지의 계산이며,
+그 `handle`을 담지 않는다([abilities.md](abilities.md#resume이-재개하는-계산)).
+`resume`은 body가 yield한 값을 돌려받는다. 그 `handle`의 arm은 재개된 계산이
+수행하는 operation을 처리하지 않고, `completion`도 돌려받은 값에 적용되지 않는다.
+재개된 계산의 operation은 `resume`이 넘기는 evidence의 handler가 처리한다.
 
 Lambda 본문의 `resume`이 lambda 바깥의 arm에 묶이면 그 lambda는 그 arm의
 resumption을 **운반**한다. 운반은 capture operand가 아니며 lambda의 header에
@@ -616,18 +622,13 @@ evidence를 만들기 전에 적용하며 `mask`만 담는다.
   ability instance([`ability.decl`](../crates/tribute-ir/src/dialect/ability.rs)의
   symbol 참조)를 나타내며 원소는 순서대로 적용한다.
   한 instance는 한 번만 나온다.
-- Key `outer`는 그 instance의 가장 위 handler를 설치한 지점의 evidence로 바꾼다.
-  Source-logical operation은 이 key를 쓰지 않는다. CPS legalization이 arm 본문에
-  중첩된 handle body 안의 `resume`에만 붙이며, 중첩 한 겹에 한 원소다. 같은
-  instance가 여러 번 나올 수 있다.
 - Row가 여러 tail의 합집합인 callable에 관한 key는 셋이다.
   `{select = i}`는 둘러싼 callable의 `i`번째 tail의 evidence로 바꾸며 목록의 첫
   원소로만 온다. `{push = instance}`는 고른 tail evidence 위에 둘러싼 evidence가
   가진 그 instance의 가장 위 handler를 얹으며 `select` 뒤에만 온다.
   `{tails = [plan, ...]}`는 callee의 tail마다 선택 하나를 담고 목록의 마지막
   원소로만 온다. 각 선택은 같은 문법의 목록이고 `tails`를 다시 담지 않는다.
-  `push`와 `tails`의 선택은 연산이 시작한 evidence(앞선 `outer`를 적용한 것)에서
-  읽는다.
+  `push`와 `tails`의 선택은 연산이 시작한 evidence에서 읽는다.
 
   ```text
   {evidence_plan = [{select = 0}, {push = @State}]}
@@ -645,7 +646,7 @@ evidence를 만들기 전에 적용하며 `mask`만 담는다.
   `ability.handle`에 같은 이름의 속성으로 둔다. Evidence를 받지 않는 callee로 가는
   호출에는 옮기지 않는다. Frame 펼치기는 frame operation의 선택을 층을 다시 만드는
   transfer와 `ability.handle_dispatch`에 옮긴다.
-  `resolve_evidence`가 이를 `effect.mask`/`effect.dup`/`effect.outer`와
+  `resolve_evidence`가 이를 `effect.mask`/`effect.dup`와
   `effect.tail`/`effect.push`/`effect.with_tail`로 만든다
   ([cps-effects.md](cps-effects.md#row-directed-evidence)).
 
@@ -668,13 +669,14 @@ logical continuation으로 region을 lower한다:
 2. Case, conditional, short-circuit operation에서는 각 branch가 먼저 해당
    structured operation의 merge에 도달한 뒤 enclosing suffix를 실행하는
    continuation을 받는다. 선택된 branch만 평가한다.
-3. Handle body는 delimiter continuation을 받는다. Body가 정상 완료되면
-   `completion`에 들어간 뒤 enclosing continuation을 실행한다.
+3. Handle body는 delimiter continuation을 받는다. Body가 그 handle 아래에서
+   정상 완료되면 `completion`에 들어간 뒤 enclosing continuation을 실행한다.
 4. `operation_kind = "fn"`인 perform은 continuation을 capture하지 않는다.
    Shared conversion이 tail path로 dispatch하며, 자동으로 resume된 operation
    result는 일반적인 남은 block suffix로 흐른다.
-5. Resumptive general handler arm의 resumption은 중단된 body continuation을
-   가리킨다. `tribute_control.resume`이 이를 호출한 뒤 arm-local strict
+5. Resumptive general handler arm의 resumption은 중단된 지점부터 body 끝까지의
+   continuation을 가리키며, 그 handle의 delimiter와 `completion`을 담지 않는다.
+   `tribute_control.resume`이 이를 호출해 body의 결과를 받은 뒤 arm-local strict
    suffix를 계속 실행한다. Arm이 resume하지 않으면 yield가 일치하는 handle을
    직접 완료하고 중단된 suffix와 completion region을 건너뛴다. Source
    `op -> Never` arm은 resumption이 없으며 이 non-resuming path만 취할 수 있다.

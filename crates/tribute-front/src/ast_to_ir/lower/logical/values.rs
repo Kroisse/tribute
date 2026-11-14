@@ -304,11 +304,11 @@ pub(super) fn lower_expr<'db>(
             )
         }
         ExprKind::Resume { arg, local_id } => {
-            let (input_ty, answer_ty) = builder.ctx.lookup_resume(local_id?)?;
+            let (input_ty, result_ty) = builder.ctx.lookup_resume(local_id?)?;
             let value = lower_expr(builder, arg, declarations)?;
             let value = builder.cast_if_needed(location, value, input_ty);
             let resume = tribute_control::Resume::operands(value)
-                .results(answer_ty)
+                .results(result_ty)
                 .build(builder.ir, location);
             attach_evidence_plan(
                 builder.ctx,

@@ -47,8 +47,8 @@ fn gate_body() ->{Gate} ReadOutcome {
     }
 }
 
-fn nested_gate(stop: Bool) -> ReadOutcome {
-    let inner = handle gate_body() {
+fn run_gate(stop: Bool, comp: fn() ->{e, Gate} ReadOutcome) ->{e} ReadOutcome {
+    handle comp() {
         do value {
             case value {
                 ReadOutcome::Line(text) -> ReadOutcome::Line(text <> "-inner-do")
@@ -60,10 +60,14 @@ fn nested_gate(stop: Bool) -> ReadOutcome {
         op Gate::decide() {
             case stop {
                 True -> ReadOutcome::EndOfInput
-                False -> resume ReadOutcome::Line("resumed")
+                False -> run_gate(stop, fn() { resume ReadOutcome::Line("resumed") })
             }
         }
     }
+}
+
+fn nested_gate(stop: Bool) -> ReadOutcome {
+    let inner = run_gate(stop, fn() { gate_body() })
     handle inner {
         do value {
             case value {
@@ -291,7 +295,8 @@ fn main() ->{std::io::Io} Nil {
 }
 
 /// A foreign Escape produced while resuming must not execute the resumed
-/// handler arm's strict suffix, its inner `do`, or the owning outer `do`.
+/// handler arm's strict suffix, the re-installed handler's `do`, or the owning
+/// outer `do`.
 #[test]
 fn test_cps_control_foreign_escape_bypasses_resume_suffix() {
     assert_native_output(
@@ -307,17 +312,23 @@ ability Stop {
     op stop() -> String
 }
 
-fn inner() ->{Stop} String {
-    handle {
-        let _ = First::first()
-        Stop::stop()
-    } {
+fn run_first(comp: fn() ->{e, First} String) ->{e} String {
+    handle comp() {
         do value { "inner-do:" <> value }
         op First::first() {
-            let resumed = resume "first-value"
-            "resume-suffix:" <> resumed
+            run_first(fn() {
+                let resumed = resume "first-value"
+                "resume-suffix:" <> resumed
+            })
         }
     }
+}
+
+fn inner() ->{Stop} String {
+    run_first(fn() {
+        let _ = First::first()
+        Stop::stop()
+    })
 }
 
 fn main() ->{std::io::Io} Nil {
@@ -369,12 +380,16 @@ fn get_state() ->{State(Int)} Int {
     State::get()
 }
 
-fn main() -> Nil {
-    let _ = handle get_state() {
+fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
+    handle comp() {
         do result { result }
-        op State::get() { resume +42 }
-        op State::set(v) { resume Nil }
+        op State::get() { run_state(fn() { resume init }, init) }
+        op State::set(v) { run_state(fn() { resume Nil }, v) }
     }
+}
+
+fn main() -> Nil {
+    let _ = run_state(fn() { get_state() }, +42)
 }
 "#;
     let output = compile_and_run_native("state_get_simple.trb", code);
@@ -755,11 +770,15 @@ fn count() ->{MyMod::Counter} Nat {
     a + b
 }
 
-fn main() ->{Io} Nil {
-    let result = handle count() {
+fn run_counter(comp: fn() ->{e, MyMod::Counter} a) ->{e} a {
+    handle comp() {
         do result { result }
-        op MyMod::Counter::inc() { resume 1 }
+        op MyMod::Counter::inc() { run_counter(fn() { resume 1 }) }
     }
+}
+
+fn main() ->{Io} Nil {
+    let result = run_counter(fn() { count() })
     print_line(result.to_string)
 }
 "#;
@@ -856,11 +875,15 @@ fn pure_value() ->{Ask} Nat {
     10
 }
 
-fn main() ->{Io} Nil {
-    let result = handle pure_value() {
+fn run_ask(comp: fn() ->{e, Ask} a) ->{e} a {
+    handle comp() {
         do result { result }
-        op Ask::ask() { resume 0 }
+        op Ask::ask() { run_ask(fn() { resume 0 }) }
     }
+}
+
+fn main() ->{Io} Nil {
+    let result = run_ask(fn() { pure_value() })
     print_line(result.to_string)
 }
 "#;
@@ -880,11 +903,15 @@ fn pure_value() ->{Ask} Nat {
     10
 }
 
-fn main() ->{Io} Nil {
-    let result = handle pure_value() {
+fn run_ask(comp: fn() ->{e, Ask} Nat) ->{e} Nat {
+    handle comp() {
         do result { 42 }
-        op Ask::ask() { resume 0 }
+        op Ask::ask() { run_ask(fn() { resume 0 }) }
     }
+}
+
+fn main() ->{Io} Nil {
+    let result = run_ask(fn() { pure_value() })
     print_line(result.to_string)
 }
 "#;
@@ -908,12 +935,16 @@ fn pure_value() ->{State(Nat)} Nat {
     10
 }
 
-fn main() ->{Io} Nil {
-    let result = handle pure_value() {
+fn run_state(comp: fn() ->{e, State(Nat)} Nat) ->{e} Nat {
+    handle comp() {
         do result { result + result }
-        op State::get() { resume 0 }
-        op State::set(v) { resume Nil }
+        op State::get() { run_state(fn() { resume 0 }) }
+        op State::set(v) { run_state(fn() { resume Nil }) }
     }
+}
+
+fn main() ->{Io} Nil {
+    let result = run_state(fn() { pure_value() })
     print_line(result.to_string)
 }
 "#;
@@ -925,6 +956,10 @@ fn main() ->{Io} Nil {
 /// `effectful_value()` resumes twice with 10, producing 21, and the result arm
 /// doubles it. This exercises nested ability operations in both a let initializer
 /// and the final value, then verifies result TDNR and native execution.
+///
+/// The handler re-installs itself around each `resume`, so only the innermost
+/// activation, which the body finishes under, applies the `do` arm: 21 doubled
+/// is 42.
 #[test]
 fn test_handler_transforms_resumed_result() {
     let code = r#"use std::io::{Io, print_line}
@@ -938,11 +973,15 @@ fn effectful_value() ->{State(Nat)} Nat {
     first + State::get()
 }
 
-fn main() ->{Io} Nil {
-    let result = handle effectful_value() {
+fn run_state(comp: fn() ->{e, State(Nat)} Nat) ->{e} Nat {
+    handle comp() {
         do result { result + result }
-        op State::get() { resume 10 }
+        op State::get() { run_state(fn() { resume 10 }) }
     }
+}
+
+fn main() ->{Io} Nil {
+    let result = run_state(fn() { effectful_value() })
     print_line(result.to_string)
 }
 "#;
@@ -1064,7 +1103,8 @@ fn main() ->{Io} Nil {
 /// Test that handler result arm receives the final computed value.
 ///
 /// `compute()` does set(5), get()+get() → 10.
-/// Handler result arm adds 1: 10 + 1 = 11.
+/// Handler result arm adds 1: 10 + 1 = 11. Only the innermost re-installed
+/// handler, which the body finishes under, applies it.
 #[test]
 fn test_handler_result_receives_body_value() {
     let code = r#"use std::io::{Io, print_line}
@@ -1081,12 +1121,16 @@ fn compute() ->{State(Nat)} Nat {
     a + b
 }
 
-fn main() ->{Io} Nil {
-    let result = handle compute() {
+fn run_state(comp: fn() ->{e, State(Nat)} Nat) ->{e} Nat {
+    handle comp() {
         do result { result + 1 }
-        op State::get() { resume 5 }
-        op State::set(v) { resume Nil }
+        op State::get() { run_state(fn() { resume 5 }) }
+        op State::set(v) { run_state(fn() { resume Nil }) }
     }
+}
+
+fn main() ->{Io} Nil {
+    let result = run_state(fn() { compute() })
     print_line(result.to_string)
 }
 "#;
@@ -1120,12 +1164,16 @@ fn compute() ->{State(Nat)} Nat {
     add(a, b)
 }
 
-fn main() ->{Io} Nil {
-    let result = handle compute() {
+fn run_state(comp: fn() ->{e, State(Nat)} Nat) ->{e} Nat {
+    handle comp() {
         do result { result }
-        op State::get() { resume 5 }
-        op State::set(v) { resume Nil }
+        op State::get() { run_state(fn() { resume 5 }) }
+        op State::set(v) { run_state(fn() { resume Nil }) }
     }
+}
+
+fn main() ->{Io} Nil {
+    let result = run_state(fn() { compute() })
     print_line(result.to_string)
 }
 "#;
@@ -1152,12 +1200,16 @@ fn compute() ->{State(Nat)} Nat {
     identity(n)
 }
 
-fn main() ->{Io} Nil {
-    let result = handle compute() {
+fn run_state(comp: fn() ->{e, State(Nat)} Nat) ->{e} Nat {
+    handle comp() {
         do result { result }
-        op State::get() { resume 7 }
-        op State::set(v) { resume Nil }
+        op State::get() { run_state(fn() { resume 7 }) }
+        op State::set(v) { run_state(fn() { resume Nil }) }
     }
+}
+
+fn main() ->{Io} Nil {
+    let result = run_state(fn() { compute() })
     print_line(result.to_string)
 }
 "#;
@@ -1187,11 +1239,15 @@ fn use_multi() ->{Multi} Nat {
     Multi::combine(10, 20, 30)
 }
 
-fn main() ->{Io} Nil {
-    let result = handle use_multi() {
+fn run_multi(comp: fn() ->{e, Multi} a) ->{e} a {
+    handle comp() {
         do result { result }
-        op Multi::combine(x, y, z) { resume x + y + z }
+        op Multi::combine(x, y, z) { run_multi(fn() { resume x + y + z }) }
     }
+}
+
+fn main() ->{Io} Nil {
+    let result = run_multi(fn() { use_multi() })
     print_line(result.to_string)
 }
 "#;
@@ -1211,11 +1267,15 @@ fn use_pair() ->{Pair} Nat {
     Pair::make(3, 7)
 }
 
-fn main() ->{Io} Nil {
-    let result = handle use_pair() {
+fn run_pair(comp: fn() ->{e, Pair} a) ->{e} a {
+    handle comp() {
         do result { result }
-        op Pair::make(a, b) { resume a + b }
+        op Pair::make(a, b) { run_pair(fn() { resume a + b }) }
     }
+}
+
+fn main() ->{Io} Nil {
+    let result = run_pair(fn() { use_pair() })
     print_line(result.to_string)
 }
 "#;
@@ -1235,11 +1295,15 @@ fn use_pick() ->{Pick} Nat {
     Pick::choose(100, 200, 300)
 }
 
-fn main() ->{Io} Nil {
-    let result = handle use_pick() {
+fn run_pick(comp: fn() ->{e, Pick} a) ->{e} a {
+    handle comp() {
         do result { result }
-        op Pick::choose(a, _, c) { resume a + c }
+        op Pick::choose(a, _, c) { run_pick(fn() { resume a + c }) }
     }
+}
+
+fn main() ->{Io} Nil {
+    let result = run_pick(fn() { use_pick() })
     print_line(result.to_string)
 }
 "#;
@@ -1285,11 +1349,15 @@ fn computation() ->{Math} Nat {
     y
 }
 
-fn main() ->{Io} Nil {
-    let result = handle computation() {
+fn run_math(comp: fn() ->{e, Math} a) ->{e} a {
+    handle comp() {
         do result { result }
-        op Math::mul(a, b) { resume a * b }
+        op Math::mul(a, b) { run_math(fn() { resume a * b }) }
     }
+}
+
+fn main() ->{Io} Nil {
+    let result = run_math(fn() { computation() })
     print_line(result.to_string)
 }
 "#;
@@ -1562,11 +1630,15 @@ ability Ask {
     op ask() -> Int
 }
 
-fn answer() ->{} Int {
-    handle Ask::ask() + Ask::ask() {
+fn answer_with(comp: fn() ->{Ask} Int) ->{} Int {
+    handle comp() {
         do value { value }
-        op Ask::ask() { resume +21 }
+        op Ask::ask() { answer_with(fn() { resume +21 }) }
     }
+}
+
+fn answer() ->{} Int {
+    answer_with(fn() { Ask::ask() + Ask::ask() })
 }
 
 fn twice(f: fn() ->{} Int) ->{} Int { f() + f() }
@@ -1618,11 +1690,15 @@ ability Tell {
     op tell(value: Int) -> Nil
 }
 
-fn inner() ->{} Int {
-    handle Ask::ask() * +2 {
+fn inner_with(comp: fn() ->{Ask} Int) ->{} Int {
+    handle comp() {
         do value { value }
-        op Ask::ask() { resume +10 }
+        op Ask::ask() { inner_with(fn() { resume +10 }) }
     }
+}
+
+fn inner() ->{} Int {
+    inner_with(fn() { Ask::ask() * +2 })
 }
 
 fn outer() ->{} Int {
@@ -1640,8 +1716,8 @@ fn main() ->{Io} Nil {
     );
 }
 
-/// A handle in one arm of a `case` in a pure function is delimited where it
-/// stands; the other arm runs no CPS code.
+/// A handler installed in one arm of a `case` in a pure function is delimited
+/// where it stands; the other arm runs no CPS code.
 #[test]
 fn test_value_delimiter_in_a_case_arm() {
     crate::common::assert_output_on_both_targets_with_native_asan(
@@ -1653,12 +1729,16 @@ ability Ask {
     op ask() -> Int
 }
 
+fn show_with(comp: fn() ->{Ask} String) ->{} String {
+    handle comp() {
+        do value { value }
+        op Ask::ask() { show_with(fn() { resume +7 }) }
+    }
+}
+
 fn pick(flag: Bool) ->{} String {
     case flag {
-        True -> handle Int::to_string(Ask::ask()) <> "!" {
-            do value { value }
-            op Ask::ask() { resume +7 }
-        }
+        True -> show_with(fn() { Int::to_string(Ask::ask()) <> "!" })
         False -> "none"
     }
 }
@@ -1685,11 +1765,15 @@ ability Ask {
     op ask() -> Nat
 }
 
-fn collect() ->{} List(Nat) {
-    handle [Ask::ask(), Ask::ask()] {
+fn collect_with(comp: fn() ->{Ask} List(Nat)) ->{} List(Nat) {
+    handle comp() {
         do value { value }
-        op Ask::ask() { resume 7 }
+        op Ask::ask() { collect_with(fn() { resume 7 }) }
     }
+}
+
+fn collect() ->{} List(Nat) {
+    collect_with(fn() { [Ask::ask(), Ask::ask()] })
 }
 
 fn main() ->{Io} Nil {
@@ -1733,11 +1817,15 @@ fn counted() ->{Next} Int {
     Next::next() + Next::next()
 }
 
-fn resumed(step: Cell) -> Int {
-    handle counted() {
+fn run_next(comp: fn() ->{e, Next} Int, step: Cell) ->{e} Int {
+    handle comp() {
         do result { result }
-        op Next::next() { resume step.value }
+        op Next::next() { run_next(fn() { resume step.value }, step) }
     }
+}
+
+fn resumed(step: Cell) -> Int {
+    run_next(fn() { counted() }, step)
 }
 
 fn nested(cell: Cell) -> Int {
@@ -1766,6 +1854,77 @@ fn main() ->{Io} Nil {
     }
 }
 
+/// An arm owns its resumption on every path: resumed in the arm body, resumed
+/// by a lambda that carries it, dropped by an arm that returns without
+/// resuming, and dropped with a carrier lambda that is never called.
+#[test]
+fn test_resumption_is_released_on_every_arm_path() {
+    let source = r#"
+use std::io::{Io, print_line}
+
+ability Next {
+    op next() -> Int
+}
+
+struct Cell { value: Int }
+
+fn counted() ->{Next} Int {
+    Next::next() + Next::next()
+}
+
+fn run_next(comp: fn() ->{e, Next} Int, step: Cell) ->{e} Int {
+    handle comp() {
+        do result { result }
+        op Next::next() { run_next(fn() { resume step.value }, step) }
+    }
+}
+
+fn first_next(comp: fn() ->{e, Next} Int, first: Cell) ->{e, Next} Int {
+    handle comp() {
+        do result { result }
+        op Next::next() { resume first.value }
+    }
+}
+
+fn stopped(comp: fn() ->{e, Next} Int, fallback: Cell) ->{e} Int {
+    handle comp() {
+        do result { result }
+        op Next::next() { fallback.value }
+    }
+}
+
+fn never_called(comp: fn() ->{e, Next} Int, fallback: Cell) ->{e} Int {
+    handle comp() {
+        do result { result }
+        op Next::next() {
+            let later = fn() { resume fallback.value }
+            fallback.value
+        }
+    }
+}
+
+fn main() ->{Io} Nil {
+    let carried = run_next(fn() { counted() }, Cell { value: +4 })
+    print_line(carried.to_string)
+    let direct = run_next(fn() { first_next(fn() { counted() }, Cell { value: +30 }) }, Cell { value: +4 })
+    print_line(direct.to_string)
+    print_line(stopped(fn() { counted() }, Cell { value: +7 }).to_string)
+    print_line(never_called(fn() { counted() }, Cell { value: +9 }).to_string)
+}
+"#;
+    for output in [
+        compile_and_run_native("resumption_released.trb", source),
+        compile_and_run_native_asan("resumption_released_asan.trb", source),
+    ] {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "stderr: {stderr}");
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout).trim(),
+            "8\n34\n7\n9"
+        );
+    }
+}
+
 /// An ability operation whose declared result is a function returns a callable
 /// value that the performing body can call (#1470).
 #[test]
@@ -1790,16 +1949,20 @@ fn apply_cell(n: Int) ->{Cell(fn(Int) ->{} Int)} Int {
     f(n)
 }
 
+fn run_cell(comp: fn() ->{e, Cell(fn(Int) ->{} Int)} Int) ->{e} Int {
+    handle comp() {
+        do result { result }
+        op Cell::get() { run_cell(fn() { resume fn(n) n * +2 }) }
+    }
+}
+
 fn main() ->{Io} Nil {
     let read = handle apply_reader(+41) {
         do result { result }
         fn Reader::read() { fn(n) n + +1 }
     }
     print_line(Int::to_string(read))
-    let got = handle apply_cell(+20) {
-        do result { result }
-        op Cell::get() { resume fn(n) n * +2 }
-    }
+    let got = run_cell(fn() { apply_cell(+20) })
     print_line(Int::to_string(got))
 }
 "#;
@@ -1807,7 +1970,8 @@ fn main() ->{Io} Nil {
 }
 
 /// A function value that a `handle` expression or a resumption returns can
-/// be called (#1565).
+/// be called (#1565). A resumption returns the body's own result, so the body
+/// of the resumed handler returns the function.
 #[test]
 fn test_handle_and_resume_return_callable_values() {
     let source = r#"use std::io::{Io, print_line}
@@ -1822,7 +1986,10 @@ ability Gen {
 
 fn asks() ->{Ask} Int { Ask::ask() }
 
-fn nexts() ->{Gen} Int { Gen::next() }
+fn nexts() ->{Gen} fn(Int) ->{} Int {
+    let k = Gen::next()
+    fn(n: Int) n + k
+}
 
 fn handled() -> Int {
     let f = handle asks() {
@@ -1832,15 +1999,20 @@ fn handled() -> Int {
     f(+2)
 }
 
-fn resumed() -> Int {
-    let f = handle nexts() {
-        do k { fn(n: Int) n + k }
+fn run_gen(comp: fn() ->{e, Gen} fn(Int) ->{} Int) ->{e} fn(Int) ->{} Int {
+    handle comp() {
         op Gen::next() {
-            let g = resume +40
-            let h = fn(n: Int) g(n) + +1
-            h
+            run_gen(fn() {
+                let g = resume +40
+                let h = fn(n: Int) g(n) + +1
+                h
+            })
         }
     }
+}
+
+fn resumed() -> Int {
+    let f = run_gen(fn() { nexts() })
     f(+1)
 }
 
@@ -1989,14 +2161,18 @@ fn stop_early() ->{Stop} Int {
     Stop::stop()
 }
 
+fn run_ask(comp: fn() ->{e, Ask} a) ->{e} a {
+    handle comp() {
+        op Ask::ask() { run_ask(fn() { resume +4 }) }
+    }
+}
+
 fn main() ->{Io} Nil {
     let counted = handle count() {
         fn Counter::next() { +3 }
     }
     print_line(Int::to_string(counted))
-    let asked = handle ask_twice() {
-        op Ask::ask() { resume +4 }
-    }
+    let asked = run_ask(fn() { ask_twice() })
     print_line(Int::to_string(asked))
     let stopped = handle stop_early() {
         op Stop::stop() { -1 }
@@ -2172,4 +2348,98 @@ fn main() ->{Io} Nil {
 }
 "#;
     assert_output_on_both_targets("generalized_value_to_ability_row.trb", source, "7");
+}
+
+/// `resume` is shallow wherever it is written: in the arm body and through a
+/// lambda it resumes the body without its handle, so the body's second `get`
+/// goes to the handler around the `resume` call, here the outer `run_state`.
+/// The arm's result is the resumed body's raw result: 1 * 1000 + 100.
+#[test]
+fn test_resume_in_arm_body_and_through_lambda_both_leave_the_handle() {
+    let source = r#"
+use std::io::{Io, print_line}
+
+ability State(s) {
+    op get() -> s
+    op set(value: s) -> Nil
+}
+
+fn run_state(comp: fn() ->{e, State(s)} a, state: s) ->{e} a {
+    handle comp() {
+        do result { result }
+        op State::get() { run_state(fn() { resume state }, state) }
+        op State::set(v) { run_state(fn() { resume Nil }, v) }
+    }
+}
+
+fn body() ->{State(Int)} Int {
+    State::get() * +1000 + State::get()
+}
+
+fn direct() ->{State(Int)} Int {
+    handle body() {
+        do result { result }
+        op State::get() { resume +1 }
+        op State::set(v) { resume Nil }
+    }
+}
+
+fn through_lambda() ->{State(Int)} Int {
+    handle body() {
+        do result { result }
+        op State::get() {
+            let k = fn() { resume +1 }
+            k()
+        }
+        op State::set(v) { resume Nil }
+    }
+}
+
+fn main() ->{Io} Nil {
+    let a = run_state(fn() { direct() }, +100)
+    print_line(a.to_string)
+    let b = run_state(fn() { through_lambda() }, +100)
+    print_line(b.to_string)
+}
+"#;
+    assert_output_on_both_targets("resume_arm_body_and_lambda.trb", source, "1100\n1100");
+}
+
+/// A handler that re-installs itself around every `resume` runs its `do` arm
+/// once, when the resumed body finishes under the innermost activation; the
+/// arms' results are the nested handle's result and skip their own `do`.
+#[test]
+fn test_reinstalled_state_handler_runs_do_arm_once() {
+    let source = r#"
+use std::io::{Io, print_line}
+
+ability State(s) {
+    op get() -> s
+    op set(value: s) -> Nil
+}
+
+fn run_state(comp: fn() ->{e, State(Int)} Int, state: Int) ->{e, Io} Int {
+    handle comp() {
+        do result {
+            print_line("done")
+            result
+        }
+        op State::get() { run_state(fn() { resume state }, state) }
+        op State::set(v) { run_state(fn() { resume Nil }, v) }
+    }
+}
+
+fn body() ->{State(Int)} Int {
+    State::set(+3)
+    let a = State::get()
+    State::set(a + +4)
+    State::get()
+}
+
+fn main() ->{Io} Nil {
+    let result = run_state(fn() { body() }, +0)
+    print_line(result.to_string)
+}
+"#;
+    assert_output_on_both_targets("reinstalled_state_do_once.trb", source, "done\n7");
 }

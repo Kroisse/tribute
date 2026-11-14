@@ -1086,7 +1086,10 @@ pub(super) fn lower_handle<'db>(
             builder.ctx,
             builder.ir,
             location,
-            result_ty,
+            HandleTypes {
+                answer: result_ty,
+                body: body_ty,
+            },
             arm,
             declarations,
         )
@@ -1113,12 +1116,21 @@ pub(super) fn lower_handle<'db>(
     Some(result(builder.ir, handle))
 }
 
+/// The logical result types of a handle.
+#[derive(Clone, Copy)]
+pub(super) struct HandleTypes {
+    /// The handle's result, which a general arm yields.
+    pub answer: TypeRef,
+    /// The body's result, which a `resume` returns.
+    pub body: TypeRef,
+}
+
 /// Lower one operation arm of a handle to its binding and arm region.
 pub(super) fn lower_handler<'db>(
     ctx: &mut IrLoweringCtx<'db>,
     ir: &mut IrContext,
     location: Location,
-    answer_ty: TypeRef,
+    types: HandleTypes,
     arm: HandlerArm<TypedRef<'db>>,
     declarations: &mut Declarations<'db>,
 ) -> Option<(tribute_control::HandlerBinding, trunk_ir::refs::RegionRef)> {
@@ -1239,7 +1251,7 @@ pub(super) fn lower_handler<'db>(
             bind_pattern(&mut IrBuilder::new(&mut scope, ir, block), pattern, value);
         }
         if let (Some(id), true) = (resume, kind == OpDeclKind::Op && !is_never) {
-            scope.bind_resume(id, operation_result, answer_ty);
+            scope.bind_resume(id, operation_result, types.body);
         }
         let value = lower_expr(
             &mut IrBuilder::new(&mut scope, ir, block),
@@ -1249,7 +1261,7 @@ pub(super) fn lower_handler<'db>(
         let expected = if kind == OpDeclKind::Fn {
             operation_result
         } else {
-            answer_ty
+            types.answer
         };
         let value = IrBuilder::new(&mut scope, ir, block).cast_if_needed(location, value, expected);
         op(

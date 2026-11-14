@@ -214,7 +214,7 @@ fn callback_effects_need_a_shared_row_variable(db: &salsa::DatabaseImpl) {
     );
     let shared = format!(
         "{ASK}fn apply(f: fn(Nat) ->{{e}} Nat, x: Nat) ->{{e}} Nat {{ f(x) }}\n\n\
-         fn main() -> Nil {{\n    let _ = handle apply(fn(x) Ask::ask() + x, 1) {{\n        do v {{ v }}\n        op Ask::ask() {{ resume 41 }}\n    }}\n}}\n"
+         fn main() -> Nil {{\n    let _ = handle apply(fn(x) Ask::ask() + x, 1) {{\n        do v {{ v }}\n        op Ask::ask() {{ 41 }}\n    }}\n}}\n"
     );
     assert!(errors(db, &shared).is_empty());
 }

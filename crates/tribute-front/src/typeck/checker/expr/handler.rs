@@ -29,7 +29,9 @@ struct HandlerOperationRequest<'a, 'db> {
 
 impl<'db> TypeChecker<'db> {
     /// Type `resume arg` against the continuation bound by the enclosing
-    /// `op` arm.
+    /// `op` arm. Resuming calls the rest of the handle body without the
+    /// handle, so the body's row joins the row of whatever contains the
+    /// `resume`.
     pub(super) fn infer_resume_type_with_ctx(
         &self,
         ctx: &mut FunctionInferenceContext<'_, 'db>,
@@ -63,7 +65,7 @@ impl<'db> TypeChecker<'db> {
             } = cont_ty.kind(self.db())
         {
             ctx.constrain_coerce(arg_ty, *cont_arg, arg.id);
-            ctx.record_lambda_resume_effect(*effect);
+            ctx.merge_effect_at(*effect, resume);
             ctx.evidence.record_resume(resume, local_id);
             *cont_result
         } else {
@@ -169,7 +171,7 @@ impl<'db> TypeChecker<'db> {
                             self.db(),
                             TypeKind::Continuation {
                                 arg: arg_ty,
-                                result: handle_ctx.answer_ty,
+                                result: handle_ctx.body_ty,
                                 effect: handle_ctx.body_effect,
                             },
                         );
@@ -190,23 +192,14 @@ impl<'db> TypeChecker<'db> {
                             .collect(),
                         resume_local_id: *resume_local_id,
                     },
-                    // An explicit operation arm either resumes (whose result
-                    // is the handler answer) or aborts with that same answer.
+                    // An explicit operation arm's value is the handler answer.
                     Mode::Infer,
                 )
             }
         };
         let contributes_answer = matches!(kind, HandlerKind::Op { .. } | HandlerKind::Do { .. });
-        // Every arm runs with the evidence of the handle's installation; only
-        // an `op` arm's resumes pass the handle body's evidence.
-        let outer_evidence = match (&kind, handle_ctx.evidence_body) {
-            (HandlerKind::Op { .. }, Some(body)) => Some(ctx.evidence.enter_op_arm(body)),
-            _ => None,
-        };
+        // Every arm runs with the evidence of the handle's installation.
         let body = self.check_expr_with_ctx(ctx, &arm.body, body_mode);
-        if let Some(outer_evidence) = outer_evidence {
-            ctx.evidence.restore(outer_evidence);
-        }
         if contributes_answer {
             let actual = ctx
                 .get_node_type(body.id)

@@ -123,7 +123,7 @@ mod asking {
 fn main() -> Nil {
     let _ = handle asking::twice() {
         do value { value }
-        op pkg::Ask::ask() { resume 21 }
+        op pkg::Ask::ask() { 42 }
     }
 }
 "#,
@@ -157,7 +157,7 @@ mod asking {
 fn main() -> Nil {
     let _ = handle asking::one() {
         do value { value }
-        op pkg::Ask::ask() { resume 1 }
+        op pkg::Ask::ask() { 1 }
     }
 }
 "#,

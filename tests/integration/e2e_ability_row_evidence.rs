@@ -1,7 +1,8 @@
 //! Handlers are selected by row position (`design/cps-effects.md`,
 //! "Row 위치에 따른 evidence 선택"): a handler handles only the instances
 //! explicit in the row at its handle site, handler arms run outside their
-//! handle, and a resumed computation keeps those selections. Each program
+//! handle, and a resumed computation keeps the selections of its other
+//! handles but runs without the handle whose arm resumed it. Each program
 //! runs on the native and Wasm targets.
 
 use crate::common::assert_output_on_both_targets;
@@ -117,11 +118,12 @@ fn main() ->{Io} Nil {
     assert_program("instance_named_by_row_argument.trb", code, "6\n6");
 }
 
-/// An `op` arm's own operations go to the handler outside its handle, and the
-/// computation it resumes stays under the arm's handle. The outer handler
+/// An `op` arm's own operations go to the handler outside its handle, and so do
+/// those of the computation it resumes: `resume` leaves the arm's handle, so
+/// only the first operation of the body reaches it. The outer handler
 /// reinstalls itself while the arm runs.
 #[test]
-fn test_op_arm_operations_reach_the_outer_handler() {
+fn test_op_arm_and_resumed_operations_reach_the_outer_handler() {
     let code = r#"
 fn counter(comp: fn() ->{e, State(Int)} a) ->{e, State(Int)} a {
     handle comp() {
@@ -142,12 +144,15 @@ fn main() ->{Io} Nil {
     show(result)
 }
 "#;
-    // set(5) stores 10 outside; each get() reads 10 and adds 1.
-    assert_program("op_arm_reaches_outer_handler.trb", code, "121010");
+    // set(5) reaches the arm, which stores 10 outside and resumes. Both get()s
+    // of the resumed body then reach the outer handler, which reads 10 each:
+    // 10 * 10 + 10 = 110, and the state stays 10.
+    assert_program("op_arm_reaches_outer_handler.trb", code, "110010");
 }
 
 /// A `do` arm runs outside its handle: an operation of the handled instance
-/// reaches the outer handler.
+/// reaches the outer handler. It applies only when the body returns under the
+/// handle, not to the result of a computation an `op` arm resumed.
 #[test]
 fn test_do_arm_operations_reach_the_outer_handler() {
     let code = r#"
@@ -163,18 +168,23 @@ fn finishing(comp: fn() ->{e, State(Int)} Int) ->{e, State(Int)} Int {
 }
 
 fn main() ->{Io} Nil {
-    let result = run_state(fn() {
-        let inner = finishing(fn() {
-            State::set(+100)
-            State::get() * +3
-        })
+    let returned = run_state(fn() {
+        let inner = finishing(fn() { +21 })
         inner * +100 + State::get()
     }, +0)
-    show(result)
+    show(returned)
+    let resumed = run_state(fn() {
+        let inner = finishing(fn() { State::get() * +3 })
+        inner * +100 + State::get()
+    }, +0)
+    show(resumed)
 }
 "#;
-    // The body yields 21; the `do` arm stores it outside and returns 22.
-    assert_program("do_arm_reaches_outer_handler.trb", code, "2221");
+    // The first body returns 21 under the handle: the `do` arm stores it
+    // outside and returns 22, so 22 * 100 + 21. The second body performs
+    // get(), whose arm resumes with 7; the body then returns 21 outside the
+    // handle, so the `do` arm does not run: 21 * 100 + 0.
+    assert_program("do_arm_reaches_outer_handler.trb", code, "2221\n2100");
 }
 
 /// A `fn` arm's own operations go to the handler outside its handle.
@@ -206,8 +216,9 @@ fn main() ->{Io} Nil {
     assert_program("fn_arm_reaches_outer_handler.trb", code, "11");
 }
 
-/// A resume from an arm body rebuilds each handle between the operation and
-/// its handler, in both nesting orders.
+/// A resumed computation keeps the handles between the operation and its
+/// handler, in both nesting orders: a handler that reinstalls itself resumes
+/// the body with the other handler still around the operation.
 #[test]
 fn test_arm_body_resume_keeps_nested_handlers() {
     let code = r#"
@@ -218,15 +229,15 @@ ability Reader {
 fn with_reader(comp: fn() ->{e, Reader} a, value: Int) ->{e} a {
     handle comp() {
         do result { result }
-        op Reader::ask() { resume value }
+        op Reader::ask() { with_reader(fn() { resume value }, value) }
     }
 }
 
 fn with_state(comp: fn() ->{e, State(Int)} a) ->{e} a {
     handle comp() {
         do result { result }
-        op State::get() { resume +3 }
-        op State::set(v) { resume Nil }
+        op State::get() { with_state(fn() { resume +3 }) }
+        op State::set(v) { with_state(fn() { resume Nil }) }
     }
 }
 
@@ -311,9 +322,11 @@ fn main() ->{Io} Nil {
     assert_program("abort_after_reinstall.trb", code, "65\n6");
 }
 
-/// A resume written in a handle body nested in an arm resumes under the
-/// arm's own handle: the nested handler handles the nested body's operations
-/// but not those of the resumed computation.
+/// A resume written in a handle body nested in an arm runs the resumed
+/// computation where the resume is written, but the nested handler's own
+/// `resume` leaves that handle. The nested handler answers the resume argument
+/// only; the resumed computation's operations reach the handler around the
+/// nested handle, and the nested `do` arm does not run.
 #[test]
 fn test_resume_in_a_handle_nested_in_an_arm() {
     let code = r#"
@@ -324,11 +337,13 @@ ability Reader {
 fn with_reader(comp: fn() ->{e, Reader} a, value: Int) ->{e} a {
     handle comp() {
         do result { result }
-        op Reader::ask() { resume value }
+        op Reader::ask() { with_reader(fn() { resume value }, value) }
     }
 }
 
-fn with_state(comp: fn() ->{e, State(Int), Reader} Int) ->{e, Reader} Int {
+fn with_state(
+    comp: fn() ->{e, State(Int), Reader} Int
+) ->{e, State(Int), Reader} Int {
     handle comp() {
         do result { result }
         op State::get() {
@@ -342,36 +357,45 @@ fn with_state(comp: fn() ->{e, State(Int), Reader} Int) ->{e, Reader} Int {
 }
 
 fn main() ->{Io} Nil {
-    show(with_reader(fn() {
-        with_state(fn() { State::get() * +10 + Reader::ask() })
-    }, +4))
+    show(run_state(fn() {
+        with_reader(fn() {
+            with_state(fn() { State::get() * +10 + Reader::ask() })
+        }, +4)
+    }, +0))
 }
 "#;
-    // The nested handler answers the resume argument (9); the resumed
-    // computation's `ask` reaches the outer handler (4).
-    assert_program("resume_in_nested_handle.trb", code, "1094");
+    // get() reaches the arm, whose nested body performs ask(): the nested arm
+    // resumes with 9 and leaves the nested handle, so `resume 9` of the outer
+    // arm runs outside it, and `do inner` never applies. The resumed
+    // computation's ask() reaches `with_reader` (4), and its raw result is
+    // the result: 9 * 10 + 4.
+    assert_program("resume_in_nested_handle.trb", code, "94");
 }
 
-/// Operations written directly in a handle body dispatch through the layer
-/// as it is installed now, across an outer handler that reinstalls itself.
+/// A handler that reinstalls itself from an arm reaches an outer handler, which
+/// reinstalls itself too, from the arm and from the resumed body in turn.
 #[test]
-fn test_inline_handle_body_follows_a_reinstalled_outer_handler() {
+fn test_handler_arm_follows_a_reinstalled_outer_handler() {
     let code = r#"
 ability Reader {
     op ask() -> Int
 }
 
+fn with_ask(comp: fn() ->{e, State(Int), Reader} Int) ->{e, State(Int)} Int {
+    handle comp() {
+        do result { result }
+        op Reader::ask() { with_ask(fn() { resume State::get() + +1 }) }
+    }
+}
+
 fn inline() ->{State(Int)} Int {
-    handle {
+    with_ask(fn() {
         let a = Reader::ask()
         State::set(a)
         let b = Reader::ask()
         State::set(State::get() + b)
         State::get() + Reader::ask()
-    } {
-        do result { result }
-        op Reader::ask() { resume State::get() + +1 }
-    }
+    })
 }
 
 fn main() ->{Io} Nil {
@@ -384,7 +408,8 @@ fn main() ->{Io} Nil {
 
 /// A resume in a handle body nested in an arm uses the arm's evidence as it
 /// is at the resume, after an operation of the nested body made an outer
-/// handler reinstall itself.
+/// handler reinstall itself. The arm reinstalls its own handler around the
+/// nested handle, so the next `tick` reaches that handler.
 #[test]
 fn test_nested_resume_after_an_outer_handler_reinstalled_itself() {
     let code = r#"
@@ -396,41 +421,58 @@ ability Reader {
     op ask() -> Int
 }
 
-fn with_tick(comp: fn() ->{e, Tick, State(Int)} Int) ->{e, State(Int)} Int {
+fn with_reader(comp: fn() ->{e, Reader} a, value: Int) ->{e} a {
+    handle comp() {
+        do result { result }
+        op Reader::ask() { with_reader(fn() { resume value }, value) }
+    }
+}
+
+fn with_tick(
+    comp: fn() ->{e, Tick, State(Int), Reader} Int
+) ->{e, State(Int), Reader} Int {
     handle comp() {
         do result { result }
         op Tick::tick() {
-            handle {
-                let s = State::get()
-                resume s + Reader::ask()
-            } {
-                do inner { inner }
-                op Reader::ask() { resume +9 }
-            }
+            with_tick(fn() {
+                handle {
+                    let s = State::get()
+                    resume s + Reader::ask()
+                } {
+                    do inner { inner }
+                    op Reader::ask() { resume +9 }
+                }
+            })
         }
     }
 }
 
+fn body() ->{Tick, State(Int), Reader} Int {
+    let t = Tick::tick()
+    State::set(t)
+    State::get() + Tick::tick()
+}
+
 fn main() ->{Io} Nil {
     show(run_state(fn() {
-        with_tick(fn() {
-            let t = Tick::tick()
-            State::set(t)
-            State::get() + Tick::tick()
-        })
+        with_reader(fn() { with_tick(body) }, +100)
     }, +1))
 }
 "#;
-    // tick() is the state plus 9: 10, stored, then 19.
+    // The first tick() reads the state (1), the nested arm answers ask() with 9
+    // and leaves the nested handle: tick() is 10, stored. The resumed body runs
+    // under the reinstalled `with_tick`, so the second tick() reaches it: the
+    // state read there is 10, giving 19, and the result is 10 + 19. No ask()
+    // reaches `with_reader`.
     assert_program("nested_resume_after_reinstall.trb", code, "29");
 }
 
 /// A handle nested in an arm may handle an instance the arm's row also names.
-/// A resume in its body still installs the arm's handle on the arm's current
-/// evidence: the nested handler's marker is taken off and the handler it hid
-/// comes back, also after an outer handler reinstalled itself in between.
+/// The nested handler's own `resume` leaves that handle, so the resumed
+/// computation's operations of the instance reach the handler the nested
+/// handle hid, also after an outer handler reinstalled itself in between.
 #[test]
-fn test_nested_resume_restores_the_handler_a_nested_handle_hid() {
+fn test_nested_handler_does_not_handle_the_resumed_computation() {
     let code = r#"
 ability Tick {
     op tick() -> Int
@@ -455,15 +497,17 @@ fn with_tick(
     handle comp() {
         do result { result }
         op Tick::tick() {
-            handle {
-                let c = Cell::read()
-                let s = State::get()
-                resume s + c
-            } {
-                do inner { inner }
-                op State::get() { resume +100 }
-                op State::set(v) { resume Nil }
-            }
+            with_tick(fn() {
+                handle {
+                    let c = Cell::read()
+                    let s = State::get()
+                    resume s + c
+                } {
+                    do inner { inner }
+                    op State::get() { resume +100 }
+                    op State::set(v) { resume Nil }
+                }
+            })
         }
     }
 }
@@ -479,8 +523,9 @@ fn main() ->{Io} Nil {
     }, +5))
 }
 "#;
-    // tick() is the nested state (100) plus the cell (5). The resumed
-    // computation then reads the cell (5) and the outer state (1).
+    // tick() is the nested state (100) plus the cell (5). The nested handler
+    // is gone from the resumed computation, which reads the cell (5) and the
+    // outer state (1), not the nested one (100): 105 + 5 + 1.
     assert_program("nested_resume_restores_hidden_handler.trb", code, "111");
 }
 
@@ -570,7 +615,7 @@ fn inc() ->{State(Int)} Nil {
 fn with_reader(comp: fn() ->{e, Reader} a) ->{e} a {
     handle comp() {
         do result { result }
-        op Reader::ask() { resume +7 }
+        op Reader::ask() { with_reader(fn() { resume +7 }) }
     }
 }
 

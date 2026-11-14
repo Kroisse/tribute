@@ -319,7 +319,7 @@ pub(super) fn validate_resume(ctx: &IrContext, op: OpRef, errors: &mut Vec<Valid
             ctx,
             op,
             errors,
-            "result type does not match the result type of the enclosing handle",
+            "result type does not match the body result type of the enclosing handle",
         );
     }
 }

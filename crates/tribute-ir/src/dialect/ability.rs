@@ -209,15 +209,20 @@ mod ability {
     /// element is a dictionary with `ability` (SymbolRef), `op_name`
     /// (String), `kind` (`"fn"` or `"op"`), and `operation_result_type`
     /// (Type), and one `(ability, op_name)` appears at most once. With `I`
-    /// the `operation_result_type`, a `kind = "op"` arm is the following
-    /// `Cps` closure, where `ResumeExact<I, R>` is
-    /// `(Evidence, ability.frame<R>, I) -> core.never`; the two tokens are
-    /// present only when `I` is not `core.never`:
+    /// the `operation_result_type` and `M` the value type of the body frame,
+    /// a `kind = "op"` arm is the following `Cps` closure, where
+    /// `ResumeExact<I, M>` is `(Evidence, ability.frame<M>, I) -> core.never`;
+    /// the token is present only when `I` is not `core.never`:
     ///
     /// ```text
-    /// (Evidence, ability.frame<R>, operation arguments..., [ResumeExact<I, R>, ResumeExact<I, R>])
+    /// (Evidence, ability.frame<R>, operation arguments..., [ResumeExact<I, M>])
     ///   -> core.never
     /// ```
+    ///
+    /// The token resumes the computation from the perform site to the end of
+    /// the body, without this handle and without `completion`. It takes the
+    /// evidence and the `ability.frame<M>` its caller supplies, and the
+    /// computation runs with them.
     ///
     /// A `kind = "fn"` arm is the `EvidenceDirect` closure
     /// `(Evidence, operation arguments...) -> I`. A closure type records no

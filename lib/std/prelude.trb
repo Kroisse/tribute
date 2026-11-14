@@ -966,10 +966,6 @@ pub(pkg) mod runtime {
             ev.install(ability_id, marker.prompt_tag, marker.tr_dispatch_fn, marker.outer)
         }
 
-        pub(pkg) fn outer(ev: Slots(Marker), ability_id: Int) ->{} Slots(Marker) {
-            ev.top(ability_id).outer
-        }
-
         pub(pkg) fn tail(ev: Slots(Marker), slot: Int) ->{} Slots(Marker) {
             let at = ev.find(slot)
             case ev.holds(at, slot) {
