@@ -690,7 +690,9 @@ fn Logger::log(msg) { print_line(msg) } // Nil 반환 → resume Nil
 
 **`op` handler arm과 `resume`:**
 
-`resume`은 키워드로, computation을 재개하는 함수처럼 호출한다.
+`resume`은 키워드로, computation을 재개하는 함수처럼 호출한다. 재개된 계산에는 이
+handle이 들어 있지 않으며, `resume`의 결과는 handle body의 결과다
+([abilities.md](abilities.md#resume이-재개하는-계산)).
 `op -> T` handler body에서 `resume`은 최대 1회 호출할 수 있다 (affine).
 호출하지 않으면 continuation은 암묵적으로 drop된다:
 
