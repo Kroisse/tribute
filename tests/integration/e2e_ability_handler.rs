@@ -1854,6 +1854,77 @@ fn main() ->{Io} Nil {
     }
 }
 
+/// An arm owns its resumption on every path: resumed in the arm body, resumed
+/// by a lambda that carries it, dropped by an arm that returns without
+/// resuming, and dropped with a carrier lambda that is never called.
+#[test]
+fn test_resumption_is_released_on_every_arm_path() {
+    let source = r#"
+use std::io::{Io, print_line}
+
+ability Next {
+    op next() -> Int
+}
+
+struct Cell { value: Int }
+
+fn counted() ->{Next} Int {
+    Next::next() + Next::next()
+}
+
+fn run_next(comp: fn() ->{e, Next} Int, step: Cell) ->{e} Int {
+    handle comp() {
+        do result { result }
+        op Next::next() { run_next(fn() { resume step.value }, step) }
+    }
+}
+
+fn first_next(comp: fn() ->{e, Next} Int, first: Cell) ->{e, Next} Int {
+    handle comp() {
+        do result { result }
+        op Next::next() { resume first.value }
+    }
+}
+
+fn stopped(comp: fn() ->{e, Next} Int, fallback: Cell) ->{e} Int {
+    handle comp() {
+        do result { result }
+        op Next::next() { fallback.value }
+    }
+}
+
+fn never_called(comp: fn() ->{e, Next} Int, fallback: Cell) ->{e} Int {
+    handle comp() {
+        do result { result }
+        op Next::next() {
+            let later = fn() { resume fallback.value }
+            fallback.value
+        }
+    }
+}
+
+fn main() ->{Io} Nil {
+    let carried = run_next(fn() { counted() }, Cell { value: +4 })
+    print_line(carried.to_string)
+    let direct = run_next(fn() { first_next(fn() { counted() }, Cell { value: +30 }) }, Cell { value: +4 })
+    print_line(direct.to_string)
+    print_line(stopped(fn() { counted() }, Cell { value: +7 }).to_string)
+    print_line(never_called(fn() { counted() }, Cell { value: +9 }).to_string)
+}
+"#;
+    for output in [
+        compile_and_run_native("resumption_released.trb", source),
+        compile_and_run_native_asan("resumption_released_asan.trb", source),
+    ] {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "stderr: {stderr}");
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout).trim(),
+            "8\n34\n7\n9"
+        );
+    }
+}
+
 /// An ability operation whose declared result is a function returns a callable
 /// value that the performing body can call (#1470).
 #[test]

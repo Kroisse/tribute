@@ -95,6 +95,41 @@ fn finish(acc: Nat) -> Nat { acc }
 fn loop(n: Nat, acc: Nat) ->{Tick} Nat {
     case n {
         0 -> become finish(acc)
+        50000 -> {
+            Tick::tick()
+            become loop(n - 1, acc + 1)
+        }
+        _ -> become loop(n - 1, acc + 1)
+    }
+}
+
+fn count_ticks(comp: fn() ->{e, Tick} Nat) ->{e} Nat {
+    handle comp() {
+        do result { result }
+        op Tick::tick() { count_ticks(fn() { resume Nil }) }
+    }
+}
+
+fn main() ->{std::io::Io} Nil {
+    let total = count_ticks(fn() loop(100000, 0))
+    std::io::print_line(total.to_string)
+}
+"#;
+    assert_output_on_both_targets("become_handler.trb", code, "100000");
+}
+
+/// A handler that installs itself again around each `resume` handles every
+/// operation of a loop of tail calls.
+#[test]
+fn test_reinstalled_handler_handles_each_operation_of_a_tail_loop() {
+    let code = r#"
+ability Tick {
+    op tick() -> Nil
+}
+
+fn loop(n: Nat, acc: Nat) ->{Tick} Nat {
+    case n {
+        0 -> acc
         _ -> {
             Tick::tick()
             become loop(n - 1, acc + 1)
@@ -114,5 +149,5 @@ fn main() ->{std::io::Io} Nil {
     std::io::print_line(total.to_string)
 }
 "#;
-    assert_output_on_both_targets("become_handler.trb", code, "2000");
+    assert_output_on_both_targets("become_reinstalled_handler.trb", code, "2000");
 }

@@ -380,7 +380,7 @@ fn run() ->{State(Int)} Int {
 fn main() -> Nil {
     let _ = handle run() {
         do value { value }
-        op State::get() { resume +0 }
+        op State::get() { +0 }
     }
 }
 "#,

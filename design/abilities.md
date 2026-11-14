@@ -244,7 +244,8 @@ url.get.await
 
 Ability operation은 두 종류로 선언한다:
 
-- **`fn`**: Tail-resumptive operation. Handler가 값을 반환하면 자동으로 resume된다.
+- **`fn`**: Tail-resumptive operation. Handler가 반환한 값이 perform 지점으로 돌아가고,
+  나머지 계산은 같은 handler 아래에서 계속된다.
   Continuation을 캡처하지 않으므로 일반 함수 호출과 동등한 성능.
   **선언부가 보증(guarantee)이다**: `fn`으로 선언된 operation은 모든 handler에서
   반드시 `fn`으로 구현해야 한다.
@@ -355,7 +356,7 @@ handle computation() {
 | arm | 대상 | 의미 |
 | --- | ---- | ---- |
 | `do value { expr }` | completion | Computation 완료, 결과값 바인딩 (생략 시 identity) |
-| `fn Op(args) { body }` | `fn` operation만 | Tail-resumptive: body의 반환값이 resume 값 |
+| `fn Op(args) { body }` | `fn` operation만 | Tail-resumptive: body의 반환값이 operation의 결과 |
 | `op Op(args) { body }` | `op` operation만 | body에서 `resume`으로 명시적 resume |
 
 Handler arm은 `handle` 표현식 내에서만 사용할 수 있다.
@@ -372,8 +373,8 @@ Handler arm은 `handle` 표현식 내에서만 사용할 수 있다.
 
 - `fn`으로 선언된 operation → handler에서 반드시 `fn`으로 구현 (`op`으로 구현 시 컴파일 에러)
 - `op`으로 선언된 operation → handler에서 반드시 `op`으로 구현 (`fn`으로 구현 시 컴파일 에러)
-- Arm의 종류는 선언의 종류와 같다. 꼬리에서 바로 `resume`하는 `op` arm을 빠른 경로로
-  내리는 것은 최적화가 정하며, 언어 계약에 속하지 않는다.
+- Arm의 종류는 선언의 종류와 같다. 꼬리에서 바로 `resume`하는 `op` arm은 `fn` arm과
+  뜻이 다르다. `resume`이 재개한 계산은 그 handle 아래에 있지 않다.
 
 **Handler arm의 완전성:**
 
@@ -392,8 +393,10 @@ Handler arm은 `handle` 표현식 내에서만 사용할 수 있다.
 
 ### `fn` Operation Handler
 
-`fn` operation은 continuation을 캡처하지 않는다. Handler body의 반환값이 곧
-resume 값이 된다. 함수 정의와 동일한 구조:
+`fn` operation은 continuation을 캡처하지 않는다. Handler body의 반환값이 perform
+지점에서 operation의 결과가 되고, 나머지 계산은 같은 handle 아래에서 계속된다. 이는
+같은 handler를 다시 설치하고 그 아래에서 arm의 값으로 `resume`하는 `op` arm과 뜻이
+같다. 함수 정의와 동일한 구조:
 
 ```rust
 // 선언
@@ -404,7 +407,7 @@ ability Logger {
 // handler (구현)
 fn run_logger(comp: fn() ->{e, Logger} a) ->{e, Io} a {
     handle comp() {
-        fn Logger::log(msg) { print_line(msg) } // Nil 반환 → resume Nil
+        fn Logger::log(msg) { print_line(msg) } // Nil이 log의 결과가 된다
     }
 }
 ```
@@ -513,12 +516,15 @@ Handler 없이 arm 본문에서 바로 `resume`하면 재개된 계산의 label�
 나가므로, 그 handle 식의 row가 처리한 label을 다시 담는다:
 
 ```rust
-fn first_get(comp: fn() ->{e, State(Nat)} a) ->{e, State(Nat)} a {
+ability Ask {
+    op ask() -> Nat
+}
+
+fn first_ask(comp: fn() ->{e, Ask} a) ->{e, Ask} a {
     handle comp() {
-        // 처음 수행한 State::get()에만 0을 돌려준다. 재개된 계산의 State는
-        // first_get을 호출한 곳의 handler가 처리한다.
-        op State::get() { resume 0 }
-        op State::set(v) { State::set(v); resume Nil }
+        // 처음 수행한 Ask::ask()에만 0을 돌려준다. 재개된 계산의 Ask는
+        // first_ask를 호출한 곳의 handler가 처리한다.
+        op Ask::ask() { resume 0 }
     }
 }
 ```

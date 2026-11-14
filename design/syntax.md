@@ -629,7 +629,8 @@ AbilityOp ::= 'fn' Identifier '(' ParamList? ')' '->' Type
 
 Ability operation은 두 종류로 선언한다:
 
-- **`fn`**: Tail-resumptive. Handler에서 반환값이 자동으로 resume 값이 된다.
+- **`fn`**: Tail-resumptive. Handler의 반환값이 operation의 결과가 되고, 나머지
+  계산은 같은 handler 아래에서 계속된다.
   Continuation을 캡처하지 않는다.
 - **`op`**: General. Handler에서 `resume` 키워드를 사용하여 명시적으로
   continuation을 호출한다. `-> Never`를 반환하면 절대 resume하지 않는
@@ -677,15 +678,15 @@ operation을 정의하듯, handler에서도 같은 키워드로 각 operation의
 | arm                    | 대상           | 의미                                               |
 | ---------------------- | -------------- | -------------------------------------------------- |
 | `do value { expr }`    | completion     | Computation 완료, 결과값 바인딩 (생략 시 identity) |
-| `fn Op(args) { body }` | `fn` operation | Tail-resumptive: body의 반환값이 resume 값         |
+| `fn Op(args) { body }` | `fn` operation | Tail-resumptive: body의 반환값이 operation의 결과  |
 | `op Op(args) { body }` | `op` operation | body에서 `resume` 키워드로 명시적 resume           |
 
 **`fn` handler arm:**
 
-Body의 반환값이 곧 resume 값. `resume` 사용 불가:
+Body의 반환값이 곧 operation의 결과. `resume` 사용 불가:
 
 ```rust
-fn Logger::log(msg) { print_line(msg) } // Nil 반환 → resume Nil
+fn Logger::log(msg) { print_line(msg) } // Nil이 log의 결과가 된다
 ```
 
 **`op` handler arm과 `resume`:**

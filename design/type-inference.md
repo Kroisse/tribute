@@ -425,12 +425,18 @@ fn f() ->{Ask} Nat {
 ```rust
 // Error: 본문이 Ping만 처리하므로 `e`가 Ping 외의 effect를 담을 수 없게 된다
 fn handled(comp: fn() ->{e} Nil) ->{} Nil {
-    handle comp() { do v { v } op Ping::ping() { handled(fn() resume Nil) } }
+    handle comp() {
+        do v { v }
+        op Ping::ping() { handled(fn() resume Nil) }
+    }
 }
 
 // OK: 처리하는 effect를 row에 적는다
 fn handled(comp: fn() ->{e, Ping} Nil) ->{e} Nil {
-    handle comp() { do v { v } op Ping::ping() { handled(fn() resume Nil) } }
+    handle comp() {
+        do v { v }
+        op Ping::ping() { handled(fn() resume Nil) }
+    }
 }
 ```
 
