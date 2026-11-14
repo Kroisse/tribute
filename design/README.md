@@ -20,8 +20,9 @@ Operation 하나의 계약은 그 `#[dialect]` 선언의 doc comment가 정하�
 | [abilities.md](abilities.md) | Ability, handler, affine resume |
 | [modules.md](modules.md) | Module, 이름 해석, 패키지 매니페스트 |
 | [type-inference.md](type-inference.md) | 타입 추론과 ability row, evidence 선택 |
-| [io.md](io.md) | Ambient `Io` ability와 기본 입출력 API |
-| [host-interface.md](host-interface.md) | Host가 handler를 공급하는 ability 경계 |
+| [std-abilities.md](std-abilities.md) | 표준 라이브러리가 선언하는 ability와 handler |
+| [io.md](io.md) | `Read`/`Write`/`Io` ability와 기본 입출력 API |
+| [host-interface.md](host-interface.md) | Host interface: entrypoint, host가 처리하는 ability, WIT 경계 |
 
 ## Compiler와 IR
 
