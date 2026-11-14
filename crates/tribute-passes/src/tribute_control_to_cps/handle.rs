@@ -172,14 +172,12 @@ impl Converter<'_> {
             ));
         }
         let location = self.ctx.op(source).location;
-        let token_source = self.ctx.op_operands(source)[0];
-        let value_source = self.ctx.op_operands(source)[1];
+        let value_source = self.ctx.op_operands(source)[0];
         // A resume in the arm body continues under the arm's own handle; any
         // other resume passes the evidence of the lambda it is in.
         // The selection yields the evidence the resumed computation's handle
         // is installed on, or its own evidence when resumed from a lambda.
-        let arm = flow.arm.clone().filter(|arm| arm.token == token_source);
-        let (token, evidence, plan) = match arm {
+        let (token, evidence, plan) = match flow.arm.clone() {
             Some(arm) => {
                 let (evidence, plan) = match arm.evidence {
                     ArmEvidence::Flow => (self.current_evidence(source, flow)?, None),
@@ -197,11 +195,15 @@ impl Converter<'_> {
                 };
                 (arm.installed, evidence, plan)
             }
-            None => (
-                mapping.get(&token_source).copied().unwrap_or(token_source),
-                self.current_evidence(source, flow)?,
-                evidence_plan_of(self.ctx, source),
-            ),
+            None => {
+                let resumption = DynResumptionRegions::enclosing(self.ctx, source)
+                    .expect("pre-CPS validation places every resume in a resumptive arm");
+                (
+                    self.arm_token(&resumption),
+                    self.current_evidence(source, flow)?,
+                    evidence_plan_of(self.ctx, source),
+                )
+            }
         };
         let value = mapping.get(&value_source).copied().unwrap_or(value_source);
         let resume_frame =
@@ -232,12 +234,7 @@ impl Converter<'_> {
         let operation_result = binding.operation_result_type;
         let source_block = self.ctx.region(source_region).blocks[0];
         let source_args = self.ctx.block_args(source_block).to_vec();
-        let has_resume_token = source_args.last().is_some_and(|arg| {
-            tribute_ir::dialect::tribute_control::ResumeToken::matches(
-                self.ctx,
-                self.ctx.value_ty(*arg),
-            )
-        });
+        let resumptive = binding.is_resumptive(self.ctx);
         let evidence_type = self.evidence_type();
         let converted_args: Vec<_> = source_args
             .iter()
@@ -249,17 +246,19 @@ impl Converter<'_> {
             CallingConvention::EvidenceDirect
         };
         // A general arm receives the outer evidence and exit frame of the
-        // layer that dispatched to it. A resumptive arm ends with a second
-        // token, which resumes under the arm's own handle; the source token
-        // resumes from a lambda.
+        // layer that dispatched to it. A resumptive arm ends with two tokens:
+        // the first resumes from a lambda, the second resumes under the arm's
+        // own handle.
         let mut params = vec![evidence_type];
         if general {
             params.push(self.frame_type(handle_answer));
         }
         let source_offset = params.len();
         params.extend_from_slice(&converted_args);
-        if has_resume_token {
-            params.push(*converted_args.last().expect("resumptive arm has a token"));
+        if resumptive {
+            let input = self.convert_type(operation_result);
+            let token_type = self.resumption_type(input, handle_answer);
+            params.extend([token_type, token_type]);
         }
         let block = make_block(self.ctx, location, &params);
         let block_args = self.ctx.block_args(block).to_vec();
@@ -273,11 +272,14 @@ impl Converter<'_> {
         }
         let evidence = block_args[0];
         let handle_exit = general.then(|| block_args[1]);
-        let arm = has_resume_token.then(|| ArmResume {
-            token: *source_args.last().expect("resumptive arm has a token"),
+        let arm = resumptive.then(|| ArmResume {
             installed: *block_args.last().expect("resumptive arm has a token"),
             evidence: ArmEvidence::Flow,
         });
+        if resumptive {
+            self.arm_tokens
+                .insert(source_region, block_args[block_args.len() - 2]);
+        }
         let flow = Flow {
             convention,
             evidence: Some(evidence),

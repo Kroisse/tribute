@@ -98,10 +98,12 @@ fn cmpi<T: IntegerLike>(
     rhs: Value<T>,
 ) -> Value<I1> {}
 
-fn resume<T: ResumeToken>(
-    resume_token: Value<T>,
-    value: Value<T::Input>,
-) -> Value<T::Answer> {}
+fn call_indirect<S: FuncSig>(
+    convention: Attr<CallingConvention>,
+    evidence_plan: Option<Attr<[EvidenceStep]>>,
+    callee: Value<S>,
+    args: Values<S::Inputs>,
+) -> Value<S::Result> {}
 
 #[verify]
 fn call_indirect<S: FuncSig>(
@@ -290,7 +292,9 @@ let sum = arith::Addi::operands(lhs, rhs).build(ctx, loc); // result is `T`
 let cmp = arith::Cmpi::operands(lhs, rhs) // or `Op::operands()` without operands
     .predicate(CmpiPredicate::Slt)         // attributes by name
     .build(ctx, loc);                       // result is `core.i1`
-let resumed = Resume::operands(token, value).build(ctx, loc); // `T::Answer`
+let called = tribute_cps::CallIndirect::operands(callee, args) // result is `S::Result`
+    .convention(CallingConvention::Cps)
+    .build(ctx, loc);
 ```
 
 The builder infers result types that are fixed types, variables bound by a

@@ -116,6 +116,126 @@ impl LocalValidation for Yield {
     }
 }
 
+impl LocalValidation for Resume {
+    fn validate(&self, ctx: &IrContext, errors: &mut Vec<ValidationError>) {
+        validate_resume(ctx, self.op_ref(), errors);
+    }
+}
+
+/// What a region is to the `tribute_control.resume`s under it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ResumptionScope {
+    /// The region is an arm that owns a resumption: a `resume` under it
+    /// supplies a value of type `input` and returns one of type `answer`.
+    Provides { input: TypeRef, answer: TypeRef },
+    /// A `resume` under the region binds to the resumption outside it.
+    Transparent,
+    /// No resumption reaches under the region.
+    Barrier,
+}
+
+/// An operation that gives its regions a role for `tribute_control.resume`.
+/// An operation that does not implement it is transparent, unless it is
+/// `IsolatedFromAbove`, which is a barrier.
+///
+/// The validator queries it on operations whose schema may not hold, so
+/// implementations read attributes and regions fallibly and answer
+/// [`ResumptionScope::Barrier`] for a malformed one.
+#[trunk_ir::op_interface]
+pub trait ResumptionRegions: DialectOp {
+    /// What `region`, one of this operation's regions, is to the resumes
+    /// under it.
+    fn resumption_scope(&self, ctx: &IrContext, region: RegionRef) -> ResumptionScope;
+}
+
+/// The resumption a `resume` at some point consumes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Resumption {
+    /// The operation that owns the resumption.
+    pub handle: OpRef,
+    /// The arm of `handle` that receives it.
+    pub arm: RegionRef,
+    /// The type of the value a `resume` supplies.
+    pub input: TypeRef,
+    /// The type of the value a `resume` returns.
+    pub answer: TypeRef,
+}
+
+impl DynResumptionRegions {
+    /// The resumption of the nearest enclosing resumptive arm of `op`, or
+    /// `None` when a barrier or the outermost operation comes first.
+    pub fn enclosing(ctx: &IrContext, op: OpRef) -> Option<Resumption> {
+        let mut current = op;
+        loop {
+            let region = parent_region(ctx, current)?;
+            let owner = ctx.region(region).parent_op?;
+            if let Some(regions) = Self::get(ctx, owner) {
+                match regions.resumption_scope(ctx, region) {
+                    ResumptionScope::Provides { input, answer } => {
+                        return Some(Resumption {
+                            handle: owner,
+                            arm: region,
+                            input,
+                            answer,
+                        });
+                    }
+                    ResumptionScope::Transparent => {}
+                    ResumptionScope::Barrier => return None,
+                }
+            } else if IsolatedFromAbove::is_set(ctx, owner) {
+                return None;
+            }
+            current = owner;
+        }
+    }
+
+    /// The resumption `lambda` carries: the one enclosing it, when a
+    /// `resume` under its bodies consumes that one.
+    pub fn carried_by(ctx: &IrContext, lambda: OpRef) -> Option<Resumption> {
+        if !SourceLambda::is_set(ctx, lambda) {
+            return None;
+        }
+        let enclosing = Self::enclosing(ctx, lambda)?;
+        let mut consumed = false;
+        for body in ctx.op_regions(lambda) {
+            walk_region_ops(ctx, body, &mut |op| {
+                consumed |= Resume::matches(ctx, op)
+                    && Self::enclosing(ctx, op).is_some_and(|r| r.arm == enclosing.arm);
+            });
+        }
+        consumed.then_some(enclosing)
+    }
+}
+
+impl ResumptionRegions for Handle {
+    /// `body` and `completion` are transparent; a resumptive `op` arm
+    /// provides the resumption of its operation into the handle's result;
+    /// any other arm is a barrier.
+    fn resumption_scope(&self, ctx: &IrContext, region: RegionRef) -> ResumptionScope {
+        let op = self.op_ref();
+        let Some(index) = ctx.op_regions(op).position(|candidate| candidate == region) else {
+            return ResumptionScope::Barrier;
+        };
+        if index < 2 {
+            return ResumptionScope::Transparent;
+        }
+        let (Some(binding), Some(answer)) = (
+            self.binding_of(ctx, region),
+            ctx.op_result_types(op).first().copied(),
+        ) else {
+            return ResumptionScope::Barrier;
+        };
+        if binding.is_resumptive(ctx) {
+            ResumptionScope::Provides {
+                input: binding.operation_result_type,
+                answer,
+            }
+        } else {
+            ResumptionScope::Barrier
+        }
+    }
+}
+
 /// An operation that names ability operation declarations, whose parameter
 /// and result types fix the types of values the operation supplies.
 ///
@@ -150,7 +270,7 @@ impl OperationDeclarationUse for Perform {
 }
 
 /// Each arm names its binding's declaration. Its arguments are the arm's
-/// entry block arguments without the trailing resume token.
+/// entry block arguments.
 impl OperationDeclarationUse for Handle {
     fn declaration_uses<'a>(&self, ctx: &'a IrContext) -> Vec<DeclarationUse<'a>> {
         let Some(Attribute::List(handlers)) = ctx.op_attrs(self.op_ref()).get("handlers") else {
@@ -165,18 +285,12 @@ impl OperationDeclarationUse for Handle {
                 };
                 let binding = binding.view(ctx);
                 let &block = ctx.region(arm).blocks.first()?;
-                let args = ctx.block_args(block);
                 Some(DeclarationUse {
                     ability: binding.get_symbol_ref("ability")?,
                     op_name: binding.get_string_ref("op_name")?,
                     kind: binding.get_string_ref("kind"),
                     kind_attr: "kind",
-                    arguments: match args.split_last() {
-                        Some((token, rest)) if ResumeToken::matches(ctx, ctx.value_ty(*token)) => {
-                            rest
-                        }
-                        _ => args,
-                    },
+                    arguments: ctx.block_args(block),
                     result_type: binding.get_type("operation_result_type"),
                     region: Some(arm),
                 })

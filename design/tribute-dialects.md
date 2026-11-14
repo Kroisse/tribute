@@ -31,9 +31,9 @@ verifier가 검사하는 것은
 
 Type은 한 번 intern되어 모든 phase가 공유하므로 type verifier는 component
 type을 검사하지 않는다. 이 경계의 `tribute_control` validator가 검사한다.
-Component는 어느 깊이에도 미해결 type, resume token, physical callable type을
-담지 않는다. Physical callable type은 calling convention의 ABI로 들어가는
-callable의 type이며 `PhysicalCallableType` type interface를 구현한다.
+Component는 어느 깊이에도 미해결 type과 physical callable type을 담지 않는다.
+Physical callable type은 calling convention의 ABI로 들어가는 callable의 type이며
+`PhysicalCallableType` type interface를 구현한다.
 `func.func_sig`, `clif.func_sig`, `wasm.func_sig`, `closure.closure`가 여기에
 속한다. `tribute_rt.anyref`와 `core.ptr`는 source-logical type이다.
 
@@ -65,7 +65,7 @@ attribute로 바꾼다. 이 type과 convention의 전체 규칙은
 | `tribute_control.return` | `func` 또는 `lambda` body의 logical result 반환 |
 | `tribute_control.perform` | source `fn` 또는 general `op` 하나를 semantic kind를 보존한 직접형으로 호출 |
 | `tribute_control.handle` | 직접형 computation, completion arm, handler arm의 경계를 설정. 각 arm은 처리하는 operation의 binding과 짝을 이루는 region이다 |
-| `tribute_control.resume` | resumptive general handler arm에 바인딩된 affine resumption을 소비 |
+| `tribute_control.resume` | 가장 가까운 resumptive general handler arm의 affine resumption을 소비 |
 | `tribute_control.yield` | 실행 가능한 `tribute_control` region을 logical value로 종료 |
 | `tribute_control.trap` | [trap intrinsic](modules.md#trap-intrinsic)의 직접 호출. 원인을 가지고 실행을 끝내는 terminator |
 
@@ -106,11 +106,41 @@ Source [`become`](syntax.md#tail-call-become)은
 Legalization은 알려진 target에 `func.tail_call`, closure, continuation과
 `done_k` target에 새 `func.tail_call_indirect`를 만들 수 있다.
 
-이 dialect는 opaque type `tribute_control.resume_token<input, answer>`도
-소유한다. 그 계약과, logical result가 `Never`인 general operation이 resumption을
-만들지 않는다는 규칙은
-[`resume_token`과 `perform`의 선언](../crates/tribute-ir/src/dialect/tribute_control.rs)이
-정한다.
+### Resumption의 범위
+
+Source-logical IR에서 resumption은 값이 아니다. Handler arm은 처리하는 operation의
+parameter만 block argument로 받고, 어느 kind의 arm이든 resumption을 위한 인자를
+받지 않는다. `tribute_control.resume`은 operand로 resumption을 지정하지 않고,
+자기 위치에서 바깥으로 부모 region을 따라 올라가며 만나는 **가장 가까운
+resumptive arm**의 resumption을 소비한다. 각 region은 `ResumptionRegions`
+interface로 자신이 `resume`에게 무엇인지 답한다:
+
+- `tribute_control.handle`의 `body`와 `completion`은 투과한다. Resumptive `op`
+  arm(`operation_kind = "op"`이고 logical result가 `core.never`가 아닌 arm)은
+  resumption을 제공한다. 그 입력 type은 operation의 logical result type이고 답
+  type은 `handle`의 result type이다. `fn` arm과 logical result가 `Never`인 `op`
+  arm은 resumption을 만들지 않으며 탐색을 멈춘다.
+- `IsolatedFromAbove`를 가진 operation(`func`)의 region은 탐색을 멈춘다.
+- 그 밖의 operation은 `tribute_control.lambda`와 `tribute_cps.lambda`, `scf.*`를
+  포함해 투과한다.
+
+제공하는 arm을 찾지 못한 `resume`은 잘못된 IR이다. `resume`의 값 type은 제공된
+입력 type과, result type은 답 type과 같아야 하며, 이는 `resume`의 지역 검증이
+확인한다.
+
+Lambda 본문의 `resume`이 lambda 바깥의 arm에 묶이면 그 lambda는 그 arm의
+resumption을 **운반**한다. 운반은 capture operand가 아니며 lambda의 header에
+쓰이지 않는다. 운반하는 lambda는 그 arm 밖으로 옮길 수 없다.
+
+Resumption은 affine이다. 한 resumptive arm에 묶인 `resume`은 둘이 함께 실행될
+수 없어야 하고, 그 resumption을 운반하는 lambda의 값은 arm 안에서만 쓰여야 한다.
+이 정적 규칙은 전체 IR 검증이 위 구조에서 확인하며, 운반하는 lambda를 반복 호출하는
+경우는 CPS 펼치기가 runtime 상태로 거부한다
+([cps-effects.md](cps-effects.md#논리적-cps-적법화)). Logical result가 `Never`인
+general operation이 resumption을 만들지 않는다는 규칙은
+[`perform`의 선언](../crates/tribute-ir/src/dialect/tribute_control.rs)이 정한다.
+Resume token은 `tribute_control`에 없고 CPS legalization이 도입한다
+([cps-effects.md](cps-effects.md#handle-evidence-extension--handler-closures)).
 
 ### Trap
 
@@ -643,11 +673,11 @@ logical continuation으로 region을 lower한다:
 4. `operation_kind = "fn"`인 perform은 continuation을 capture하지 않는다.
    Shared conversion이 tail path로 dispatch하며, 자동으로 resume된 operation
    result는 일반적인 남은 block suffix로 흐른다.
-5. Resumptive general handler의 resume token은 중단된 body continuation을
+5. Resumptive general handler arm의 resumption은 중단된 body continuation을
    가리킨다. `tribute_control.resume`이 이를 호출한 뒤 arm-local strict
    suffix를 계속 실행한다. Arm이 resume하지 않으면 yield가 일치하는 handle을
    직접 완료하고 중단된 suffix와 completion region을 건너뛴다. Source
-   `op -> Never` arm은 token을 받지 않으며 이 non-resuming path만 취할 수 있다.
+   `op -> Never` arm은 resumption이 없으며 이 non-resuming path만 취할 수 있다.
 6. Nested handle은 자체 delimiter를 설치한다. Perform은 둘러싼 callable 또는
    handle body row의 명시 label에 묶인 handler가 처리하며, row tail로 들어온
    operation은 그 사이에 설치된 handler를 지나친다

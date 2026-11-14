@@ -1,10 +1,10 @@
 //! Static type bounds and projections used by declarative operation schemas.
 //!
 //! A bound in a typed `#[dialect]` operation definition (`T: IntegerLike`,
-//! `S: func::FuncSig`, `P: ResumeToken`) names a Rust type implementing
+//! `S: func::FuncSig`) names a Rust type implementing
 //! [`TypeConstraint`]. Its [`ConstraintDesc`] tells the generated schema how to
 //! test a `TypeRef` against the bound and which projections (`S::Inputs`,
-//! `P::Input`) it provides. The `const fn` helpers here run while the schema
+//! `S::Results`) it provides. The `const fn` helpers here run while the schema
 //! constant is evaluated, so malformed definitions fail to compile even when the
 //! bound comes from another crate.
 

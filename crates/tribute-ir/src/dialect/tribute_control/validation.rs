@@ -119,7 +119,6 @@ fn contains_forbidden_logical_component(
     }
     let data = ctx.get_type(ty);
     let forbidden = DynPhysicalCallableType::is_implemented(ctx, ty)
-        || ResumeToken::matches(ctx, ty)
         || is_unresolved_type(ctx, ty)
         || data
             .params
@@ -149,30 +148,9 @@ pub(super) fn validate_control_types(ctx: &IrContext, errors: &mut Vec<Validatio
                     push_type_error(
                         errors,
                         format!(
-                            "{ty}: callable component {component} contains an unresolved type, a resume token, or a physical callable type"
+                            "{ty}: callable component {component} contains an unresolved type or a physical callable type"
                         ),
                     );
-                }
-            }
-        } else if ResumeToken::matches(ctx, ty) {
-            if data.params.len() != 2 {
-                push_type_error(
-                    errors,
-                    format!(
-                        "{ty}: tribute_control.resume_token requires exactly input and answer types"
-                    ),
-                );
-            } else {
-                for component in data.params.iter().copied() {
-                    if contains_forbidden_logical_component(ctx, component, &mut HashSet::default())
-                    {
-                        push_type_error(
-                            errors,
-                            format!(
-                                "{ty}: resume token component {component} is not a resolved logical value type"
-                            ),
-                        );
-                    }
                 }
             }
         } else {
@@ -436,7 +414,6 @@ fn whole_ir(
     validate_return_contracts(ctx, body, &mut errors);
     validate_declaration_uses(ctx, body, &declarations, &mut errors);
     validate_resume_ownership(ctx, body, &mut errors);
-    validate_token_placements(ctx, body, &mut errors);
     ValidationResult { errors }
 }
 

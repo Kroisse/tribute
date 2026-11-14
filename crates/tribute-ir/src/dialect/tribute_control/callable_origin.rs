@@ -556,15 +556,10 @@ fn handle_result_sources(ctx: &IrContext, handle: Handle) -> Option<Vec<ValueRef
     Some(sources)
 }
 
-/// The result of the `handle` whose arm holds the resume token that
-/// `resume` consumes.
+/// The result of the `handle` whose resumption `resume` consumes.
 fn resumed_handle_result(ctx: &IrContext, resume: OpRef) -> Option<ValueRef> {
-    let token = *ctx.op_operands(resume).first()?;
-    let ValueDef::BlockArg(block, _) = ctx.value_def(token) else {
-        return None;
-    };
-    let (handle, _) = super::enclosing_arm(ctx, ctx.block(block).parent_region?)?;
-    ctx.op_results(handle.op_ref()).first().copied()
+    let handle = super::DynResumptionRegions::enclosing(ctx, resume)?.handle;
+    ctx.op_results(handle).first().copied()
 }
 
 fn verified_callable_declaration(

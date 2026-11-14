@@ -75,8 +75,9 @@ pub(crate) use evidence::{EvidencePlanSite, verify_evidence_plan};
 pub use func_sig::{FuncSig, FuncSigBuilder, FuncSigTypeError};
 pub use handler_binding::{BindingHeader, HandleArms, HandlerBinding};
 pub use interfaces::{
-    DeclarationUse, DynLocalValidation, DynOperationDeclarationUse, DynSourceCallable,
-    LocalValidation, OperationDeclarationUse, SourceCallable,
+    DeclarationUse, DynLocalValidation, DynOperationDeclarationUse, DynResumptionRegions,
+    DynSourceCallable, LocalValidation, OperationDeclarationUse, Resumption, ResumptionRegions,
+    ResumptionScope, SourceCallable,
 };
 pub use local_validation::validate_local;
 pub(crate) use local_validation::{
@@ -198,23 +199,6 @@ pub struct SourceTailCallIndirect;
 
 #[trunk_ir::dialect]
 mod tribute_control {
-    // Types
-    /// The affine resumption a resumptive general handler arm receives.
-    ///
-    /// ```text
-    /// tribute_control.resume_token<InputType, AnswerType>
-    /// ```
-    ///
-    /// `Input` is the value the suspended operation continuation receives,
-    /// and `Answer` is the logical result of running that continuation to
-    /// the enclosing handle. The type is opaque: it is not a source type, a
-    /// callable ABI, or a backend carrier, and it grants no right to inspect
-    /// the continuation representation. Its only producer is the last block
-    /// argument of a resumptive `op` arm of `tribute_control.handle`. A
-    /// `tribute_control.lambda` may capture it along one static ownership
-    /// path, and its only consumer is `tribute_control.resume`.
-    struct ResumeToken<Input, Answer>;
-
     // FuncSig operations
     // Only the named function is isolated. Lambda intentionally remains
     // non-isolated so its exact external-reference/capture set can be validated.
@@ -367,8 +351,17 @@ mod tribute_control {
     ///   use in that lambda's body must be an `instantiate`.
     /// - **Row attributes:** optional `quantified_rows` (`design/tribute-dialects.md`,
     ///   "지역 람다의 양화와 인스턴스화").
-    /// - **Ownership and value flow:** the captures are ordinary SSA uses,
-    ///   and there is no other hidden operand.
+    /// - **Ownership and value flow:** the captures are ordinary SSA uses.
+    ///   Besides the captures, a lambda carries the resumption of its
+    ///   enclosing handler arm when a `tribute_control.resume` in its body
+    ///   consumes it (`DynResumptionRegions::carried_by`). The resumption is
+    ///   not a capture operand and the header writes nothing for it. A
+    ///   lambda that carries a resumption cannot be moved out of that arm:
+    ///   its result may be called, may be captured by another lambda, and
+    ///   may be passed to the recursive call of the enclosing function, but
+    ///   any other use, such as yielding it, storing it, or passing it to
+    ///   another call, lets the resumption escape and is invalid. See
+    ///   `tribute_control.handle` for the affine rule.
     /// - **Signature:** a `SourceCallable` whose signature is its result type.
     /// - **Flags:** `SourceLambda`, shared with `tribute_cps.lambda`.
     /// - **Location:** the whole span of the source lambda.
@@ -646,8 +639,8 @@ mod tribute_control {
     /// - **Results:** exactly one logical operation result. A source `Never`
     ///   result is the canonical `core.never`, and does not select a
     ///   physical `Never` control carrier; such an operation makes no
-    ///   resumption and exposes no `resume_token`, and an `anyref`
-    ///   placeholder for `Never` is invalid at this boundary.
+    ///   resumption, and an `anyref` placeholder for `Never` is invalid at
+    ///   this boundary.
     /// - **Attributes:** `ability: SymbolRef`, `op_name: String`, and
     ///   `operation_kind: OperationKind` are required. `operation_kind` is exactly
     ///   `fn` or `op`, copied from the typechecked operation declaration. It
@@ -716,9 +709,10 @@ mod tribute_control {
     /// } do(%completed: BodyType) {
     ///   ...
     ///   tribute_control.yield %answer_value
-    /// } op @State @get(%arg: ArgType, %k: tribute_control.resume_token<ResultType, AnswerType>) : ResultType {
+    /// } op @State @get(%arg: ArgType) : ResultType {
     ///   ...
-    ///   tribute_control.yield %answer
+    ///   %resumed = tribute_control.resume %value : ResultType -> AnswerType
+    ///   tribute_control.yield %resumed
     /// } fn @State @peek() : ResultType {
     ///   ...
     ///   tribute_control.yield %result
@@ -745,10 +739,8 @@ mod tribute_control {
     ///   `completion` is one block with exactly one argument, whose type is
     ///   the type of the value `body` yields. Each arm is one block whose
     ///   arguments are the source operation arguments, in declaration order
-    ///   and with their logical types; a resumptive `op` arm has one last
-    ///   argument, `resume_token<operation_result_type, handle-result-type>`.
-    ///   An `op` arm whose `operation_result_type` is source `Never` has no
-    ///   token, and neither does a `fn` arm.
+    ///   and with their logical types, and nothing else, whatever the arm's
+    ///   kind. The resumption of a resumptive arm is not an argument.
     /// - **Terminators:** every region ends in `tribute_control.yield`.
     /// - **Meaning:** when `body` completes normally, `completion` is
     ///   evaluated exactly once and its value is returned. A general arm
@@ -762,27 +754,41 @@ mod tribute_control {
     ///   counts, the terminators, and yield type equality: the result type
     ///   equals the completion yield type and the yield type of every
     ///   general arm, including an `op -> Never` arm, and a `fn` arm yields
-    ///   its `operation_result_type`. It checks the token's position and
-    ///   parameters, and that an `op -> Never` arm has no token and no
-    ///   `tribute_control.resume` anywhere in it, nested regions included;
-    ///   the converter checks the same before rewriting and reports a
-    ///   violation as a conversion failure. The symbol-aware frontend
-    ///   conformance check also confirms that each arm's `kind`, argument
-    ///   types, and `operation_result_type` are those of the declaration it
-    ///   names. No verifier reclassifies a general `op` from the shape of its
-    ///   arm.
+    ///   its `operation_result_type`. A `tribute_control.resume` consumes
+    ///   the resumption of the nearest enclosing resumptive arm
+    ///   (`DynResumptionRegions::enclosing`), so a `resume` in an
+    ///   `op -> Never` arm or a `fn` arm, which are barriers, is invalid; its
+    ///   own local validation reports it, and the converter checks the same
+    ///   before rewriting and reports a violation as a conversion failure.
+    ///   Whole-IR verification checks the affine rule below. The symbol-aware
+    ///   frontend conformance check also confirms that each arm's `kind`,
+    ///   argument types, and `operation_result_type` are those of the
+    ///   declaration it names. No verifier reclassifies a general `op` from
+    ///   the shape of its arm.
+    /// - **Resumption scope:** `body` and `completion` are transparent to a
+    ///   `resume` under them, which consumes the resumption of an outer arm.
+    ///   A resumptive `op` arm provides a resumption whose input is its
+    ///   `operation_result_type` and whose answer is the handle's result
+    ///   type. A `fn` arm and an `op -> Never` arm provide none and stop the
+    ///   search for one.
     /// - **Ownership and value flow:** this operation owns the delimited
-    ///   resumption capability that arises when the body performs a
-    ///   resumptive general operation. That capability is exposed only as the
-    ///   `resume_token` argument of a resumptive general arm, which is
-    ///   affine. It may go unused, dropping the continuation, or have one
-    ///   static ownership path to a `tribute_control.resume`. When a closure
-    ///   captures it, that static path moves into the closure. A copy, store,
-    ///   return, yield, or any other escape is invalid. Static SSA validation
-    ///   cannot prove that a capturing closure is called at most once
-    ///   dynamically, so the lowered resumption must also enforce one-shot
-    ///   consumption at run time and reject or trap on a second call. Values
-    ///   leave an executable region only through `tribute_control.yield`.
+    ///   resumption that arises when the body performs a resumptive general
+    ///   operation. The resumption is not a value: no operation produces,
+    ///   takes, or yields it, and it is named only by the `resume`s and the
+    ///   carrier lambdas under its arm. It is affine. It may go unused,
+    ///   dropping the continuation, or have one static path to a
+    ///   `tribute_control.resume`, whose other candidates are on mutually
+    ///   exclusive branches. A `tribute_control.lambda` whose body holds
+    ///   such a `resume` carries the resumption, and then the static path
+    ///   goes through that lambda: its result may be called, captured by
+    ///   another lambda, or passed to the recursive call of the enclosing
+    ///   function, and every other use, such as yielding it, storing it, or
+    ///   passing it to another call, is an escape and is invalid. Static
+    ///   validation cannot prove that a carrier lambda is called at most
+    ///   once dynamically, so the lowered resumption must also enforce
+    ///   one-shot consumption at run time and reject or trap on a second
+    ///   call. Values leave an executable region only through
+    ///   `tribute_control.yield`.
     /// - **Location:** the whole source `handle` expression. Region and block
     ///   locations use the matching body, completion arm, and handler arm
     ///   spans.
@@ -799,7 +805,8 @@ mod tribute_control {
         CallableResultOrigin,
         CallableArgumentOrigin,
         LocalValidation,
-        OperationDeclarationUse
+        OperationDeclarationUse,
+        ResumptionRegions
     )]
     fn handle(
         handlers: Attr<[HandlerBinding]>,
@@ -813,47 +820,48 @@ mod tribute_control {
         {}
     }
 
-    /// A resumption. It returns the result of the handle its token belongs
-    /// to, so its result is a callable origin when that result is.
+    /// A resumption. It returns the result of the handle whose resumption it
+    /// consumes, so its result is a callable origin when that result is.
     ///
     /// ```text
-    /// %answer = tribute_control.resume %resume, %value : AnswerType
+    /// %answer = tribute_control.resume %value : ResultType -> AnswerType
     /// ```
     ///
-    /// - **Operands:** exactly two. `%resume` is a
-    ///   `resume_token<InputType, AnswerType>` and `%value` is an
-    ///   `InputType`.
-    /// - **Results:** exactly one `AnswerType`.
+    /// - **Operands:** exactly one, `%value`.
+    /// - **Results:** exactly one.
     /// - **Attributes and regions:** only an optional `evidence_plan`
     ///   (`design/tribute-dialects.md`, "Evidence 선택 속성"), and no region.
     /// - **Terminator:** no. Strict work after `resume` stays explicitly in
     ///   the enclosing region and runs only after the resumed computation
     ///   returns.
-    /// - **Meaning:** consumes the one-shot resumption of the lexically
-    ///   nearest enclosing general handler, supplies `%value` to the
+    /// - **Meaning:** consumes the one-shot resumption of the nearest
+    ///   enclosing resumptive arm of a `tribute_control.handle`
+    ///   (`DynResumptionRegions::enclosing`), supplies `%value` to the
     ///   suspended `perform`, and returns the logical result the resumed
-    ///   computation reaches at the handle boundary. It is invalid in a `fn`
-    ///   or `op -> Never` arm.
-    /// - **Local verification:** enforces the operand and result arity and
-    ///   the three type equalities that
-    ///   `resume_token<InputType, AnswerType>` requires.
-    /// - **Ownership and value flow:** consumes the token. The token may
-    ///   reach this operation through an explicit closure capture, but it
-    ///   must keep a single static use-def path from the handler block
-    ///   argument. Affine-use validation follows captures and nested regions,
-    ///   so it is a whole-IR check. When a capture allows repeated dynamic
-    ///   invocation, the converted continuation's run-time one-shot state is
-    ///   the final enforcement boundary.
+    ///   computation reaches at the handle boundary. The search walks
+    ///   outward through the parent regions: the `body` and `completion` of
+    ///   a handle, a lambda, and a structured operation such as `scf.if` are
+    ///   transparent, while a `fn` arm, an `op -> Never` arm, and an
+    ///   operation that is isolated from above, such as a `func`, stop it
+    ///   without a resumption.
+    /// - **Local verification:** requires an enclosing resumption, that the
+    ///   type of `%value` is that resumption's input (the `operation_result_type`
+    ///   of the arm), and that the result type is its answer (the handle's
+    ///   result type). A `resume` with no enclosing resumption is invalid.
+    /// - **Ownership and value flow:** consumes the resumption of the
+    ///   enclosing arm, which is affine and is not a value (see
+    ///   `tribute_control.handle`). All the `resume`s of one arm are on
+    ///   mutually exclusive branches. A lambda that holds one carries the
+    ///   resumption (see `tribute_control.lambda`). Affine-use validation
+    ///   follows carrier lambdas and nested regions, so it is a whole-IR
+    ///   check. When a carrier allows repeated dynamic invocation, the
+    ///   converted continuation's run-time one-shot state is the final
+    ///   enforcement boundary.
     /// - **Location:** the source `resume` expression.
     #[verify]
-    #[implements(CallableResultOrigin)]
-    #[asm_format(resume_token "," value attr_dict_bare ":" type(result))]
-    fn resume<T: ResumeToken>(
-        evidence_plan: Option<Attr<[EvidenceStep]>>,
-        resume_token: Value<T>,
-        value: Value<T::Input>,
-    ) -> Value<T::Answer> {
-    }
+    #[implements(CallableResultOrigin, LocalValidation)]
+    #[asm_format(value attr_dict_bare ":" type(value) "->" type(result))]
+    fn resume(evidence_plan: Option<Attr<[EvidenceStep]>>, value: Value<_>) -> Value<_> {}
 
     /// End an executable `tribute_control` region with a logical value.
     ///
@@ -868,8 +876,9 @@ mod tribute_control {
     /// - **Local verification:** enforces its own shape. The owning operation
     ///   checks the placement and the yield type.
     /// - **Ownership and value flow:** passes an ordinary logical value to
-    ///   the owning structured operation. A `resume_token` can never be
-    ///   yielded.
+    ///   the owning structured operation. The resumption of an arm is not a
+    ///   value, so it cannot be yielded; yielding a lambda that carries it
+    ///   is an escape (`tribute_control.handle`).
     /// - **Location:** the source expression that makes the region result. A
     ///   synthesized identity completion uses the owning `handle` location.
     #[flags(Terminator)]
@@ -910,15 +919,6 @@ mod tribute_control {
     #[implements(CallableExit, LocalValidation)]
     #[asm_format(cause attr_dict)]
     fn trap(cause: Attr<TrapCause>) {}
-}
-
-/// Read the exact input and answer types carried by a resume token.
-pub fn resume_token_parts(ctx: &IrContext, ty: TypeRef) -> Option<(TypeRef, TypeRef)> {
-    if !ResumeToken::matches(ctx, ty) {
-        return None;
-    }
-    let [input, answer] = ctx.get_type(ty).params.as_array()?;
-    Some((*input, *answer))
 }
 
 /// Build a body-less `tribute_control.func` declaration.
@@ -994,10 +994,4 @@ impl Handle {
             .find(|&(_, region)| region == arm)
             .and_then(|(binding, _)| binding)
     }
-}
-
-/// The handle `region` is an arm of, with the arm's binding.
-pub fn enclosing_arm(ctx: &IrContext, region: RegionRef) -> Option<(Handle, HandlerBinding)> {
-    let handle = Handle::from_op(ctx, ctx.region(region).parent_op?).ok()?;
-    Some((handle, handle.binding_of(ctx, region)?))
 }

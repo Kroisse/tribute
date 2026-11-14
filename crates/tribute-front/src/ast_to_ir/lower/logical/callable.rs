@@ -3,12 +3,12 @@
 
 use tribute_ir::dialect::tribute_control;
 use tribute_ir::dialect::tribute_control::{OperationDeclaration, Row, RowBinder};
+use trunk_ir::SymbolPath;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, OperationDataBuilder, RegionData};
 use trunk_ir::op_interface::DynCallableExit;
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{BlockRef, OpRef, TypeRef, ValueRef};
 use trunk_ir::types::{Attribute, Location};
-use trunk_ir::{Symbol, SymbolPath};
 
 use crate::ast::{
     Decl, DeclEntry, Expr, ExprKind, FuncDecl, HandlerArm, HandlerKind, OpDeclKind, ResolvedRef,
@@ -1219,23 +1219,13 @@ pub(super) fn lower_handler<'db>(
     );
     declarations.record(ir, declaration, ability_id, &arguments);
     let is_never = trunk_ir::dialect::core::Never::matches(ir, operation_result);
-    let mut block_args: Vec<_> = parameter_types
+    let block_args: Vec<_> = parameter_types
         .iter()
         .map(|ty| BlockArgData {
             ty: *ty,
             attrs: Default::default(),
         })
         .collect();
-    if kind == OpDeclKind::Op && !is_never {
-        let token =
-            tribute_ir::dialect::tribute_control::ResumeToken::params(operation_result, answer_ty)
-                .intern(ir)
-                .as_type_ref();
-        block_args.push(BlockArgData {
-            ty: token,
-            attrs: Default::default(),
-        });
-    }
     let block = ir.create_block(BlockData {
         location,
         args: block_args,
@@ -1249,11 +1239,7 @@ pub(super) fn lower_handler<'db>(
             bind_pattern(&mut IrBuilder::new(&mut scope, ir, block), pattern, value);
         }
         if let (Some(id), true) = (resume, kind == OpDeclKind::Op && !is_never) {
-            scope.bind_resume(
-                id,
-                Symbol::new("resume"),
-                ir.block_arg(block, parameter_types.len() as u32),
-            );
+            scope.bind_resume(id, operation_result, answer_ty);
         }
         let value = lower_expr(
             &mut IrBuilder::new(&mut scope, ir, block),

@@ -304,14 +304,12 @@ pub(super) fn lower_expr<'db>(
             )
         }
         ExprKind::Resume { arg, local_id } => {
-            let token = builder.ctx.lookup_resume(local_id?)?;
-            let (input_ty, _) =
-                tribute_control::resume_token_parts(builder.ir, builder.ir.value_ty(token))
-                    .expect("typechecked resume local must lower to a resume token");
+            let (input_ty, answer_ty) = builder.ctx.lookup_resume(local_id?)?;
             let value = lower_expr(builder, arg, declarations)?;
             let value = builder.cast_if_needed(location, value, input_ty);
-            let resume =
-                tribute_control::Resume::operands(token, value).build(builder.ir, location);
+            let resume = tribute_control::Resume::operands(value)
+                .results(answer_ty)
+                .build(builder.ir, location);
             attach_evidence_plan(
                 builder.ctx,
                 builder.ir,
