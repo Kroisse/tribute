@@ -136,7 +136,8 @@ Resumption은 affine이다. 한 resumptive arm에 묶인 `resume`은 둘이 함�
 수 없어야 하고, 그 resumption을 운반하는 lambda의 값은 arm 안에서만 쓰여야 한다.
 운반하는 lambda의 값을 본문에서 쓰는 lambda도 그 resumption을 운반한다. 한
 경로 위의 운반 lambda들은 서로를 감싸며, 서로 감싸지 않는 둘은 서로 배타적인
-분기에 있어야 한다.
+분기에 있어야 한다. 한 lambda의 서로 다른 본문도 서로 배타적이다. 호출 한 번은
+본문 하나를 실행한다.
 이 정적 규칙은 전체 IR 검증이 위 구조에서 확인하며, 운반하는 lambda를 반복 호출하는
 경우는 CPS 펼치기가 runtime 상태로 거부한다
 ([cps-effects.md](cps-effects.md#논리적-cps-적법화)). Logical result가 `Never`인

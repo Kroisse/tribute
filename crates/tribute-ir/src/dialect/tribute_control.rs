@@ -789,7 +789,8 @@ mod tribute_control {
     ///   use, such as yielding it, storing it, or passing it to another call,
     ///   is an escape and is invalid. Two lambdas that close over one carrier
     ///   are on one path when one encloses the other; otherwise they must be
-    ///   on mutually exclusive branches. Static
+    ///   on mutually exclusive branches, which include the different bodies
+    ///   of one lambda, since a call runs one of them. Static
     ///   validation cannot prove that a carrier lambda is called at most
     ///   once dynamically, so the lowered resumption must also enforce
     ///   one-shot consumption at run time and reject or trap on a second
