@@ -1653,6 +1653,121 @@ fn whole_ir_rejects_same_path_lambda_carrier_terminals() {
     );
 }
 
+/// The lambdas between a carrier and its use enclose one another, so they
+/// are one path.
+#[test]
+fn whole_ir_allows_a_carrier_used_two_lambdas_deep() {
+    let (ctx, module) = parse_fixture(
+        r#"core.module @test {
+  %handled = tribute_control.handle : core.i32 {
+    %body = arith.constant 0 : core.i32
+    tribute_control.yield %body
+  } do(%value: core.i32) {
+      tribute_control.yield %value
+  } op @State @get(%argument: core.i32) : core.i32 {
+      %inner = tribute_control.lambda() -> core.i32 captures [%argument] {
+        %resumed = tribute_control.resume %argument : core.i32 -> core.i32
+        tribute_control.return %resumed
+      }
+      %outer = tribute_control.lambda() -> core.i32 captures [%inner] {
+        %middle = tribute_control.lambda() -> core.i32 captures [%inner] {
+          %called = tribute_control.call_indirect %inner() : () -> core.i32
+          tribute_control.return %called
+        }
+        %entered = tribute_control.call_indirect %middle() : () -> core.i32
+        tribute_control.return %entered
+      }
+      %answer = tribute_control.call_indirect %outer() : () -> core.i32
+      tribute_control.yield %answer
+  }
+}"#,
+    );
+    let result = validate_whole_ir(&ctx, module, &[]);
+    assert!(
+        !messages(&result).contains("resumption carrier"),
+        "{result}"
+    );
+}
+
+/// Two lambdas inside one lambda that close over a carrier are two paths.
+#[test]
+fn whole_ir_rejects_sibling_lambdas_over_a_carrier_inside_a_lambda() {
+    let (ctx, module) = parse_fixture(
+        r#"core.module @test {
+  %handled = tribute_control.handle : core.i32 {
+    %body = arith.constant 0 : core.i32
+    tribute_control.yield %body
+  } do(%value: core.i32) {
+      tribute_control.yield %value
+  } op @State @get(%argument: core.i32) : core.i32 {
+      %inner = tribute_control.lambda() -> core.i32 captures [%argument] {
+        %resumed = tribute_control.resume %argument : core.i32 -> core.i32
+        tribute_control.return %resumed
+      }
+      %outer = tribute_control.lambda() -> core.i32 captures [%inner] {
+        %left = tribute_control.lambda() -> core.i32 captures [%inner] {
+          %called = tribute_control.call_indirect %inner() : () -> core.i32
+          tribute_control.return %called
+        }
+        %right = tribute_control.lambda() -> core.i32 captures [%inner] {
+          %called = tribute_control.call_indirect %inner() : () -> core.i32
+          tribute_control.return %called
+        }
+        %entered = tribute_control.call_indirect %left() : () -> core.i32
+        tribute_control.return %entered
+      }
+      %answer = tribute_control.call_indirect %outer() : () -> core.i32
+      tribute_control.yield %answer
+  }
+}"#,
+    );
+    let result = validate_whole_ir(&ctx, module, &[]);
+    assert_diagnostics(
+        &result,
+        &["resumption carrier branches into multiple lambda captures"],
+    );
+}
+
+/// One call of a lambda runs one of its bodies, so a carrier may be called
+/// from each of them.
+#[test]
+fn whole_ir_allows_a_carrier_called_from_each_body_of_a_lambda() {
+    let (ctx, module) = parse_fixture(
+        r#"core.module @test {
+  %handled = tribute_control.handle : core.i32 {
+    %body = arith.constant 0 : core.i32
+    tribute_control.yield %body
+  } do(%value: core.i32) {
+      tribute_control.yield %value
+  } op @State @get(%argument: core.i32) : core.i32 {
+      %inner = tribute_cps.lambda() -> core.i32 captures [%argument] entries {
+        cps {
+          %resumed = tribute_control.resume %argument : core.i32 -> core.i32
+          tribute_control.return %resumed
+        }
+      }
+      %wrapper = tribute_cps.lambda() -> core.i32 captures [%inner] entries {
+        direct {
+          %direct = tribute_cps.call_indirect %inner() attributes {convention = "cps"} : () -> core.i32
+          tribute_control.return %direct
+        }
+        cps {
+          %cps = tribute_cps.call_indirect %inner() attributes {convention = "cps"} : () -> core.i32
+          tribute_control.return %cps
+        }
+      }
+      %answer = tribute_cps.call_indirect %wrapper() attributes {convention = "cps"} : () -> core.i32
+      tribute_control.yield %answer
+  }
+}"#,
+    );
+    let result = validate_whole_ir(&ctx, module, &[]);
+    assert!(
+        !messages(&result).contains("resumption carrier"),
+        "{result}"
+    );
+}
+
 #[test]
 fn a_resume_in_an_op_never_arm_is_rejected_where_it_stands() {
     let (ctx, module) = parse_fixture(

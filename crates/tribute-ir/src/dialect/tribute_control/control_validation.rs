@@ -190,6 +190,12 @@ fn validate_affine_lambda_carrier(
         return;
     }
 
+    // The lambdas that close over the carrier: each one between a use and
+    // the region that defines it.
+    let defined_in = match ctx.value_def(carrier) {
+        ValueDef::OpResult(producer, _) => parent_region(ctx, producer),
+        ValueDef::BlockArg(block, _) => ctx.block(block).parent_region,
+    };
     let mut captures = Vec::new();
     let mut terminals = Vec::new();
     for use_ in ctx.uses(carrier) {
@@ -205,9 +211,21 @@ fn validate_affine_lambda_carrier(
             );
             continue;
         }
+        let mut current = use_.user;
+        while let Some(region) = parent_region(ctx, current)
+            && Some(region) != defined_in
+            && let Some(owner) = ctx.region(region).parent_op
+        {
+            if SourceLambda::is_set(ctx, owner) && !captures.contains(&owner) {
+                captures.push(owner);
+            }
+            current = owner;
+        }
+        // A capture list names the carrier the body's uses already reach.
         if SourceLambda::is_set(ctx, use_.user) {
-            captures.push(use_.user);
-        } else if (SourceCallIndirect::is_set(ctx, use_.user) && use_.operand_index == 0)
+            continue;
+        }
+        if (SourceCallIndirect::is_set(ctx, use_.user) && use_.operand_index == 0)
             // A carrier may be passed to the enclosing source
             // function's recursive logical call (for example
             // `run_state(fn() { resume value }, value)`). Other direct calls
@@ -228,7 +246,17 @@ fn validate_affine_lambda_carrier(
         }
     }
 
-    if has_nonexclusive_pair(ctx, &captures) {
+    // A lambda that encloses another is on the same path.
+    let separate_paths = captures
+        .iter()
+        .copied()
+        .tuple_combinations()
+        .any(|(left, right)| {
+            !op_encloses(ctx, left, right)
+                && !op_encloses(ctx, right, left)
+                && !ops_are_mutually_exclusive(ctx, left, right)
+        });
+    if separate_paths {
         push_op_error(
             ctx,
             handle,
@@ -248,10 +276,9 @@ fn validate_affine_lambda_carrier(
     if !captures.is_empty() {
         for terminal in &terminals {
             if SourceCallIndirect::is_set(ctx, *terminal)
-                && !captures.iter().any(|capture| {
-                    ctx.op_region(*capture, 0)
-                        .is_some_and(|region| op_is_within_region(ctx, *terminal, region))
-                })
+                && !captures
+                    .iter()
+                    .any(|capture| op_encloses(ctx, *capture, *terminal))
             {
                 push_op_error(
                     ctx,
@@ -324,10 +351,39 @@ fn has_nonexclusive_pair(ctx: &IrContext, ops: &[OpRef]) -> bool {
         .any(|(left, right)| !ops_are_mutually_exclusive(ctx, left, right))
 }
 
+/// Whether `inner` is nested in a region of `outer`.
+fn op_encloses(ctx: &IrContext, outer: OpRef, inner: OpRef) -> bool {
+    let mut current = parent_op(ctx, inner);
+    while let Some(op) = current {
+        if op == outer {
+            return true;
+        }
+        current = parent_op(ctx, op);
+    }
+    false
+}
+
+/// Whether at most one of `left` and `right` runs: they are on different
+/// branches of a structured conditional, or in different bodies of one
+/// lambda, whose call runs one body. A lambda on a resumption's path is
+/// called at most once.
 pub(super) fn ops_are_mutually_exclusive(ctx: &IrContext, left: OpRef, right: OpRef) -> bool {
     let mut region = parent_region(ctx, left);
     while let Some(current) = region {
         let owner = ctx.region(current).parent_op;
+        if let Some(owner) = owner
+            && SourceLambda::is_set(ctx, owner)
+        {
+            let body_of = |candidate: OpRef| {
+                ctx.op_regions(owner)
+                    .find(|body| op_is_within_region(ctx, candidate, *body))
+            };
+            if let (Some(left_body), Some(right_body)) = (body_of(left), body_of(right))
+                && left_body != right_body
+            {
+                return true;
+            }
+        }
         if let Some(owner) = owner
             && let Some(interface) = DynRegionBranch::get(ctx, owner)
             && let Ok(successors) = interface.successors(ctx, RegionBranchPoint::Parent)
