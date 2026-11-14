@@ -200,8 +200,8 @@ pub struct SourceTailCallIndirect;
 #[trunk_ir::dialect]
 mod tribute_control {
     // FuncSig operations
-    // Only the named function is isolated. Lambda intentionally remains
-    // non-isolated so its exact external-reference/capture set can be validated.
+    // Only the named function is isolated. A lambda closes over its lexical
+    // scope.
     /// A named source function. A parameter is a callable origin when its
     /// type is the parameter type `type` declares.
     ///
@@ -310,23 +310,26 @@ mod tribute_control {
     /// parameter whose type is the one its result type declares.
     ///
     /// ```text
-    /// %f = tribute_control.lambda(%x: T) -> R captures [%capture0, ...] {
+    /// %f = tribute_control.lambda(%x: T) -> R {
     ///   ...
     ///   tribute_control.return %value
     /// }
     ///
     /// %step = tribute_control.lambda['a1](%m: core.i32) -> core.i32 row(| 'a1)
-    ///     captures [] attributes {debug_name = "step"} {
+    ///     attributes {debug_name = "step"} {
     ///   ...
     /// }
     /// ```
     ///
-    /// - **Shape:** the operands are the typechecked captures in source
-    ///   order. The result is one `tribute_control.func_sig`, and no
-    ///   attribute is required. The single-block body takes only the source
-    ///   parameters as block arguments and ends in `tribute_control.return`.
-    /// - **Meaning:** creates a source lambda. The body uses the lexical
-    ///   captures and the parameters.
+    /// - **Shape:** no operands. The result is one
+    ///   `tribute_control.func_sig`, and no attribute is required. The
+    ///   single-block body takes only the source parameters as block
+    ///   arguments and ends in `tribute_control.return`.
+    /// - **Meaning:** creates a source lambda that closes over its lexical
+    ///   scope. The body is not isolated from above: besides its
+    ///   parameters, it refers to values of the enclosing regions directly,
+    ///   and those values are its captures. Legalization collects them into
+    ///   the closure (`design/tribute-dialects.md`, "Convention entry").
     /// - **Format:** hand-written, shared with `tribute_cps.lambda`. After
     ///   the operation name, the list `[...]` names the `local` binders of
     ///   the enclosing `func` that the lambda quantifies, in instantiation
@@ -335,32 +338,32 @@ mod tribute_control {
     ///   kind or union and checks no positional names. Then come the
     ///   parameters as the entry block arguments, `-> Result`, the result
     ///   signature's `row(..)` clause when its row is not closed and empty
-    ///   (its tail names a binder of the enclosing `func`), `captures [..]`,
-    ///   always written even as `captures []`, ` attributes {..}` for any
-    ///   other attribute, and the body with its entry block label elided.
+    ///   (its tail names a binder of the enclosing `func`), ` attributes
+    ///   {..}` for any other attribute, and the body with its entry block
+    ///   label elided.
     ///   The concise form is used only while the result signature has no
     ///   type attribute other than `ability_row`; otherwise the operation
     ///   prints generically.
     /// - **Verification:** the local verifier matches the result signature,
     ///   block arguments, and return type. Whole-IR verification checks that
-    ///   the body's external SSA references are exactly the captures, that
     ///   each element of `quantified_rows` is a `local` binder of the
     ///   enclosing `func` and each `local` binder is listed by one lambda
     ///   only, and that only `instantiate` uses the result of a quantifying
-    ///   lambda. Passing it as a capture of an inner lambda is not a use; the
-    ///   use in that lambda's body must be an `instantiate`.
+    ///   lambda, including uses in the bodies of other lambdas.
     /// - **Row attributes:** optional `quantified_rows` (`design/tribute-dialects.md`,
     ///   "지역 람다의 양화와 인스턴스화").
-    /// - **Ownership and value flow:** the captures are ordinary SSA uses.
-    ///   Besides the captures, a lambda carries the resumption of its
-    ///   enclosing handler arm when a `tribute_control.resume` in its body
-    ///   consumes it (`DynResumptionRegions::carried_by`). The resumption is
-    ///   not a capture operand and the header writes nothing for it. A
-    ///   lambda that carries a resumption cannot be moved out of that arm:
-    ///   its result may be called, may be captured by another lambda, and
-    ///   may be passed to the recursive call of the enclosing function, but
-    ///   any other use, such as yielding it, storing it, or passing it to
-    ///   another call, lets the resumption escape and is invalid. See
+    /// - **Ownership and value flow:** the body's uses of enclosing values
+    ///   are ordinary SSA uses held by the operations in the body; the
+    ///   lambda itself uses none. A lambda also carries the resumption of
+    ///   its enclosing handler arm when a `tribute_control.resume` in its
+    ///   body consumes it (`DynResumptionRegions::carried_by`), and the
+    ///   header writes nothing for it. A lambda that carries a resumption,
+    ///   or closes over the value of one that does, cannot be moved out of
+    ///   that arm: its result may be called, may be used in the body of
+    ///   another lambda, and may be passed to the recursive call of the
+    ///   enclosing function, but any other use, such as yielding it, storing
+    ///   it, or passing it to another call, lets the resumption escape and
+    ///   is invalid. See
     ///   `tribute_control.handle` for the affine rule.
     /// - **Signature:** a `SourceCallable` whose signature is its result type.
     /// - **Flags:** `SourceLambda`, shared with `tribute_cps.lambda`.
@@ -373,7 +376,7 @@ mod tribute_control {
         LocalValidation,
         SourceCallable
     )]
-    fn lambda(quantified_rows: Option<Attr<[u32]>>, captures: Variadic<_>) -> Value<impl FuncSig> {
+    fn lambda(quantified_rows: Option<Attr<[u32]>>) -> Value<impl FuncSig> {
         #[region(body)]
         {}
     }
@@ -780,10 +783,14 @@ mod tribute_control {
     ///   `tribute_control.resume`, whose other candidates are on mutually
     ///   exclusive branches. A `tribute_control.lambda` whose body holds
     ///   such a `resume` carries the resumption, and then the static path
-    ///   goes through that lambda: its result may be called, captured by
-    ///   another lambda, or passed to the recursive call of the enclosing
-    ///   function, and every other use, such as yielding it, storing it, or
-    ///   passing it to another call, is an escape and is invalid. Static
+    ///   goes through that lambda: its result may be called, used in the body
+    ///   of another lambda, which then carries the resumption too, or passed
+    ///   to the recursive call of the enclosing function, and every other
+    ///   use, such as yielding it, storing it, or passing it to another call,
+    ///   is an escape and is invalid. Two lambdas that close over one carrier
+    ///   are on one path when one encloses the other; otherwise they must be
+    ///   on mutually exclusive branches, which include the different bodies
+    ///   of one lambda, since a call runs one of them. Static
     ///   validation cannot prove that a carrier lambda is called at most
     ///   once dynamically, so the lowered resumption must also enforce
     ///   one-shot consumption at run time and reject or trap on a second

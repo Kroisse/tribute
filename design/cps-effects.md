@@ -292,10 +292,10 @@ row와 [row binder](tribute-dialects.md#row-binder), 참조의 `row_args`, 지�
      그 class로 다시 읽은 람다 본문의 복사이며, 그 안에서 row를 양화하는 람다는
      정의의 binder 목록 끝에 새 `local` binder를 받는다.
   2. 본문이 없는 convention entry는 더 약한 본문을 부르는 adapter나 trap entry로 채운다.
-  3. 람다 op, 결과 값, capture 목록, `instantiate`는 하나로 남으므로 사용처를 다시
+  3. 람다 op, 결과 값, `instantiate`는 하나로 남으므로 사용처를 다시
      연결하지 않는다. 같은 class를 고르는 사용들이 양화한 binder에 서로 다른 class를
-     넘겨도 값을 나누지 않으며, 그 본문은 binder를 상한으로 읽는다. Capture 목록은
-     모든 본문의 외부 참조와 같게 다시 계산한다.
+     넘겨도 값을 나누지 않으며, 그 본문은 binder를 상한으로 읽는다. 복사한 본문은
+     바깥 값을 그대로 참조한다.
   4. 본문 안의 사용이 바깥 람다에 새 class를 고를 수 있으므로, 새 본문이 없을 때까지
      지역 class를 다시 정한다. 람다마다 본문은 셋을 넘지 않으므로 이 반복은 끝난다.
 - `func_ref`마다 그 정의와 class 인자의 `tribute_cps.func_table`을 가리키는
@@ -401,10 +401,10 @@ tail만 `Cps`를 요구한다.
 target identity를 가진 `func_ref`의 convention entry로 각 convention의 자리에
 들어가며, 그 entry를 채우는 규칙은 [함수 참조](tribute-dialects.md#convention-entry)가 정한다.
 
-Lambda capture 목록은 [capture 규칙](tribute-dialects.md#convention-entry)을 따른다. Named
-reference를 새 `func_ref`로 대체하여 사라진 capture는 제거하고, 남는 값은 lexical
-scope와 dominance를 유지하여 중복 없이 전달한다. 이 변환은 RHS 평가를 복제하거나 resumption을 운반하는 lambda의
-affine 경로를 늘려서는 안 된다.
+Lambda capture는 [capture 규칙](tribute-dialects.md#convention-entry)을 따른다. Named
+reference를 새 `func_ref`로 대체하여 쓰이지 않게 된 값은 capture되지 않고, 남는
+값은 lexical scope와 dominance를 유지하여 중복 없이 전달한다. 이 변환은 RHS
+평가를 복제하거나 resumption을 운반하는 lambda의 affine 경로를 늘려서는 안 된다.
 
 Source 타입 검사는 정확한 equality, `Never` 표현식의 방향성 있는 제거, 공통 source
 결과 추론을 구별한다. 분기의 answer를 맞추기 위해 정상 source 값을 `Never`로
@@ -643,6 +643,10 @@ operation을 왼쪽에서 오른쪽으로 소비한다:
 
   세 번째 formal은 읽지 않는다.
   Source operation result는 `Never`로 남는다.
+- `tribute_cps.lambda`는 본문을 하나씩 변환해 `closure.lambda`가 된다. 그
+  capture는 변환된 본문들이 convention 순서로 바깥에서 쓰는 값을 처음 쓰인
+  순서대로 중복 없이 담으며, 생성된 continuation의 환경도 같은 규칙을 따른다.
+  본문의 `resume`이 쓰는 arm의 첫 token도 이렇게 담긴다.
 - `tribute_control.yield value`는 region의 `exit_k(value)`를 호출한다.
 
 일반 structured control은 기존 `scf.*` dialect에 남고
@@ -1027,9 +1031,8 @@ Handle 하나는 실행 중 여러 번 설치될 수 있다. 처음 설치한 �
 - General arm: `(Evidence, ContinuationFrame<R>, operation argument...,
   resume token, resume token)`. Evidence와 frame은 층의 바깥 evidence와 handle의
   exit frame이다. Resumptive arm만 token 둘을 받으며, 두 token은 모두 legalization이
-  도입한 값이다. 첫 token은 resumption을 운반하는 lambda가 capture하며
-  legalization이 그 lambda의 capture에 더한다. 둘째 token은 arm 본문의 `resume`이
-  쓴다.
+  도입한 값이다. 첫 token은 resumption을 운반하는 lambda 본문의 `resume`이 쓰므로
+  그 lambda의 closure에 담긴다. 둘째 token은 arm 본문의 `resume`이 쓴다.
 - `fn` arm: `(Evidence, operation argument...)`. 층의 `tr_dispatch_fn`이 그 층의
   바깥 evidence를 capture해 넘기며, operation을 수행한 지점의 evidence는 쓰지 않는다.
 

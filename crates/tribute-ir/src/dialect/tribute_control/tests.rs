@@ -111,7 +111,7 @@ fn builder_fixture() -> ValidFixture {
     let lambda_return = Return::operands(x).build(&mut ctx, loc);
     ctx.push_op(lambda_block, lambda_return.op_ref());
     let lambda_body = region(&mut ctx, loc, lambda_block);
-    let lambda = Lambda::operands([x])
+    let lambda = Lambda::operands()
         .results(lambda_ty)
         .regions(lambda_body)
         .build(&mut ctx, loc);
@@ -199,7 +199,7 @@ const VALID_CONTROL_MODULE: &str = r#"core.module @test {
     %function = tribute_control.func_ref @id : !callable
     %direct = tribute_control.call @id(%value) : (core.i32) -> core.i32
     %indirect = tribute_control.call_indirect %function(%value) : (core.i32) -> core.i32
-    %closure = tribute_control.lambda() -> core.i32 captures [%value] {
+    %closure = tribute_control.lambda() -> core.i32 {
       tribute_control.return %value
     }
     %handled = tribute_control.handle : core.i32 {
@@ -528,11 +528,11 @@ fn custom_assembly_round_trips_declarations_definitions_and_lambdas() {
     tribute_control.return %value
   }
   tribute_control.func @outer(%first: core.i32, %second: core.i32) -> core.i32 {
-    %captured = "tribute_control.lambda"(%first, %second) ({
+    %captured = "tribute_control.lambda"() ({
       ^bb0(%left: core.i32, %right: core.i32):
         tribute_control.return %first
     }) {debug_name = "apply", inline_hint = true, metadata = @operation} : !lambda
-    %empty = tribute_control.lambda() -> core.i32 captures [] {
+    %empty = tribute_control.lambda() -> core.i32 {
       %constant = arith.constant 1 : core.i32
       tribute_control.return %constant
     }
@@ -557,10 +557,10 @@ fn custom_assembly_round_trips_declarations_definitions_and_lambdas() {
     assert!(printed.contains(" : !lambda"), "{printed}");
     assert!(printed.contains("metadata = @operation"), "{printed}");
     assert!(
-        printed.contains("%2 = \"tribute_control.lambda\"(%0, %1)"),
+        printed.contains("%2 = \"tribute_control.lambda\"()"),
         "generic fallback must not consume an extra lambda result name: {printed}"
     );
-    assert!(printed.contains("-> core.i32 captures []"), "{printed}");
+    assert!(printed.contains("-> core.i32 {"), "{printed}");
     assert!(printed.contains("debug_name = \"apply\""));
     assert!(printed.contains("inline_hint = true"));
     assert!(
@@ -680,7 +680,7 @@ fn parser_rejects_conventions_on_control_callables() {
   tribute_control.func @bad() -> core.i32 convention(direct)
 }"#,
         r#"core.module @test {
-  %0 = tribute_control.lambda() -> core.i32 convention(cps) captures [] {
+  %0 = tribute_control.lambda() -> core.i32 convention(cps) {
     %1 = arith.constant 1 : core.i32
     tribute_control.return %1
   }
@@ -695,7 +695,7 @@ fn parser_rejects_conventions_on_control_callables() {
   tribute_control.func @bad() -> core.i32 attributes {tribute.calling_convention = "direct"}
 }"#,
         r#"core.module @test {
-  %0 = tribute_control.lambda() -> core.i32 captures [] attributes {tribute.calling_convention = "cps"} {
+  %0 = tribute_control.lambda() -> core.i32 attributes {tribute.calling_convention = "cps"} {
     %1 = arith.constant 1 : core.i32
     tribute_control.return %1
   }
@@ -704,7 +704,7 @@ fn parser_rejects_conventions_on_control_callables() {
   tribute_control.func @bad() -> core.i32 signature_attributes {metadata = @retired}
 }"#,
         r#"core.module @test {
-  %0 = tribute_control.lambda() -> core.i32 signature_attributes {metadata = @retired} captures [] {
+  %0 = tribute_control.lambda() -> core.i32 signature_attributes {metadata = @retired} {
     %1 = arith.constant 1 : core.i32
     tribute_control.return %1
   }
@@ -1007,36 +1007,6 @@ fn local_validator_checks_handle_and_handler_region_contracts() {
 }
 
 #[test]
-fn whole_ir_rejects_missing_and_excess_lambda_captures() {
-    let (missing_ctx, missing_module) = parse_fixture(
-        r#"core.module @test {
-  tribute_control.func @outer(%external: core.i32) -> core.i32 {
-    %closure = tribute_control.lambda() -> core.i32 captures [] {
-      tribute_control.return %external
-    }
-    tribute_control.return %external
-  }
-}"#,
-    );
-    let missing = validate_whole_ir(&missing_ctx, missing_module, &[]);
-    assert!(messages(&missing).contains("capture list is missing external value"));
-
-    let (excess_ctx, excess_module) = parse_fixture(
-        r#"core.module @test {
-  tribute_control.func @outer(%external: core.i32) -> core.i32 {
-    %closure = tribute_control.lambda() -> core.i32 captures [%external] {
-      %constant = arith.constant 0 : core.i32
-      tribute_control.return %constant
-    }
-    tribute_control.return %external
-  }
-}"#,
-    );
-    let excess = validate_whole_ir(&excess_ctx, excess_module, &[]);
-    assert!(messages(&excess).contains("capture list contains unused external value"));
-}
-
-#[test]
 fn whole_ir_resolves_references_in_the_nearest_module() {
     let (ctx, module) = parse_fixture(
         r#"core.module @outer {
@@ -1093,7 +1063,7 @@ fn whole_ir_resolves_references_in_the_nearest_module() {
 }
 
 #[test]
-fn whole_ir_reports_symbol_declaration_and_capture_contracts() {
+fn whole_ir_reports_symbol_and_declaration_contracts() {
     let (mut ctx, module) = parse_fixture(
         r#"core.module @test {
   !direct = tribute_control.func_sig<(core.i32) -> core.i32>
@@ -1113,9 +1083,6 @@ fn whole_ir_reports_symbol_declaration_and_capture_contracts() {
   %bad_call = tribute_control.call @id(%false) : (core.i1) -> core.i1
   %unknown_perform = tribute_control.perform op @State @missing() : () -> core.i32
   %bad_perform = tribute_control.perform fn @State @get(%false) : (core.i1) -> core.i1
-  %duplicate_capture = tribute_control.lambda() -> core.i1 captures [%false, %false] {
-    tribute_control.return %false
-  }
 }"#,
     );
     let i32_ty = ctx
@@ -1144,7 +1111,6 @@ fn whole_ir_reports_symbol_declaration_and_capture_contracts() {
             "unresolved callee @missing",
             "call argument types do not match the logical signature",
             "call result types do not match the logical signature",
-            "capture list contains duplicate values",
             "duplicate operation declaration",
             "no resolved operation declaration",
             "operation_kind does not match the resolved declaration",
@@ -1225,7 +1191,7 @@ fn whole_ir_rejects_a_direct_resume_and_a_resume_in_a_lambda() {
       tribute_control.yield %value
   } op @State @get(%argument: core.i32) : core.i32 {
       %direct = tribute_control.resume %argument : core.i32 -> core.i32
-      %later = tribute_control.lambda() -> core.i32 captures [%argument] {
+      %later = tribute_control.lambda() -> core.i32 {
         %resumed = tribute_control.resume %argument : core.i32 -> core.i32
         tribute_control.return %resumed
       }
@@ -1319,11 +1285,11 @@ fn a_resume_in_a_lambda_in_an_arm_makes_the_lambda_a_carrier() {
   } do(%value: core.i32) {
       tribute_control.yield %value
   } op @State @get(%argument: core.i32) : core.i32 {
-      %continuation = tribute_control.lambda() -> core.i32 captures [%argument] {
+      %continuation = tribute_control.lambda() -> core.i32 {
         %resumed = tribute_control.resume %argument : core.i32 -> core.i32
         tribute_control.return %resumed
       }
-      %plain = tribute_control.lambda() -> core.i32 captures [%argument] {
+      %plain = tribute_control.lambda() -> core.i32 {
         tribute_control.return %argument
       }
       %answer = tribute_control.call_indirect %continuation() : () -> core.i32
@@ -1446,20 +1412,20 @@ fn whole_ir_rejects_branching_and_escape_at_each_affine_carrier() {
   } do(%value: core.i32) {
       tribute_control.yield %value
   } op @State @get(%argument: core.i32) : core.i32 {
-      %inner = tribute_control.lambda() -> core.i32 captures [%argument] {
+      %inner = tribute_control.lambda() -> core.i32 {
         %resumed = tribute_control.resume %argument : core.i32 -> core.i32
         tribute_control.return %resumed
       }
-      %wrapper = tribute_control.lambda() -> core.i32 captures [%inner] {
+      %wrapper = tribute_control.lambda() -> core.i32 {
         %called = tribute_control.call_indirect %inner() : () -> core.i32
         tribute_control.return %called
       }
       %escape =tribute_control.call @id(%wrapper) : (tribute_control.func_sig<() -> core.i32>) -> core.i32
-      %first_capture = tribute_control.lambda() -> core.i32 captures [%wrapper] {
+      %first_capture = tribute_control.lambda() -> core.i32 {
         %called = tribute_control.call_indirect %wrapper() : () -> core.i32
         tribute_control.return %called
       }
-      %second_capture = tribute_control.lambda() -> core.i32 captures [%wrapper] {
+      %second_capture = tribute_control.lambda() -> core.i32 {
         %called = tribute_control.call_indirect %wrapper() : () -> core.i32
         tribute_control.return %called
       }
@@ -1485,7 +1451,7 @@ fn whole_ir_rejects_a_carrier_lambda_yielded_out_of_its_arm() {
     let (ctx, module) = parse_fixture(
         r#"core.module @test {
   %handled = tribute_control.handle : tribute_control.func_sig<() -> core.i32> {
-    %body = tribute_control.lambda() -> core.i32 captures [] {
+    %body = tribute_control.lambda() -> core.i32 {
       %zero = arith.constant 0 : core.i32
       tribute_control.return %zero
     }
@@ -1493,7 +1459,7 @@ fn whole_ir_rejects_a_carrier_lambda_yielded_out_of_its_arm() {
   } do(%value: tribute_control.func_sig<() -> core.i32>) {
       tribute_control.yield %value
   } op @State @get(%argument: core.i32) : core.i32 {
-      %continuation = tribute_control.lambda() -> core.i32 captures [%argument] {
+      %continuation = tribute_control.lambda() -> core.i32 {
         %resumed = tribute_control.resume %argument : core.i32 -> core.i32
         tribute_control.return %resumed
       }
@@ -1515,11 +1481,11 @@ fn whole_ir_rejects_sibling_carrier_lambdas() {
   } do(%value: core.i32) {
       tribute_control.yield %value
   } op @State @get(%argument: core.i32) : core.i32 {
-      %first = tribute_control.lambda() -> core.i32 captures [%argument] {
+      %first = tribute_control.lambda() -> core.i32 {
         %resumed = tribute_control.resume %argument : core.i32 -> core.i32
         tribute_control.return %resumed
       }
-      %second = tribute_control.lambda() -> core.i32 captures [%argument] {
+      %second = tribute_control.lambda() -> core.i32 {
         %resumed = tribute_control.resume %argument : core.i32 -> core.i32
         tribute_control.return %resumed
       }
@@ -1543,14 +1509,14 @@ fn whole_ir_allows_mutually_exclusive_lambda_capture_and_terminal_paths() {
   } op @State @get(%argument: core.i32) : core.i32 {
       %flag = arith.constant true : core.i1
       %value = scf.if %flag -> (core.i32) {
-        %left = tribute_control.lambda() -> core.i32 captures [%argument] {
+        %left = tribute_control.lambda() -> core.i32 {
           %resumed = tribute_control.resume %argument : core.i32 -> core.i32
           tribute_control.return %resumed
         }
         %called = tribute_control.call_indirect %left() : () -> core.i32
         scf.yield %called
       } else {
-        %right = tribute_control.lambda() -> core.i32 captures [%argument] {
+        %right = tribute_control.lambda() -> core.i32 {
           %resumed = tribute_control.resume %argument : core.i32 -> core.i32
           tribute_control.return %resumed
         }
@@ -1581,7 +1547,7 @@ fn whole_ir_allows_mutually_exclusive_switch_capture_paths() {
       %choice = arith.constant 0 : core.i32
       scf.index_switch %choice : (core.i32) -> ()
       case 0 {
-        %left = tribute_control.lambda() -> core.i32 captures [%argument] {
+        %left = tribute_control.lambda() -> core.i32 {
           %left_resumed = tribute_control.resume %argument : core.i32 -> core.i32
           tribute_control.return %left_resumed
         }
@@ -1589,7 +1555,7 @@ fn whole_ir_allows_mutually_exclusive_switch_capture_paths() {
         scf.yield
       }
       case 1 {
-        %right = tribute_control.lambda() -> core.i32 captures [%argument] {
+        %right = tribute_control.lambda() -> core.i32 {
           %right_resumed = tribute_control.resume %argument : core.i32 -> core.i32
           tribute_control.return %right_resumed
         }
@@ -1636,7 +1602,7 @@ fn whole_ir_rejects_same_path_lambda_carrier_terminals() {
   } do(%value: core.i32) {
       tribute_control.yield %value
   } op @State @get(%argument: core.i32) : core.i32 {
-      %continuation = tribute_control.lambda() -> core.i32 captures [%argument] {
+      %continuation = tribute_control.lambda() -> core.i32 {
         %resumed = tribute_control.resume %argument : core.i32 -> core.i32
         tribute_control.return %resumed
       }
@@ -1649,6 +1615,121 @@ fn whole_ir_rejects_same_path_lambda_carrier_terminals() {
     let result = validate_whole_ir(&ctx, module, &[]);
     assert!(
         messages(&result).contains("multiple static terminal uses"),
+        "{result}"
+    );
+}
+
+/// The lambdas between a carrier and its use enclose one another, so they
+/// are one path.
+#[test]
+fn whole_ir_allows_a_carrier_used_two_lambdas_deep() {
+    let (ctx, module) = parse_fixture(
+        r#"core.module @test {
+  %handled = tribute_control.handle : core.i32 {
+    %body = arith.constant 0 : core.i32
+    tribute_control.yield %body
+  } do(%value: core.i32) {
+      tribute_control.yield %value
+  } op @State @get(%argument: core.i32) : core.i32 {
+      %inner = tribute_control.lambda() -> core.i32 {
+        %resumed = tribute_control.resume %argument : core.i32 -> core.i32
+        tribute_control.return %resumed
+      }
+      %outer = tribute_control.lambda() -> core.i32 {
+        %middle = tribute_control.lambda() -> core.i32 {
+          %called = tribute_control.call_indirect %inner() : () -> core.i32
+          tribute_control.return %called
+        }
+        %entered = tribute_control.call_indirect %middle() : () -> core.i32
+        tribute_control.return %entered
+      }
+      %answer = tribute_control.call_indirect %outer() : () -> core.i32
+      tribute_control.yield %answer
+  }
+}"#,
+    );
+    let result = validate_whole_ir(&ctx, module, &[]);
+    assert!(
+        !messages(&result).contains("resumption carrier"),
+        "{result}"
+    );
+}
+
+/// Two lambdas inside one lambda that close over a carrier are two paths.
+#[test]
+fn whole_ir_rejects_sibling_lambdas_over_a_carrier_inside_a_lambda() {
+    let (ctx, module) = parse_fixture(
+        r#"core.module @test {
+  %handled = tribute_control.handle : core.i32 {
+    %body = arith.constant 0 : core.i32
+    tribute_control.yield %body
+  } do(%value: core.i32) {
+      tribute_control.yield %value
+  } op @State @get(%argument: core.i32) : core.i32 {
+      %inner = tribute_control.lambda() -> core.i32 {
+        %resumed = tribute_control.resume %argument : core.i32 -> core.i32
+        tribute_control.return %resumed
+      }
+      %outer = tribute_control.lambda() -> core.i32 {
+        %left = tribute_control.lambda() -> core.i32 {
+          %called = tribute_control.call_indirect %inner() : () -> core.i32
+          tribute_control.return %called
+        }
+        %right = tribute_control.lambda() -> core.i32 {
+          %called = tribute_control.call_indirect %inner() : () -> core.i32
+          tribute_control.return %called
+        }
+        %entered = tribute_control.call_indirect %left() : () -> core.i32
+        tribute_control.return %entered
+      }
+      %answer = tribute_control.call_indirect %outer() : () -> core.i32
+      tribute_control.yield %answer
+  }
+}"#,
+    );
+    let result = validate_whole_ir(&ctx, module, &[]);
+    assert_diagnostics(
+        &result,
+        &["resumption carrier branches into multiple lambda captures"],
+    );
+}
+
+/// One call of a lambda runs one of its bodies, so a carrier may be called
+/// from each of them.
+#[test]
+fn whole_ir_allows_a_carrier_called_from_each_body_of_a_lambda() {
+    let (ctx, module) = parse_fixture(
+        r#"core.module @test {
+  %handled = tribute_control.handle : core.i32 {
+    %body = arith.constant 0 : core.i32
+    tribute_control.yield %body
+  } do(%value: core.i32) {
+      tribute_control.yield %value
+  } op @State @get(%argument: core.i32) : core.i32 {
+      %inner = tribute_cps.lambda() -> core.i32 entries {
+        cps {
+          %resumed = tribute_control.resume %argument : core.i32 -> core.i32
+          tribute_control.return %resumed
+        }
+      }
+      %wrapper = tribute_cps.lambda() -> core.i32 entries {
+        direct {
+          %direct = tribute_cps.call_indirect %inner() attributes {convention = "cps"} : () -> core.i32
+          tribute_control.return %direct
+        }
+        cps {
+          %cps = tribute_cps.call_indirect %inner() attributes {convention = "cps"} : () -> core.i32
+          tribute_control.return %cps
+        }
+      }
+      %answer = tribute_cps.call_indirect %wrapper() attributes {convention = "cps"} : () -> core.i32
+      tribute_control.yield %answer
+  }
+}"#,
+    );
+    let result = validate_whole_ir(&ctx, module, &[]);
+    assert!(
+        !messages(&result).contains("resumption carrier"),
         "{result}"
     );
 }
@@ -1745,7 +1826,7 @@ fn a_carrier_lambda_used_in_another_handlers_arm_is_rejected() {
   } do(%value: core.i32) {
       tribute_control.yield %value
   } op @State @get(%argument: core.i32) : core.i32 {
-      %continuation = tribute_control.lambda() -> core.i32 captures [%argument] {
+      %continuation = tribute_control.lambda() -> core.i32 {
         %resumed = tribute_control.resume %argument : core.i32 -> core.i32
         tribute_control.return %resumed
       }
@@ -1845,11 +1926,11 @@ fn whole_ir_rejects_branch_after_transitive_lambda_transfer() {
   } do(%value: core.i32) {
       tribute_control.yield %value
   } op @State @get(%argument: core.i32) : core.i32 {
-      %inner = tribute_control.lambda() -> core.i32 captures [%argument] {
+      %inner = tribute_control.lambda() -> core.i32 {
         %resumed = tribute_control.resume %argument : core.i32 -> core.i32
         tribute_control.return %resumed
       }
-      %wrapper = tribute_control.lambda() -> core.i32 captures [%inner] {
+      %wrapper = tribute_control.lambda() -> core.i32 {
         %called = tribute_control.call_indirect %inner() : () -> core.i32
         tribute_control.return %called
       }
@@ -2483,7 +2564,7 @@ fn resume_result_needs_an_enclosing_resumptive_arm() {
   tribute_control.func @caller(%value: core.i32) -> core.i32 {
     %from_func = tribute_control.resume %value : core.i32 -> !F
     %first = tribute_control.call_indirect %from_func(%value) : (core.i32) -> core.i32
-    %from_lambda = tribute_control.lambda() -> core.i32 captures [%first] {
+    %from_lambda = tribute_control.lambda() -> core.i32 {
       %again = tribute_control.resume %first : core.i32 -> !F
       %called = tribute_control.call_indirect %again(%first) : (core.i32) -> core.i32
       tribute_control.return %called
@@ -2509,7 +2590,7 @@ fn lambda_parameters_indirect_results_and_list_heads_have_callable_provenance() 
   !G = tribute_control.func_sig<(!F, core.i32) -> core.i32>
   !H = tribute_control.func_sig<(core.i32) -> !F>
   tribute_control.func @caller(%list: core.ptr, %make: !H, %value: core.i32) -> core.i32 {
-    %apply = tribute_control.lambda(%callback: !F, %argument: core.i32) -> core.i32 captures [] {
+    %apply = tribute_control.lambda(%callback: !F, %argument: core.i32) -> core.i32 {
       %applied = tribute_control.call_indirect %callback(%argument) : (core.i32) -> core.i32
       tribute_control.return %applied
     }

@@ -23,7 +23,7 @@ const MODULE: &str = r#"core.module @test {
     tribute_control.return %r
   }
   tribute_control.func @main(%x: core.i32) -> core.i32 row(@A, @B) {
-    %f = tribute_control.lambda(%y: core.i32) -> core.i32 row(@A, @B) captures [] {
+    %f = tribute_control.lambda(%y: core.i32) -> core.i32 row(@A, @B) {
       tribute_control.return %y
     }
     %g = tribute_control.func_ref @apply rows [{instances = [@A, @B]}] : !applied
@@ -162,7 +162,7 @@ fn a_reference_passes_one_row_for_each_quantified_binder() {
 #[test]
 fn rows_must_be_sorted_and_not_written_when_closed_and_empty() {
     assert_rejects(
-        &MODULE.replace("row(@A, @B) {", "row(@B, @A) {"),
+        &MODULE.replace("row(@A, @B) {\n    %f", "row(@B, @A) {\n    %f"),
         "malformed tribute_control.func_sig: Row",
     );
     assert_rejects(
@@ -177,7 +177,7 @@ fn rows_must_be_sorted_and_not_written_when_closed_and_empty() {
 #[test]
 fn a_row_names_each_instance_once() {
     assert_rejects(
-        &MODULE.replace("row(@A, @B) {", "row(@A, @A, @B) {"),
+        &MODULE.replace("row(@A, @B) {\n    %f", "row(@A, @A, @B) {\n    %f"),
         "malformed tribute_control.func_sig: Row",
     );
     let a = SymbolPath::new(["A"]);
@@ -201,7 +201,7 @@ fn substitution_merges_an_instance_named_by_the_row_and_its_argument() {
     tribute_control.return %x
   }
   tribute_control.func @main(%x: core.i32) -> core.i32 row(@A) {
-    %f = tribute_control.lambda(%y: core.i32) -> core.i32 row(@A) captures [] {
+    %f = tribute_control.lambda(%y: core.i32) -> core.i32 row(@A) {
       tribute_control.return %y
     }
     %r = tribute_control.call @apply(%f, %x) attributes {row_args = [{instances = [@A]}]} : (tribute_control.func_sig<(core.i32) -> core.i32 row(@A)>, core.i32) -> core.i32
@@ -550,7 +550,7 @@ fn a_binder_is_named_by_its_position() {
 fn a_header_may_declare_only_unquantified_binders() {
     let input = r#"core.module @test {
   tribute_control.func @run[local 'a0, body 'a1]() -> core.i32 {
-    %f = tribute_control.lambda['a0]() -> core.i32 row(| 'a0) captures [] {
+    %f = tribute_control.lambda['a0]() -> core.i32 row(| 'a0) {
       %x = arith.constant 1 : core.i32
       tribute_control.return %x
     }
@@ -567,7 +567,7 @@ fn a_header_may_declare_only_unquantified_binders() {
         "{printed}"
     );
     assert!(
-        printed.contains("lambda['a0]() -> core.i32 row(| 'a0) captures []"),
+        printed.contains("lambda['a0]() -> core.i32 row(| 'a0) {"),
         "{printed}"
     );
 }
@@ -610,7 +610,7 @@ const LOCALS: &str = r#"core.module @test {
   ability.decl @A {
   }
   tribute_control.func @f['a0, local 'a1](%x: core.i32) -> core.i32 row(| 'a0) {
-    %g = tribute_control.lambda['a1](%y: core.i32) -> core.i32 row(| 'a1) captures [] {
+    %g = tribute_control.lambda['a1](%y: core.i32) -> core.i32 row(| 'a1) {
       tribute_control.return %y
     }
     %s = tribute_control.instantiate %g {row_args = [ARGS]} : RESULT
@@ -640,9 +640,7 @@ fn a_quantifying_lambda_round_trips_and_its_uses_instantiate_it() {
     assert!(result.is_ok(), "{result}");
     let printed = module.op().display(&ctx).to_string();
     assert!(
-        printed.contains(
-            "%1 = tribute_control.lambda['a1](%2: core.i32) -> core.i32 row(| 'a1) captures [] {"
-        ),
+        printed.contains("%1 = tribute_control.lambda['a1](%2: core.i32) -> core.i32 row(| 'a1) {"),
         "{printed}"
     );
     assert!(
@@ -699,7 +697,7 @@ fn a_lambda_quantifies_local_binders_it_alone_owns() {
     assert_rejects(
         &locals("{tail = 0}", "!step0").replace(
             "    %s = tribute_control.instantiate",
-            "    %h = tribute_control.lambda['a1](%z: core.i32) -> core.i32 row(| 'a1) captures [] {\n      tribute_control.return %z\n    }\n    %s = tribute_control.instantiate",
+            "    %h = tribute_control.lambda['a1](%z: core.i32) -> core.i32 row(| 'a1) {\n      tribute_control.return %z\n    }\n    %s = tribute_control.instantiate",
         ),
         "local binder 1 is quantified by two lambdas",
     );
@@ -718,7 +716,7 @@ fn a_lambda_captured_by_another_is_instantiated_in_its_body() {
         locals("{tail = 0}", "!step0").replace(
             "    %s = tribute_control.instantiate %g {row_args = [{tail = 0}]} : !step0\n    %r = tribute_control.call_indirect %s(%x) : (core.i32) -> core.i32 row(| 'a0)\n",
             &format!(
-                "    %h = tribute_control.lambda(%z: core.i32) -> core.i32 row(| 'a0) captures [%g] {{\n{use_}      tribute_control.return %r\n    }}\n    %r = tribute_control.call_indirect %h(%x) : (core.i32) -> core.i32 row(| 'a0)\n"
+                "    %h = tribute_control.lambda(%z: core.i32) -> core.i32 row(| 'a0) {{\n{use_}      tribute_control.return %r\n    }}\n    %r = tribute_control.call_indirect %h(%x) : (core.i32) -> core.i32 row(| 'a0)\n"
             ),
         )
     };
@@ -748,10 +746,10 @@ const FRONTEND: &str = r#"core.module @test {
     tribute_control.tail_call_indirect %f(%x) : (core.i32) -> core.i32 row(| 'a0)
   }
   tribute_control.func @main[local 'a0](%x: core.i32) -> core.i32 inferred {
-    %g = tribute_control.lambda(%y: core.i32) -> core.i32 captures [] {
+    %g = tribute_control.lambda(%y: core.i32) -> core.i32 {
       tribute_control.return %y
     }
-    %h = tribute_control.lambda['a0](%z: core.i32) -> core.i32 row(| 'a0) captures [] {
+    %h = tribute_control.lambda['a0](%z: core.i32) -> core.i32 row(| 'a0) {
       tribute_control.return %z
     }
     %s = tribute_control.instantiate %h {row_args = [{}]} : !pure
@@ -772,7 +770,7 @@ fn frontend_output_validates_and_round_trips() {
         printed.contains("@apply['a0](%0: !cb, %1: core.i32) -> core.i32 row(| 'a0) {")
             && printed.contains("@main[local 'a0](%0: core.i32) -> core.i32 inferred {")
             && printed.contains("tribute_control.lambda['a0](%")
-            && printed.contains("-> core.i32 captures [] {"),
+            && printed.contains("-> core.i32 {"),
         "{printed}"
     );
     let (reparsed, module) = parse(&printed);

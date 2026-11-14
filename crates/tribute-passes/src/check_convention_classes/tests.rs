@@ -28,7 +28,7 @@ fn calls(callback: &str, own: &str, lambda: &str, callee: &str) -> String {
     tribute_control.return %r
   }}
   tribute_cps.func @main(%x: core.i32) -> core.i32 convention(direct) {{
-    %f = tribute_cps.lambda(%y: core.i32) -> core.i32 captures [] entries {{
+    %f = tribute_cps.lambda(%y: core.i32) -> core.i32 entries {{
       {lambda} {{
         tribute_control.return %y
       }}
@@ -74,7 +74,7 @@ fn an_instance_of_an_upper_bound_has_a_body_per_class_up_to_it() {
             r#"core.module @m {{
   !cb = tribute_control.func_sig<(core.i32) -> core.i32 row(| 'a0)>
   tribute_cps.func @"wrap$9e"['a0](%x: core.i32) -> core.i32 row(| 'a0) convention(evidence_direct) {{
-    %f = tribute_cps.lambda(%y: core.i32) -> core.i32 row(| 'a0) captures [] entries {{
+    %f = tribute_cps.lambda(%y: core.i32) -> core.i32 row(| 'a0) entries {{
 {bodies}
     }}
     %r = tribute_cps.call_indirect %f(%x) attributes {{convention = "evidence_direct"}} : (core.i32) -> core.i32 row(| 'a0)
@@ -115,12 +115,12 @@ const LOCAL: &str = r#"core.module @m {
   !h0 = tribute_control.func_sig<() -> core.i32>
 CTL
   tribute_cps.func @f[local 'a0, local 'a1](%x: core.i32) -> core.i32 convention(direct) {
-    %g = tribute_cps.lambda['a0](%y: core.i32) -> core.i32 row(| 'a0) captures [] entries {
+    %g = tribute_cps.lambda['a0](%y: core.i32) -> core.i32 row(| 'a0) entries {
       direct {
         tribute_control.return %y
       }
     }
-    %h = tribute_cps.lambda['a1]() -> core.i32 row(| 'a1) captures [%g] entries {
+    %h = tribute_cps.lambda['a1]() -> core.i32 row(| 'a1) entries {
       direct {
         %s = tribute_control.instantiate %g {row_args = [{tail = 1}]} : !l1
         %c = arith.constant 1 : core.i32
@@ -170,7 +170,7 @@ fn instantiations_that_select_one_class_may_pass_other_classes() {
   }}
 {CTL}
   tribute_cps.func @f[local 'a0](%x: core.i32) -> core.i32 convention(direct) {{
-    %g = tribute_cps.lambda['a0](%y: core.i32) -> core.i32 row(@Ctl | 'a0) captures [] entries {{
+    %g = tribute_cps.lambda['a0](%y: core.i32) -> core.i32 row(@Ctl | 'a0) entries {{
       cps {{
         tribute_control.return %y
       }}

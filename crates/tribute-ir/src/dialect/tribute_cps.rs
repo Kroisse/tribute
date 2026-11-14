@@ -88,7 +88,7 @@ mod tribute_cps {
     /// A source lambda with a body per convention entry its uses select.
     ///
     /// ```text
-    /// %f = tribute_cps.lambda(%x: T) -> R captures [%capture0, ...] entries {
+    /// %f = tribute_cps.lambda(%x: T) -> R entries {
     ///   direct {
     ///     ...
     ///     tribute_control.return %value
@@ -122,8 +122,9 @@ mod tribute_cps {
     /// - **Verification:** the verifier checks that the conventions are
     ///   strictly increasing and that there is a body for each one.
     ///   Otherwise as `tribute_control.lambda`, for each body.
-    /// - **Ownership and value flow:** as `tribute_control.lambda`; the
-    ///   captures are shared by every body.
+    /// - **Ownership and value flow:** as `tribute_control.lambda`. Every
+    ///   body closes over the same lexical scope, and the lambda's captures
+    ///   are the enclosing values any of its bodies uses.
     /// - **Signature:** a `SourceCallable` whose signature is its result type.
     /// - **Flags:** `SourceLambda`, shared with `tribute_control.lambda`.
     /// - **Location:** the source lambda's span.
@@ -139,7 +140,6 @@ mod tribute_cps {
     fn lambda(
         conventions: Attr<[CallingConvention]>,
         quantified_rows: Option<Attr<[u32]>>,
-        captures: Variadic<_>,
     ) -> Value<impl FuncSig> {
         #[regions(bodies)]
         {}

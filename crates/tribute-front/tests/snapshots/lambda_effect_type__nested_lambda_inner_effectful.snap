@@ -24,8 +24,8 @@ core.module @test {
       tribute_control.return %1
   }
   tribute_control.func @"pkg::read_state"['a0]() -> core.i32 row(| 'a0) inferred {
-      %0 = tribute_control.lambda() -> core.i32 row(| 'a0) captures [] {
-          %1 = tribute_control.lambda() -> core.i32 row(@"ability_2_10_pkg::State_3_int") captures [] {
+      %0 = tribute_control.lambda() -> core.i32 row(| 'a0) {
+          %1 = tribute_control.lambda() -> core.i32 row(@"ability_2_10_pkg::State_3_int") {
               %2 = tribute_control.perform op @"ability_2_10_pkg::State_3_int" @get() : () -> core.i32
               tribute_control.return %2
           }
