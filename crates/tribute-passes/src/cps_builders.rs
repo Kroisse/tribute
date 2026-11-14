@@ -67,7 +67,7 @@ pub(crate) fn closure_over(
     let signature = closure::Closure::from_type_ref(ctx, closure_type)
         .expect("a generated continuation is a closure")
         .func_type(ctx);
-    closure::Lambda::operands(ordered_external_values(ctx, region))
+    closure::Lambda::operands(values_defined_above(ctx, &[region]))
         .signatures([signature])
         .conventions([convention])
         .results(closure_type)
@@ -169,11 +169,17 @@ fn collect_external_in_order(
     }
 }
 
-fn ordered_external_values(ctx: &IrContext, region: RegionRef) -> Vec<ValueRef> {
+/// The values `regions` use that are defined outside them, in order of first
+/// use, `regions` in order, each once.
+pub(crate) fn values_defined_above(ctx: &IrContext, regions: &[RegionRef]) -> Vec<ValueRef> {
     let mut defined = HashSet::default();
-    collect_defined_values(ctx, region, &mut defined);
+    for &region in regions {
+        collect_defined_values(ctx, region, &mut defined);
+    }
     let mut seen = HashSet::default();
     let mut external = Vec::new();
-    collect_external_in_order(ctx, region, &defined, &mut seen, &mut external);
+    for &region in regions {
+        collect_external_in_order(ctx, region, &defined, &mut seen, &mut external);
+    }
     external
 }

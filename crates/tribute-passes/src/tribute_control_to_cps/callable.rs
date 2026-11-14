@@ -70,17 +70,9 @@ impl Converter<'_> {
             )?;
             bodies.push(single_block_region(self.ctx, location, block));
         }
-        let mut captures: Vec<_> = self
-            .ctx
-            .op_operands(source)
-            .iter()
-            .map(|capture| mapping.get(capture).copied().unwrap_or(*capture))
-            .collect();
-        // A lambda that carries the resumption of its enclosing arm reaches
-        // the arm's first token from its bodies.
-        if let Some(resumption) = DynResumptionRegions::carried_by(self.ctx, source) {
-            captures.push(self.arm_token(&resumption));
-        }
+        // The bodies' uses of enclosing values, including the arm token a
+        // `resume` in them transfers into, are the captures.
+        let captures = values_defined_above(self.ctx, &bodies);
         let physical_ty = self.convert_type(logical_ty);
         let signatures: Vec<_> = conventions
             .iter()
