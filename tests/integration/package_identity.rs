@@ -22,11 +22,15 @@ mod std {
 
 fn count() ->{std::Tick} Int { std::Tick::tick() }
 
-fn main() ->{Io} Nil {
-    let ticked = handle count() {
+fn answer_tick(comp: fn() ->{e, std::Tick} Int) ->{e} Int {
+    handle comp() {
         do result { result }
-        op std::Tick::tick() { resume +2 }
+        op std::Tick::tick() { answer_tick(fn() { resume +2 }) }
     }
+}
+
+fn main() ->{Io} Nil {
+    let ticked = answer_tick(fn() count())
     print_line(Int::to_string(std::Int::probe(+1) + ticked))
 }
 "#;

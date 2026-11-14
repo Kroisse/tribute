@@ -11,12 +11,16 @@ fn bump() ->{State(Int)} Int {
     n
 }
 
-fn run_state() -> Int {
-    handle bump() {
+fn handle_state(comp: fn() ->{e, State(Int)} Int) ->{e} Int {
+    handle comp() {
         do result { result }
-        op State::get() { resume +10 }
-        op State::set(value) { resume Nil }
+        op State::get() { handle_state(fn() { resume +10 }) }
+        op State::set(value) { handle_state(fn() { resume Nil }) }
     }
+}
+
+fn run_state() ->{} Int {
+    handle_state(fn() bump())
 }
 
 fn main() ->{Io} Nil {

@@ -660,11 +660,14 @@ fn run() ->{State(Int)} Int {
     let read = fn() { State::get() }
     read() + read() + +1
 }
-fn main() ->{Io} Nil {
-    let value = handle run() {
+fn run_state(comp: fn() ->{e, State(Int)} Int) ->{e} Int {
+    handle comp() {
         do result { result }
-        op State::get() { resume +20 }
+        op State::get() { run_state(fn() { resume +20 }) }
     }
+}
+fn main() ->{Io} Nil {
+    let value = run_state(fn() run())
     print_line(value.to_string)
 }
 "#

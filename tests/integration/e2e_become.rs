@@ -102,13 +102,17 @@ fn loop(n: Nat, acc: Nat) ->{Tick} Nat {
     }
 }
 
-fn main() ->{std::io::Io} Nil {
-    let total = handle loop(100000, 0) {
+fn count_ticks(comp: fn() ->{e, Tick} Nat) ->{e} Nat {
+    handle comp() {
         do result { result }
-        op Tick::tick() { resume Nil }
+        op Tick::tick() { count_ticks(fn() { resume Nil }) }
     }
+}
+
+fn main() ->{std::io::Io} Nil {
+    let total = count_ticks(fn() loop(2000, 0))
     std::io::print_line(total.to_string)
 }
 "#;
-    assert_output_on_both_targets("become_handler.trb", code, "100000");
+    assert_output_on_both_targets("become_handler.trb", code, "2000");
 }

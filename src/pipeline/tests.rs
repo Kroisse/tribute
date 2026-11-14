@@ -818,11 +818,15 @@ fn apply(f: fn(Int) ->{e} Int, value: Int) ->{e} Int { f(value) }
 
 fn run(seed: fn() ->{r} Int) ->{r} Int { apply(fn(x) { x + +1 }, seed()) }
 
-fn main() ->{Io} Nil {
-    let result = handle run(fn() { Tick::tick() }) {
+fn handle_tick(comp: fn() ->{e, Tick} Int) ->{e} Int {
+    handle comp() {
         do value { value }
-        op Tick::tick() { resume +41 }
+        op Tick::tick() { handle_tick(fn() { resume +41 }) }
     }
+}
+
+fn main() ->{Io} Nil {
+    let result = handle_tick(fn() run(fn() { Tick::tick() }))
     print_line(Int::to_string(result))
 }
 "#,
@@ -1199,11 +1203,15 @@ fn count() ->{Counter} Int {
     Counter::next()
 }
 
-fn main() -> Nil {
-    let _ = handle count() {
+fn handle_counter(comp: fn() ->{e, Counter} Int) ->{e} Int {
+    handle comp() {
         do result { result }
-        op Counter::next() { resume +1 }
+        op Counter::next() { handle_counter(fn() { resume +1 }) }
     }
+}
+
+fn main() -> Nil {
+    let _ = handle_counter(fn() count())
 }
 "#,
     );

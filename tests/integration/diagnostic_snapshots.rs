@@ -698,11 +698,15 @@ fn comp() ->{Foo, Bar} Nil {
     Bar::bar()
 }
 
-fn valid() ->{Bar} Nil {
-    handle comp() {
+fn handle_foo(body: fn() ->{e, Foo} Nil) ->{e} Nil {
+    handle body() {
         do result { result }
-        op Foo::foo() { resume Nil }
+        op Foo::foo() { handle_foo(fn() { resume Nil }) }
     }
+}
+
+fn valid() ->{Bar} Nil {
+    handle_foo(fn() comp())
 }
 "#,
     );

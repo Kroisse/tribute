@@ -3149,11 +3149,15 @@ fn asked(x: Option(Int)) ->{Ask, Io} Option(Int) {
     Option::map(z, fn(n) n + Ask::ask())
 }
 
-fn main() ->{Io} Nil {
-    let answer = handle asked(.Some(+1)) {
+fn answer_ask(comp: fn() ->{e, Ask} Option(Int)) ->{e} Option(Int) {
+    handle comp() {
         do value { value }
-        op Ask::ask() { resume +40 }
+        op Ask::ask() { answer_ask(fn() { resume +40 }) }
     }
+}
+
+fn main() ->{Io} Nil {
+    let answer = answer_ask(fn() asked(.Some(+1)))
     case answer {
         .Some(n) -> print_line(Int::to_string(n))
         .None -> print_line("none")
@@ -3211,11 +3215,15 @@ fn start(n: Int) -> Int { become go(fn(x) x + +2, n, +0) }
 
 fn asking(g: fn(Int) ->{Ask} Int) ->{Ask} Int { g(+5) }
 
-fn main() ->{Io} Nil {
-    let answer = handle asking(start) {
+fn answer_ask(comp: fn() ->{e, Ask} Int) ->{e} Int {
+    handle comp() {
         do value { value }
-        op Ask::ask() { resume +0 }
+        op Ask::ask() { answer_ask(fn() { resume +0 }) }
     }
+}
+
+fn main() ->{Io} Nil {
+    let answer = answer_ask(fn() asking(start))
     print_line(Int::to_string(answer))
     print_line(Int::to_string(start(+1000000)))
 }
@@ -3297,14 +3305,18 @@ fn run(suffix: String, callback: fn(String) ->{r} String) ->{r} String {
     callback(twice(g, "a")) <> g("b") <> alias("c")
 }
 
+fn answer_ask(comp: fn() ->{e, Ask} String) ->{e} String {
+    handle comp() {
+        do value { value }
+        op Ask::ask() { answer_ask(fn() { resume "+" }) }
+    }
+}
+
 fn main() ->{Io} Nil {
     let suffix = "!"
     let g = fn(s: String) app(s, fn(t) t <> suffix)
     print_line(twice(g, "io"))
-    let asked = handle ask_once(g, "io") <> run("?", fn(s) s <> Ask::ask()) {
-        do value { value }
-        op Ask::ask() { resume "+" }
-    }
+    let asked = answer_ask(fn() ask_once(g, "io") <> run("?", fn(s) s <> Ask::ask()))
     print_line(asked)
     print_line(run(".", fn(s) s))
     print_line(g("x"))
@@ -3339,16 +3351,20 @@ fn run(suffix: String, callback: fn(String) ->{r} String) ->{r} String {
     callback(twice(g, "a")) <> g("b")
 }
 
+fn answer_ask(comp: fn() ->{e, Ask} String) ->{e} String {
+    handle comp() {
+        do value { value }
+        op Ask::ask() { answer_ask(fn() { resume "+" }) }
+    }
+}
+
 fn main() ->{Io} Nil {
     let g = fn(s: String) {
         let h = fn(t: String) app(t, fn(u) u <> "!")
         h(s)
     }
     print_line(twice(g, "io"))
-    let asked = handle ask_once(g, "io") <> run("?", fn(s) s <> Ask::ask()) {
-        do value { value }
-        op Ask::ask() { resume "+" }
-    }
+    let asked = answer_ask(fn() ask_once(g, "io") <> run("?", fn(s) s <> Ask::ask()))
     print_line(asked)
     print_line(run(".", fn(s) s))
 }
@@ -3374,19 +3390,27 @@ fn app(x: a, f: fn(a) ->{e} a) ->{e} a { f(x) }
 fn twice(f: fn(String) ->{} String, s: String) -> String { f(f(s)) }
 fn ask_once(f: fn(String) ->{Ask} String, s: String) ->{Ask} String { f(s) }
 
-fn main() ->{Io} Nil {
-    let answer = handle Ask::ask() <> "." {
+fn plus(comp: fn() ->{e, Ask} String) ->{e} String {
+    handle comp() {
+        do value { value }
+        op Ask::ask() { plus(fn() { resume "+" }) }
+    }
+}
+
+fn answer_ask(comp: fn() ->{e, Ask} String) ->{e} String {
+    handle comp() {
         do value { value }
         op Ask::ask() {
             let g = fn(s: String) app(s, fn(t) t <> "!")
             let pure = twice(g, "x")
-            let asked = handle ask_once(g, "y") {
-                do value { value }
-                op Ask::ask() { resume "+" }
-            }
-            resume pure <> asked
+            let asked = plus(fn() ask_once(g, "y"))
+            answer_ask(fn() { resume pure <> asked })
         }
     }
+}
+
+fn main() ->{Io} Nil {
+    let answer = answer_ask(fn() Ask::ask() <> ".")
     print_line(answer)
 }
 "#,
@@ -3690,12 +3714,16 @@ fn tagged() ->{Tag(fn(Int) ->{} Int)} Int {
     Tag::tag() + Tag::label()
 }
 
-fn main() ->{Io} Nil {
-    let value = handle tagged() {
+fn tag_handler(comp: fn() ->{e, Tag(fn(Int) ->{} Int)} Int) ->{e} Int {
+    handle comp() {
         do result { result }
-        op Tag::tag() { resume +40 }
+        op Tag::tag() { tag_handler(fn() { resume +40 }) }
         fn Tag::label() { +2 }
     }
+}
+
+fn main() ->{Io} Nil {
+    let value = tag_handler(fn() tagged())
     print_line(Int::to_string(value))
 }
 "#,

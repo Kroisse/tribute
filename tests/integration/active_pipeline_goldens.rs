@@ -174,7 +174,12 @@ fn pipeline_contract_summary(ir_text: &str, native: bool) -> String {
                 ControlFlow::Continue(WalkAction::Advance)
             });
         }
+        // A specialization's instance suffix numbers a generated instance.
         let name = function.sym_name(&ctx).to_string();
+        let name = match name.split_once('$') {
+            Some((base, instance)) if !instance.contains("::") => base.to_owned(),
+            _ => name,
+        };
         if !matches!(
             name.as_str(),
             "main"
@@ -182,6 +187,7 @@ fn pipeline_contract_summary(ir_text: &str, native: bool) -> String {
                 | "pkg::use_console"
                 | "pkg::run"
                 | "pkg::bump"
+                | "pkg::handle_state"
                 | "pkg::run_state"
                 | "pkg::step"
                 | "pkg::run_state_with_console"
@@ -293,12 +299,16 @@ fn bump() ->{State(Int)} Int {
     n
 }
 
-fn run_state() -> Int {
-    handle bump() {
+fn handle_state(comp: fn() ->{e, State(Int)} Int) ->{e} Int {
+    handle comp() {
         do result { result }
-        op State::get() { resume +10 }
-        op State::set(value) { resume Nil }
+        op State::get() { handle_state(fn() { resume +10 }) }
+        op State::set(value) { handle_state(fn() { resume Nil }) }
     }
+}
+
+fn run_state() ->{} Int {
+    handle_state(fn() bump())
 }
 
 fn main() -> Nil {
@@ -325,12 +335,16 @@ fn step() ->{Console, State(Int)} Int {
     current + base
 }
 
-fn run_state_with_console() ->{Console} Int {
-    handle step() {
+fn handle_state(comp: fn() ->{e, State(Int)} Int) ->{e} Int {
+    handle comp() {
         do result { result }
-        op State::get() { resume +7 }
-        op State::set(value) { resume Nil }
+        op State::get() { handle_state(fn() { resume +7 }) }
+        op State::set(value) { handle_state(fn() { resume Nil }) }
     }
+}
+
+fn run_state_with_console() ->{Console} Int {
+    handle_state(fn() step())
 }
 
 fn run_all() -> Int {

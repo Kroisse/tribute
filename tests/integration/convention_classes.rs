@@ -677,14 +677,14 @@ ability State(s) {
     op get() -> s
 }
 
-fn run(f: fn() ->{State(Int)} Int) -> Int {
+fn run(f: fn() ->{e, State(Int)} Int) ->{e} Int {
     handle f() {
         do result { result }
-        op State::get() { resume +0 }
+        op State::get() { run(fn() { resume +0 }) }
     }
 }
 
-fn entry() -> Int { run(fn() State::get()) }
+fn entry() ->{} Int { run(fn() State::get()) }
 fn main() -> Nil {}
 "#,
     );
