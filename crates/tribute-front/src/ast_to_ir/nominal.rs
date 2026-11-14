@@ -317,12 +317,10 @@ impl<'db> NominalTypes<'db> {
                     .collect::<Vec<_>>();
                 tribute_ir::dialect::tribute_control::logical_tuple_type(ir, &elements)
             }
-            TypeKind::Continuation { arg, result, .. } => {
-                let arg = self.convert_logical_type(ir, *arg);
-                let result = self.convert_logical_type(ir, *result);
-                tribute_ir::dialect::tribute_control::ResumeToken::params(arg, result)
-                    .intern(ir)
-                    .as_type_ref()
+            TypeKind::Continuation { .. } => {
+                panic!(
+                    "a continuation is implicit at the source-logical boundary and has no IR type"
+                )
             }
         }
     }

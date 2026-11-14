@@ -64,7 +64,7 @@ unknown operation이 legal하지 않으므로 frontend 적합성 target과 backe
 target이 legal dialect와 operation을 열거해야 한다. `ConversionTarget`은
 operation 적법성만 검사하므로 Tribute whole-IR type walk가 pre-CPS의
 `func.func_sig`/`closure.closure`와 post-CPS의
-`tribute_control.func_sig`/`resume_token`을 별도로 거부한다. 최종 코드 생성의
+`tribute_control.func_sig`를 별도로 거부한다. 최종 코드 생성의
 안전성은 최종 Native/Wasm 코드 생성 경계의 목표 계약이다. 이 계약은 보존된
 메타데이터를 실제로 생성되는 값 및 함수 시그니처의 입출력 항목과 구분해야 한다.
 이 경계를 만족한다고 선언하는 컴파일 경로는 해당 검증을 코드 생성 전에 수행해야

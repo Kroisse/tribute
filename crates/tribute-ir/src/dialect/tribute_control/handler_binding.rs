@@ -182,7 +182,7 @@ impl trunk_ir::attr_kind::AttrKind for HandlerBinding {
 }
 
 /// Each arm of a `tribute_control.handle` after its completion, as
-/// ` op @State @get(%x: A, %k: K) : R { .. }`: the binding, the arm's entry
+/// ` op @State @get(%x: A) : R { .. }`: the binding, the arm's entry
 /// block arguments, the operation result type, and the arm region.
 pub struct HandleArms;
 

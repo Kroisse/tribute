@@ -1232,7 +1232,6 @@ fn main() -> Nil {
     for forbidden in [
         "tribute_control.",
         "tribute_control.func_sig",
-        "resume_token",
         "ability.legacy_",
     ] {
         assert!(

@@ -12,10 +12,10 @@ core.module @test {
           tribute_control.yield %2
       } do(%3: core.i32) {
           tribute_control.yield %3
-      } op @"ability_2_10_pkg::State_3_int" @get(%4: tribute_control.resume_token<core.i32, core.i32>) : core.i32 {
-          %5 = arith.constant 99 : core.i32
-          %6 = tribute_control.resume %4, %5 : core.i32
-          tribute_control.yield %6
+      } op @"ability_2_10_pkg::State_3_int" @get() : core.i32 {
+          %4 = arith.constant 99 : core.i32
+          %5 = tribute_control.resume %4 : core.i32 -> core.i32
+          tribute_control.yield %5
       }
       tribute_control.return %1
   }
