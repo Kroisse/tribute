@@ -545,7 +545,7 @@ func.func @decl(%arg0: core.i32)
 형식은 Rust token으로 쓴다. Entity는 선언에 쓴 식별자(`r#type` 포함)로 가리키고,
 literal은 문자열 literal로 쓴다.
 
-- **Literal** — keyword(`"captures"`)나 구두점(`"("`, `"["`, `"->"`, `":"`,
+- **Literal** — keyword(`"entries"`)나 구두점(`"("`, `"["`, `"->"`, `":"`,
   `","`, `"="`)이다. Keyword는 식별자 하나이고, 구두점에는 영숫자를 섞지 않는다.
   공백은 printer가 정하므로 빈 literal은 없다.
 - **Operand** — `%name`으로 쓰고, 가변 operand는 쉼표로 구분한 목록이다. 목록을
@@ -740,7 +740,6 @@ region의 값에 이름 하나를 쓰면, 그 순서와 공유를 pre-pass에 �
   `adapters`)는 attribute 사전에 남는다.
 - 남은 attribute는 `attr_dict`로 region 바로 앞에 쓰고, region이 없으면 끝에
   쓴다. Region이 없는 operation은 `attr_dict_bare`로 `{..}`만 쓸 수 있다.
-- Capture operand 목록은 비어 있어도 `captures [..]`로 쓴다.
 - Callable 정의의 convention처럼 keyword로 쓰는 attribute 하나는
   `name(keyword)`로 쓴다(`convention(cps)`). 간접 호출은 MLIR
   `func.call_indirect`처럼 callee의 signature를 쓰고, convention은 attribute
@@ -765,7 +764,7 @@ region의 값에 이름 하나를 쓰면, 그 순서와 공유를 pre-pass에 �
   result 타입만 `: type`으로 쓴다.
 
 ```text
-%f = closure.lambda captures [%y] attributes {adapters = {evidence_direct = @a0}} entries {
+%f = closure.lambda [%y] attributes {adapters = {evidence_direct = @a0}} entries {
   direct(%x: core.i32) -> core.i32 {
     ...
   }

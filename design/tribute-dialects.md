@@ -56,7 +56,7 @@ attribute로 바꾼다. 이 type과 convention의 전체 규칙은
 | Operation | 용도 |
 | ---- | ---- |
 | `tribute_control.func` | named source callable의 선언 또는 정의 |
-| `tribute_control.lambda` | capture를 가진 source lambda와 callable value 생성 |
+| `tribute_control.lambda` | lexical scope를 닫는 source lambda와 callable value 생성 |
 | `tribute_control.func_ref` | named function을 first-class callable value로 참조 |
 | `tribute_control.call` | named source callable 직접 호출 |
 | `tribute_control.call_indirect` | source callable value 간접 호출 |
@@ -129,11 +129,14 @@ interface로 자신이 `resume`에게 무엇인지 답한다:
 확인한다.
 
 Lambda 본문의 `resume`이 lambda 바깥의 arm에 묶이면 그 lambda는 그 arm의
-resumption을 **운반**한다. 운반은 capture operand가 아니며 lambda의 header에
-쓰이지 않는다. 운반하는 lambda는 그 arm 밖으로 옮길 수 없다.
+resumption을 **운반**한다. 운반은 본문에서 정해지며 lambda의 header에 쓰이지
+않는다. 운반하는 lambda는 그 arm 밖으로 옮길 수 없다.
 
 Resumption은 affine이다. 한 resumptive arm에 묶인 `resume`은 둘이 함께 실행될
 수 없어야 하고, 그 resumption을 운반하는 lambda의 값은 arm 안에서만 쓰여야 한다.
+운반하는 lambda의 값을 본문에서 쓰는 lambda도 그 resumption을 운반한다. 한
+경로 위의 운반 lambda들은 서로를 감싸며, 서로 감싸지 않는 둘은 서로 배타적인
+분기에 있어야 한다.
 이 정적 규칙은 전체 IR 검증이 위 구조에서 확인하며, 운반하는 lambda를 반복 호출하는
 경우는 CPS 펼치기가 runtime 상태로 거부한다
 ([cps-effects.md](cps-effects.md#논리적-cps-적법화)). Logical result가 `Never`인
@@ -434,8 +437,11 @@ Class `c`의 본문은 위 읽기를 따르되, 자기 row의 tail이 상한이�
 class를 넘겨도 람다는 값 하나다. 앞의 `wrap`이 그 예다. 상한으로 읽어도 결과는
 바뀌지 않는다.
 
-**Capture.** 람다의 capture 목록은 하나이며, 모든 본문이 실제 사용하는 외부
-SSA 값과 일치한다. Capture는 closure 하나에 한 번만 담긴다.
+**Capture.** 람다는 capture operand를 갖지 않는다. 람다는 isolated from
+above가 아닌 region으로서 lexical scope를 닫으며, 본문은 바깥 SSA 값을 직접
+참조한다. 모든 본문이 바깥에서 쓰는 값이 람다의 capture이고, closure 하나에 한
+번만 담긴다. 그 순서는 CPS legalization이 정한다
+([cps-effects.md](cps-effects.md#논리적-cps-적법화)).
 
 **채우기.** Class `c`의 convention entry는 다음과 같다.
 
@@ -502,7 +508,7 @@ managed 참조를 담지 않는다.
 선언이 정한다: row binder header와 `row(..)` 절, `inferred`, `attributes {..}`,
 body를 쓰는 `func` 형식은
 [`tribute_control.func`](../crates/tribute-ir/src/dialect/tribute_control.rs)가,
-양화 binder 목록과 `captures [..]`를 쓰는 `lambda` 형식은
+양화 binder 목록을 쓰는 `lambda` 형식은
 `tribute_control.lambda`가, `convention(..)`과 `entries`는
 [`tribute_cps.func`와 `tribute_cps.lambda`](../crates/tribute-ir/src/dialect/tribute_cps.rs)가,
 row 절 자체는
@@ -511,8 +517,7 @@ row 절 자체는
 ```text
 tribute_cps.func @join['a0 = 'a1 | 'a2, 'a1, 'a2](%x: T) -> T row(| 'a0) convention(cps)
 
-%step = tribute_control.lambda['a1](%m: core.i32) -> core.i32 row(| 'a1)
-    captures [] {
+%step = tribute_control.lambda['a1](%m: core.i32) -> core.i32 row(| 'a1) {
   ...
 }
 %s = tribute_control.instantiate %step {row_args = [{tail = 0}]} : !Step0
