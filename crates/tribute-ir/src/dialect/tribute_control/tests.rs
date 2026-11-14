@@ -1366,24 +1366,43 @@ fn local_validation_checks_the_resume_types_against_the_arm() {
         &["operand type does not match the operation result type of the enclosing arm"],
     );
 
-    let wrong_answer = r#"core.module @test {
-  %handled = tribute_control.handle : core.i32 {
+    // The resumed computation ends where the body does, so a resume returns
+    // the body's `core.i32`, not the handle's `core.i1`.
+    let handle_result = r#"core.module @test {
+  %handled = tribute_control.handle : core.i1 {
     %body = arith.constant 0 : core.i32
     tribute_control.yield %body
   } do(%value: core.i32) {
-      tribute_control.yield %value
+      %done = arith.constant true : core.i1
+      tribute_control.yield %done
   } op @State @get(%argument: core.i32) : core.i32 {
       %resumed = tribute_control.resume %argument : core.i32 -> core.i1
-      %fixed = arith.constant 0 : core.i32
-      tribute_control.yield %fixed
+      tribute_control.yield %resumed
   }
 }"#;
-    let (ctx, module) = parse_fixture(wrong_answer);
+    let (ctx, module) = parse_fixture(handle_result);
     let local = validate_local(&ctx, module);
     assert_diagnostics(
         &local,
-        &["result type does not match the result type of the enclosing handle"],
+        &["result type does not match the body result type of the enclosing handle"],
     );
+
+    let body_result = r#"core.module @test {
+  %handled = tribute_control.handle : core.i1 {
+    %body = arith.constant 0 : core.i32
+    tribute_control.yield %body
+  } do(%value: core.i32) {
+      %done = arith.constant true : core.i1
+      tribute_control.yield %done
+  } op @State @get(%argument: core.i32) : core.i32 {
+      %resumed = tribute_control.resume %argument : core.i32 -> core.i32
+      %done = arith.constant false : core.i1
+      tribute_control.yield %done
+  }
+}"#;
+    let (ctx, module) = parse_fixture(body_result);
+    let local = validate_local(&ctx, module);
+    assert!(local.is_ok(), "{local}");
 }
 
 #[test]
@@ -2419,7 +2438,7 @@ fn perform_result_needs_the_declared_callable_type() {
     );
 }
 
-fn handled_callable_module(op_yield: &str) -> String {
+fn handled_callable_module(body_yield: &str, op_yield: &str) -> String {
     format!(
         r#"core.module @test {{
   !F = tribute_control.func_sig<(core.i32) -> core.i32>
@@ -2427,11 +2446,12 @@ fn handled_callable_module(op_yield: &str) -> String {
     tribute_control.return %n
   }}
   %f = tribute_control.handle : !F {{
-    %body = tribute_control.perform op @Gen @next() : () -> core.i32
-    tribute_control.yield %body
-  }} do(%k: core.i32) {{
-      %done = tribute_control.func_ref @inc : !F
-      tribute_control.yield %done
+    %next = tribute_control.perform op @Gen @next() : () -> core.i32
+    %inc = tribute_control.func_ref @inc : !F
+    %cast = core.unrealized_conversion_cast %next : core.i32 to !F
+    tribute_control.yield {body_yield}
+  }} do(%k: !F) {{
+      tribute_control.yield %k
   }} op @Gen @next() : core.i32 {{
       %resumed_value = arith.constant 40 : core.i32
       %g = tribute_control.resume %resumed_value : core.i32 -> !F
@@ -2457,7 +2477,7 @@ fn handled_callable_module(op_yield: &str) -> String {
 
 #[test]
 fn handle_and_resume_results_have_callable_provenance() {
-    let (ctx, module) = parse_fixture(&handled_callable_module("%g"));
+    let (ctx, module) = parse_fixture(&handled_callable_module("%inc", "%g"));
 
     let result = validate(&ctx, module, &[], &mut Default::default());
     assert!(result.is_ok(), "{result}");
@@ -2465,9 +2485,25 @@ fn handle_and_resume_results_have_callable_provenance() {
 
 #[test]
 fn handle_result_needs_every_yield_to_have_callable_provenance() {
-    let (ctx, module) = parse_fixture(&handled_callable_module("%bad"));
+    let (ctx, module) = parse_fixture(&handled_callable_module("%inc", "%bad"));
 
     let result = validate(&ctx, module, &[], &mut Default::default());
+    // Only the handle result loses its provenance; the resume returns the
+    // body's yield.
+    assert_eq!(
+        messages(&result).matches("callable provenance").count(),
+        1,
+        "{result}"
+    );
+}
+
+#[test]
+fn resume_result_follows_the_body_yield() {
+    let (ctx, module) = parse_fixture(&handled_callable_module("%cast", "%g"));
+
+    let result = validate(&ctx, module, &[], &mut Default::default());
+    // The resumed `%g` and the handle result, through the completion
+    // argument and the arm's yield of `%g`.
     assert_eq!(
         messages(&result).matches("callable provenance").count(),
         2,
@@ -2574,7 +2610,7 @@ fn indirect_calls_sharing_a_callee_chain_evaluate_each_value_once() {
 
 #[test]
 fn a_withdrawn_origin_withdraws_the_values_that_depend_on_it() {
-    let (ctx, module) = parse_fixture(&handled_callable_module("%bad"));
+    let (ctx, module) = parse_fixture(&handled_callable_module("%cast", "%g"));
     let body = module.body(&ctx).unwrap();
     let functions = SymbolTable::collect(&ctx, module);
     let declarations = declared_operations(&ctx, module, &mut Vec::new());

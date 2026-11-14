@@ -282,14 +282,15 @@ impl<'db> IrLoweringCtx<'db> {
     }
 
     /// Bind the continuation local of a resumptive arm to the logical types of
-    /// its resumption.
-    pub(crate) fn bind_resume(&mut self, local_id: LocalId, input: TypeRef, answer: TypeRef) {
+    /// its resumption: the operation result it takes and the handle body
+    /// result it returns.
+    pub(crate) fn bind_resume(&mut self, local_id: LocalId, input: TypeRef, result: TypeRef) {
         if let Some(scope) = self.resume_scopes.last_mut() {
-            scope.insert(local_id, (input, answer));
+            scope.insert(local_id, (input, result));
         }
     }
 
-    /// The `(input, answer)` types of the resumption `local_id` names.
+    /// The `(input, result)` types of the resumption `local_id` names.
     pub(crate) fn lookup_resume(&self, local_id: LocalId) -> Option<(TypeRef, TypeRef)> {
         self.resume_scopes
             .iter()

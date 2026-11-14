@@ -303,11 +303,11 @@ mod outer {
     pub fn run() -> Nat {
         let _ = handle count_unqualified() {
             do result { result }
-            op Tick::tick() { resume 2 }
+            op Tick::tick() { 2 }
         }
         handle count() {
             do result { result }
-            op Tick::tick() { resume make().x }
+            op Tick::tick() { make().x }
         }
     }
 }
@@ -403,7 +403,7 @@ mod outer {
     pub fn run() -> Nat {
         handle count() {
             do result { result }
-            op effects::Tick::tick() { resume 1 }
+            op effects::Tick::tick() { 1 }
         }
     }
 }
@@ -484,7 +484,7 @@ mod outer {
     pub fn run() -> Nat {
         handle count() {
             do result { result }
-            op T::tick() { resume 1 }
+            op T::tick() { 1 }
         }
     }
 }

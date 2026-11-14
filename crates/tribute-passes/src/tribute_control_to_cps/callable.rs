@@ -58,7 +58,6 @@ impl Converter<'_> {
                 void_exit_k: None,
                 answer_type: result,
                 preserve_scf_yield: false,
-                arm: None,
                 tail_join: None,
             };
             self.convert_sequence(
@@ -77,7 +76,7 @@ impl Converter<'_> {
             .map(|capture| mapping.get(capture).copied().unwrap_or(*capture))
             .collect();
         // A lambda that carries the resumption of its enclosing arm reaches
-        // the arm's first token from its bodies.
+        // the arm's token from its bodies.
         if let Some(resumption) = DynResumptionRegions::carried_by(self.ctx, source) {
             captures.push(self.arm_token(&resumption));
         }
@@ -394,7 +393,6 @@ impl Converter<'_> {
             void_exit_k: None,
             answer_type: source_result,
             preserve_scf_yield: false,
-            arm: None,
             tail_join: None,
         };
         self.convert_sequence(

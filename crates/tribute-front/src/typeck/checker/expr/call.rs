@@ -498,12 +498,9 @@ impl<'db> TypeChecker<'db> {
             // use continuation semantics; otherwise use function semantics.
             // We check the callee type directly rather than relying on unification to choose.
             if matches!(callee_ty.kind(self.db()), TypeKind::Continuation { .. }) {
-                // Callee is a continuation - constrain as continuation call.
-                // Note: We intentionally do NOT merge cont_effect into the current effect
-                // context here, unlike the function call path below. The continuation's
-                // ability row is already the handler body's ability row (assigned in
-                // convert_handler_arm_with_ctx), so it's already accounted for in the
-                // enclosing handle expression's effect propagation.
+                // Callee is a continuation: calling it performs the rest of
+                // the handle body, whose row joins the current one as
+                // `resume` does.
                 ctx.constrain_eq_at(
                     callee_ty,
                     expected_cont_ty,
@@ -516,6 +513,7 @@ impl<'db> TypeChecker<'db> {
                     origin,
                     ConstraintOriginKind::Call,
                 );
+                ctx.merge_effect_at(cont_effect, origin);
                 return cont_result_ty;
             } else {
                 // Callee is a UniVar, concrete function type, or other - use function semantics

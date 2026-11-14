@@ -711,8 +711,9 @@ mod tribute_control {
     ///   tribute_control.yield %answer_value
     /// } op @State @get(%arg: ArgType) : ResultType {
     ///   ...
-    ///   %resumed = tribute_control.resume %value : ResultType -> AnswerType
-    ///   tribute_control.yield %resumed
+    ///   %resumed = tribute_control.resume %value : ResultType -> BodyType
+    ///   ...
+    ///   tribute_control.yield %answer_value
     /// } fn @State @peek() : ResultType {
     ///   ...
     ///   tribute_control.yield %result
@@ -742,10 +743,10 @@ mod tribute_control {
     ///   and with their logical types, and nothing else, whatever the arm's
     ///   kind. The resumption of a resumptive arm is not an argument.
     /// - **Terminators:** every region ends in `tribute_control.yield`.
-    /// - **Meaning:** when `body` completes normally, `completion` is
-    ///   evaluated exactly once and its value is returned. A general arm
-    ///   that completes without resuming returns the arm value as the handle
-    ///   result and skips `completion`. A tail-resumptive `fn` arm returns
+    /// - **Meaning:** when `body` completes normally under this handle,
+    ///   `completion` is evaluated exactly once and its value is returned.
+    ///   A general arm returns its value as the handle result, whether or
+    ///   not it resumed, and skips `completion`. A tail-resumptive `fn` arm returns
     ///   the operation result supplied automatically to the suspended
     ///   computation.
     /// - **Verification:** the verifier checks that there is one arm per
@@ -768,12 +769,15 @@ mod tribute_control {
     /// - **Resumption scope:** `body` and `completion` are transparent to a
     ///   `resume` under them, which consumes the resumption of an outer arm.
     ///   A resumptive `op` arm provides a resumption whose input is its
-    ///   `operation_result_type` and whose answer is the handle's result
-    ///   type. A `fn` arm and an `op -> Never` arm provide none and stop the
-    ///   search for one.
+    ///   `operation_result_type` and whose result is the type of the
+    ///   completion argument, the body's result type. A `fn` arm and an
+    ///   `op -> Never` arm provide none and stop the search for one.
     /// - **Ownership and value flow:** this operation owns the delimited
     ///   resumption that arises when the body performs a resumptive general
-    ///   operation. The resumption is not a value: no operation produces,
+    ///   operation: the rest of `body` from the suspended `perform` to the
+    ///   value `body` yields, without this handle. Neither the arms nor
+    ///   `completion` apply to what the resumed computation does or yields.
+    ///   The resumption is not a value: no operation produces,
     ///   takes, or yields it, and it is named only by the `resume`s and the
     ///   carrier lambdas under its arm. It is affine. It may go unused,
     ///   dropping the continuation, or have one static path to a
@@ -820,11 +824,12 @@ mod tribute_control {
         {}
     }
 
-    /// A resumption. It returns the result of the handle whose resumption it
-    /// consumes, so its result is a callable origin when that result is.
+    /// A resumption. It returns the value the body of the handle whose
+    /// resumption it consumes yields, so its result is a callable origin
+    /// when that value is.
     ///
     /// ```text
-    /// %answer = tribute_control.resume %value : ResultType -> AnswerType
+    /// %resumed = tribute_control.resume %value : ResultType -> BodyType
     /// ```
     ///
     /// - **Operands:** exactly one, `%value`.
@@ -837,8 +842,11 @@ mod tribute_control {
     /// - **Meaning:** consumes the one-shot resumption of the nearest
     ///   enclosing resumptive arm of a `tribute_control.handle`
     ///   (`DynResumptionRegions::enclosing`), supplies `%value` to the
-    ///   suspended `perform`, and returns the logical result the resumed
-    ///   computation reaches at the handle boundary. The search walks
+    ///   suspended `perform`, runs the rest of the handle's `body` without
+    ///   the handle, and returns the value `body` yields. The handle's arms
+    ///   do not handle the operations the resumed computation performs,
+    ///   which reach the handlers of the evidence this `resume` passes, and
+    ///   its `completion` does not apply to the returned value. The search walks
     ///   outward through the parent regions: the `body` and `completion` of
     ///   a handle, a lambda, and a structured operation such as `scf.if` are
     ///   transparent, while a `fn` arm, an `op -> Never` arm, and an
@@ -846,8 +854,9 @@ mod tribute_control {
     ///   without a resumption.
     /// - **Local verification:** requires an enclosing resumption, that the
     ///   type of `%value` is that resumption's input (the `operation_result_type`
-    ///   of the arm), and that the result type is its answer (the handle's
-    ///   result type). A `resume` with no enclosing resumption is invalid.
+    ///   of the arm), and that the result type is its result (the type of
+    ///   the handle's completion argument, which is the body's result type).
+    ///   A `resume` with no enclosing resumption is invalid.
     /// - **Ownership and value flow:** consumes the resumption of the
     ///   enclosing arm, which is affine and is not a value (see
     ///   `tribute_control.handle`). All the `resume`s of one arm are on

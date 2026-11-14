@@ -283,8 +283,7 @@ impl DispatchAdapters {
 }
 
 /// Build one dispatch adapter factory for each distinct key among the
-/// module's suffix frames and the layers its handles leave when they are
-/// resumed from a lambda, and append the factories to `module_block`.
+/// module's suffix frames, and append the factories to `module_block`.
 pub(super) fn build_dispatch_adapters(
     ctx: &mut IrContext,
     module: Module,
@@ -293,16 +292,11 @@ pub(super) fn build_dispatch_adapters(
 ) -> Result<DispatchAdapters, TributeControlToCpsError> {
     let mut needed = Vec::new();
     let _ = walk_op::<()>(ctx, module.op(), &mut |op| {
-        let layer = if let Ok(suffix) = ability::SuffixFrame::from_op(ctx, op) {
+        if let Ok(suffix) = ability::SuffixFrame::from_op(ctx, op) {
             let outer = ctx.value_ty(suffix.outer(ctx));
-            Some((suffix.result_ty(ctx), outer, evidence_plan(ctx, op)))
-        } else if let Ok(handle) = ability::Handle::from_op(ctx, op) {
-            let exit = ctx.value_ty(handle.exit(ctx));
-            handle_body_frame(ctx, handle).map(|body| (body, exit, None))
-        } else {
-            None
-        };
-        needed.extend(layer.map(|layer| (ctx.op(op).location, layer)));
+            let layer = (suffix.result_ty(ctx), outer, evidence_plan(ctx, op));
+            needed.push((ctx.op(op).location, layer));
+        }
         ControlFlow::Continue(WalkAction::Advance)
     });
     let mut adapters = DispatchAdapters::default();
@@ -328,13 +322,6 @@ fn evidence_plan(ctx: &IrContext, op: OpRef) -> Option<Attribute> {
     ctx.op_attrs(op)
         .get(tribute_control::EVIDENCE_PLAN_ATTR)
         .cloned()
-}
-
-/// The type of the frame the body of `handle` receives.
-pub(super) fn handle_body_frame(ctx: &IrContext, handle: ability::Handle) -> Option<TypeRef> {
-    let &[block] = ctx.region(handle.body(ctx)).blocks.as_array()?;
-    let &[_, frame] = ctx.block_args(block).as_array()?;
-    Some(ctx.value_ty(frame))
 }
 
 /// The frame layouts and dispatch adapters that `ability.suffix_frame` and
