@@ -622,18 +622,13 @@ evidence를 만들기 전에 적용하며 `mask`만 담는다.
   ability instance([`ability.decl`](../crates/tribute-ir/src/dialect/ability.rs)의
   symbol 참조)를 나타내며 원소는 순서대로 적용한다.
   한 instance는 한 번만 나온다.
-- Key `outer`는 그 instance의 가장 위 handler를 설치한 지점의 evidence로 바꾼다.
-  Source-logical operation은 이 key를 쓰지 않는다. CPS legalization이 arm 본문에
-  중첩된 handle body 안의 `resume`에만 붙이며, 중첩 한 겹에 한 원소다. 같은
-  instance가 여러 번 나올 수 있다.
 - Row가 여러 tail의 합집합인 callable에 관한 key는 셋이다.
   `{select = i}`는 둘러싼 callable의 `i`번째 tail의 evidence로 바꾸며 목록의 첫
   원소로만 온다. `{push = instance}`는 고른 tail evidence 위에 둘러싼 evidence가
   가진 그 instance의 가장 위 handler를 얹으며 `select` 뒤에만 온다.
   `{tails = [plan, ...]}`는 callee의 tail마다 선택 하나를 담고 목록의 마지막
   원소로만 온다. 각 선택은 같은 문법의 목록이고 `tails`를 다시 담지 않는다.
-  `push`와 `tails`의 선택은 연산이 시작한 evidence(앞선 `outer`를 적용한 것)에서
-  읽는다.
+  `push`와 `tails`의 선택은 연산이 시작한 evidence에서 읽는다.
 
   ```text
   {evidence_plan = [{select = 0}, {push = @State}]}
@@ -651,7 +646,7 @@ evidence를 만들기 전에 적용하며 `mask`만 담는다.
   `ability.handle`에 같은 이름의 속성으로 둔다. Evidence를 받지 않는 callee로 가는
   호출에는 옮기지 않는다. Frame 펼치기는 frame operation의 선택을 층을 다시 만드는
   transfer와 `ability.handle_dispatch`에 옮긴다.
-  `resolve_evidence`가 이를 `effect.mask`/`effect.dup`/`effect.outer`와
+  `resolve_evidence`가 이를 `effect.mask`/`effect.dup`와
   `effect.tail`/`effect.push`/`effect.with_tail`로 만든다
   ([cps-effects.md](cps-effects.md#row-directed-evidence)).
 

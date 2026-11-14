@@ -2969,7 +2969,7 @@ fn evidence_plan_verifier_rejects_malformed_selections() {
         (
             "[{keep = @State}]",
             "[{mask = @State}]",
-            "must be mask, dup, outer, select, push, or tails, found keep",
+            "must be mask, dup, select, push, or tails, found keep",
         ),
         (
             "[{mask = @State}, {select = 0}]",
@@ -3004,7 +3004,7 @@ fn evidence_plan_verifier_rejects_malformed_selections() {
         (
             "[{outer = @State}]",
             "[{mask = @State}]",
-            "may not use outer",
+            "must be mask, dup, select, push, or tails, found outer",
         ),
         (
             "[{mask = core.i32}]",

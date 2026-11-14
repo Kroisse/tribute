@@ -1042,8 +1042,8 @@ Handle 하나는 실행 중 여러 번 설치될 수 있다. 처음 설치한 �
 한 번만 materialize하며, body의 evidence 인자 사용을 확장된 값으로 치환한다.
 호출이 가진 evidence 선택(`evidence_plan`,
 [tribute-dialects.md](tribute-dialects.md#direct-style-control))은
-같은 pass가 그 호출의 evidence operand 앞에 `effect.mask`/`effect.dup`/
-`effect.outer`와 `effect.tail`/`effect.push`/`effect.with_tail`로 만들고 속성을
+같은 pass가 그 호출의 evidence operand 앞에 `effect.mask`/`effect.dup`과
+`effect.tail`/`effect.push`/`effect.with_tail`로 만들고 속성을
 지운다. Delimiter의 선택은 extend 전에 바깥 evidence에 적용한다.
 CPS legalization은 선택을 계산하거나 바꾸지 않고 만든 호출로 옮기기만 한다. 층을
 다시 만드는 transfer와 delimiter에도 같은 선택을 옮긴다.
@@ -1277,7 +1277,6 @@ fn extend(
 ) ->{} Evidence
 fn mask(ev: Evidence, ability_id: Int) ->{} Evidence
 fn dup(ev: Evidence, ability_id: Int) ->{} Evidence
-fn outer(ev: Evidence, ability_id: Int) ->{} Evidence
 fn tail(ev: Evidence, slot: Int) ->{} Evidence
 fn with_tail(ev: Evidence, slot: Int, tail: Evidence) ->{} Evidence
 fn push(ev: Evidence, source: Evidence, ability_id: Int) ->{} Evidence
@@ -1287,14 +1286,13 @@ fn push(ev: Evidence, source: Evidence, ability_id: Int) ->{} Evidence
 closure를 돌려준다. `extend`는 같은 ability의 기존 marker를 새 marker의
 `shadowed`로 두고 `outer` 인자를 marker에 기록한다. `mask`는 그 칸을 `shadowed`로
 바꾸고, `shadowed`가 `None`이면 칸을 지운다. `dup`은 가장 위 marker의 복사본이
-원본을 가리게 하며 복사본은 원본의 `outer`를 그대로 가진다. `outer`는 가장 위
-marker가 기록한 evidence를 돌려준다. `with_tail`은 `slot` 칸에 `outer`가 `tail`인
+원본을 가리게 하며 복사본은 원본의 `outer`를 그대로 가진다. `with_tail`은 `slot` 칸에 `outer`가 `tail`인
 marker를 두고, `tail`은 그 칸의 `outer`를, 칸이 없으면 `ev` 자신을 돌려준다.
 `push`는 `source`의 가장 위 marker를 복사해 `ev`의 같은 ability 위에 얹으며 복사본은
 원본의 `outer`를 가진다.
 
 칸은 `ability_id`에 대한 이진 탐색으로 찾으며, 탐색은 tail position의 재귀다.
-없는 ability를 `lookup`, `lookup_tr`, `mask`, `dup`, `outer`, `push`하거나 dispatch
+없는 ability를 `lookup`, `lookup_tr`, `mask`, `dup`, `push`하거나 dispatch
 closure가 없는 marker에 `lookup_tr`하는 것은 compiler bug이며, runtime code는 그
 실행을 [trap intrinsic](modules.md#trap-intrinsic) `trap_missing_ability`로
 끝낸다. 범위 밖 칸을 읽어 trap을 일으키지 않는다.
@@ -1349,7 +1347,6 @@ Operations:
   { ability } -> evidence`
 - `effect.mask(evidence) { ability } -> evidence`
 - `effect.dup(evidence) { ability } -> evidence`
-- `effect.outer(evidence) { ability } -> evidence`
 - `effect.tail(evidence) { index } -> evidence`
 - `effect.with_tail(evidence, tail) { index } -> evidence`
 - `effect.push(evidence, source) { ability } -> evidence`
@@ -1393,7 +1390,7 @@ decomposition, indirect call로 변환한다. Evidence는 일반 managed 배열�
 WasmGC도 같은 shared middle-end와 evidence lowering을 사용한다. Evidence
 lowering(`evidence_lowering`)은 target과 무관한 pass로, representation/ABI 경계
 안에서 두 target의 `effect.*`를 같은 구조로 낮춘다.
-`effect.extend`, `effect.mask`, `effect.dup`, `effect.outer`, `effect.tail`,
+`effect.extend`, `effect.mask`, `effect.dup`, `effect.tail`,
 `effect.with_tail`, `effect.push`는 각각 같은 이름의 runtime 항목 호출이 되고,
 `effect.dispatch_tail` / `effect.dispatch_cps`는 `lookup_tr` / `lookup` 호출, closure
 field 접근, `func.call_indirect` 또는 proper-tail `func.tail_call_indirect`가 된다.

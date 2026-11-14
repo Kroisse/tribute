@@ -125,7 +125,7 @@ impl trunk_ir::ops::Verify for SuffixFrame {
         Ok(verify_evidence_plan(
             ctx,
             self.op_ref(),
-            EvidencePlanSite::Legalized,
+            EvidencePlanSite::Source,
         )?)
     }
 }
@@ -438,15 +438,6 @@ mod tests {
                 "{name}: expected {expected:?}, got {error:?}"
             );
         }
-    }
-
-    #[test]
-    fn suffix_frame_may_select_the_evidence_a_handle_was_installed_on() {
-        let text = module(
-            ", %k: !completion",
-            "    %frame = ability.suffix_frame %ev, %exit, %k {evidence_plan = [{outer = @State}]} : !frame_nil\n    func.unreachable",
-        );
-        assert_eq!(errors(&text), "");
     }
 
     #[test]
