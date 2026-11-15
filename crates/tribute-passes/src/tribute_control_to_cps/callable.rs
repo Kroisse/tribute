@@ -4,6 +4,7 @@
 use super::*;
 use tribute_ir::calling_convention::{ConventionBearing, DynConventionBearing};
 use trunk_ir::ops::VariadicResults;
+use trunk_ir::region_utils::values_defined_above;
 
 impl Converter<'_> {
     pub(super) fn lower_lambda(
