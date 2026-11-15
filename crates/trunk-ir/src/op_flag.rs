@@ -139,12 +139,26 @@ fn is_defined_within(ctx: &IrContext, value: ValueRef, owner: OpRef) -> bool {
 /// Operations that must be the last operation of their block, as MLIR's
 /// `IsTerminator` is.
 ///
-/// The operation verifier rejects a flagged operation that some operation
-/// follows. The flag says nothing about where control goes: `CallableExit`,
-/// `Branch`, and `RegionBranchTerminator` describe that. An operation without
-/// the flag may still end its block.
-#[op_flag]
+/// Its verifier rejects a flagged operation that is detached or that some
+/// operation follows. The flag says nothing about where control goes:
+/// `CallableExit`, `Branch`, and `RegionBranchTerminator` describe that. An
+/// operation without the flag may still end its block.
+#[op_flag(verify)]
 pub struct Terminator;
+
+impl VerifyFlag for Terminator {
+    fn verify(ctx: &IrContext, op: OpRef) -> Result<(), VerificationError> {
+        let last = ctx
+            .op(op)
+            .parent_block
+            .and_then(|block| ctx.block(block).ops.last().copied());
+        if last == Some(op) {
+            Ok(())
+        } else {
+            Err("must terminate its block".into())
+        }
+    }
+}
 
 /// Operations whose regions' blocks need not end in a [`Terminator`], as
 /// MLIR's `NoTerminator` trait.

@@ -1815,7 +1815,7 @@ mod tests {
         let verifiers = trunk_ir::validation::validate_operation_verifiers(&ctx, module);
         assert!(verifiers.is_ok(), "{verifiers}");
         crate::passes::func_to_wasm::lower(&mut ctx, module, TypeConverter::new());
-        let positions = trunk_ir::validation::validate_terminator_positions(&ctx, module.op());
+        let positions = trunk_ir::validation::validate_op_schemas(&ctx, module.op());
         assert!(positions.is_ok(), "{positions}");
         let bytes = crate::emit_module_to_wasm(&mut ctx, module)
             .expect("module emits")

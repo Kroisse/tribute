@@ -361,20 +361,6 @@ pub(super) fn walk_region_ops(
     }
 }
 
-pub(super) fn validate_return_or_yield_shape(
-    ctx: &IrContext,
-    op: OpRef,
-    errors: &mut Vec<ValidationError>,
-) {
-    let Some(block) = ctx.op(op).parent_block else {
-        push_op_error(ctx, op, errors, "must be attached to a block");
-        return;
-    };
-    if ctx.block(block).ops.last().copied() != Some(op) {
-        push_op_error(ctx, op, errors, "must be the final operation in its block");
-    }
-}
-
 /// Validate graph-wide `tribute_control` invariants.
 pub fn validate_whole_ir(
     ctx: &IrContext,
