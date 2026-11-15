@@ -757,25 +757,26 @@ region의 값에 이름 하나를 쓰면, 그 순서와 공유를 pre-pass에 �
   타입을 쓰며(`clif.icmp eq, %a, %b : core.i64`), 결과 타입이 연산으로 정해지지
   않는 변환은 `: A to B`로 쓴다(`clif.uextend %a : core.i8 to core.i32`). 아래
   관례는 그렇지 않은 operation에 적용한다.
-- 이름 붙은 본문이 여럿이면 `entries { label { .. } .. }`로 쓴다. 본문마다
-  signature가 다르면 label 뒤에 그 본문의 signature를 쓴다
-  (`label(%x: T) -> R { .. }`). 모든 본문이 같은 signature를 받으면 signature는
-  header에 한 번만 쓴다.
+- 이름 붙은 본문이 여럿이고 모두 같은 signature를 받으면 signature는 header에 한
+  번만 쓰고, 본문은 `entries { label { .. } .. }`로 쓴다. 본문마다 signature가
+  다르면 `entries` 없이 label 뒤에 그 본문의 signature를 써서 본문을 차례로
+  잇는다(`label(%x: T) -> R { .. } label(..) -> R { .. }`).
 - `signature`로 재구성되지 않는 result 타입은 형식의 끝에 `: type`으로 쓴다.
 - 간접 호출은 MLIR의 `func.call_indirect`처럼 `%callee(%args)`로 쓴다. 호출
   signature를 attribute로 가지면 `: signature(t)`로 끝에 쓰고, 결과 타입은 그
   signature에서 재구성한다. Callee 타입이 signature이면 operand 타입에서 얻으므로
   result 타입만 `: type`으로 쓴다.
 
+손으로 쓴 형식인 `closure.lambda`는 본문마다 signature가 다르다. 남은 attribute는
+operation 이름 바로 뒤에 `{..}`로, capture는 그 뒤에 `[..]`로 쓰고, convention
+keyword를 label로 삼아 본문을 잇는다.
+
 ```text
-%f = closure.lambda [%y] attributes {adapters = {evidence_direct = @a0}} entries {
-  direct(%x: core.i32) -> core.i32 {
-    ...
-  }
-  cps(%ev: E, %k: K, %x: core.i32) -> core.i32 {
-    ...
-  }
-} : closure.closure<S>
+%1 = closure.lambda {adapters = {evidence_direct = @a0}} [%0] direct(%2: core.i32) -> core.i32 {
+    func.return %0
+} cps(%3: core.i64, %4: core.i64, %5: core.i32) -> core.i32 {
+    func.return %5
+} : closure.closure<func.func_sig<(core.i32) -> core.i32>>
 ```
 
 #### Signature codec

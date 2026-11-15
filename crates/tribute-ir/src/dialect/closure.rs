@@ -847,6 +847,33 @@ mod tests {
         assert_roundtrip(text);
     }
 
+    /// The `closure.lambda` example of `design/ir.md` is the printed form of
+    /// a lambda in a function whose parameter is `%0`.
+    #[test]
+    fn the_documented_lambda_example_prints_back_unchanged() {
+        const EXAMPLE: &str = r#"%1 = closure.lambda {adapters = {evidence_direct = @a0}} [%0] direct(%2: core.i32) -> core.i32 {
+    func.return %0
+} cps(%3: core.i64, %4: core.i64, %5: core.i32) -> core.i32 {
+    func.return %5
+} : closure.closure<func.func_sig<(core.i32) -> core.i32>>
+"#;
+        let design = include_str!("../../../../design/ir.md");
+        assert!(
+            design.contains(&format!("```text\n{EXAMPLE}```")),
+            "design/ir.md has another closure.lambda example"
+        );
+
+        let mut text = String::from("core.module @test {\n  func.func @main(%0: core.i32) {\n");
+        for line in EXAMPLE.lines() {
+            text += &format!("      {line}\n");
+        }
+        text += "      func.return\n  }\n}\n";
+        let mut ctx = IrContext::new();
+        let module = trunk_ir::parser::parse_test_module(&mut ctx, &text);
+        assert!(trunk_ir::validation::validate_all(&ctx, module, &mut Default::default()).is_ok());
+        assert_eq!(module.op().display(&ctx).to_string(), text);
+    }
+
     #[test]
     fn a_lambda_needs_a_signature_per_body_and_increasing_conventions() {
         for (conventions, signatures) in [
