@@ -506,7 +506,7 @@ impl trunk_ir::asm_format::OpAsmFormat for Func {
 
 /// Print a source lambda as `name`. With the conventions of the bodies the
 /// operation declares, each body is written under its convention in
-/// `entries`; without them, the one body follows the captures.
+/// `entries`; without them, the one body follows the header.
 pub(crate) fn print_lambda(
     p: &mut OpAsmPrinter<'_>,
     op: OpRef,
@@ -545,7 +545,6 @@ pub(crate) fn print_lambda(
             write!(p, "{}", display_row(&FuncSig(ty).row(ctx)))?;
         }
     }
-    write!(p, " captures [{}]", s.values(ctx.op_operands(op)))?;
     let mut excluded = vec![CALLING_CONVENTION_ATTR, QUANTIFIED_ROWS_ATTR];
     if entries.is_some() {
         excluded.push(tribute_cps::CONVENTIONS_ATTR);
@@ -632,7 +631,7 @@ fn parse_entries(
 
 /// Parse a source lambda. With `entries`, its bodies are written under the
 /// conventions the operation declares; otherwise its one body follows the
-/// captures.
+/// header.
 pub(crate) fn parse_lambda(
     p: &mut OpAsmParser<'_>,
     state: &mut OperationState,
@@ -655,8 +654,6 @@ pub(crate) fn parse_lambda(
     p.parse_punct("->")?;
     let result = p.parse_type()?;
     let row = parse_row(p)?;
-    p.parse_keyword("captures")?;
-    let captures = p.parse_delimited("[", "]", |p| p.parse_operand())?;
     let attributes = parse_extra_attributes(p)?;
     let view = attributes.view(p.ctx());
     if has_duplicate_convention_attr(p.ctx(), &attributes)
@@ -696,7 +693,6 @@ pub(crate) fn parse_lambda(
             Attribute::List(quantified),
         );
     }
-    state.operands = captures;
     state.result_types = vec![signature];
     Ok(())
 }

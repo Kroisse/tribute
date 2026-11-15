@@ -16,7 +16,7 @@ const MODULE: &str = r#"core.module @test {
       tribute_control.return %2
   }
   tribute_cps.func @outer['a0](%0: core.i32) -> core.i32 row(| 'a0) convention(cps) attributes {visibility = "private"} {
-      %1 = tribute_cps.lambda(%2: core.i32) -> core.i32 row(| 'a0) captures [%0] entries {
+      %1 = tribute_cps.lambda(%2: core.i32) -> core.i32 row(| 'a0) entries {
         cps {
             tribute_control.return %0
         }
@@ -50,14 +50,13 @@ fn concise_forms_write_the_operation_convention() {
     let body = ctx.region(outer.body(&ctx)).blocks[0];
     let lambda = Lambda::from_op(&ctx, ctx.block(body).ops[0]).unwrap();
     itertools::assert_equal(lambda.conventions(&ctx), [CallingConvention::Cps]);
-    assert_eq!(lambda.captures(&ctx).len(), 1);
 }
 
 const TWO_BODIES: &str = r#"core.module @test {
   !t0 = tribute_control.func_sig<(core.i32) -> core.i32>
 
   tribute_cps.func @outer(%0: core.i32) -> core.i32 convention(cps) {
-      %1 = tribute_cps.lambda(%2: core.i32) -> core.i32 captures [%0] entries {
+      %1 = tribute_cps.lambda(%2: core.i32) -> core.i32 entries {
         direct {
             tribute_control.return %0
         }
@@ -302,7 +301,7 @@ fn every_body_takes_the_parameters_and_its_own_convention() {
   !t1 = tribute_control.func_sig<(!t0) -> core.i32>
 
   tribute_cps.func @outer(%0: core.i32) -> core.i32 convention(cps) {
-      %1 = tribute_cps.lambda(%2: !t0) -> core.i32 captures [%0] entries {
+      %1 = tribute_cps.lambda(%2: !t0) -> core.i32 entries {
         direct {
             tribute_control.return %0
         }

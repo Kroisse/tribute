@@ -1,4 +1,4 @@
-//! Whole-IR validation of symbol references and lambda captures.
+//! Whole-IR validation of symbol references.
 
 use super::*;
 
@@ -366,68 +366,4 @@ pub(super) fn validate_module_symbols(
         }
     }
     validate_symbol_uses(ctx, module, funcs, errors);
-}
-
-fn collect_external_references(
-    ctx: &IrContext,
-    region: RegionRef,
-    defined: &HashSet<ValueRef>,
-    external: &mut HashSet<ValueRef>,
-) {
-    for block in ctx.region(region).blocks.iter().copied() {
-        for op in ctx.block(block).ops.iter().copied() {
-            for operand in ctx.op_operands(op).iter().copied() {
-                if !defined.contains(&operand) {
-                    external.insert(operand);
-                }
-            }
-            if SourceFunc::is_set(ctx, op) {
-                continue;
-            }
-            for nested in ctx.op_regions(op) {
-                collect_external_references(ctx, nested, defined, external);
-            }
-        }
-    }
-}
-
-pub(super) fn validate_lambda_captures(
-    ctx: &IrContext,
-    body: RegionRef,
-    errors: &mut Vec<ValidationError>,
-) {
-    walk_region_ops(ctx, body, &mut |op| {
-        if !SourceLambda::is_set(ctx, op) {
-            return;
-        }
-        let captures = ctx.op_operands(op);
-        let capture_set: HashSet<ValueRef> = captures.iter().copied().collect();
-        if capture_set.len() != captures.len() {
-            push_op_error(ctx, op, errors, "capture list contains duplicate values");
-        }
-        // The bodies share the captures, which every body's references
-        // outside it make up together.
-        let mut external = HashSet::default();
-        for region in ctx.op_regions(op) {
-            let mut defined = HashSet::default();
-            collect_region_values(ctx, region, &mut defined);
-            collect_external_references(ctx, region, &defined, &mut external);
-        }
-        for missing in external.difference(&capture_set) {
-            push_op_error(
-                ctx,
-                op,
-                errors,
-                format!("capture list is missing external value {missing}"),
-            );
-        }
-        for excess in capture_set.difference(&external) {
-            push_op_error(
-                ctx,
-                op,
-                errors,
-                format!("capture list contains unused external value {excess}"),
-            );
-        }
-    });
 }

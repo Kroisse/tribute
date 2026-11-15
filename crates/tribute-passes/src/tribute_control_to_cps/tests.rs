@@ -208,7 +208,7 @@ fn textual_callable_graph_converts_and_reparses() {
     tribute_control.return %value
   }
   tribute_cps.func @outer(%first: core.i32) -> core.i32 convention(direct) {
-    %captured = tribute_cps.lambda(%value: core.i32) -> core.i32 captures [%first] entries {
+    %captured = tribute_cps.lambda(%value: core.i32) -> core.i32 entries {
       direct {
         tribute_control.return %first
       }
@@ -368,7 +368,7 @@ fn source_data_indirect_calls_carry_their_exact_signature() {
     tribute_control.return %called
   }
   tribute_cps.func @capturing(%captured: core.i32, %value: core.i32) -> core.i32 convention(direct) {
-    %lambda = tribute_cps.lambda(%inner: core.i32) -> core.i32 captures [%captured] entries {
+    %lambda = tribute_cps.lambda(%inner: core.i32) -> core.i32 entries {
       direct {
         %sum = arith.addi %inner, %captured : core.i32
         tribute_control.return %sum
@@ -1509,7 +1509,7 @@ fn textual_zero_result_cps_and_direct_scf_branches_lower() {
     tribute_control.return %value
   }
   tribute_cps.func @branch(%input: core.i32, %condition: core.i1) -> core.i32 convention(cps) {
-    %direct = tribute_cps.lambda(%value: core.i32) -> core.i32 captures [%condition] entries {
+    %direct = tribute_cps.lambda(%value: core.i32) -> core.i32 entries {
       direct {
         %selected = scf.if %condition -> (core.i32) {
           %called = tribute_control.call @identity(%value) : (core.i32) -> core.i32
@@ -2469,7 +2469,7 @@ fn textual_direct_scf_switch_keeps_its_result() {
     tribute_control.return %value
   }
   tribute_cps.func @switching(%input: core.i32) -> core.i32 convention(cps) {
-    %direct = tribute_cps.lambda(%value: core.i32) -> core.i32 captures [] entries {
+    %direct = tribute_cps.lambda(%value: core.i32) -> core.i32 entries {
       direct {
         %selected = scf.index_switch %value : (core.i32) -> core.i32
         case 0 {
@@ -2770,7 +2770,7 @@ fn legalization_drops_ability_rows_and_row_metadata() {
     tribute_control.return %r
   }
   tribute_cps.func @main(%x: core.i32) -> core.i32 row(@A) convention(cps) {
-    %f = tribute_cps.lambda(%y: core.i32) -> core.i32 row(@A) captures [] entries {
+    %f = tribute_cps.lambda(%y: core.i32) -> core.i32 row(@A) entries {
       cps {
         tribute_control.return %y
       }
@@ -2804,7 +2804,7 @@ fn instantiate_legalizes_to_its_lambda() {
             r#"core.module @m {{
   !step0 = tribute_control.func_sig<(core.i32) -> core.i32 row(| 'a0)>
   tribute_cps.func @f['a0, {kind} 'a1](%x: core.i32) -> core.i32 row(| 'a0) convention(direct) {{
-    %g = tribute_cps.lambda{header}(%y: core.i32) -> core.i32 row(| 'a1) captures [] entries {{
+    %g = tribute_cps.lambda{header}(%y: core.i32) -> core.i32 row(| 'a1) entries {{
       direct {{
         tribute_control.return %y
       }}
@@ -2860,7 +2860,7 @@ fn a_lambda_with_two_bodies_lifts_an_entry_per_body() {
     let (mut ctx, module) = parse(
         r#"core.module @test {
   tribute_cps.func @outer(%captured: core.i32, %value: core.i32) -> core.i32 convention(cps) {
-    %lambda = tribute_cps.lambda(%inner: core.i32) -> core.i32 captures [%captured] entries {
+    %lambda = tribute_cps.lambda(%inner: core.i32) -> core.i32 entries {
       direct {
         tribute_control.return %inner
       }
@@ -3031,7 +3031,7 @@ fn a_lambda_carrying_the_resumption_captures_the_first_token() {
     } do(%value: core.i32) {
         tribute_control.yield %value
     } op @State @get(%argument: core.i32) : core.i32 {
-        %thunk = tribute_cps.lambda(%v: core.i32) -> core.i32 captures [] entries {
+        %thunk = tribute_cps.lambda(%v: core.i32) -> core.i32 entries {
           cps {
             %resumed = tribute_control.resume %v : core.i32 -> core.i32
             tribute_control.return %resumed
@@ -3065,9 +3065,9 @@ fn nested_lambdas_carrying_the_resumption_each_capture_the_first_token() {
     } do(%value: core.i32) {
         tribute_control.yield %value
     } op @State @get(%argument: core.i32) : core.i32 {
-        %outer = tribute_cps.lambda(%v: core.i32) -> core.i32 captures [] entries {
+        %outer = tribute_cps.lambda(%v: core.i32) -> core.i32 entries {
           cps {
-            %inner = tribute_cps.lambda(%w: core.i32) -> core.i32 captures [] entries {
+            %inner = tribute_cps.lambda(%w: core.i32) -> core.i32 entries {
               cps {
                 %resumed = tribute_control.resume %w : core.i32 -> core.i32
                 tribute_control.return %resumed

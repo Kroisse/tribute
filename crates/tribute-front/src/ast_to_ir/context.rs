@@ -448,25 +448,6 @@ impl<'db> IrLoweringCtx<'db> {
         self.node_types.get(&node_id)
     }
 
-    /// Get all bindings visible in the current scope (for capture analysis).
-    ///
-    /// The stable local-ID order keeps generated closure capture lists and IR
-    /// snapshots deterministic; each local ID is unique even across scopes.
-    pub fn all_bindings(&self) -> impl Iterator<Item = (LocalId, Symbol, ValueRef)> + '_ {
-        let mut bindings: Vec<_> = self
-            .scopes
-            .iter()
-            .rev()
-            .flat_map(|scope| {
-                scope
-                    .iter()
-                    .map(|(&id, (name, value))| (id, name.clone(), *value))
-            })
-            .collect();
-        bindings.sort_unstable_by_key(|(local_id, _, _)| local_id.raw());
-        bindings.into_iter()
-    }
-
     // =========================================================================
     // Arena type conversion
     // =========================================================================
