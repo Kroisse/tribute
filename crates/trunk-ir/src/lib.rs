@@ -53,6 +53,7 @@ pub mod ir_mapping;
 pub mod analysis;
 pub mod pass;
 pub mod printer;
+pub mod region_utils;
 pub mod rewrite;
 pub mod transforms;
 pub mod validation;

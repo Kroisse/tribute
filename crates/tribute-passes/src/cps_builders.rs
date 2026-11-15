@@ -1,7 +1,6 @@
 //! Builders that `tribute_control_to_cps` and `lower_continuation_frames`
 //! share.
 
-use rustc_hash::FxHashSet as HashSet;
 use tribute_ir::calling_convention::cps_closure_function_type;
 use tribute_ir::calling_convention::{CallingConvention, ConventionBearing};
 use tribute_ir::dialect::{closure, tribute_control};
@@ -10,6 +9,7 @@ use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
 use trunk_ir::dialect::{core, func};
 use trunk_ir::ops::DialectType;
 use trunk_ir::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
+use trunk_ir::region_utils::values_defined_above;
 use trunk_ir::types::{Attribute, AttributeMap, Location};
 
 use crate::tribute_control_to_cps::TributeControlToCpsError;
@@ -134,52 +134,4 @@ pub(crate) fn emit_cps_entry_transfer(
     tail.set_calling_convention(ctx, CallingConvention::Cps);
     ctx.push_op(block, tail.op_ref());
     Ok(tail.op_ref())
-}
-
-fn collect_defined_values(ctx: &IrContext, region: RegionRef, defined: &mut HashSet<ValueRef>) {
-    for block in ctx.region(region).blocks.iter().copied() {
-        defined.extend(ctx.block_args(block).iter().copied());
-        for op in ctx.block(block).ops.iter().copied() {
-            defined.extend(ctx.op_results(op).iter().copied());
-            for nested in ctx.op_regions(op) {
-                collect_defined_values(ctx, nested, defined);
-            }
-        }
-    }
-}
-
-fn collect_external_in_order(
-    ctx: &IrContext,
-    region: RegionRef,
-    defined: &HashSet<ValueRef>,
-    seen: &mut HashSet<ValueRef>,
-    external: &mut Vec<ValueRef>,
-) {
-    for block in ctx.region(region).blocks.iter().copied() {
-        for op in ctx.block(block).ops.iter().copied() {
-            for operand in ctx.op_operands(op).iter().copied() {
-                if !defined.contains(&operand) && seen.insert(operand) {
-                    external.push(operand);
-                }
-            }
-            for nested in ctx.op_regions(op) {
-                collect_external_in_order(ctx, nested, defined, seen, external);
-            }
-        }
-    }
-}
-
-/// The values `regions` use that are defined outside them, in order of first
-/// use, `regions` in order, each once.
-pub(crate) fn values_defined_above(ctx: &IrContext, regions: &[RegionRef]) -> Vec<ValueRef> {
-    let mut defined = HashSet::default();
-    for &region in regions {
-        collect_defined_values(ctx, region, &mut defined);
-    }
-    let mut seen = HashSet::default();
-    let mut external = Vec::new();
-    for &region in regions {
-        collect_external_in_order(ctx, region, &defined, &mut seen, &mut external);
-    }
-    external
 }
