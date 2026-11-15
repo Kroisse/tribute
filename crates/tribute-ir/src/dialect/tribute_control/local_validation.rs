@@ -56,7 +56,6 @@ pub(crate) fn validate_lambda(ctx: &IrContext, op: OpRef, errors: &mut Vec<Valid
 }
 
 pub(super) fn validate_return(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
-    validate_return_or_yield_shape(ctx, op, errors);
     let Some(owner) = parent_op(ctx, op) else {
         push_op_error(
             ctx,
@@ -146,7 +145,6 @@ pub(super) fn tail_call_owner(
 }
 
 pub(crate) fn validate_tail_call(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
-    validate_return_or_yield_shape(ctx, op, errors);
     let (owner, owner_ty) = match tail_call_owner(ctx, op) {
         Ok(owner) => owner,
         Err(message) => {
@@ -278,7 +276,6 @@ fn validate_arm(
 }
 
 pub(super) fn validate_yield(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
-    validate_return_or_yield_shape(ctx, op, errors);
     let valid_owner = parent_op(ctx, op).is_some_and(|owner| Handle::matches(ctx, owner));
     if !valid_owner {
         push_op_error(

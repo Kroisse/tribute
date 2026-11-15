@@ -19,8 +19,8 @@ help: the following other types implement trait `OpFlag`
   | #[op_flag(verify)]
   | ^^^^^^^^^^^^^^^^^^ `IsolatedFromAbove`
 ...
-  | #[op_flag]
-  | ^^^^^^^^^^ `trunk_ir::op_flag::Terminator`
+  | #[op_flag(verify)]
+  | ^^^^^^^^^^^^^^^^^^ `trunk_ir::op_flag::Terminator`
 ...
   | #[op_flag]
   | ^^^^^^^^^^ `NoTerminator`

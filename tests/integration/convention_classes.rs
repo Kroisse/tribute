@@ -691,7 +691,7 @@ fn main() -> Nil {}
     let ir = common::specialized_frontend_ir(db, source);
     assert!(
         lambda_headers(logical_function(&ir, "entry")).iter().any(|line| line.contains(
-            "tribute_cps.lambda() -> core.i32 row(@\"ability_2_10_pkg::State_3_int\") captures [] entries { cps {"
+            "tribute_cps.lambda() -> core.i32 row(@\"ability_2_10_pkg::State_3_int\") entries { cps {"
         )),
         "a lambda that performs an effect must remain CPS:\n{ir}"
     );
@@ -826,7 +826,7 @@ fn main() -> Nil {}
         lambda_headers(total)
             .iter()
             .filter(|line| line.contains(
-                "tribute_cps.lambda() -> core.i32 row(@\"ability_2_10_pkg::State_3_nat\" | 'a0) captures [] entries { cps {"
+                "tribute_cps.lambda() -> core.i32 row(@\"ability_2_10_pkg::State_3_nat\" | 'a0) entries { cps {"
             ))
             .count(),
         4,

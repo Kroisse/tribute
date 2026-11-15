@@ -10,8 +10,11 @@ help: the trait `VerifyFlag` is not implemented for `Checked`
 2 | pub struct Checked;
   | ^^^^^^^^^^^^^^^^^^
   = note: add `impl VerifyFlag for Checked { fn verify(ctx: &IrContext, op: OpRef) -> Result<(), VerificationError> { .. } }`
-help: the trait `VerifyFlag` is implemented for `IsolatedFromAbove`
+help: the following other types implement trait `VerifyFlag`
  --> src/op_flag.rs
   |
   | impl VerifyFlag for IsolatedFromAbove {
-  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `IsolatedFromAbove`
+...
+  | impl VerifyFlag for Terminator {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `trunk_ir::op_flag::Terminator`

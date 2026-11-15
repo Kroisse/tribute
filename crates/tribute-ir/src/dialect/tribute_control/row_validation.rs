@@ -106,15 +106,12 @@ pub(super) fn validate_local_quantification(
                         );
                     }
                 }
-                // A capture only hands the lambda to an inner body, whose
-                // own uses of it are uses too.
                 let result = ctx.op_results(op).first().copied();
                 let direct_use = !quantified.is_empty()
                     && result.is_some_and(|result| {
-                        ctx.uses(result).iter().any(|used| {
-                            !Instantiate::matches(ctx, used.user)
-                                && !SourceLambda::is_set(ctx, used.user)
-                        })
+                        ctx.uses(result)
+                            .iter()
+                            .any(|used| !Instantiate::matches(ctx, used.user))
                     });
                 if direct_use {
                     push_op_error(

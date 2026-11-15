@@ -10,7 +10,7 @@ core.module @test {
       tribute_control.return %2
   }
   tribute_control.func @"pkg::test_lambda"['a0]() -> core.i32 row(| 'a0) inferred {
-      %0 = tribute_control.lambda(%1: core.i32) -> core.i32 row(| 'a0) captures [] {
+      %0 = tribute_control.lambda(%1: core.i32) -> core.i32 row(| 'a0) {
           tribute_control.return %1
       }
       %2 = arith.constant 1 : core.i32

@@ -330,22 +330,6 @@ pub(super) fn validate_callable_body(
     }
 }
 
-pub(super) fn collect_region_values(
-    ctx: &IrContext,
-    region: RegionRef,
-    values: &mut HashSet<ValueRef>,
-) {
-    for block in ctx.region(region).blocks.iter().copied() {
-        values.extend(ctx.block_args(block).iter().copied());
-        for op in ctx.block(block).ops.iter().copied() {
-            values.extend(ctx.op_results(op).iter().copied());
-            for nested in ctx.op_regions(op) {
-                collect_region_values(ctx, nested, values);
-            }
-        }
-    }
-}
-
 pub(super) fn walk_region_ops(
     ctx: &IrContext,
     region: RegionRef,
@@ -358,20 +342,6 @@ pub(super) fn walk_region_ops(
                 walk_region_ops(ctx, nested, callback);
             }
         }
-    }
-}
-
-pub(super) fn validate_return_or_yield_shape(
-    ctx: &IrContext,
-    op: OpRef,
-    errors: &mut Vec<ValidationError>,
-) {
-    let Some(block) = ctx.op(op).parent_block else {
-        push_op_error(ctx, op, errors, "must be attached to a block");
-        return;
-    };
-    if ctx.block(block).ops.last().copied() != Some(op) {
-        push_op_error(ctx, op, errors, "must be the final operation in its block");
     }
 }
 
@@ -404,7 +374,6 @@ fn whole_ir(
     validate_row_scopes(ctx, module, &declared_instances(ctx, module), &mut errors);
     validate_local_quantification(ctx, module, &mut errors);
     validate_evidence_tails(ctx, body, symbols, &mut errors);
-    validate_lambda_captures(ctx, body, &mut errors);
     let declarations = declaration_map(ctx, declarations, &mut errors);
     if specialized(ctx, module).is_none() {
         push_type_error(

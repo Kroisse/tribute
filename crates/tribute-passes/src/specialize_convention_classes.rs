@@ -476,7 +476,6 @@ impl Instance<'_> {
         let data = ctx.op(lambda);
         let mut builder =
             trunk_ir::context::OperationDataBuilder::new(data.location, tribute_cps::Lambda::NAME)
-                .operands(ctx.op_operands(lambda).iter().copied())
                 .results(ctx.op_result_types(lambda).iter().copied());
         for (key, value) in data.attributes.iter() {
             builder = builder.attr(key, value.clone());

@@ -1,15 +1,11 @@
-//! Local callables: the named-function aliases of a function body, and the
-//! captures of a lambda.
+//! Local callables: the named-function aliases of a function body.
 
-use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
-use trunk_ir::context::IrContext;
-use trunk_ir::refs::ValueRef;
+use rustc_hash::FxHashMap as HashMap;
 
 use crate::ast::{
     AbilityRow, Expr, ExprKind, FuncDefId, LocalId, NodeId, ResolvedRef, RowVar, Stmt, TypedRef,
     reference_binding,
 };
-use crate::ast_to_ir::context::IrLoweringCtx;
 
 use super::declarations::Declarations;
 
@@ -155,45 +151,4 @@ fn substitute<'db>(
         }
     }
     replacement.with_instances(db, instances)
-}
-
-/// Source order of actual external SSA uses, with duplicates removed.
-pub(super) fn captures(
-    ctx: &IrLoweringCtx<'_>,
-    ir: &IrContext,
-    region: trunk_ir::refs::RegionRef,
-) -> Vec<ValueRef> {
-    fn collect(
-        ir: &IrContext,
-        region: trunk_ir::refs::RegionRef,
-        defined: &mut HashSet<ValueRef>,
-        uses: &mut Vec<ValueRef>,
-    ) {
-        for block in &ir.region(region).blocks {
-            for index in 0..ir.block(*block).args.len() {
-                defined.insert(ir.block_arg(*block, index as u32));
-            }
-            for op in &ir.block(*block).ops {
-                defined.extend(ir.op_results(*op));
-                uses.extend(ir.op_operands(*op));
-                for nested in ir.op_regions(*op) {
-                    collect(ir, nested, defined, uses);
-                }
-            }
-        }
-    }
-    let mut defined = HashSet::default();
-    let mut uses = Vec::new();
-    collect(ir, region, &mut defined, &mut uses);
-    let mut seen = HashSet::default();
-    let external: HashSet<_> = uses
-        .iter()
-        .copied()
-        .filter(|value| !defined.contains(value))
-        .collect();
-    ctx.all_bindings()
-        .map(|(_, _, value)| value)
-        .chain(uses)
-        .filter(|value| external.contains(value) && seen.insert(*value))
-        .collect()
 }

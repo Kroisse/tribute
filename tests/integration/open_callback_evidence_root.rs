@@ -422,9 +422,7 @@ fn main() ->{Io} Nil {
     );
     // The pure callback is lowered at the instantiated, closed row.
     assert!(
-        main.contains(
-            "tribute_cps.lambda(%8: core.i32) -> core.i32 captures [] entries {\n        direct {"
-        ),
+        main.contains("tribute_cps.lambda(%8: core.i32) -> core.i32 entries {\n        direct {"),
         "{main}"
     );
 }
@@ -585,9 +583,9 @@ fn main() -> Nil {
         .and_then(|rest| rest.split("\n  }\n").next())
         .unwrap_or_else(|| panic!("run in\n{ir}"));
     let inner = run
-        .split("captures [%0] entries {")
+        .split("row(| 'a2) entries {")
         .nth(1)
-        .unwrap_or_else(|| panic!("a lambda capturing `both` in\n{run}"));
+        .unwrap_or_else(|| panic!("a lambda using `both` in\n{run}"));
     assert!(
         inner.contains("tribute_control.instantiate %0 {row_args = ["),
         "{run}"

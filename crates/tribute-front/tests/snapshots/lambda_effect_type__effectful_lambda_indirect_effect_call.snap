@@ -20,7 +20,7 @@ core.module @test {
       } do(%3: core.i32) {
           tribute_control.yield %3
       } op @"ability_2_10_pkg::State_3_int" @get() : core.i32 {
-          %4 = tribute_control.lambda() -> core.i32 row(@"ability_2_10_pkg::State_3_int") captures [] {
+          %4 = tribute_control.lambda() -> core.i32 row(@"ability_2_10_pkg::State_3_int") {
               %5 = arith.constant 0 : core.i32
               %6 = tribute_control.resume %5 : core.i32 -> core.i32
               tribute_control.return %6
@@ -28,7 +28,7 @@ core.module @test {
           %7 = tribute_control.call @"pkg::run_with_state"(%4) attributes {row_args = [{tail = 0}]} : (!t0) -> core.i32
           tribute_control.yield %7
       } op @"ability_2_10_pkg::State_3_int" @set(%8: core.i32) : core.nil {
-          %9 = tribute_control.lambda() -> core.i32 row(@"ability_2_10_pkg::State_3_int") captures [] {
+          %9 = tribute_control.lambda() -> core.i32 row(@"ability_2_10_pkg::State_3_int") {
               %10 = core.nil_value : core.nil
               %11 = tribute_control.resume %10 : core.nil -> core.i32
               tribute_control.return %11
@@ -39,7 +39,7 @@ core.module @test {
       tribute_control.return %1
   }
   tribute_control.func @"pkg::read_state"['a0]() -> core.i32 row(| 'a0) inferred {
-      %0 = tribute_control.lambda() -> core.i32 row(@"ability_2_10_pkg::State_3_int") captures [] {
+      %0 = tribute_control.lambda() -> core.i32 row(@"ability_2_10_pkg::State_3_int") {
           %1 = tribute_control.call @"pkg::counter"() : () -> core.i32
           tribute_control.return %1
       }

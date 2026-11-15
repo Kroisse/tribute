@@ -163,11 +163,15 @@ region은 `wasm.yield`로 끝난다
 ([분기와 region 끝의 값](wasm-backend.md#분기와-region-끝의-값)).
 등록되지 않은 operation은 정의를 읽을 수 없으므로 어느 쪽으로도 검사하지 않는다.
 
-Flag는 operation 정의의 선언이므로 이름을 나열하지 않고 검사한다. Operation
-verifier, 각 pass 뒤의 debug schema 검사, native와 Wasm backend 경계의 검증이
-flag가 있는 operation이 block의 마지막이 아니거나, `NoTerminator`가 아닌
-operation의 block이 `Terminator`로 끝나지 않으면 거부한다. Pass가 이 규칙을 어긴
-IR을 남기면 그 pass의 오류다.
+Flag는 operation 정의의 선언이므로 이름을 나열하지 않고 검사한다. `Terminator`가
+block의 마지막이어야 한다는 성질은 flag verifier가 검사하므로(MLIR의
+`IsTerminator::verifyTrait`) operation 정의의 검증을 거치는 모든 곳이 이를
+거부하고, 각 pass 뒤의 debug schema 검사도 이 verifier는 실행한다. Dialect
+validator는 이 위치를 따로 다시 검사하지 않는다. `NoTerminator`가 아닌
+operation의 block이 `Terminator`로 끝나야 한다는 규칙은 flag가 없는 operation에
+대한 것이므로 구조 검사로 남고, operation verifier, debug schema 검사, native와
+Wasm backend 경계의 검증이 이를 실행한다. Pass가 이 규칙을 어긴 IR을 남기면 그
+pass의 오류다.
 
 ## 선언적 operation schema
 
@@ -545,7 +549,7 @@ func.func @decl(%arg0: core.i32)
 형식은 Rust token으로 쓴다. Entity는 선언에 쓴 식별자(`r#type` 포함)로 가리키고,
 literal은 문자열 literal로 쓴다.
 
-- **Literal** — keyword(`"captures"`)나 구두점(`"("`, `"["`, `"->"`, `":"`,
+- **Literal** — keyword(`"entries"`)나 구두점(`"("`, `"["`, `"->"`, `":"`,
   `","`, `"="`)이다. Keyword는 식별자 하나이고, 구두점에는 영숫자를 섞지 않는다.
   공백은 printer가 정하므로 빈 literal은 없다.
 - **Operand** — `%name`으로 쓰고, 가변 operand는 쉼표로 구분한 목록이다. 목록을
@@ -740,7 +744,6 @@ region의 값에 이름 하나를 쓰면, 그 순서와 공유를 pre-pass에 �
   `adapters`)는 attribute 사전에 남는다.
 - 남은 attribute는 `attr_dict`로 region 바로 앞에 쓰고, region이 없으면 끝에
   쓴다. Region이 없는 operation은 `attr_dict_bare`로 `{..}`만 쓸 수 있다.
-- Capture operand 목록은 비어 있어도 `captures [..]`로 쓴다.
 - Callable 정의의 convention처럼 keyword로 쓰는 attribute 하나는
   `name(keyword)`로 쓴다(`convention(cps)`). 간접 호출은 MLIR
   `func.call_indirect`처럼 callee의 signature를 쓰고, convention은 attribute
@@ -765,7 +768,7 @@ region의 값에 이름 하나를 쓰면, 그 순서와 공유를 pre-pass에 �
   result 타입만 `: type`으로 쓴다.
 
 ```text
-%f = closure.lambda captures [%y] attributes {adapters = {evidence_direct = @a0}} entries {
+%f = closure.lambda [%y] attributes {adapters = {evidence_direct = @a0}} entries {
   direct(%x: core.i32) -> core.i32 {
     ...
   }
