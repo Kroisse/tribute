@@ -150,6 +150,7 @@ fn builder_fixture() -> ValidFixture {
         ability: ability.clone(),
         op_name: ctx.intern_str("get"),
         kind: OperationKind::Op,
+        declared: OperationKind::Op,
         operation_result_type: i32_ty,
     };
     let handle = Handle::build_with_arms(
@@ -821,6 +822,7 @@ fn a_handle_with_an_arm_without_blocks_prints_generically() {
         ability: SymbolPath::new(["State"]),
         op_name: ctx.intern_str("get"),
         kind: OperationKind::Fn,
+        declared: OperationKind::Fn,
         operation_result_type: i32_ty,
     };
     let handle = Handle::build_with_arms(&mut ctx, loc, i32_ty, body, completion, [(binding, arm)]);
@@ -982,6 +984,7 @@ fn local_validator_checks_handle_and_handler_region_contracts() {
             ability: SymbolPath::new(["State"]),
             op_name: ctx.intern_str("get"),
             kind: OperationKind::Fn,
+            declared: OperationKind::Fn,
             operation_result_type: i32_ty,
         };
         let malformed_handle =

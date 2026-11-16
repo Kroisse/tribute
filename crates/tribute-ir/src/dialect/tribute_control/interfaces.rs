@@ -289,8 +289,10 @@ impl OperationDeclarationUse for Handle {
                 Some(DeclarationUse {
                     ability: binding.get_symbol_ref("ability")?,
                     op_name: binding.get_string_ref("op_name")?,
-                    kind: binding.get_string_ref("kind"),
-                    kind_attr: "kind",
+                    kind: binding
+                        .get_string_ref("declared_kind")
+                        .or_else(|| binding.get_string_ref("kind")),
+                    kind_attr: "declared kind",
                     arguments: ctx.block_args(block),
                     result_type: binding.get_type("operation_result_type"),
                     region: Some(arm),

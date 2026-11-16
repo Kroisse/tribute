@@ -256,7 +256,12 @@ impl<'db> TypeChecker<'db> {
             }
             return self.invalid_handler_operation(ctx, op, syntax_kind, params.len());
         };
-        if syntax_kind != op_info.kind && ctx.mark_handler_error(arm_id, "operation kind") {
+        // An `fn` arm may answer an `op` operation: its value answers the
+        // operation and the body continues under the same handle.
+        if syntax_kind == OpDeclKind::Op
+            && op_info.kind == OpDeclKind::Fn
+            && ctx.mark_handler_error(arm_id, "operation kind")
+        {
             NodeDiagnostic::new(
                 format!(
                     "handler arm uses @{:?} for '{}', but the declared operation is @{:?}",
@@ -420,6 +425,23 @@ impl<'db> TypeChecker<'db> {
                         index, max
                     )
                 });
+        if syntax_kind == OpDeclKind::Fn
+            && op_info.kind == OpDeclKind::Op
+            && matches!(return_type.kind(self.db()), TypeKind::Never)
+            && ctx.mark_handler_error(arm_id, "fn arm for a never operation")
+        {
+            NodeDiagnostic::new(
+                format!(
+                    "an fn arm cannot handle '{}': the operation never returns, so there is \
+                     nothing to continue; use an op arm",
+                    op
+                ),
+                arm_id,
+                DiagnosticSeverity::Error,
+                CompilationPhase::TypeChecking,
+            )
+            .accumulate(self.db());
+        }
         InstantiatedHandlerOperation {
             ability: ability_id,
             ability_args,

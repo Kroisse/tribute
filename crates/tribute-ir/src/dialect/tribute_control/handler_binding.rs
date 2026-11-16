@@ -24,7 +24,13 @@ use super::OperationKind;
 pub struct HandlerBinding {
     pub ability: SymbolPath,
     pub op_name: StringRef,
+    /// The arm's kind, which decides the arm closure's ABI.
     pub kind: OperationKind,
+    /// The kind of the operation's declaration. It differs from `kind` only
+    /// for an `fn` arm that answers an `op` operation: the operation is
+    /// answered with the arm's value and the computation continues under the
+    /// same handle.
+    pub declared: OperationKind,
     pub operation_result_type: TypeRef,
 }
 
@@ -34,10 +40,10 @@ impl HandlerBinding {
         let Attribute::Dict(entries) = attr else {
             return Err("handlers element must be a dictionary".into());
         };
-        if entries.len() != 4 {
+        if !matches!(entries.len(), 4 | 5) {
             return Err(format!(
-                "handlers element must have exactly ability, op_name, kind, and \
-                 operation_result_type, found {} entries",
+                "handlers element must have exactly ability, op_name, kind, \
+                 operation_result_type, and optionally declared_kind, found {} entries",
                 entries.len()
             ));
         }
@@ -59,10 +65,28 @@ impl HandlerBinding {
             Some(Attribute::Type(ty)) => *ty,
             _ => return Err("handlers operation_result_type must be a type".into()),
         };
+        let declared = match entries.get("declared_kind") {
+            None if entries.len() == 4 => kind,
+            Some(Attribute::String(declared)) if entries.len() == 5 => {
+                OperationKind::from_keyword(ctx.str(*declared))
+                    .ok_or_else(|| "handlers declared_kind must be fn or op".to_string())?
+            }
+            _ => {
+                return Err(format!(
+                    "handlers element must have exactly ability, op_name, kind, \
+                     operation_result_type, and optionally declared_kind, found {} entries",
+                    entries.len()
+                ));
+            }
+        };
+        if kind == OperationKind::Op && declared == OperationKind::Fn {
+            return Err("an op arm cannot handle an fn operation".into());
+        }
         Ok(Self {
             ability,
             op_name,
             kind,
+            declared,
             operation_result_type,
         })
     }
@@ -81,18 +105,20 @@ impl HandlerBinding {
 
     pub fn to_attribute(&self, ctx: &mut IrContext) -> Attribute {
         let kind = ctx.string_attr(self.kind.keyword());
-        Attribute::Dict(AttributeMap::from_entries(
-            ctx,
-            [
-                ("ability", Attribute::SymbolRef(self.ability.clone())),
-                ("op_name", Attribute::String(self.op_name)),
-                ("kind", kind),
-                (
-                    "operation_result_type",
-                    Attribute::Type(self.operation_result_type),
-                ),
-            ],
-        ))
+        let mut entries = vec![
+            ("ability", Attribute::SymbolRef(self.ability.clone())),
+            ("op_name", Attribute::String(self.op_name)),
+            ("kind", kind),
+            (
+                "operation_result_type",
+                Attribute::Type(self.operation_result_type),
+            ),
+        ];
+        if self.declared != self.kind {
+            let declared = ctx.string_attr(self.declared.keyword());
+            entries.push(("declared_kind", declared));
+        }
+        Attribute::Dict(AttributeMap::from_entries(ctx, entries))
     }
 
     /// Whether the arm receives a resumption: a general (`op`) arm whose
@@ -103,13 +129,17 @@ impl HandlerBinding {
     }
 
     /// The header the handle formats write for this binding,
-    /// `op @Ability @name`.
+    /// `op @Ability @name`, with the declared kind as a second keyword
+    /// when it differs from the arm's: `fn op @Ability @name`.
     pub fn header<'a>(&'a self, ctx: &'a IrContext) -> impl fmt::Display + 'a {
         fmt::from_fn(move |f| {
+            write!(f, "{}", self.kind.keyword())?;
+            if self.declared != self.kind {
+                write!(f, " {}", self.declared.keyword())?;
+            }
             write!(
                 f,
-                "{} {} {}",
-                self.kind.keyword(),
+                " {} {}",
                 display_symbol_ref(&self.ability),
                 display_symbol_text(ctx.str(self.op_name))
             )
@@ -130,10 +160,18 @@ impl HandlerBinding {
         else {
             return Ok(None);
         };
+        let declared = p
+            .parse_optional_token("a declared operation kind", |input| {
+                lexer::ident
+                    .verify_map(OperationKind::from_keyword)
+                    .parse_next(input)
+            })?
+            .unwrap_or(kind);
         let ability = p.parse_symbol_ref()?;
         let op_name = p.parse_symbol_name()?;
         Ok(Some(BindingHeader {
             kind,
+            declared,
             ability,
             op_name,
         }))
@@ -145,6 +183,7 @@ impl HandlerBinding {
 #[derive(Clone, Debug)]
 pub struct BindingHeader {
     pub kind: OperationKind,
+    pub declared: OperationKind,
     pub ability: SymbolPath,
     pub op_name: String,
 }
@@ -160,6 +199,7 @@ impl BindingHeader {
             ability: self.ability,
             op_name: ctx.intern_str(&self.op_name),
             kind: self.kind,
+            declared: self.declared,
             operation_result_type,
         }
     }

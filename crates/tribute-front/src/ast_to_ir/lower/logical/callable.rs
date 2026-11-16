@@ -1162,14 +1162,15 @@ pub(super) fn lower_handler<'db>(
         .operations
         .get(&operation)
         .unwrap_or_else(|| panic!("missing resolved operation schema for handler {operation}"));
-    if operation_schema.kind != kind {
+    let declared = operation_schema.kind;
+    if kind == OpDeclKind::Op && declared == OpDeclKind::Fn {
         panic!("handler operation kind disagrees with resolved schema");
     }
     let semantic = declarations
         .handler_operations
         .get(&arm.id)
         .unwrap_or_else(|| panic!("missing typed semantic operation for handler {operation}"));
-    if semantic.ability != ability_id || semantic.kind != kind {
+    if semantic.ability != ability_id || semantic.kind != declared {
         panic!("typed handler operation identity disagrees with source handler arm");
     }
     let arguments = semantic.ability_args.clone();
@@ -1211,14 +1212,16 @@ pub(super) fn lower_handler<'db>(
         .collect();
     let operation_result = ctx.convert_logical_type(ir, expected_result);
     let op_name = ir.intern_symbol_text(&operation);
-    let kind_name = ir.intern_str(operation_kind_text(kind));
+    let kind_name = ir.intern_str(operation_kind_text(declared));
+    let ir_kind = |kind| match kind {
+        OpDeclKind::Op => tribute_control::OperationKind::Op,
+        OpDeclKind::Fn => tribute_control::OperationKind::Fn,
+    };
     let binding = tribute_control::HandlerBinding {
         ability: instance.clone(),
         op_name,
-        kind: match kind {
-            OpDeclKind::Op => tribute_control::OperationKind::Op,
-            OpDeclKind::Fn => tribute_control::OperationKind::Fn,
-        },
+        kind: ir_kind(kind),
+        declared: ir_kind(declared),
         operation_result_type: operation_result,
     };
     let declaration = OperationDeclaration::new(

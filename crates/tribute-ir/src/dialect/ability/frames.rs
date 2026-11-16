@@ -584,6 +584,7 @@ mod tests {
                 ability: state.clone(),
                 op_name,
                 kind,
+                declared: kind,
                 operation_result_type: result,
             };
             let attr = <super::HandlerBinding as trunk_ir::attr_kind::AttrKind>::write(
