@@ -126,8 +126,8 @@ impl LocalValidation for Resume {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ResumptionScope {
     /// The region is an arm that owns a resumption: a `resume` under it
-    /// supplies a value of type `input` and returns one of type `answer`.
-    Provides { input: TypeRef, answer: TypeRef },
+    /// supplies a value of type `input` and returns one of type `result`.
+    Provides { input: TypeRef, result: TypeRef },
     /// A `resume` under the region binds to the resumption outside it.
     Transparent,
     /// No resumption reaches under the region.
@@ -159,7 +159,7 @@ pub struct Resumption {
     pub input: TypeRef,
     /// The type of the value a `resume` returns: the result type of the
     /// body of `handle`.
-    pub answer: TypeRef,
+    pub result: TypeRef,
 }
 
 impl DynResumptionRegions {
@@ -172,12 +172,12 @@ impl DynResumptionRegions {
             let owner = ctx.region(region).parent_op?;
             if let Some(regions) = Self::get(ctx, owner) {
                 match regions.resumption_scope(ctx, region) {
-                    ResumptionScope::Provides { input, answer } => {
+                    ResumptionScope::Provides { input, result } => {
                         return Some(Resumption {
                             handle: owner,
                             arm: region,
                             input,
-                            answer,
+                            result,
                         });
                     }
                     ResumptionScope::Transparent => {}
@@ -221,18 +221,15 @@ impl ResumptionRegions for Handle {
         if index < 2 {
             return ResumptionScope::Transparent;
         }
-        let body_result = ctx
-            .op_region(op, 1)
-            .and_then(|completion| ctx.region(completion).blocks.first().copied())
-            .and_then(|entry| ctx.block(entry).args.first())
-            .map(|arg| arg.ty);
-        let (Some(binding), Some(answer)) = (self.binding_of(ctx, region), body_result) else {
+        let (Some(binding), Some(result)) =
+            (self.binding_of(ctx, region), self.body_result_type(ctx))
+        else {
             return ResumptionScope::Barrier;
         };
         if binding.is_resumptive(ctx) {
             ResumptionScope::Provides {
                 input: binding.operation_result_type,
-                answer,
+                result,
             }
         } else {
             ResumptionScope::Barrier

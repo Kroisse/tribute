@@ -2954,7 +2954,7 @@ fn converted_resumptive_arm(ctx: &IrContext, module: Module) -> (OpRef, ValueRef
     let trunk_ir::ValueDef::OpResult(lambda, _) = ctx.value_def(arm) else {
         panic!("an arm is a closure.lambda result");
     };
-    let block = ctx.region(ctx.op_regions(lambda).next().unwrap()).blocks[0];
+    let block = lambda_entry(ctx, lambda);
     let token = *ctx
         .block_args(block)
         .last()

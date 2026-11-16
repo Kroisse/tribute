@@ -271,7 +271,7 @@ pub(super) fn build_dispatch_adapter_factory(
 type AdapterKey = (TypeRef, TypeRef, Option<Attribute>);
 
 /// The dispatch adapter factory of each key the module needs.
-#[derive(Clone, Default)]
+#[derive(Default)]
 pub(super) struct DispatchAdapters(HashMap<AdapterKey, Symbol>);
 
 impl DispatchAdapters {

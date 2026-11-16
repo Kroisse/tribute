@@ -326,12 +326,10 @@ impl Converter<'_> {
             .handlers(self.ctx)
             .zip(source_handle.arms(self.ctx))
             .collect();
-        let completion_input = self.convert_type(
-            self.ctx.value_ty(
-                self.ctx
-                    .block_args(self.ctx.region(completion_source).blocks[0])[0],
-            ),
-        );
+        let body_result = source_handle
+            .body_result_type(self.ctx)
+            .expect("a handle's completion takes the body result");
+        let completion_input = self.convert_type(body_result);
         let mut arms = Vec::new();
         let mut handlers = Vec::new();
         for (binding, source_arm) in source_arms {

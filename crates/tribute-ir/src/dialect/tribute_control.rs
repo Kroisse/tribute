@@ -1010,4 +1010,12 @@ impl Handle {
             .find(|&(_, region)| region == arm)
             .and_then(|(binding, _)| binding)
     }
+
+    /// The result type of the body, which the completion takes as its
+    /// argument, read fallibly for IR whose schema may not hold.
+    pub fn body_result_type(self, ctx: &IrContext) -> Option<TypeRef> {
+        let completion = ctx.op_region(self.op_ref(), 1)?;
+        let entry = ctx.region(completion).blocks.first()?;
+        Some(ctx.block(*entry).args.first()?.ty)
+    }
 }

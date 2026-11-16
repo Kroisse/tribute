@@ -73,10 +73,7 @@ enum EvidenceSite<'db> {
 }
 
 /// The evidence scope that code currently runs in, saved across a nested scope.
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct SavedEvidenceScope {
-    current: Option<usize>,
-}
+pub(crate) type SavedEvidenceScope = Option<usize>;
 
 /// Evidence scopes and call sites of one function body.
 #[derive(Debug, Default)]
@@ -101,15 +98,9 @@ struct ScopeEvidence<'db> {
 }
 
 impl<'db> EvidenceTracker<'db> {
-    fn save(&self) -> SavedEvidenceScope {
-        SavedEvidenceScope {
-            current: self.current,
-        }
-    }
-
     /// Restore the scope that was current before a nested scope.
     pub(crate) fn restore(&mut self, saved: SavedEvidenceScope) {
-        self.current = saved.current;
+        self.current = saved;
     }
 
     /// Enter a function or lambda body. The row may be supplied later with
@@ -118,7 +109,7 @@ impl<'db> EvidenceTracker<'db> {
         &mut self,
         row: Option<AbilityRow<'db>>,
     ) -> (usize, SavedEvidenceScope) {
-        let saved = self.save();
+        let saved = self.current;
         let scope = self.scopes.len();
         self.scopes.push(EvidenceScope::Callable(row));
         self.current = Some(scope);
@@ -139,7 +130,7 @@ impl<'db> EvidenceTracker<'db> {
         handled: Option<AbilityRow<'db>>,
     ) -> Option<(usize, SavedEvidenceScope)> {
         let parent = self.current?;
-        let saved = self.save();
+        let saved = self.current;
         let scope = self.scopes.len();
         self.scopes
             .push(EvidenceScope::HandleBody { parent, handled });
