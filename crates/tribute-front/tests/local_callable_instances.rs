@@ -46,9 +46,17 @@ fn entry() ->{} Int {
 }
 
 /// A lambda that uses a named-function alias references the function in its
-/// body, so the alias needs no cast.
+/// body: no value from outside the lambda flows in for the alias, and the
+/// alias needs no cast.
 #[salsa_test]
-fn a_named_alias_inside_a_lambda_needs_no_cast(db: &salsa::DatabaseImpl) {
+fn a_named_alias_inside_a_lambda_is_referenced_in_its_body(db: &salsa::DatabaseImpl) {
+    use std::ops::ControlFlow;
+    use tribute_ir::dialect::tribute_control::{FuncRef, Lambda};
+    use trunk_ir::context::IrContext;
+    use trunk_ir::ops::DialectOp;
+    use trunk_ir::parser::parse_test_module;
+    use trunk_ir::walk::{WalkAction, walk_op};
+
     let source = SourceCst::from_source_str(
         db,
         "named_capture.trb",
@@ -63,8 +71,46 @@ fn entry() ->{} Int {
 }
 "#,
     );
-    let ir = common::run_ast_pipeline_with_ir(db, source);
-    assert!(!ir.contains("unrealized_conversion_cast"), "{ir}");
+    let text = common::run_ast_pipeline_with_ir(db, source);
+    assert!(!text.contains("unrealized_conversion_cast"), "{text}");
+
+    let mut ir = IrContext::new();
+    let module = parse_test_module(&mut ir, text);
+    let mut lambdas = Vec::new();
+    let _ = walk_op::<()>(&ir, module.op(), &mut |op| {
+        if Lambda::matches(&ir, op) {
+            lambdas.push(op);
+        }
+        ControlFlow::Continue(WalkAction::Advance)
+    });
+    let [lambda] = lambdas[..] else {
+        panic!("one lambda:\n{text}");
+    };
+
+    let mut defined = Vec::new();
+    let mut operands = Vec::new();
+    let mut references_identity = false;
+    let _ = walk_op::<()>(&ir, lambda, &mut |op| {
+        defined.extend_from_slice(ir.op_results(op));
+        for region in ir.op_regions(op) {
+            for &block in &ir.region(region).blocks {
+                defined.extend_from_slice(ir.block_args(block));
+            }
+        }
+        if op != lambda {
+            operands.extend_from_slice(ir.op_operands(op));
+        }
+        if let Ok(func_ref) = FuncRef::from_op(&ir, op) {
+            references_identity |= *func_ref.value(&ir) == ["pkg::identity"];
+        }
+        ControlFlow::Continue(WalkAction::Advance)
+    });
+    assert!(references_identity, "{text}");
+    assert!(!operands.is_empty(), "{text}");
+    assert!(
+        operands.iter().all(|operand| defined.contains(operand)),
+        "the lambda body uses a value from outside it:\n{text}"
+    );
 }
 
 #[salsa_test]
