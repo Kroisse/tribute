@@ -740,8 +740,8 @@ region의 값에 이름 하나를 쓰면, 그 순서와 공유를 pre-pass에 �
   참조는 operand보다 앞에 쓴다(`clif.symbol_addr @f`). Operation 종류를
   keyword로 쓰는 operation은 그 keyword 뒤에 쓴다
   (`tribute_control.perform fn @State @get(..)`). 참조 목록도 종류의 문법
-  `[@a, @b]`로 같은 자리에 쓴다. 선택 attribute 안의 참조(`evidence_plan`,
-  `adapters`)는 attribute 사전에 남는다.
+  `[@a, @b]`로 같은 자리에 쓴다. 선택 attribute 안의 참조(`evidence_plan`)는
+  attribute 사전에 남는다.
 - 남은 attribute는 `attr_dict`로 region 바로 앞에 쓰고, region이 없으면 끝에
   쓴다. Region이 없는 operation은 `attr_dict_bare`로 `{..}`만 쓸 수 있다.
 - Callable 정의의 convention처럼 keyword로 쓰는 attribute 하나는
@@ -760,21 +760,24 @@ region의 값에 이름 하나를 쓰면, 그 순서와 공유를 pre-pass에 �
 - 이름 붙은 본문이 여럿이고 모두 같은 signature를 받으면 signature는 header에 한
   번만 쓰고, 본문은 `entries { label { .. } .. }`로 쓴다. 본문마다 signature가
   다르면 `entries` 없이 label 뒤에 그 본문의 signature를 써서 본문을 차례로
-  잇는다(`label(%x: T) -> R { .. } label(..) -> R { .. }`).
+  잇는다(`label(%x: T) -> R { .. } label(..) -> R { .. }`). 본문 대신 다른
+  정의를 가리키는 칸은 같은 자리에 `label @name`으로 쓰며, 본문과 함께 label
+  순서를 따른다.
 - `signature`로 재구성되지 않는 result 타입은 형식의 끝에 `: type`으로 쓴다.
 - 간접 호출은 MLIR의 `func.call_indirect`처럼 `%callee(%args)`로 쓴다. 호출
   signature를 attribute로 가지면 `: signature(t)`로 끝에 쓰고, 결과 타입은 그
   signature에서 재구성한다. Callee 타입이 signature이면 operand 타입에서 얻으므로
   result 타입만 `: type`으로 쓴다.
 
-손으로 쓴 형식인 `closure.lambda`는 본문마다 signature가 다르다. 남은 attribute는
-operation 이름 바로 뒤에 `{..}`로, capture는 그 뒤에 `[..]`로 쓰고, convention
-keyword를 label로 삼아 본문을 잇는다.
+손으로 쓴 형식인 `closure.lambda`는 본문마다 signature가 다르다. Capture를
+`[..]`로 쓰고, 남은 attribute를 `attributes {..}`로 첫 칸 앞에 쓴 뒤, convention
+keyword를 label로 삼아 convention table 순서대로 칸을 잇는다. 본문이 없는 칸을
+채우는 adapter entry는 `label @name`으로 그 칸에 쓴다.
 
 ```text
-%1 = closure.lambda {adapters = {evidence_direct = @a0}} [%0] direct(%2: core.i32) -> core.i32 {
+%1 = closure.lambda [%0] direct(%2: core.i32) -> core.i32 {
     func.return %0
-} cps(%3: core.i64, %4: core.i64, %5: core.i32) -> core.i32 {
+} evidence_direct @a0 cps(%3: core.i64, %4: core.i64, %5: core.i32) -> core.i32 {
     func.return %5
 } : closure.closure<func.func_sig<(core.i32) -> core.i32>>
 ```

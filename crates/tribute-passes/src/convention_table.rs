@@ -557,7 +557,12 @@ mod tests {
         .unwrap();
         // The lambdas name their adapters, and the text round trips.
         let printed = module.op().display(&ctx).to_string();
-        assert!(printed.contains("adapters = {"), "{printed}");
+        assert!(
+            printed.contains(
+                "} evidence_direct @__tribute_entry_adapter_0 cps @__tribute_entry_adapter_1\n"
+            ),
+            "{printed}"
+        );
         let mut ctx = IrContext::new();
         let module = trunk_ir::parser::parse_test_module(&mut ctx, &printed);
         // The printer orders generated aliases by use and the reparsed ones,
