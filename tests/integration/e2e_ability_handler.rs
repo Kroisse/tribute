@@ -2512,6 +2512,36 @@ fn main() ->{Io} Nil {
     );
 }
 
+/// An `fn` arm answers an `op` operation whose result is a callable: the
+/// lambda the arm returns, with its capture, is the value of the perform.
+#[test]
+fn test_fn_arm_answers_an_op_operation_with_a_callable() {
+    let source = r#"
+use std::io::{Io, print_line}
+
+ability Make {
+    op make() -> fn() -> Int
+}
+
+fn use_make() ->{Make} Int {
+    let f = Make::make()
+    let g = Make::make()
+    f() + g()
+}
+
+fn run(comp: fn() ->{e, Make} a, base: Int) ->{e} a {
+    handle comp() {
+        fn Make::make() { fn() base + +1 }
+    }
+}
+
+fn main() ->{Io} Nil {
+    print_line(run(use_make, +20).to_string)
+}
+"#;
+    assert_output_on_both_targets("fn_arm_answers_op_with_callable.trb", source, "42");
+}
+
 /// One handle holds an `fn` arm for an `op` operation and a resuming `op` arm
 /// for another operation of the same ability.
 #[test]

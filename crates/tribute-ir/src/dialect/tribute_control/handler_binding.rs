@@ -23,7 +23,8 @@ use super::OperationKind;
 ///
 /// The `declared_kind` entry is present only when the declaration's kind
 /// differs from `kind`, and the format then writes it as a second keyword,
-/// `fn op @State @get`. `kind = op` with `declared_kind = fn` is rejected.
+/// `fn op @State @get`. `kind = op` with `declared_kind = fn` is rejected, and so is
+/// `kind = fn` with `declared_kind = op` and a `core.never` result.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct HandlerBinding {
     pub ability: SymbolPath,
@@ -85,6 +86,12 @@ impl HandlerBinding {
         };
         if kind == OperationKind::Op && declared == OperationKind::Fn {
             return Err("an op arm cannot handle an fn operation".into());
+        }
+        if kind == OperationKind::Fn
+            && declared == OperationKind::Op
+            && Never::from_type_ref(ctx, operation_result_type).is_some()
+        {
+            return Err("an fn arm cannot handle an op operation that never returns".into());
         }
         Ok(Self {
             ability,

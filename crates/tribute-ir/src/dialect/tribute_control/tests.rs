@@ -388,6 +388,24 @@ fn a_binding_rejects_an_op_arm_for_an_fn_operation_and_unknown_entries() {
         "an op arm cannot handle an fn operation"
     );
 
+    let never = trunk_ir::dialect::core::Never::params()
+        .intern(&mut ctx)
+        .as_type_ref();
+    let fn_for_never = Attribute::Dict(AttributeMap::from_entries(
+        &mut ctx,
+        [
+            ("ability", Attribute::SymbolRef(binding.ability.clone())),
+            ("op_name", Attribute::String(binding.op_name)),
+            ("kind", fn_kind.clone()),
+            ("operation_result_type", Attribute::Type(never)),
+            ("declared_kind", op.clone()),
+        ],
+    ));
+    assert_eq!(
+        HandlerBinding::from_attribute(&ctx, &fn_for_never).unwrap_err(),
+        "an fn arm cannot handle an op operation that never returns"
+    );
+
     let unknown_declared = dict(&mut ctx, &fn_kind, ("declared_kind", &bogus));
     assert_eq!(
         HandlerBinding::from_attribute(&ctx, &unknown_declared).unwrap_err(),

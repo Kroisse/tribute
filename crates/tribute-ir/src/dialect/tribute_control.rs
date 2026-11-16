@@ -774,9 +774,9 @@ mod tribute_control {
     ///   Whole-IR verification checks the affine rule below. The symbol-aware
     ///   frontend conformance check also confirms that each arm's declared
     ///   kind, argument types, and `operation_result_type` are those of the
-    ///   declaration it names, and that an `fn` arm for an `op` operation
-    ///   does not have a `Never` result. No verifier reclassifies a general `op` from
-    ///   the shape of its arm.
+    ///   declaration it names. A binding of an `fn` arm for an `op`
+    ///   operation with a `Never` result is malformed. No verifier
+    ///   reclassifies a general `op` from the shape of its arm.
     /// - **Resumption scope:** `body` and `completion` are transparent to a
     ///   `resume` under them, which consumes the resumption of an outer arm.
     ///   A resumptive `op` arm provides a resumption whose input is its
