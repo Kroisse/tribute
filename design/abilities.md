@@ -244,7 +244,8 @@ url.get.await
 
 Ability operation은 두 종류로 선언한다:
 
-- **`fn`**: Tail-resumptive operation. Handler가 값을 반환하면 자동으로 resume된다.
+- **`fn`**: Tail-resumptive operation. Handler가 반환한 값이 perform 지점으로 돌아가고,
+  나머지 계산은 같은 handler 아래에서 계속된다.
   Continuation을 캡처하지 않으므로 일반 함수 호출과 동등한 성능.
   **선언부가 보증(guarantee)이다**: `fn`으로 선언된 operation은 모든 handler에서
   반드시 `fn`으로 구현해야 한다.
@@ -355,7 +356,7 @@ handle computation() {
 | arm | 대상 | 의미 |
 | --- | ---- | ---- |
 | `do value { expr }` | completion | Computation 완료, 결과값 바인딩 (생략 시 identity) |
-| `fn Op(args) { body }` | `fn` operation만 | Tail-resumptive: body의 반환값이 resume 값 |
+| `fn Op(args) { body }` | `fn` operation만 | Tail-resumptive: body의 반환값이 operation의 결과 |
 | `op Op(args) { body }` | `op` operation만 | body에서 `resume`으로 명시적 resume |
 
 Handler arm은 `handle` 표현식 내에서만 사용할 수 있다.
@@ -363,9 +364,8 @@ Handler arm은 `handle` 표현식 내에서만 사용할 수 있다.
 **`do` arm 생략:**
 
 - `handle`의 `do` arm은 없거나 하나다. 둘 이상이면 typechecking 단계의 컴파일 에러다.
-- `do` arm이 없는 `handle`의 결과 타입은 body의 결과 타입이다. 따라서 값을 내는
-  `op` arm, 곧 `resume`하지 않고 끝나는 arm의 결과도 body의 결과 타입이어야 한다.
-  `resume`의 결과도 같은 타입이다.
+- `do` arm이 없는 `handle`의 결과 타입은 body의 결과 타입이다. 따라서 `op` arm의
+  결과도 body의 결과 타입이어야 한다.
 - 생략은 결과를 바꾸지 않는 completion에 한한다. Body의 결과를 다른 타입이나 값으로
   바꾸려면 `do` arm을 적는다.
 
@@ -373,8 +373,8 @@ Handler arm은 `handle` 표현식 내에서만 사용할 수 있다.
 
 - `fn`으로 선언된 operation → handler에서 반드시 `fn`으로 구현 (`op`으로 구현 시 컴파일 에러)
 - `op`으로 선언된 operation → handler에서 반드시 `op`으로 구현 (`fn`으로 구현 시 컴파일 에러)
-- Arm의 종류는 선언의 종류와 같다. 꼬리에서 바로 `resume`하는 `op` arm을 빠른 경로로
-  내리는 것은 최적화가 정하며, 언어 계약에 속하지 않는다.
+- Arm의 종류는 선언의 종류와 같다. 꼬리에서 바로 `resume`하는 `op` arm은 `fn` arm과
+  뜻이 다르다. `resume`이 재개한 계산은 그 handle 아래에 있지 않다.
 
 **Handler arm의 완전성:**
 
@@ -393,8 +393,10 @@ Handler arm은 `handle` 표현식 내에서만 사용할 수 있다.
 
 ### `fn` Operation Handler
 
-`fn` operation은 continuation을 캡처하지 않는다. Handler body의 반환값이 곧
-resume 값이 된다. 함수 정의와 동일한 구조:
+`fn` operation은 continuation을 캡처하지 않는다. Handler body의 반환값이 perform
+지점에서 operation의 결과가 되고, 나머지 계산은 같은 handle 아래에서 계속된다. 이는
+같은 handler를 다시 설치하고 그 아래에서 arm의 값으로 `resume`하는 `op` arm과 뜻이
+같다. 함수 정의와 동일한 구조:
 
 ```rust
 // 선언
@@ -405,7 +407,7 @@ ability Logger {
 // handler (구현)
 fn run_logger(comp: fn() ->{e, Logger} a) ->{e, Io} a {
     handle comp() {
-        fn Logger::log(msg) { print_line(msg) } // Nil 반환 → resume Nil
+        fn Logger::log(msg) { print_line(msg) } // Nil이 log의 결과가 된다
     }
 }
 ```
@@ -491,30 +493,45 @@ Continuation은 자신을 캡처한 handler 스코프 내에서만 resume될 수
 이 경우 continuation의 affine 사용(최대 1회 호출)은 런타임에서 보장한다
 ([논리적 CPS 적법화](cps-effects.md#논리적-cps-적법화)).
 
-#### `resume`과 handler 선택
+#### `resume`이 재개하는 계산
 
-Handler arm은 처리한 label이 빠진 row로 검사된다. 따라서 arm이 직접 수행하는
-operation은 그 handle 바깥의 handler가 처리한다. 재개된 계산의 handler는 `resume`이
-놓인 위치가 정한다:
+`resume value`는 operation을 수행한 지점부터 handle의 body가 끝날 때까지의 계산을
+호출한다. 이 계산에는 그 handle이 들어 있지 않다:
 
-- **Arm 본문의 `resume`:** 재개된 계산은 같은 handle 아래에서 계속된다. Arm 본문의
-  row는 continuation의 effect를 더하지 않으며, 처리한 label은 계속 이 handler에 묶인다.
-- **Arm 안 lambda의 `resume`:** lambda의 row는 continuation의 effect를 담는다.
-  재개된 계산의 label은 그 lambda를 호출한 곳이 묶은 handler, 예를 들어 arm 안에서
-  새로 설치한 handler로 간다.
+- **결과:** `resume`의 결과는 body의 결과이며 타입도 body의 결과 타입이다. Handle의
+  `do` arm은 body가 그 handle 아래에서 끝났을 때만 실행되고, 재개된 계산의 결과에는
+  적용되지 않는다.
+- **Row:** `resume`의 effect row는 body의 row이며, 그 handle이 처리하는 label을
+  포함한다. `resume`이 놓인 arm 본문이나 lambda의 row는 이 row를 담는다.
+- **Handler:** 재개된 계산이 수행하는 operation은 `resume`을 호출한 곳의 handler가
+  처리한다. 그 handle이 처리하던 label도 마찬가지다.
+
+이 규칙은 `resume`이 arm 본문에 있든 arm 안의 lambda에 있든 같다. Handler arm은
+처리한 label이 빠진 row로 검사되므로, arm이 직접 수행하는 operation은 그 handle
+바깥의 handler가 처리한다. 계속 같은 방식으로 처리하려는 handler는 `resume`을 감싸
+자신을 다시 설치한다. 아래 `run_state`의 `run_state(fn() resume state, state)`가
+그렇게 하며, 재개된 계산은 새로 설치한 handler 아래에서 실행된다.
+
+Handler 없이 arm 본문에서 바로 `resume`하면 재개된 계산의 label이 handle 바깥으로
+나가므로, 그 handle 식의 row가 처리한 label을 다시 담는다:
 
 ```rust
-fn counter(comp: fn() ->{e, State(Nat)} a) ->{e, State(Nat)} a {
+ability Ask {
+    op ask() -> Nat
+}
+
+fn first_ask(comp: fn() ->{e, Ask} a) ->{e, Ask} a {
     handle comp() {
-        // State::get()은 바깥 State로 간다. resume 뒤의 State는 이 handler가 받는다.
-        op State::get() { resume State::get() + 1 }
-        op State::set(v) { resume Nil }
+        // 처음 수행한 Ask::ask()에만 0을 돌려준다. 재개된 계산의 Ask는
+        // first_ask를 호출한 곳의 handler가 처리한다.
+        op Ask::ask() { resume 0 }
     }
 }
 ```
 
-아래 `run_state`의 `run_state(fn() resume state, state)`는 두 번째 규칙을 쓴다.
-재개된 계산은 새로 설치한 `run_state`의 handler로 이어진다.
+어떤 handler 아래에서도 같은 handler가 이어서 처리하고 perform 지점으로 한 번
+돌아오는 operation은 `fn`으로 선언한다
+([`fn` Operation Handler](#fn-operation-handler)).
 
 ### 기본 예시: State (op)
 

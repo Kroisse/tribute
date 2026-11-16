@@ -42,18 +42,26 @@ fn through_operation(outer: Outer) ->{Keep} Int {
     }
 }
 
-fn resumed(outer: Outer) -> Int {
-    handle across_resume(outer) {
+fn answer_ask(comp: fn() ->{e, Ask} Int) ->{e} Int {
+    handle comp() {
         do result { result }
-        op Ask::ask() { resume +5 }
+        op Ask::ask() { answer_ask(fn() { resume +5 }) }
+    }
+}
+
+fn resumed(outer: Outer) -> Int {
+    answer_ask(fn() across_resume(outer))
+}
+
+fn answer_keep(comp: fn() ->{e, Keep} Int) ->{e} Int {
+    handle comp() {
+        do result { result }
+        op Keep::keep(value) { answer_keep(fn() { resume read(value) }) }
     }
 }
 
 fn kept(outer: Outer) -> Int {
-    handle through_operation(outer) {
-        do result { result }
-        op Keep::keep(value) { resume read(value) }
-    }
+    answer_keep(fn() through_operation(outer))
 }
 
 // The handler drops the continuation that still holds the projection.

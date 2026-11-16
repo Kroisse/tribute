@@ -231,20 +231,26 @@ fn ask() ->{Ask} Nat { Ask::ask() }
 
 fn tell() ->{Tell} Nat { Tell::tell() }
 
-fn asked() -> Nat {
-    let held = keep(ask)
-    handle held() {
+fn run_ask(comp: fn() ->{Ask} Nat) -> Nat {
+    handle comp() {
         do result { result }
-        op Ask::ask() { resume 40 }
+        op Ask::ask() { run_ask(fn() { resume 40 }) }
     }
 }
 
-fn told() -> Nat {
-    let held = keep(tell)
-    handle held() {
+fn run_tell(comp: fn() ->{Tell} Nat) -> Nat {
+    handle comp() {
         do result { result }
-        op Tell::tell() { resume 2 }
+        op Tell::tell() { run_tell(fn() { resume 2 }) }
     }
+}
+
+fn asked() -> Nat {
+    run_ask(keep(ask))
+}
+
+fn told() -> Nat {
+    run_tell(keep(tell))
 }
 
 fn main() ->{Io} Nil {
@@ -280,11 +286,15 @@ fn run() ->{Ask} Nat {
     callback(Box { value: 1 }) + direct(Box { value: 1 })
 }
 
-fn main() ->{Io} Nil {
-    let total = handle run() {
+fn run_ask(comp: fn() ->{Ask} Nat) -> Nat {
+    handle comp() {
         do result { result }
-        op Ask::ask() { resume 20 }
+        op Ask::ask() { run_ask(fn() { resume 20 }) }
     }
+}
+
+fn main() ->{Io} Nil {
+    let total = run_ask(run)
     print_line(total.to_string)
 }
 "#;
@@ -367,11 +377,15 @@ ability Logger {
 
 fn asks() ->{Ask} Int { Ask::ask() + Ask::ask() }
 
-fn work() ->{e} Int {
-    handle asks() {
+fn run_ask(comp: fn() ->{Ask} Int) -> Int {
+    handle comp() {
         do result { result }
-        op Ask::ask() { resume +20 }
+        op Ask::ask() { run_ask(fn() { resume +20 }) }
     }
+}
+
+fn work() ->{e} Int {
+    run_ask(asks)
 }
 
 fn logged() ->{e, Logger} Int { Logger::log(work()) }

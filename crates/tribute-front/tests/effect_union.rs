@@ -134,10 +134,16 @@ fn combine(left: fn() ->{e1} Nil, right: fn() ->{e2} Nil) ->{e1, e2} Nil {
     left()
     right()
 }
+fn ignore_pings(comp: fn() ->{e, Ping} Nil) ->{e} Nil {
+    handle comp() {
+        do value { value }
+        op Ping::ping() { ignore_pings(fn() resume Nil) }
+    }
+}
 fn main() ->{} Nil {
     handle combine(ping, ping) {
         do value { value }
-        op Ping::ping() { resume Nil }
+        op Ping::ping() { ignore_pings(fn() resume Nil) }
     }
 }
 "#,
@@ -174,7 +180,7 @@ fn other() ->{Other} Nil { Other::other() }
 fn handled(comp: fn() ->{{e, Ping}} Nil) ->{{e}} Nil {{
     handle comp() {{
         do value {{ value }}
-        op Ping::ping() {{ resume Nil }}
+        op Ping::ping() {{ handled(fn() resume Nil) }}
     }}
 }}
 fn main() ->{{}} Nil {{ handled({callback}) }}
@@ -202,7 +208,7 @@ fn main() ->{{}} Nil {{ handled({callback}) }}
 fn handled(comp: fn() ->{{e}} Nil) ->{{}} Nil {{
     handle comp() {{
         do value {{ value }}
-        op Ping::ping() {{ resume Nil }}
+        op Ping::ping() {{ handled(fn() resume Nil) }}
     }}
 }}
 "#
@@ -242,7 +248,7 @@ fn other() ->{{Other}} Nil {{ Other::other() }}
 fn handled(comp: fn() ->{{e, Ping}} Nil) ->{{e}} Nil {{
     handle comp() {{
         do value {{ value }}
-        op Ping::ping() {{ resume Nil }}
+        op Ping::ping() {{ handled(fn() resume Nil) }}
     }}
 }}
 fn main() ->{{}} Nil {{
@@ -508,6 +514,12 @@ fn one() -> Int { +1 }
 fn two() -> Int { +2 }
 fn asked() ->{Ask} Int { Ask::ask() }
 fn sum(x: Int, y: Int, z: Int) ->{} Int { x + y + z }
+fn answer(comp: fn() ->{e, Ask} Int) ->{e} Int {
+    handle comp() {
+        do result { result }
+        op Ask::ask() { answer(fn() resume +3) }
+    }
+}
 fn omitted() -> Int {
     handle {
         let x = one()
@@ -515,7 +527,7 @@ fn omitted() -> Int {
         sum(x, y, asked())
     } {
         do result { result }
-        op Ask::ask() { resume +3 }
+        op Ask::ask() { answer(fn() resume +3) }
     }
 }
 fn named(f: fn() ->{e} Int) ->{e} Int {
@@ -525,7 +537,7 @@ fn named(f: fn() ->{e} Int) ->{e} Int {
         sum(x, y, asked()) + f()
     } {
         do result { result }
-        op Ask::ask() { resume +3 }
+        op Ask::ask() { answer(fn() resume +3) }
     }
 }
 "#,
@@ -536,4 +548,78 @@ fn named(f: fn() ->{e} Int) ->{e} Int {
         .map(|diagnostic| diagnostic.message)
         .collect();
     assert!(errors.is_empty(), "{errors:?}");
+}
+
+/// The computation a `resume` calls runs without the handle, so a `resume`
+/// in an arm body or in a lambda in the arm performs the handled label where
+/// it is written, unless a handle around the `resume` handles it again.
+#[salsa_test]
+fn resume_performs_the_handled_label_outside_the_handle(db: &salsa::DatabaseImpl) {
+    let resumes = [
+        ("resume Nil", true),
+        ("let k = fn() { resume Nil }\n        k()", true),
+        ("handle { resume Nil } { op Ping::ping() { Nil } }", false),
+    ];
+    for (row, valid) in [("e, Ping", true), ("e", false)] {
+        let source = SourceCst::from_source_str(
+            db,
+            "resume_row_in_lambda.trb",
+            &format!(
+                r#"
+ability Ping {{ op ping() -> Nil }}
+fn handled(comp: fn() ->{{e, Ping}} Nil) ->{{{row}}} Nil {{
+    let run = fn() {{
+        handle comp() {{
+            op Ping::ping() {{ resume Nil }}
+        }}
+    }}
+    run()
+}}
+"#
+            ),
+        );
+        let _ = checked(db, source);
+        let errors: Vec<_> = diagnostics(db, source)
+            .into_iter()
+            .map(|diagnostic| diagnostic.message)
+            .collect();
+        assert_eq!(
+            errors.is_empty(),
+            valid,
+            "in a lambda, ->{{{row}}}: {errors:?}"
+        );
+    }
+    for (resume, performs_ping) in resumes {
+        for row in ["e, Ping", "e"] {
+            let valid = row == "e, Ping" || !performs_ping;
+            let source = SourceCst::from_source_str(
+                db,
+                "resume_row.trb",
+                &format!(
+                    r#"
+ability Ping {{ op ping() -> Nil }}
+fn handled(comp: fn() ->{{e, Ping}} Nil) ->{{{row}}} Nil {{
+    handle comp() {{
+        op Ping::ping() {{ {resume} }}
+    }}
+}}
+"#
+                ),
+            );
+            let _ = checked(db, source);
+            let errors: Vec<_> = diagnostics(db, source)
+                .into_iter()
+                .map(|diagnostic| diagnostic.message)
+                .collect();
+            if valid {
+                assert!(errors.is_empty(), "{resume} in ->{{{row}}}: {errors:?}");
+            } else {
+                assert_eq!(
+                    errors,
+                    ["function 'handled' uses undeclared effects: Ping"],
+                    "{resume} in ->{{{row}}}"
+                );
+            }
+        }
+    }
 }

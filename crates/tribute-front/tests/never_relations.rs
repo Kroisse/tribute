@@ -482,11 +482,14 @@ fn every_three_way_case_and_list_mismatch_is_rejected(db: &salsa::DatabaseImpl) 
     }
 }
 
+/// A `resume` returns the handle body's result, which the `do` arm does not
+/// see, so an arm that resumes contributes the body's type to the handle
+/// result even when the `do` arm never returns.
 #[salsa_test]
-fn handle_join_separates_aborting_results_from_resume_answers(db: &salsa::DatabaseImpl) {
+fn handle_join_takes_resume_results_as_body_results(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
         db,
-        "handle_join_accepts_never_do_path_and_resumptive_answer.trb",
+        "handle_join_takes_resume_results_as_body_results.trb",
         r#"
 ability Stop { op stop() -> Never }
 ability Ask { op ask() -> Nat }
@@ -500,14 +503,14 @@ fn handler_nat() -> Nat {
     }
 }
 
-fn resume_only() ->{Stop} Never {
+fn resume_only() ->{Stop, Ask} Nat {
     handle Ask::ask() {
         do result { do_never() }
         op Ask::ask() { resume 42 }
     }
 }
 
-fn resume_or_abort(flag: Bool) ->{Stop} Nat {
+fn resume_or_abort(flag: Bool) ->{Stop, Ask} Nat {
     handle Ask::ask() {
         do result { do_never() }
         op Ask::ask() {
@@ -519,7 +522,7 @@ fn resume_or_abort(flag: Bool) ->{Stop} Nat {
     }
 }
 
-fn nested_resume_only(flag: Bool) ->{Stop} Never {
+fn nested_resume_only(flag: Bool) ->{Stop, Ask} Nat {
     handle Ask::ask() {
         do result { do_never() }
         op Ask::ask() {
@@ -536,7 +539,7 @@ fn nested_resume_only(flag: Bool) ->{Stop} Never {
     let errors = ast_pipeline_error_messages(db, source);
     assert!(
         errors.is_empty(),
-        "Never do-path and resumptive answer must form a Nat handle result: {errors:#?}"
+        "Never do-path and resumed body results must form a Nat handle result: {errors:#?}"
     );
     let result = function_tail_type(db, source, "handler_nat");
     assert!(
@@ -544,18 +547,36 @@ fn nested_resume_only(flag: Bool) ->{Stop} Never {
         "the handle answer should be Nat, got {}",
         result.display(db, &names())
     );
-    assert!(matches!(
-        function_tail_type(db, source, "resume_only").kind(db),
-        TypeKind::Never
-    ));
-    assert!(matches!(
-        function_tail_type(db, source, "resume_or_abort").kind(db),
-        TypeKind::Nat
-    ));
-    assert!(matches!(
-        function_tail_type(db, source, "nested_resume_only").kind(db),
-        TypeKind::Never
-    ));
+    for function in ["resume_only", "resume_or_abort", "nested_resume_only"] {
+        let result = function_tail_type(db, source, function);
+        assert!(
+            matches!(result.kind(db), TypeKind::Nat),
+            "{function}: the handle answer should be Nat, got {}",
+            result.display(db, &names())
+        );
+    }
+
+    let errors = type_errors(
+        db,
+        "resume_is_not_the_answer.trb",
+        r#"
+ability Stop { op stop() -> Never }
+ability Ask { op ask() -> Nat }
+
+fn do_never() ->{Stop} Never { Stop::stop() }
+
+fn resume_only() ->{Stop, Ask} Never {
+    handle Ask::ask() {
+        do result { do_never() }
+        op Ask::ask() { resume 42 }
+    }
+}
+"#,
+    );
+    assert_eq!(
+        errors,
+        ["type error in function 'resume_only': expected `Never`, found `Nat`"],
+    );
 }
 
 #[salsa_test]

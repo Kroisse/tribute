@@ -425,12 +425,18 @@ fn f() ->{Ask} Nat {
 ```rust
 // Error: 본문이 Ping만 처리하므로 `e`가 Ping 외의 effect를 담을 수 없게 된다
 fn handled(comp: fn() ->{e} Nil) ->{} Nil {
-    handle comp() { do v { v } op Ping::ping() { resume Nil } }
+    handle comp() {
+        do v { v }
+        op Ping::ping() { handled(fn() resume Nil) }
+    }
 }
 
 // OK: 처리하는 effect를 row에 적는다
 fn handled(comp: fn() ->{e, Ping} Nil) ->{e} Nil {
-    handle comp() { do v { v } op Ping::ping() { resume Nil } }
+    handle comp() {
+        do v { v }
+        op Ping::ping() { handled(fn() resume Nil) }
+    }
 }
 ```
 
@@ -532,8 +538,14 @@ Handle body는 처리하는 label을 새 handler에 묶고 나머지 label은 �
 사이에 끼어 tail 자리를 밀어낸다. 그래서 handle 설치도 `k = 0`인 호출처럼 그
 label을 먼저 가린다. 바깥 row가 그 label을 tail로만 가지면 가리지 않는다.
 Handler arm과 `do` arm은 처리한 label이 빠진 row로 검사되므로, arm의
-operation과 호출은 handle 바깥의 handler를 본다. `resume`의 handler 선택은
-[abilities.md](abilities.md#resume과-handler-선택)를 따른다. `fn` arm 본문의
+operation과 호출은 handle 바깥의 handler를 본다. 재개된 계산은 그 handle을 담지
+않으므로([abilities.md](abilities.md#resume이-재개하는-계산)), `resume`은 자신이
+놓인 scope의 evidence에서 handle body의 evidence를 고른다. Arm 본문, arm 안의
+lambda, arm 안에 중첩된 handle body 가운데 어디에 있든 그 scope의 evidence를
+caller로, handle body를 callee로 보고 호출과 같은 규칙으로 고른다. Body는 처리하는
+label과 바깥 evidence의 명시 label을 한 번씩 받는다. Arm 본문의 `resume`은 바깥
+row가 처리한 label을 명시하므로 선택이 그대로 전달이 되고, `resume`을 감싼 다른
+handler의 label은 body row가 명시하지 않으면 가려진다. `fn` arm 본문의
 perform과 호출은 solving이 끝난 뒤 검사하며, `op` operation을 수행하거나 그런
 ability를 요구하는 callable을 호출할 수 없다([abilities.md](abilities.md#fn-operation-handler)).
 
@@ -742,9 +754,8 @@ fresh α, β, e
 
 람다 본문을 검사할 때의 누적기는 항상 닫힌 빈 row `{}`에서 시작한다. 본문이
 실제로 요구한 잔여 row가 이미 열려 있으면 그 row를 그대로 callable type에
-기록한다. 본문이 `resume`을 쓰고 잔여 row가 닫혀 있으면, 람다의 row는 그
-label들과 continuation row의 합집합이다. Continuation을 재개하면 그 row의
-effect를 수행하기 때문이다. 그 밖에 잔여 row가 닫혀 있으면 본문에서 확정한
+기록한다. 본문의 `resume`은 호출처럼 continuation row를 누적기에 합친다
+([Resume](#resume-infer)). 잔여 row가 닫혀 있으면 본문에서 확정한
 concrete effect만 보존하고, 람다가 검사된 문맥의 callable signature가 제공한
 open tail만 다시 붙인다. 따라서 문맥이 없는 local lambda가
 새로운 open tail을 본문 효과의 무조건적인 기본값으로 만들지 않는다. 반환되거나
@@ -804,6 +815,21 @@ op : fn(A₁, ..., Aₙ) ->{Eff} B ∈ Ability
 선언한 모든 operation의 arm을 가져야 한다. 빠진 arm은 typechecking 에러다
 ([abilities.md](abilities.md#handler-arm-종류)). Arm이 없는 ability는 처리되지 않고
 `E`에 남는다.
+
+#### Resume (Infer)
+
+```text
+resume이 놓인 op arm의 handle:  body ⇒ A ; {E, Eff},  op의 결과 타입 R
+Γ ⊢ v ⇐ R ; E₁
+─────────────────────────────────────────
+Γ ⊢ resume v ⇒ A ; {E, Eff} ∪ E₁
+```
+
+`resume`의 결과 타입은 handle body의 결과 타입 `A`이며, `do` arm이 만드는 handle의
+결과 타입과 무관하다. `resume`의 row는 body의 row이며 그 handle이 처리하는
+label을 포함한다. 이 row는 `resume`을 담은 누적기, 곧 arm 본문, arm 안의 lambda,
+arm 안에 중첩된 handle body 가운데 `resume`이 직접 놓인 곳의 누적기에 합쳐진다
+([abilities.md](abilities.md#resume이-재개하는-계산)).
 
 ### Subsumption
 

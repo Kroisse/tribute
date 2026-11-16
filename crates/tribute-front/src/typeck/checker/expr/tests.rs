@@ -191,7 +191,6 @@ fn test_handler_do_binding_does_not_leak(db: &dyn salsa::Database) {
     let handle_ctx = HandleContext {
         handled_effects: AbilityRow::pure(db),
         node_id: handle_node_id,
-        answer_ty: body_ty,
         body_ty,
         body_effect: AbilityRow::pure(db),
         evidence_body: None,
@@ -290,7 +289,6 @@ fn test_same_name_handler_bindings_are_independent(db: &dyn salsa::Database) {
     let handle_ctx = HandleContext {
         handled_effects: AbilityRow::pure(db),
         node_id: handle_node_id,
-        answer_ty: Type::new(db, TypeKind::Nil),
         body_ty: Type::new(db, TypeKind::Nil),
         body_effect: AbilityRow::pure(db),
         evidence_body: None,

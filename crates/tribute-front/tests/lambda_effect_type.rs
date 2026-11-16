@@ -78,8 +78,8 @@ ability State(s) {
 fn run_with_state(f: fn() ->{State(Int)} Int) -> Int {
     handle f() {
         do result { result }
-        op State::get() { resume +42 }
-        op State::set(v) { resume Nil }
+        op State::get() { run_with_state(fn() resume +42) }
+        op State::set(v) { run_with_state(fn() resume Nil) }
     }
 }
 
@@ -117,8 +117,8 @@ fn counter() ->{State(Int)} Int {
 fn run_with_state(f: fn() ->{State(Int)} Int) -> Int {
     handle f() {
         do result { result }
-        op State::get() { resume +0 }
-        op State::set(v) { resume Nil }
+        op State::get() { run_with_state(fn() resume +0) }
+        op State::set(v) { run_with_state(fn() resume Nil) }
     }
 }
 
@@ -147,8 +147,8 @@ ability State(s) {
 fn run_with_state(f: fn() ->{State(Int)} Int) -> Int {
     handle f() {
         do result { result }
-        op State::get() { resume +0 }
-        op State::set(v) { resume Nil }
+        op State::get() { run_with_state(fn() resume +0) }
+        op State::set(v) { run_with_state(fn() resume Nil) }
     }
 }
 
@@ -295,7 +295,7 @@ ability State(s) {
 fn run_with_state(f: fn() ->{State(Int)} Int) -> Int {
     handle f() {
         do result { result }
-        op State::get() { resume +99 }
+        op State::get() { run_with_state(fn() resume +99) }
     }
 }
 

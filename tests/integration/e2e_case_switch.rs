@@ -54,11 +54,15 @@ fn asked(n: Nat) ->{Ask} Nat {
     }
 }
 
-fn answer(n: Nat) -> Nat {
-    handle asked(n) {
+fn answer_ask(comp: fn() ->{e, Ask} Nat) ->{e} Nat {
+    handle comp() {
         do value { value }
-        op Ask::ask() { resume 40 }
+        op Ask::ask() { answer_ask(fn() { resume 40 }) }
     }
+}
+
+fn answer(n: Nat) -> Nat {
+    answer_ask(fn() asked(n))
 }
 
 fn main() ->{Io} Nil {
@@ -187,11 +191,15 @@ fn asked(shape: Shape) ->{Ask} Nat {
     }
 }
 
-fn answer(shape: Shape) -> Nat {
-    handle asked(shape) {
+fn answer_ask(comp: fn() ->{e, Ask} Nat) ->{e} Nat {
+    handle comp() {
         do value { value }
-        op Ask::ask() { resume 40 }
+        op Ask::ask() { answer_ask(fn() { resume 40 }) }
     }
+}
+
+fn answer(shape: Shape) -> Nat {
+    answer_ask(fn() asked(shape))
 }
 
 fn main() ->{Io} Nil {

@@ -28,15 +28,21 @@ fn counter(comp: fn() ->{e, State(Nat)} Nat) ->{e, State(Nat)} Nat {
     }
 }
 
-fn main() -> Nil {
-    let _ = handle counter(fn() {
-        caller()
-        State::get()
-    }) {
+fn run_state(comp: fn() ->{State(Nat)} Nat) -> Nat {
+    handle comp() {
         do result { result }
-        op State::get() { resume 0 }
-        op State::set(v) { resume Nil }
+        op State::get() { run_state(fn() { resume 0 }) }
+        op State::set(v) { run_state(fn() { resume Nil }) }
     }
+}
+
+fn main() -> Nil {
+    let _ = run_state(fn() {
+        counter(fn() {
+            caller()
+            State::get()
+        })
+    })
     Nil
 }
 "#;

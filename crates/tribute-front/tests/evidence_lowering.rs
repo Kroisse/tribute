@@ -82,7 +82,8 @@ fn use_ask() ->{Ask} Nat {
 fn main() -> Nil {
     let r = handle use_ask() {
         do result { result }
-        op Ask::ask() { resume 42 }
+        // TODO(#1974): answer with an `fn` arm so the computation continues.
+        op Ask::ask() { 42 }
     }
 }
 "#,
@@ -90,4 +91,48 @@ fn main() -> Nil {
 
     let ir_text = run_ast_pipeline_with_ir(db, source);
     assert_snapshot!(ir_text);
+}
+
+/// A `resume` under a handler the resumed body does not name masks it, so
+/// operations reaching the body's row tail pass that handler.
+#[salsa_test]
+fn resume_under_another_handler_masks_it(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+ability Ping {
+    op ping() -> Nat
+}
+
+ability Other {
+    op other() -> Nil
+}
+
+fn handled(comp: fn() ->{e, Ping} Nat) ->{e, Ping} Nat {
+    handle comp() {
+        op Ping::ping() {
+            handle {
+                Other::other()
+                resume 0
+            } {
+                op Other::other() { 0 }
+            }
+        }
+    }
+}
+
+fn main() -> Nil { }
+"#,
+    );
+
+    let ir_text = run_ast_pipeline_with_ir(db, source);
+    let resume = ir_text
+        .lines()
+        .find(|line| line.contains("= tribute_control.resume "))
+        .expect("source-logical resume");
+    assert!(
+        resume.contains("{evidence_plan = [{mask = @\"ability_") && resume.contains("Other\"}]}"),
+        "{resume}"
+    );
 }

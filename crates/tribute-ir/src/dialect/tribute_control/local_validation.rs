@@ -311,12 +311,12 @@ pub(super) fn validate_resume(ctx: &IrContext, op: OpRef, errors: &mut Vec<Valid
             "operand type does not match the operation result type of the enclosing arm",
         );
     }
-    if result != resumption.answer {
+    if result != resumption.result {
         push_op_error(
             ctx,
             op,
             errors,
-            "result type does not match the result type of the enclosing handle",
+            "result type does not match the body result type of the enclosing handle",
         );
     }
 }

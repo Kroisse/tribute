@@ -59,7 +59,6 @@ impl Converter<'_> {
                 void_exit_k: None,
                 answer_type: result,
                 preserve_scf_yield: false,
-                arm: None,
                 tail_join: None,
             };
             self.convert_sequence(
@@ -387,7 +386,6 @@ impl Converter<'_> {
             void_exit_k: None,
             answer_type: source_result,
             preserve_scf_yield: false,
-            arm: None,
             tail_join: None,
         };
         self.convert_sequence(

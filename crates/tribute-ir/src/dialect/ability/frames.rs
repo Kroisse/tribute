@@ -125,7 +125,7 @@ impl trunk_ir::ops::Verify for SuffixFrame {
         Ok(verify_evidence_plan(
             ctx,
             self.op_ref(),
-            EvidencePlanSite::Legalized,
+            EvidencePlanSite::Source,
         )?)
     }
 }
@@ -165,7 +165,7 @@ impl trunk_ir::ops::Verify for Handle {
         }
 
         for (binding, &arm) in bindings.iter().zip(arms) {
-            verify_arm(ctx, binding, arm, exit)?;
+            verify_arm(ctx, binding, arm, (exit, body_frame))?;
         }
         Ok(())
     }
@@ -198,7 +198,7 @@ fn verify_arm(
     ctx: &IrContext,
     binding: &HandlerBinding,
     arm: ValueRef,
-    exit: TypeRef,
+    (exit, body_frame): (TypeRef, TypeRef),
 ) -> Result<(), String> {
     let name = ctx.str(binding.op_name);
     match binding.kind {
@@ -222,14 +222,13 @@ fn verify_arm(
             let role = format!("arm of op operation {name}");
             let rest = cps_closure_rest(ctx, arm, exit, &role)?;
             if binding.is_resumptive(ctx) {
-                let tokens_match = rest.len() >= 2
-                    && rest[rest.len() - 2..].iter().all(|&token| {
-                        is_resume_exact(ctx, token, exit, binding.operation_result_type)
-                    });
-                if !tokens_match {
+                let token_matches = rest.last().is_some_and(|&token| {
+                    is_resume_exact(ctx, token, body_frame, binding.operation_result_type)
+                });
+                if !token_matches {
                     return Err(format!(
-                        "{role} must end with two resumptions of the operation result \
-                         into the handle answer"
+                        "{role} must end with a resumption of the operation result \
+                         into the body frame"
                     ));
                 }
             }
@@ -270,7 +269,9 @@ mod tests {
   !frame_nil = ability.frame<core.nil>
   !completion = closure.closure<func.func_sig<(!ev, !frame_i32, core.nil) -> core.never>>
   !resume = closure.closure<func.func_sig<(!ev, !frame_i32, core.i32) -> core.never>>
-  !op_arm = closure.closure<func.func_sig<(!ev, !frame_i32, core.i32, !resume, !resume) -> core.never>>
+  !token = closure.closure<func.func_sig<(!ev, !frame_nil, core.i32) -> core.never>>
+  !op_arm = closure.closure<func.func_sig<(!ev, !frame_i32, core.i32, !token) -> core.never>>
+  !exit_token_arm = closure.closure<func.func_sig<(!ev, !frame_i32, core.i32, !resume) -> core.never>>
   !never_arm = closure.closure<func.func_sig<(!ev, !frame_i32, core.i32) -> core.never>>
   !fn_arm = closure.closure<func.func_sig<(!ev) -> core.i32>>"#;
 
@@ -440,17 +441,8 @@ mod tests {
     }
 
     #[test]
-    fn suffix_frame_may_select_the_evidence_a_handle_was_installed_on() {
-        let text = module(
-            ", %k: !completion",
-            "    %frame = ability.suffix_frame %ev, %exit, %k {evidence_plan = [{outer = @State}]} : !frame_nil\n    func.unreachable",
-        );
-        assert_eq!(errors(&text), "");
-    }
-
-    #[test]
     fn never_arm_accepts_cps_function_arguments() {
-        // `!op_arm`'s last inputs have the type of a resumption, as a `Cps`
+        // `!op_arm`'s last input has the type of a resumption, as a `Cps`
         // function argument of the operation would.
         let text = module(
             ARMS,
@@ -528,9 +520,17 @@ mod tests {
                 "must return core.never",
             ),
             (
-                "resumptive arm without tokens",
+                "resumptive arm without a token",
                 module(ARMS, &handle(&[binding("op", "fail", "core.i32")], "%fail", "")),
-                "must end with two resumptions",
+                "must end with a resumption",
+            ),
+            (
+                "token into the handle answer frame",
+                module(
+                    ", %get: !exit_token_arm, %done: !completion",
+                    &handle(&[binding("op", "get", "core.i32")], "%get", ""),
+                ),
+                "must end with a resumption",
             ),
             (
                 "non-mask handle selection",

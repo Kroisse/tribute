@@ -35,8 +35,6 @@ use super::subst;
 /// can assign proper effect information to continuation variables.
 pub(crate) struct HandleContext<'db> {
     pub node_id: NodeId,
-    /// The source result of the complete handle expression after its `do` arm.
-    pub answer_ty: Type<'db>,
     pub body_ty: Type<'db>,
     pub body_effect: AbilityRow<'db>,
     pub handled_effects: AbilityRow<'db>,
@@ -131,9 +129,6 @@ struct LocalScope<'db> {
 struct EffectFrames<'db> {
     /// Current accumulated effects.
     current_effect: AbilityRow<'db>,
-
-    /// Continuation effect rows captured while checking active lambdas.
-    lambda_resume_effects: Vec<Option<AbilityRow<'db>>>,
 
     /// Result types of the enclosing callables, innermost last. A `become`
     /// call must produce exactly this type. An inferred lambda has no result
@@ -379,7 +374,6 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
             },
             effects: EffectFrames {
                 current_effect: AbilityRow::pure(db),
-                lambda_resume_effects: Vec::new(),
                 callable_results: Vec::new(),
                 handle_ctx_stack: Vec::new(),
             },
@@ -1329,17 +1323,6 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
         self.effects.current_effect = effect;
     }
 
-    pub(crate) fn enter_lambda(&mut self) {
-        self.effects.lambda_resume_effects.push(None);
-    }
-
-    pub(crate) fn exit_lambda(&mut self) -> Option<AbilityRow<'db>> {
-        self.effects
-            .lambda_resume_effects
-            .pop()
-            .expect("lambda resume effect stack must be balanced")
-    }
-
     /// Enter a callable whose result type is `result`, or not yet known.
     pub(crate) fn push_callable_result(&mut self, result: Option<Type<'db>>) {
         self.effects.callable_results.push(result);
@@ -1372,13 +1355,6 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
 
     pub(crate) fn take_become_method_operands(&mut self) -> Vec<NodeId> {
         std::mem::take(&mut self.results.become_method_operands)
-    }
-
-    /// Record the continuation row selected by a resume in the active lambda.
-    pub(crate) fn record_lambda_resume_effect(&mut self, effect: AbilityRow<'db>) {
-        if let Some(slot) = self.effects.lambda_resume_effects.last_mut() {
-            *slot = Some(effect);
-        }
     }
 
     /// Push a handle context onto the stack.

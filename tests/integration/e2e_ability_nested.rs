@@ -131,13 +131,17 @@ fn use_both() ->{State(Nat), Reader(Nat)} Nat {
     n + 1
 }
 
-fn main() ->{Io} Nil {
-    let result = handle use_both() {
+fn run_both(comp: fn() ->{State(Nat), Reader(Nat)} Nat) -> Nat {
+    handle comp() {
         do result { result }
-        op State::get() { resume 0 }
-        op State::set(v) { resume Nil }
-        op Reader::ask() { resume 10 }
+        op State::get() { run_both(fn() { resume 0 }) }
+        op State::set(v) { run_both(fn() { resume Nil }) }
+        op Reader::ask() { run_both(fn() { resume 10 }) }
     }
+}
+
+fn main() ->{Io} Nil {
+    let result = run_both(use_both)
     print_line(result.to_string)
 }
 "#;

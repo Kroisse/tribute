@@ -244,7 +244,8 @@ fn count() ->{fx::Tick} Nat { fx::Tick::tick() }
 fn main() -> Nil {
     let _ = handle count() {
         do result { result }
-        op fx::Tick::tick() { resume 1 }
+        // TODO(#1974): answer with an `fn` arm so the computation continues.
+        op fx::Tick::tick() { 1 }
     }
 }
 "#,

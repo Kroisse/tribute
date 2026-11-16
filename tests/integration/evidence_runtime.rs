@@ -13,7 +13,7 @@ const EVIDENCE_TESTS: &str = r#"
 pub mod evidence_tests {
     use super::{Int, Nat}
     use super::runtime::Slots
-    use super::runtime::evidence::{Marker, extend, lookup, mask, dup, outer, tail, with_tail, push}
+    use super::runtime::evidence::{Marker, extend, lookup, mask, dup, tail, with_tail, push}
 
     fn empty() ->{} Slots(Marker) {
         Slots::empty()
@@ -51,7 +51,7 @@ pub mod evidence_tests {
         let tailed = ev.with_tail(-1, one())
         let a = digit(small(ev.lookup(+10)), ev.lookup(+5))
         let b = digit(a, ev.mask(+10).lookup(+10))
-        let c = digit(b, two().outer(+10).lookup(+10))
+        let c = digit(b, one().lookup(+10))
         let d = digit(c, one().dup(+10).mask(+10).lookup(+10))
         let e = digit(d, tailed.tail(-1).lookup(+10))
         let f = digit(e, tailed.lookup(+10))
@@ -77,8 +77,8 @@ fn program(call: &str) -> String {
 
 #[test]
 fn markers_stack_per_ability() {
-    // lookup 8 and 3; mask uncovers 7; outer is the evidence before; dup then
-    // mask is the original; a tail slot holds its evidence, leaves ability 10
+    // lookup 8 and 3; mask uncovers 7; the evidence before is unchanged; dup
+    // then mask is the original; a tail slot holds its evidence, leaves ability 10
     // alone, and is absent from evidence without it; push copies the top.
     assert_output_in_std_on_both_targets_with_native_asan(
         "evidence_runtime.trb",

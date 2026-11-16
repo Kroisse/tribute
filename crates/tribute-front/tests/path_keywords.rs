@@ -123,7 +123,8 @@ mod asking {
 fn main() -> Nil {
     let _ = handle asking::twice() {
         do value { value }
-        op pkg::Ask::ask() { resume 21 }
+        // TODO(#1974): answer with an `fn` arm so the computation continues.
+        op pkg::Ask::ask() { 42 }
     }
 }
 "#,
@@ -157,7 +158,8 @@ mod asking {
 fn main() -> Nil {
     let _ = handle asking::one() {
         do value { value }
-        op pkg::Ask::ask() { resume 1 }
+        // TODO(#1974): answer with an `fn` arm so the computation continues.
+        op pkg::Ask::ask() { 1 }
     }
 }
 "#,

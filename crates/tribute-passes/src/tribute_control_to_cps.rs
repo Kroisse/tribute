@@ -90,31 +90,10 @@ struct Converter<'a> {
     /// The convention tables, made with the converted evidence type when
     /// first needed.
     tables: Option<ConventionTables<AbstractFrames>>,
-    /// The first token of each converted resumptive arm, by its source
-    /// region. A `resume` that is not in the arm's own body, and a lambda
-    /// that carries the resumption, reach the arm through it.
+    /// The token of each converted resumptive arm, by its source region. A
+    /// `resume` in the arm, wherever it is written, and a lambda that
+    /// carries the resumption reach the arm through it.
     arm_tokens: HashMap<RegionRef, ValueRef>,
-}
-
-/// How a `resume` in the body of a handler arm reaches its continuation.
-#[derive(Clone)]
-struct ArmResume {
-    /// The token that installs the arm's handle again on the evidence it is
-    /// called with and resumes under it.
-    installed: ValueRef,
-    evidence: ArmEvidence,
-}
-
-/// Where the evidence of a handler arm is found at a point of its body.
-#[derive(Clone)]
-enum ArmEvidence {
-    /// The flow's evidence.
-    Flow,
-    /// The evidence the handles nested in the arm were installed on, read
-    /// from the flow's evidence: one handled instance per nested handle,
-    /// outermost first. Each handle's marker records the evidence it was
-    /// installed on.
-    Outside(Vec<trunk_ir::SymbolPath>),
 }
 
 /// The operations of a source block that follow the one being converted.
@@ -135,8 +114,6 @@ struct Flow {
     void_exit_k: Option<ValueRef>,
     answer_type: TypeRef,
     preserve_scf_yield: bool,
-    /// Set in the body of a resumptive handler arm, outside its lambdas.
-    arm: Option<ArmResume>,
     /// Set in the arms of a structured operation in tail position that a
     /// source `become` leaves.
     tail_join: Option<Box<TailJoin>>,
@@ -178,7 +155,7 @@ impl<'a> Converter<'a> {
         }
     }
 
-    /// The first converted token of the arm that provides `resumption`.
+    /// The converted token of the arm that provides `resumption`.
     fn arm_token(&self, resumption: &tribute_control::Resumption) -> ValueRef {
         *self
             .arm_tokens

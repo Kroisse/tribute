@@ -629,7 +629,8 @@ AbilityOp ::= 'fn' Identifier '(' ParamList? ')' '->' Type
 
 Ability operation은 두 종류로 선언한다:
 
-- **`fn`**: Tail-resumptive. Handler에서 반환값이 자동으로 resume 값이 된다.
+- **`fn`**: Tail-resumptive. Handler의 반환값이 operation의 결과가 되고, 나머지
+  계산은 같은 handler 아래에서 계속된다.
   Continuation을 캡처하지 않는다.
 - **`op`**: General. Handler에서 `resume` 키워드를 사용하여 명시적으로
   continuation을 호출한다. `-> Never`를 반환하면 절대 resume하지 않는
@@ -677,20 +678,22 @@ operation을 정의하듯, handler에서도 같은 키워드로 각 operation의
 | arm                    | 대상           | 의미                                               |
 | ---------------------- | -------------- | -------------------------------------------------- |
 | `do value { expr }`    | completion     | Computation 완료, 결과값 바인딩 (생략 시 identity) |
-| `fn Op(args) { body }` | `fn` operation | Tail-resumptive: body의 반환값이 resume 값         |
+| `fn Op(args) { body }` | `fn` operation | Tail-resumptive: body의 반환값이 operation의 결과  |
 | `op Op(args) { body }` | `op` operation | body에서 `resume` 키워드로 명시적 resume           |
 
 **`fn` handler arm:**
 
-Body의 반환값이 곧 resume 값. `resume` 사용 불가:
+Body의 반환값이 곧 operation의 결과. `resume` 사용 불가:
 
 ```rust
-fn Logger::log(msg) { print_line(msg) } // Nil 반환 → resume Nil
+fn Logger::log(msg) { print_line(msg) } // Nil이 log의 결과가 된다
 ```
 
 **`op` handler arm과 `resume`:**
 
-`resume`은 키워드로, computation을 재개하는 함수처럼 호출한다.
+`resume`은 키워드로, computation을 재개하는 함수처럼 호출한다. 재개된 계산에는 이
+handle이 들어 있지 않으며, `resume`의 결과는 handle body의 결과다
+([abilities.md](abilities.md#resume이-재개하는-계산)).
 `op -> T` handler body에서 `resume`은 최대 1회 호출할 수 있다 (affine).
 호출하지 않으면 continuation은 암묵적으로 drop된다:
 

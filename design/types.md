@@ -71,8 +71,8 @@ Case 결과와 리스트 리터럴 원소는 공통 타입 관계를 사용한�
 결과들은 같은 타입이어야 하며, 모두 `Never`이면 공통 타입도 `Never`다. 빈 리스트의
 원소 타입은 fresh 변수로 남는다. Handle의 공통 answer에는 정상 완료 경로(`do`,
 또는 `do`가 없으면 처리 대상 본문)와 `op` handler의 반환 경로가 포함된다.
-`fn` handler는 operation의 결과 타입을 반환한다. `resume`이 바깥 answer를 참조하는
-것은 그 answer 타입을 결정하는 독립적인 근거가 아니다.
+`fn` handler는 operation의 결과 타입을 반환한다. `resume`의 결과 타입은 처리 대상
+본문의 결과 타입이며 answer를 참조하지 않는다.
 
 ### 빈 타입과 명시적 제거
 

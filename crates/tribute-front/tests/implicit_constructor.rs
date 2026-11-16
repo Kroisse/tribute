@@ -375,7 +375,8 @@ fn handled() -> Int {
     let t = .Leaf(+1)
     let n = handle Ask::ask() {
         do r { r }
-        op Ask::ask() { resume +1 }
+        // TODO(#1974): answer with an `fn` arm so the computation continues.
+        op Ask::ask() { +1 }
     }
     take(t) + n
 }

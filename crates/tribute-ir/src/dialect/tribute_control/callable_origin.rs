@@ -473,8 +473,8 @@ impl CallableResultOrigin for Resume {
         result: ValueRef,
         query: &mut CallableQuery<'q>,
     ) -> bool {
-        resumed_handle_result(ctx, self.op_ref()).is_some_and(|handled| {
-            ctx.value_ty(handled) == ctx.value_ty(result) && query.accepts(ctx, handled)
+        resumed_body_result(ctx, self.op_ref()).is_some_and(|value| {
+            ctx.value_ty(value) == ctx.value_ty(result) && query.accepts(ctx, value)
         })
     }
 }
@@ -556,10 +556,11 @@ fn handle_result_sources(ctx: &IrContext, handle: Handle) -> Option<Vec<ValueRef
     Some(sources)
 }
 
-/// The result of the `handle` whose resumption `resume` consumes.
-fn resumed_handle_result(ctx: &IrContext, resume: OpRef) -> Option<ValueRef> {
+/// The value the body of the `handle` whose resumption `resume` consumes
+/// yields.
+fn resumed_body_result(ctx: &IrContext, resume: OpRef) -> Option<ValueRef> {
     let handle = super::DynResumptionRegions::enclosing(ctx, resume)?.handle;
-    ctx.op_results(handle).first().copied()
+    region_yield_value(ctx, ctx.op_region(handle, 0)?)
 }
 
 fn verified_callable_declaration(

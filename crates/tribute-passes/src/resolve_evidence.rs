@@ -4,7 +4,7 @@
 //! explicit evidence operands. This pass resolves handler prompt identities and
 //! replaces each delimiter body evidence argument with its extended evidence.
 //! It also turns each `evidence_plan` selection into `effect.mask`,
-//! `effect.dup`, `effect.outer`, `effect.tail`, `effect.push`, or
+//! `effect.dup`, `effect.tail`, `effect.push`, or
 //! `effect.with_tail` on the evidence the operation passes.
 
 use itertools::Itertools;
@@ -232,7 +232,7 @@ fn take_evidence_plan(
 /// Apply a selection to `evidence` before `op`, returning the selected evidence.
 ///
 /// `push` and the plans of `tails` read the evidence the selection starts
-/// from, after its leading `outer` steps.
+/// from.
 fn apply_evidence_plan(
     ctx: &mut IrContext,
     block: BlockRef,
@@ -241,7 +241,6 @@ fn apply_evidence_plan(
     plan: &[EvidenceStep],
 ) -> ValueRef {
     let location = ctx.op(op).location;
-    let mut source = evidence;
     let mut selected = evidence;
     for step in plan {
         let stack_op = |ctx: &mut IrContext, built: (OpRef, ValueRef)| {
@@ -261,13 +260,6 @@ fn apply_evidence_plan(
                     .build(ctx, location);
                 stack_op(ctx, (dup.op_ref(), dup.result(ctx)))
             }
-            EvidenceStep::Outer(instance) => {
-                let outer = effect::Outer::operands(selected)
-                    .ability(instance.clone())
-                    .build(ctx, location);
-                source = stack_op(ctx, (outer.op_ref(), outer.result(ctx)));
-                source
-            }
             EvidenceStep::Select(index) => {
                 let tail = effect::Tail::operands(selected)
                     .index(*index)
@@ -275,7 +267,7 @@ fn apply_evidence_plan(
                 stack_op(ctx, (tail.op_ref(), tail.result(ctx)))
             }
             EvidenceStep::Push(instance) => {
-                let push = effect::Push::operands(selected, source)
+                let push = effect::Push::operands(selected, evidence)
                     .ability(instance.clone())
                     .build(ctx, location);
                 stack_op(ctx, (push.op_ref(), push.result(ctx)))
@@ -283,7 +275,7 @@ fn apply_evidence_plan(
             EvidenceStep::Tails(plans) => {
                 let mut attached = selected;
                 for (index, plan) in plans.iter().enumerate() {
-                    let tail = apply_evidence_plan(ctx, block, op, source, plan);
+                    let tail = apply_evidence_plan(ctx, block, op, evidence, plan);
                     let with_tail = effect::WithTail::operands(attached, tail)
                         .index(index as u32)
                         .build(ctx, location);

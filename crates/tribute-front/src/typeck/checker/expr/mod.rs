@@ -329,7 +329,6 @@ impl<'db> TypeChecker<'db> {
 
                 // Use a new scope for lambda parameters so they don't leak out
                 ctx.push_scope();
-                ctx.enter_lambda();
                 ctx.push_callable_result(expected_result);
                 let (lambda_evidence, outer_evidence) = ctx.evidence.enter_callable(None);
 
@@ -354,47 +353,18 @@ impl<'db> TypeChecker<'db> {
                 let become_result = ctx.pop_callable_result();
                 ctx.pop_scope();
                 ctx.evidence.restore(outer_evidence);
-                let resume_effect = ctx.exit_lambda();
-                let inferred_effect = match (accumulated.rest(self.db()), resume_effect) {
-                    // Resuming performs the continuation's effects, so a closed
-                    // local row joins the continuation row instead of naming
-                    // its tail.
-                    (None, Some(resume_effect)) => {
-                        let mut effects = resume_effect.instances(self.db()).to_vec();
-                        for effect in accumulated.instances(self.db()) {
-                            if !effects.contains(effect) {
-                                effects.push(effect.clone());
-                            }
-                        }
-                        resume_effect.with_instances(self.db(), effects)
-                    }
-                    (None, None) => AbilityRow::new(
+                let inferred_effect = match accumulated.rest(self.db()) {
+                    None => AbilityRow::new(
                         self.db(),
                         accumulated.instances(self.db()),
                         expected_effect
                             .and_then(|effect| effect.rest(self.db()).map(|_| ctx.fresh_row_var())),
                     ),
-                    (Some(_), _) => accumulated,
+                    Some(_) => accumulated,
                 };
 
                 // Restore the outer context's effect
                 ctx.set_current_effect(outer_effect);
-
-                // A `resume` selects the ability row of the captured continuation.
-                // An open local row keeps its latent tail as the lambda's
-                // signature and is constrained to the continuation row so
-                // solving retains both the continuation identity and local
-                // effects.
-                if let Some(resume_effect) = resume_effect
-                    && accumulated.rest(self.db()).is_some()
-                {
-                    ctx.constrain_row_eq_at(
-                        inferred_effect,
-                        resume_effect,
-                        expr.id,
-                        ConstraintOriginKind::Lambda,
-                    );
-                }
                 ctx.effect_contract = outer_contract;
                 let lambda_effect = inferred_effect;
                 ctx.evidence
@@ -536,10 +506,9 @@ impl<'db> TypeChecker<'db> {
                 };
 
                 // Push handle context with the ORIGINAL body effect (including handled effects).
-                // The continuation `k` represents the rest of the original computation,
-                // which can still perform the handled effects. When `k(x)` is called
-                // (e.g., inside `fn() { k(init) }`), the lambda needs the full effect
-                // row `{e, State(s)}` so it matches the expected `comp` parameter type.
+                // A `resume` calls the rest of the body without this handle,
+                // so it performs the handled effects and returns the body's
+                // result rather than the handle's.
                 let completion_node = handlers
                     .iter()
                     .find(|handler| matches!(handler.kind, HandlerKind::Do { .. }))
@@ -547,7 +516,6 @@ impl<'db> TypeChecker<'db> {
                 ctx.add_result_source(expr.id, completion_node, completion_ty.unwrap_or(body_ty));
                 ctx.push_handle_ctx(super::super::func_context::HandleContext {
                     node_id: expr.id,
-                    answer_ty,
                     body_ty,
                     body_effect: body_effect_after,
                     handled_effects,

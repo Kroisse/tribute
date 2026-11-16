@@ -130,7 +130,7 @@ ability State(s) {
 
 fn pure_value() ->{State(Nat)} Nat { 10 }
 
-fn test() -> Nat {
+fn test() ->{State(Nat)} Nat {
     handle pure_value() {
         do result { result + result }
         op State::get() { resume 0 }

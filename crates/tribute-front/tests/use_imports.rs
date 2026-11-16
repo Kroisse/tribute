@@ -303,11 +303,13 @@ mod outer {
     pub fn run() -> Nat {
         let _ = handle count_unqualified() {
             do result { result }
-            op Tick::tick() { resume 2 }
+            // TODO(#1974): answer with an `fn` arm so the computation continues.
+            op Tick::tick() { 2 }
         }
         handle count() {
             do result { result }
-            op Tick::tick() { resume make().x }
+            // TODO(#1974): answer with an `fn` arm so the computation continues.
+            op Tick::tick() { make().x }
         }
     }
 }
@@ -403,7 +405,8 @@ mod outer {
     pub fn run() -> Nat {
         handle count() {
             do result { result }
-            op effects::Tick::tick() { resume 1 }
+            // TODO(#1974): answer with an `fn` arm so the computation continues.
+            op effects::Tick::tick() { 1 }
         }
     }
 }
@@ -484,7 +487,8 @@ mod outer {
     pub fn run() -> Nat {
         handle count() {
             do result { result }
-            op T::tick() { resume 1 }
+            // TODO(#1974): answer with an `fn` arm so the computation continues.
+            op T::tick() { 1 }
         }
     }
 }

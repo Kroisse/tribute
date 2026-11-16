@@ -39,7 +39,6 @@ pub struct EvidenceRuntime {
     extend: Option<RuntimeFunction>,
     mask: Option<RuntimeFunction>,
     dup: Option<RuntimeFunction>,
-    outer: Option<RuntimeFunction>,
     tail: Option<RuntimeFunction>,
     with_tail: Option<RuntimeFunction>,
     push: Option<RuntimeFunction>,
@@ -87,7 +86,6 @@ pub(crate) fn prepare_evidence_runtime(
         extend,
         mask: find(needs.mask, evidence::MASK)?,
         dup: find(needs.dup, evidence::DUP)?,
-        outer: find(needs.outer, evidence::OUTER)?,
         tail: find(needs.tail, evidence::TAIL)?,
         with_tail: find(needs.with_tail, evidence::WITH_TAIL)?,
         push: find(needs.push, evidence::PUSH)?,
@@ -156,7 +154,6 @@ fn effect_abi_target() -> ConversionTarget {
         .illegal_op("effect.extend")
         .illegal_op("effect.mask")
         .illegal_op("effect.dup")
-        .illegal_op("effect.outer")
         .illegal_op("effect.tail")
         .illegal_op("effect.with_tail")
         .illegal_op("effect.push")
@@ -172,7 +169,6 @@ struct RuntimeRequirements {
     extend: bool,
     mask: bool,
     dup: bool,
-    outer: bool,
     tail: bool,
     with_tail: bool,
     push: bool,
@@ -187,7 +183,6 @@ fn evidence_runtime_requirements(ctx: &IrContext, module: Module) -> RuntimeRequ
                 needs.extend |= effect::Extend::matches(ctx, op);
                 needs.mask |= effect::Mask::matches(ctx, op);
                 needs.dup |= effect::Dup::matches(ctx, op);
-                needs.outer |= effect::Outer::matches(ctx, op);
                 needs.tail |= effect::Tail::matches(ctx, op);
                 needs.with_tail |= effect::WithTail::matches(ctx, op);
                 needs.push |= effect::Push::matches(ctx, op);
@@ -297,15 +292,14 @@ impl OpRewritePattern for LowerEffectExtend<'_> {
     }
 }
 
-/// `effect.mask` / `effect.dup` / `effect.outer` → the runtime function of
-/// the same name.
+/// `effect.mask` / `effect.dup` → the runtime function of the same name.
 struct LowerEffectStackOp<'a> {
     runtime: &'a EvidenceRuntime,
 }
 
 impl RewritePattern for LowerEffectStackOp<'_> {
     fn roots(&self) -> Option<&[OpName]> {
-        Some(&[effect::Mask::NAME, effect::Dup::NAME, effect::Outer::NAME])
+        Some(&[effect::Mask::NAME, effect::Dup::NAME])
     }
 
     fn match_and_rewrite(
@@ -319,12 +313,6 @@ impl RewritePattern for LowerEffectStackOp<'_> {
             (runtime.mask, mask.ability(ctx).clone(), mask.evidence(ctx))
         } else if let Ok(dup) = effect::Dup::from_op(ctx, op) {
             (runtime.dup, dup.ability(ctx).clone(), dup.evidence(ctx))
-        } else if let Ok(outer) = effect::Outer::from_op(ctx, op) {
-            (
-                runtime.outer,
-                outer.ability(ctx).clone(),
-                outer.evidence(ctx),
-            )
         } else {
             return None;
         };

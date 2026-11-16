@@ -7,19 +7,15 @@ use super::*;
 pub const EVIDENCE_PLAN_ATTR: &str = "evidence_plan";
 
 /// One element of an `evidence_plan`. `{mask = instance}`, `{dup = instance}`,
-/// `{outer = instance}`, and `{push = instance}` name an exact
-/// `ability.decl` symbol; `{select = index}` names a row tail of the
-/// surrounding callable, and `{tails = [plan, ...]}` holds one plan for each
-/// row tail of the callee.
+/// and `{push = instance}` name an exact `ability.decl` symbol;
+/// `{select = index}` names a row tail of the surrounding callable, and
+/// `{tails = [plan, ...]}` holds one plan for each row tail of the callee.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum EvidenceStep {
     /// Hide the top handler of the instance, uncovering the one beneath.
     Mask(SymbolPath),
     /// Stack one more copy of the top handler of the instance.
     Dup(SymbolPath),
-    /// Take the evidence the top handler of the instance was installed on.
-    /// CPS legalization adds this step; source operations never carry it.
-    Outer(SymbolPath),
     /// Take the evidence of the surrounding callable's row tail `index`.
     Select(u32),
     /// Put the surrounding evidence's top handler of the instance on top of
@@ -34,10 +30,7 @@ impl EvidenceStep {
     /// The ability instance this step changes.
     pub fn instance(&self) -> Option<&SymbolPath> {
         match self {
-            Self::Mask(instance)
-            | Self::Dup(instance)
-            | Self::Outer(instance)
-            | Self::Push(instance) => Some(instance),
+            Self::Mask(instance) | Self::Dup(instance) | Self::Push(instance) => Some(instance),
             Self::Select(_) | Self::Tails(_) => None,
         }
     }
@@ -63,7 +56,6 @@ impl EvidenceStep {
         match ctx.str(key) {
             "mask" => instance().map(Self::Mask),
             "dup" => instance().map(Self::Dup),
-            "outer" => instance().map(Self::Outer),
             "push" => instance().map(Self::Push),
             "select" => match value {
                 Attribute::Int(index) => u32::try_from(*index)
@@ -90,8 +82,7 @@ impl EvidenceStep {
                     .map(Self::Tails)
             }
             other => Err(format!(
-                "evidence_plan element must be mask, dup, outer, select, push, or tails, \
-                 found {other}"
+                "evidence_plan element must be mask, dup, select, push, or tails, found {other}"
             )),
         }
     }
@@ -100,7 +91,6 @@ impl EvidenceStep {
         let (keyword, value) = match self {
             Self::Mask(instance) => ("mask", Attribute::SymbolRef(instance.clone())),
             Self::Dup(instance) => ("dup", Attribute::SymbolRef(instance.clone())),
-            Self::Outer(instance) => ("outer", Attribute::SymbolRef(instance.clone())),
             Self::Push(instance) => ("push", Attribute::SymbolRef(instance.clone())),
             Self::Select(index) => ("select", Attribute::Int(i128::from(*index))),
             Self::Tails(plans) => (
@@ -156,13 +146,10 @@ impl trunk_ir::attr_kind::AttrKind for EvidenceStep {
 /// may hold.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum EvidencePlanSite {
-    /// A source call or resume: no `outer` step.
+    /// A call, `resume`, or an operation built from one.
     Source,
     /// A handle: `mask` steps only.
     Handle,
-    /// An operation CPS legalization built from a source operation, which may
-    /// also select the evidence a handle was installed on.
-    Legalized,
 }
 
 /// Check the shape of an operation's `evidence_plan`. Whether the selection
@@ -192,23 +179,16 @@ pub(crate) fn verify_evidence_plan(
     {
         return Err("a handle's evidence_plan may only mask".into());
     }
-    verify_evidence_steps(&steps, true, site == EvidencePlanSite::Legalized)
+    verify_evidence_steps(&steps, true)
 }
 
 /// Check one plan: an optional leading `select`, then the steps on ability
 /// instances, each instance changed in one way, then an optional `tails`
 /// whose plans follow the same rule without `tails` of their own.
-fn verify_evidence_steps(
-    steps: &[EvidenceStep],
-    tails_allowed: bool,
-    outer_allowed: bool,
-) -> Result<(), String> {
+fn verify_evidence_steps(steps: &[EvidenceStep], tails_allowed: bool) -> Result<(), String> {
     let mut seen = HashSet::default();
     for (index, step) in steps.iter().enumerate() {
         match step {
-            EvidenceStep::Outer(_) if !outer_allowed => {
-                return Err("a source operation's evidence_plan may not use outer".into());
-            }
             EvidenceStep::Select(_) if index != 0 => {
                 return Err("evidence_plan select must be the first step".into());
             }
@@ -224,12 +204,10 @@ fn verify_evidence_steps(
             }
             EvidenceStep::Tails(plans) => {
                 for plan in plans {
-                    verify_evidence_steps(plan, false, outer_allowed)?;
+                    verify_evidence_steps(plan, false)?;
                 }
             }
-            EvidenceStep::Mask(instance)
-            | EvidenceStep::Dup(instance)
-            | EvidenceStep::Outer(instance) => {
+            EvidenceStep::Mask(instance) | EvidenceStep::Dup(instance) => {
                 if !seen.insert((instance, false)) {
                     return Err(format!(
                         "evidence_plan names ability instance {instance} more than once"
