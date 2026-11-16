@@ -20,7 +20,7 @@ fn handle_state(comp: fn() ->{e, State(Int)} Int) ->{e} Int {
 }
 
 fn run_state() ->{} Int {
-    handle_state(fn() bump())
+    handle_state(bump)
 }
 
 fn main() ->{Io} Nil {

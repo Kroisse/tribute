@@ -67,7 +67,7 @@ fn run_gate(stop: Bool, comp: fn() ->{e, Gate} ReadOutcome) ->{e} ReadOutcome {
 }
 
 fn nested_gate(stop: Bool) -> ReadOutcome {
-    let inner = run_gate(stop, fn() { gate_body() })
+    let inner = run_gate(stop, gate_body)
     handle inner {
         do value {
             case value {
@@ -389,7 +389,7 @@ fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
 }
 
 fn main() -> Nil {
-    let _ = run_state(fn() { get_state() }, +42)
+    let _ = run_state(get_state, +42)
 }
 "#;
     let output = compile_and_run_native("state_get_simple.trb", code);
@@ -778,7 +778,7 @@ fn run_counter(comp: fn() ->{e, MyMod::Counter} a) ->{e} a {
 }
 
 fn main() ->{Io} Nil {
-    let result = run_counter(fn() { count() })
+    let result = run_counter(count)
     print_line(result.to_string)
 }
 "#;
@@ -883,7 +883,7 @@ fn run_ask(comp: fn() ->{e, Ask} a) ->{e} a {
 }
 
 fn main() ->{Io} Nil {
-    let result = run_ask(fn() { pure_value() })
+    let result = run_ask(pure_value)
     print_line(result.to_string)
 }
 "#;
@@ -911,7 +911,7 @@ fn run_ask(comp: fn() ->{e, Ask} Nat) ->{e} Nat {
 }
 
 fn main() ->{Io} Nil {
-    let result = run_ask(fn() { pure_value() })
+    let result = run_ask(pure_value)
     print_line(result.to_string)
 }
 "#;
@@ -944,7 +944,7 @@ fn run_state(comp: fn() ->{e, State(Nat)} Nat) ->{e} Nat {
 }
 
 fn main() ->{Io} Nil {
-    let result = run_state(fn() { pure_value() })
+    let result = run_state(pure_value)
     print_line(result.to_string)
 }
 "#;
@@ -981,7 +981,7 @@ fn run_state(comp: fn() ->{e, State(Nat)} Nat) ->{e} Nat {
 }
 
 fn main() ->{Io} Nil {
-    let result = run_state(fn() { effectful_value() })
+    let result = run_state(effectful_value)
     print_line(result.to_string)
 }
 "#;
@@ -1130,7 +1130,7 @@ fn run_state(comp: fn() ->{e, State(Nat)} Nat) ->{e} Nat {
 }
 
 fn main() ->{Io} Nil {
-    let result = run_state(fn() { compute() })
+    let result = run_state(compute)
     print_line(result.to_string)
 }
 "#;
@@ -1173,7 +1173,7 @@ fn run_state(comp: fn() ->{e, State(Nat)} Nat) ->{e} Nat {
 }
 
 fn main() ->{Io} Nil {
-    let result = run_state(fn() { compute() })
+    let result = run_state(compute)
     print_line(result.to_string)
 }
 "#;
@@ -1209,7 +1209,7 @@ fn run_state(comp: fn() ->{e, State(Nat)} Nat) ->{e} Nat {
 }
 
 fn main() ->{Io} Nil {
-    let result = run_state(fn() { compute() })
+    let result = run_state(compute)
     print_line(result.to_string)
 }
 "#;
@@ -1247,7 +1247,7 @@ fn run_multi(comp: fn() ->{e, Multi} a) ->{e} a {
 }
 
 fn main() ->{Io} Nil {
-    let result = run_multi(fn() { use_multi() })
+    let result = run_multi(use_multi)
     print_line(result.to_string)
 }
 "#;
@@ -1275,7 +1275,7 @@ fn run_pair(comp: fn() ->{e, Pair} a) ->{e} a {
 }
 
 fn main() ->{Io} Nil {
-    let result = run_pair(fn() { use_pair() })
+    let result = run_pair(use_pair)
     print_line(result.to_string)
 }
 "#;
@@ -1303,7 +1303,7 @@ fn run_pick(comp: fn() ->{e, Pick} a) ->{e} a {
 }
 
 fn main() ->{Io} Nil {
-    let result = run_pick(fn() { use_pick() })
+    let result = run_pick(use_pick)
     print_line(result.to_string)
 }
 "#;
@@ -1357,7 +1357,7 @@ fn run_math(comp: fn() ->{e, Math} a) ->{e} a {
 }
 
 fn main() ->{Io} Nil {
-    let result = run_math(fn() { computation() })
+    let result = run_math(computation)
     print_line(result.to_string)
 }
 "#;
@@ -1825,7 +1825,7 @@ fn run_next(comp: fn() ->{e, Next} Int, step: Cell) ->{e} Int {
 }
 
 fn resumed(step: Cell) -> Int {
-    run_next(fn() { counted() }, step)
+    run_next(counted, step)
 }
 
 fn nested(cell: Cell) -> Int {
@@ -1904,12 +1904,12 @@ fn never_called(comp: fn() ->{e, Next} Int, fallback: Cell) ->{e} Int {
 }
 
 fn main() ->{Io} Nil {
-    let carried = run_next(fn() { counted() }, Cell { value: +4 })
+    let carried = run_next(counted, Cell { value: +4 })
     print_line(carried.to_string)
-    let direct = run_next(fn() { first_next(fn() { counted() }, Cell { value: +30 }) }, Cell { value: +4 })
+    let direct = run_next(fn() { first_next(counted, Cell { value: +30 }) }, Cell { value: +4 })
     print_line(direct.to_string)
-    print_line(stopped(fn() { counted() }, Cell { value: +7 }).to_string)
-    print_line(never_called(fn() { counted() }, Cell { value: +9 }).to_string)
+    print_line(stopped(counted, Cell { value: +7 }).to_string)
+    print_line(never_called(counted, Cell { value: +9 }).to_string)
 }
 "#;
     for output in [
@@ -2012,7 +2012,7 @@ fn run_gen(comp: fn() ->{e, Gen} fn(Int) ->{} Int) ->{e} fn(Int) ->{} Int {
 }
 
 fn resumed() -> Int {
-    let f = run_gen(fn() { nexts() })
+    let f = run_gen(nexts)
     f(+1)
 }
 
@@ -2172,7 +2172,7 @@ fn main() ->{Io} Nil {
         fn Counter::next() { +3 }
     }
     print_line(Int::to_string(counted))
-    let asked = run_ask(fn() { ask_twice() })
+    let asked = run_ask(ask_twice)
     print_line(Int::to_string(asked))
     let stopped = handle stop_early() {
         op Stop::stop() { -1 }
@@ -2396,9 +2396,9 @@ fn through_lambda() ->{State(Int)} Int {
 }
 
 fn main() ->{Io} Nil {
-    let a = run_state(fn() { direct() }, +100)
+    let a = run_state(direct, +100)
     print_line(a.to_string)
-    let b = run_state(fn() { through_lambda() }, +100)
+    let b = run_state(through_lambda, +100)
     print_line(b.to_string)
 }
 "#;
@@ -2437,7 +2437,7 @@ fn body() ->{State(Int)} Int {
 }
 
 fn main() ->{Io} Nil {
-    let result = run_state(fn() { body() }, +0)
+    let result = run_state(body, +0)
     print_line(result.to_string)
 }
 "#;

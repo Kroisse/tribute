@@ -1211,7 +1211,7 @@ fn handle_counter(comp: fn() ->{e, Counter} Int) ->{e} Int {
 }
 
 fn main() -> Nil {
-    let _ = handle_counter(fn() count())
+    let _ = handle_counter(count)
 }
 "#,
     );

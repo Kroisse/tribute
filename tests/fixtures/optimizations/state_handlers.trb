@@ -20,7 +20,7 @@ fn handle_state(comp: fn() ->{e, State(Int)} Int) ->{e} Int {
 }
 
 fn run_state() ->{} Int {
-    handle_state(fn() bump())
+    handle_state(bump)
 }
 
 // These independently lowered source handles make the baseline profile emit
@@ -36,7 +36,7 @@ fn handle_state_again(comp: fn() ->{e, State(Int)} Int) ->{e} Int {
 }
 
 fn run_state_again() ->{} Int {
-    handle_state_again(fn() bump())
+    handle_state_again(bump)
 }
 
 fn handle_state_once_more(comp: fn() ->{e, State(Int)} Int) ->{e} Int {
@@ -48,7 +48,7 @@ fn handle_state_once_more(comp: fn() ->{e, State(Int)} Int) ->{e} Int {
 }
 
 fn run_state_once_more() ->{} Int {
-    handle_state_once_more(fn() bump())
+    handle_state_once_more(bump)
 }
 
 fn main() ->{Io} Nil {

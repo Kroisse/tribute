@@ -667,7 +667,7 @@ fn run_state(comp: fn() ->{e, State(Int)} Int) ->{e} Int {
     }
 }
 fn main() ->{Io} Nil {
-    let value = run_state(fn() run())
+    let value = run_state(run)
     print_line(value.to_string)
 }
 "#

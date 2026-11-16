@@ -706,7 +706,7 @@ fn handle_foo(body: fn() ->{e, Foo} Nil) ->{e} Nil {
 }
 
 fn valid() ->{Bar} Nil {
-    handle_foo(fn() comp())
+    handle_foo(comp)
 }
 "#,
     );

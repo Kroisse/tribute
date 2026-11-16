@@ -3723,7 +3723,7 @@ fn tag_handler(comp: fn() ->{e, Tag(fn(Int) ->{} Int)} Int) ->{e} Int {
 }
 
 fn main() ->{Io} Nil {
-    let value = tag_handler(fn() tagged())
+    let value = tag_handler(tagged)
     print_line(Int::to_string(value))
 }
 "#,

@@ -308,7 +308,7 @@ fn handle_state(comp: fn() ->{e, State(Int)} Int) ->{e} Int {
 }
 
 fn run_state() ->{} Int {
-    handle_state(fn() bump())
+    handle_state(bump)
 }
 
 fn main() -> Nil {
@@ -344,7 +344,7 @@ fn handle_state(comp: fn() ->{e, State(Int)} Int) ->{e} Int {
 }
 
 fn run_state_with_console() ->{Console} Int {
-    handle_state(fn() step())
+    handle_state(step)
 }
 
 fn run_all() -> Int {
