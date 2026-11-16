@@ -389,7 +389,7 @@ fn run_state(comp: fn() ->{e, State(Int)} Int) ->{e} Int {
 }
 
 fn main() ->{std::io::Io} Nil {
-    case run_state(fn() bump()) {
+    case run_state(bump) {
         +41 -> std::io::print_line("ok")
         _ -> std::io::print_line("unexpected")
     }

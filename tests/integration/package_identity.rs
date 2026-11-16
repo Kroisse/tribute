@@ -30,7 +30,7 @@ fn answer_tick(comp: fn() ->{e, std::Tick} Int) ->{e} Int {
 }
 
 fn main() ->{Io} Nil {
-    let ticked = answer_tick(fn() count())
+    let ticked = answer_tick(count)
     print_line(Int::to_string(std::Int::probe(+1) + ticked))
 }
 "#;
