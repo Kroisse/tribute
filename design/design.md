@@ -143,11 +143,12 @@ RRB invariant를 만족하는 target-private physical layout을 사용한다.
 
 Tribute는 Unison의 선례를 따라 algebraic effect를 **ability**라고 부른다.
 
-일반 ability와 별도로 compiler-owned builtin ambient ability를 둘 수 있다.
-현재 유일한 ambient ability는 `std::io::Io`이며 handler로 제거할 수 없고
-entrypoint에 terminal effect로 남을 수 있다. 사용자에게 ambient ability 선언
-문법은 제공하지 않는다. 기본 I/O API는 [io.md](io.md)를, 호출 규약은
-[CPS 전략](cps-effects.md#호출-규약)을 따른다.
+Compiler가 특별히 아는 ambient ability는 두지 않는다. Program 밖의 기능은
+host가 처리하는 ability로 열며, entrypoint에 남은 ability가 program의
+host interface가 된다. 표준 입출력도 패키지 `std`의 source에 선언한 ability `std::io::Io`와 그 위의
+`std::io::Read`, `std::io::Write`로 제공한다([io.md](io.md),
+[std-abilities.md](std-abilities.md)). 호출 규약은 [CPS 전략](cps-effects.md#호출-규약)을
+따른다.
 
 ### Continuation 의미론
 
