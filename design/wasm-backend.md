@@ -599,10 +599,11 @@ descriptor](runtime-types.md#wasm-배치) index를 두어 runtime identity를 �
   목록은 interning으로 같은 타입이 된다.
 - 소스 필드의 저장 표현은 다음과 같다. `core.i1`은 `core.i32`, struct나 enum
   layout의 `heap.box`는 자기를 담을 수 있으므로 `wasm.structref`, 배열 layout의
-  `heap.box`는 아래 배열 규칙이 원소 타입으로 정한 표현, inline 필드는 자신의
-  leaf들을 둘러싼 GC struct의 필드로 기여하며, literal `adt.enum` 값은 emission이
-  쓰는 erased `wasm.anyref`, 중첩된 사용자 struct는 그 struct의
-  `wasm_gc.struct`이다. Builtin layout을 포함한 나머지 타입은 그대로 둔다.
+  `heap.box`는 아래 배열 규칙이 원소 타입으로 정한 표현, literal `adt.enum` 값은
+  emission이 쓰는 erased `wasm.anyref`이다. 사용자 struct 타입의 필드는 표현 선택
+  뒤에 box이거나 inline이다. Box이면 위의 `heap.box` 규칙을 따르고, inline이면 자신의
+  leaf들을 둘러싼 GC struct의 필드로 기여하며 자기 `wasm_gc.struct`를 따로 갖지
+  않는다. Builtin layout을 포함한 나머지 타입은 그대로 둔다.
 - Variant의 타입은 그 variant 자신의 필드로 만든다. Enum의 다른 variant 필드를
   복사하지 않는다.
 - Nominal layout을 마지막으로 읽는 단계는 `adt_to_wasm`이다. 그 뒤
