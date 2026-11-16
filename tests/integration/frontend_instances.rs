@@ -380,6 +380,7 @@ fn run() ->{State(Int)} Int {
 fn main() -> Nil {
     let _ = handle run() {
         do value { value }
+        // TODO(#1974): answer with an `fn` arm so the computation continues.
         op State::get() { +0 }
     }
 }

@@ -82,6 +82,7 @@ fn use_ask() ->{Ask} Nat {
 fn main() -> Nil {
     let r = handle use_ask() {
         do result { result }
+        // TODO(#1974): answer with an `fn` arm so the computation continues.
         op Ask::ask() { 42 }
     }
 }
