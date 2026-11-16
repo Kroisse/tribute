@@ -74,9 +74,9 @@ mod closure {
     ///
     /// ```text
     /// %f = closure.lambda [%y] direct(%x: core.i32) -> core.i32 { .. }
-    /// %g = closure.lambda {adapters = {evidence_direct = @a0}} [%y] direct(%x: core.i32) -> core.i32 {
+    /// %g = closure.lambda [%y] direct(%x: core.i32) -> core.i32 {
     ///   ..
-    /// } cps(%ev: E, %k: K, %x: core.i32) -> core.i32 {
+    /// } evidence_direct @a0 cps(%ev: E, %k: K, %x: core.i32) -> core.i32 {
     ///   ..
     /// } : closure.closure<S>
     /// ```
@@ -86,10 +86,14 @@ mod closure {
     ///   body in the same order: its parameters, the hidden ones of its
     ///   convention included, without the environment, and its result. There
     ///   is one body region per convention, whose entry block takes its
-    ///   signature's parameters. Each body is written under its
-    ///   convention's keyword with the parameters and result of its
-    ///   signature; the closure type is omitted when the lambda has one body
-    ///   and the type is the closure of its signature.
+    ///   signature's parameters. `adapters` is keyed by convention keywords,
+    ///   each stronger than some body's convention and none a body's.
+    /// - **Text:** the captures come first, then any other attributes as
+    ///   `attributes {..}`, then the convention table's slots in order: a
+    ///   body under its convention's keyword with the parameters and result
+    ///   of its signature, and an adapter as its keyword and symbol
+    ///   (`evidence_direct @a0`). The closure type is omitted when the
+    ///   lambda has one body and the type is the closure of its signature.
     /// - **Meaning:** a body is the closure's entry for its convention. The
     ///   closure type's callable is the closure's identity and may differ
     ///   from every signature. `adapters` names, by convention keyword, the
@@ -99,8 +103,10 @@ mod closure {
     ///   closure type's callable is its own entry, has one body and no
     ///   adapters.
     /// - **Verification:** the verifier checks that the conventions are
-    ///   strictly increasing, that each signature is a `func.func_sig`, and
-    ///   that there is a signature and a body for each convention.
+    ///   strictly increasing, that each signature is a `func.func_sig`, that
+    ///   there is a signature and a body for each convention, and that each
+    ///   adapter's key is a convention without a body stronger than some
+    ///   body's.
     /// - **Ownership and value flow:** the captures are values of the
     ///   enclosing scope (the lambda is not isolated from above), shared by
     ///   every body. Lambda lifting extracts each body into a top-level
@@ -141,6 +147,14 @@ pub struct LambdaEntry {
     "closure.lambda needs strictly increasing conventions, and a func.func_sig and a body for each"
 )]
 pub struct MalformedEntries;
+
+/// An adapter of a `closure.lambda` does not fill a slot without a body
+/// that is stronger than one of its bodies.
+#[derive(Clone, Copy, Debug, derive_more::Display, derive_more::Error)]
+#[display(
+    "closure.lambda adapters are keyed by conventions without a body, each stronger than a body's"
+)]
+pub struct MalformedAdapters;
 
 impl Lambda {
     /// The bodies in order, with their conventions and signatures; `None`
@@ -184,14 +198,45 @@ impl Lambda {
             .is_sorted_by(|a, b| a.convention < b.convention)
             .then_some(entries)
     }
+
+    /// The adapters in convention order, given the lambda's `entries`;
+    /// `None` when one is not keyed by a convention without a body that is
+    /// stronger than some body's.
+    pub fn adapter_entries<'a>(
+        &self,
+        ctx: &'a trunk_ir::IrContext,
+        entries: &[LambdaEntry],
+    ) -> Option<Vec<(CallingConvention, &'a trunk_ir::SymbolPath)>> {
+        let weakest = entries.first()?.convention;
+        let Some(adapters) = ctx.op_attrs(self.op_ref()).get("adapters") else {
+            return Some(Vec::new());
+        };
+        let trunk_ir::Attribute::Dict(adapters) = adapters else {
+            return None;
+        };
+        let mut adapters = adapters
+            .view(ctx)
+            .iter()
+            .map(|(key, adapter)| {
+                let convention = key.parse::<CallingConvention>().ok()?;
+                let trunk_ir::Attribute::SymbolRef(adapter) = adapter else {
+                    return None;
+                };
+                (convention > weakest && entries.iter().all(|e| e.convention != convention))
+                    .then_some((convention, adapter))
+            })
+            .collect::<Option<Vec<_>>>()?;
+        adapters.sort_by_key(|&(convention, _)| convention);
+        Some(adapters)
+    }
 }
 
 impl trunk_ir::ops::Verify for Lambda {
     fn verify(&self, ctx: &trunk_ir::IrContext) -> Result<(), trunk_ir::ops::VerificationError> {
-        match self.entries(ctx) {
-            Some(_) => Ok(()),
-            None => Err(MalformedEntries.into()),
-        }
+        let entries = self.entries(ctx).ok_or(MalformedEntries)?;
+        self.adapter_entries(ctx, &entries)
+            .ok_or(MalformedAdapters)?;
+        Ok(())
     }
 }
 
@@ -222,8 +267,8 @@ fn spells_signature(
             .eq(signature.inputs(ctx).iter().copied())
 }
 
-/// Print closure.lambda with each body under its convention:
-/// `%r = closure.lambda {attrs} [%cap0, %cap1] <convention>(%param: type, ...) -> ret { body } ... [: closure]`
+/// Print closure.lambda with its convention table's slots in order:
+/// `%r = closure.lambda [%cap0, %cap1] attributes {..} <convention>(%param: type, ...) -> ret { body } <convention> @adapter ... [: closure]`
 ///
 /// Each body's parameters and result spell its signature, so a signature
 /// with attributes of its own, or whose inputs are not its body's
@@ -235,18 +280,18 @@ fn print_closure_lambda(
     use itertools::Itertools as _;
     use std::fmt::Write;
     use trunk_ir::ops::{DialectOp, DialectType};
+    use trunk_ir::printer::display_symbol_ref;
 
     let s = p.state();
     let ctx = s.ctx();
-    let Some(entries) = Lambda::from_op(ctx, op)
-        .ok()
-        .and_then(|lambda| lambda.entries(ctx))
-        .filter(|entries| {
-            entries
-                .iter()
-                .all(|entry| spells_signature(ctx, entry.signature, entry.body))
-        })
-    else {
+    let Some((entries, adapters)) = Lambda::from_op(ctx, op).ok().and_then(|lambda| {
+        let entries = lambda.entries(ctx)?;
+        let adapters = lambda.adapter_entries(ctx, &entries)?;
+        entries
+            .iter()
+            .all(|entry| spells_signature(ctx, entry.signature, entry.body))
+            .then_some((entries, adapters))
+    }) else {
         return p.print_generic(op);
     };
     let result_ty = ctx.op_result_types(op)[0];
@@ -258,27 +303,39 @@ fn print_closure_lambda(
 
     write!(p, "{} = closure.lambda", s.value(ctx.op_results(op)[0]))?;
 
-    // " {key = val, ...}" — attributes other than the entry lists (if any)
-    let mut attrs = ctx
-        .op_attrs(op)
-        .iter()
-        .filter(|(key, _)| *key != "signatures" && *key != "conventions")
-        .peekable();
-    if attrs.peek().is_some() {
-        let attrs = attrs.format_with(", ", |(key, val), f| {
-            f(&format_args!("{key} = {}", s.attr(val)))
-        });
-        write!(p, " {{{attrs}}}")?;
-    }
-
     // " [%x, %y]" — captures (operands)
     let captures = ctx.op_operands(op);
     if !captures.is_empty() {
         write!(p, " [{}]", s.values(captures))?;
     }
 
-    // " <convention>(%param: type, ...) -> ret { body }" — entry label elided
+    // " attributes {key = val, ...}" — attributes the slots do not write
+    let mut attrs = ctx
+        .op_attrs(op)
+        .iter()
+        .filter(|(key, _)| !matches!(*key, "signatures" | "conventions" | "adapters"))
+        .peekable();
+    if attrs.peek().is_some() {
+        let attrs = attrs.format_with(", ", |(key, val), f| {
+            f(&format_args!("{key} = {}", s.attr(val)))
+        });
+        write!(p, " attributes {{{attrs}}}")?;
+    }
+
+    // The slots in convention order: " <convention>(%param: type, ...) -> ret
+    // { body }" for a body and " <convention> @adapter" for an adapter.
+    let mut adapters = adapters.into_iter().peekable();
     for entry in entries {
+        while let Some((convention, adapter)) =
+            adapters.next_if(|&(convention, _)| convention < entry.convention)
+        {
+            write!(
+                p,
+                " {} {}",
+                convention.keyword(),
+                display_symbol_ref(adapter)
+            )?;
+        }
         write!(
             p,
             " {}{}",
@@ -290,29 +347,19 @@ fn print_closure_lambda(
         }
         p.print_body(entry.body)?;
     }
+    for (convention, adapter) in adapters {
+        write!(
+            p,
+            " {} {}",
+            convention.keyword(),
+            display_symbol_ref(adapter)
+        )?;
+    }
 
     if !closure_of_signature {
         write!(p, " : {}", s.ty(result_ty))?;
     }
     Ok(())
-}
-
-/// Lookahead: does the input start with an attribute dict `{key = ...}`?
-///
-/// Distinguishes `{key = val}` (attr dict) from `{ ops... }` (body region).
-/// Checks for `{` + optional whitespace + identifier + whitespace + `=`.
-fn starts_attr_dict(input: &str) -> bool {
-    let rest = input.strip_prefix('{').unwrap_or("");
-    let rest = rest.trim_start();
-    // Must start with an ident char (letter or _)
-    let after_ident =
-        rest.trim_start_matches(|c: char| c.is_ascii_alphanumeric() || c == '_' || c == '.');
-    // Must have consumed at least one ident char, then whitespace + '='
-    if after_ident.len() == rest.len() {
-        return false; // no ident consumed
-    }
-    let after_ws = after_ident.trim_start();
-    after_ws.starts_with('=')
 }
 
 /// Parse the `closure.lambda` custom format [`print_closure_lambda`] writes.
@@ -324,17 +371,6 @@ fn parse_closure_lambda(
     use trunk_ir::{Attribute, AttributeMap};
     use winnow::Parser as _;
 
-    // " {key = val, ...}" (optional attributes)
-    let attributes = if starts_attr_dict(p.peek()) {
-        p.parse_attr_dict()?
-    } else {
-        AttributeMap::new()
-    };
-    let view = attributes.view(p.ctx());
-    if view.contains_key("signatures") || view.contains_key("conventions") {
-        return Err(p.expected("attributes without `signatures` or `conventions`"));
-    }
-
     // " [%x, %y]" (optional captures)
     let captures = if p.peek().starts_with('[') {
         p.parse_delimited("[", "]", |p| p.parse_operand())?
@@ -342,15 +378,40 @@ fn parse_closure_lambda(
         Vec::new()
     };
 
-    // " <convention>(%param: type, ...) -> ret { body }", one or more
+    // " attributes {key = val, ...}" (optional attributes)
+    let attributes = if p.parse_optional_keyword("attributes") {
+        p.parse_attr_dict()?
+    } else {
+        AttributeMap::new()
+    };
+    let view = attributes.view(p.ctx());
+    if ["signatures", "conventions", "adapters"]
+        .into_iter()
+        .any(|key| view.contains_key(key))
+    {
+        return Err(p.expected("attributes without `signatures`, `conventions`, or `adapters`"));
+    }
+
+    // The slots, one or more: " <convention>(%param: type, ...) -> ret
+    // { body }" for a body and " <convention> @adapter" for an adapter.
     let mut conventions = Vec::new();
     let mut signatures = Vec::new();
     let mut regions = Vec::new();
+    let mut adapters = AttributeMap::new();
     while let Some(convention) = p.parse_optional_token("a calling convention", |input| {
         ident
             .try_map(str::parse::<CallingConvention>)
             .parse_next(input)
     })? {
+        if p.peek().starts_with('@') {
+            let adapter = p.parse_symbol_ref()?;
+            let mut view = adapters.view_mut(p.ctx_mut());
+            if view.contains_key(convention.keyword()) {
+                return Err(p.expected("one adapter per convention"));
+            }
+            view.insert(convention.keyword(), Attribute::SymbolRef(adapter));
+            continue;
+        }
         let params = p.parse_entry_args()?;
         let result = if p.parse_optional_punct("->") {
             Some(p.parse_type()?)
@@ -393,6 +454,9 @@ fn parse_closure_lambda(
     };
 
     state.add_attributes(p.ctx_mut(), attributes);
+    if !adapters.is_empty() {
+        state.add_attribute(p.ctx_mut(), "adapters", Attribute::Dict(adapters));
+    }
     state.add_attribute(p.ctx_mut(), "conventions", Attribute::List(conventions));
     state.add_attribute(
         p.ctx_mut(),
@@ -804,7 +868,7 @@ mod tests {
         assert_roundtrip(
             r#"core.module @test {
   func.func @main() -> core.i32 {
-    %0 = closure.lambda {tag = 42} direct(%1: core.i32) -> core.i32 {
+    %0 = closure.lambda attributes {tag = 42} direct(%1: core.i32) -> core.i32 {
         func.return %1
     }
     func.return %0
@@ -817,9 +881,9 @@ mod tests {
     fn a_lambda_writes_each_body_under_its_convention() {
         let text = r#"core.module @test {
   func.func @main(%y: core.i32) {
-    %f = closure.lambda {adapters = {evidence_direct = @a0}} [%y] direct(%x: core.i32) -> core.i32 {
+    %f = closure.lambda [%y] direct(%x: core.i32) -> core.i32 {
       func.return %y
-    } cps(%ev: core.i64, %k: core.i64, %x2: core.i32) -> core.i32 {
+    } evidence_direct @a0 cps(%ev: core.i64, %k: core.i64, %x2: core.i32) -> core.i32 {
       func.return %x2
     } : closure.closure<func.func_sig<(core.i32) -> core.i32>>
     func.return
@@ -845,6 +909,83 @@ mod tests {
         }
         assert!(trunk_ir::validation::validate_all(&ctx, module, &mut Default::default()).is_ok());
         assert_roundtrip(text);
+    }
+
+    /// The `closure.lambda` example of `design/ir.md` is the printed form of
+    /// a lambda in a function whose parameter is `%0`.
+    #[test]
+    fn the_documented_lambda_example_prints_back_unchanged() {
+        const EXAMPLE: &str = r#"%1 = closure.lambda [%0] direct(%2: core.i32) -> core.i32 {
+    func.return %0
+} evidence_direct @a0 cps(%3: core.i64, %4: core.i64, %5: core.i32) -> core.i32 {
+    func.return %5
+} : closure.closure<func.func_sig<(core.i32) -> core.i32>>
+"#;
+        let design = include_str!("../../../../design/ir.md");
+        assert!(
+            design.contains(&format!("```text\n{EXAMPLE}```")),
+            "design/ir.md has another closure.lambda example"
+        );
+
+        let mut text = String::from("core.module @test {\n  func.func @main(%0: core.i32) {\n");
+        for line in EXAMPLE.lines() {
+            text += &format!("      {line}\n");
+        }
+        text += "      func.return\n  }\n}\n";
+        let mut ctx = IrContext::new();
+        let module = trunk_ir::parser::parse_test_module(&mut ctx, &text);
+        assert!(trunk_ir::validation::validate_all(&ctx, module, &mut Default::default()).is_ok());
+        assert_eq!(module.op().display(&ctx).to_string(), text);
+    }
+
+    #[test]
+    fn a_lambda_writes_a_trailing_adapter_after_its_bodies() {
+        assert_roundtrip(
+            r#"core.module @test {
+  %f = closure.lambda direct(%x: core.i32) -> core.i32 {
+    func.return %x
+  } evidence_direct @a0 cps @a1
+}"#,
+        );
+    }
+
+    #[test]
+    fn an_adapter_fills_a_slot_stronger_than_a_body_and_without_one() {
+        for adapters in [
+            r#"{direct = @a0}"#,
+            r#"{evidence_direct = @a0}"#,
+            r#"{tail = @a0}"#,
+            r#"{cps = "a0"}"#,
+        ] {
+            let mut ctx = IrContext::new();
+            let module = trunk_ir::parser::parse_test_module(
+                &mut ctx,
+                r#"core.module @test {
+  %f = closure.lambda evidence_direct() -> core.i32 {
+    %0 = arith.constant 0 : core.i32
+    func.return %0
+  }
+}"#,
+            );
+            let op = module.ops(&ctx)[0];
+            let source = trunk_ir::parser::parse_test_module(
+                &mut ctx,
+                &format!("core.module @a {{ \"test.op\"() {{adapters = {adapters}}} }}"),
+            );
+            let value = ctx
+                .op_attrs(source.ops(&ctx)[0])
+                .get("adapters")
+                .unwrap()
+                .clone();
+            ctx.op_attrs_mut(op).insert("adapters", value);
+            let lambda = super::Lambda::from_op(&ctx, op).unwrap();
+            let entries = lambda.entries(&ctx).expect("the lists describe the body");
+            assert_eq!(lambda.adapter_entries(&ctx, &entries), None, "{adapters}");
+            let result = trunk_ir::validation::validate_operation_verifiers(&ctx, module);
+            assert!(!result.is_ok(), "{adapters}: {result}");
+            let printed = module.op().display(&ctx).to_string();
+            assert!(printed.contains("\"closure.lambda\""), "{printed}");
+        }
     }
 
     #[test]
