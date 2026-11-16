@@ -20,6 +20,10 @@ use super::OperationKind;
 /// Stored as `{ability = @State, op_name = "get", kind = "op",
 /// operation_result_type = core.i32}`, and written by those operations'
 /// formats as `op @State @get` with the result type after the arm.
+///
+/// The `declared_kind` entry is present only when the declaration's kind
+/// differs from `kind`, and the format then writes it as a second keyword,
+/// `fn op @State @get`. `kind = op` with `declared_kind = fn` is rejected.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct HandlerBinding {
     pub ability: SymbolPath,

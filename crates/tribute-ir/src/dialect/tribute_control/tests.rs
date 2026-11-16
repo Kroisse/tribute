@@ -285,6 +285,129 @@ const DECLARED_PERFORM: &str = r#"core.module @test {
   }
 }"#;
 
+const FN_ARM_FOR_OP_OPERATION: &str = r#"core.module @test {
+  tribute_control.func @run() -> core.i32 {
+    %handled = tribute_control.handle : core.i32 {
+      %performed = tribute_control.perform op @State @get() : () -> core.i32
+      tribute_control.yield %performed
+    } do(%value: core.i32) {
+        tribute_control.yield %value
+    } fn op @State @get() : core.i32 {
+        %answer = arith.constant 1 : core.i32
+        tribute_control.yield %answer
+    }
+    tribute_control.return %handled
+  }
+  ability.decl @State {
+    ability.operation {kind = "op", op_name = "get", param_types = [], result_type = core.i32}
+  }
+}"#;
+
+#[test]
+fn an_fn_arm_for_an_op_operation_round_trips_and_validates() {
+    let (ctx, module) = parse_fixture(FN_ARM_FOR_OP_OPERATION);
+    let result = validate(&ctx, module, &[], &mut Default::default());
+    assert!(result.is_ok(), "{result}");
+
+    let handle = Handle::from_op(&ctx, control_op(&ctx, module, Handle::NAME)).unwrap();
+    let binding = handle.handlers(&ctx).next().unwrap();
+    assert_eq!(binding.kind, OperationKind::Fn);
+    assert_eq!(binding.declared, OperationKind::Op);
+
+    let printed = assert_round_trip(&ctx, module);
+    assert!(
+        printed.contains("} fn op @State @get() : core.i32 {"),
+        "{printed}"
+    );
+
+    // The declared kind is compared with the resolved declaration.
+    let (ctx, module) = parse_fixture(&FN_ARM_FOR_OP_OPERATION.replace(
+        r#"{kind = "op", op_name = "get""#,
+        r#"{kind = "fn", op_name = "get""#,
+    ));
+    let result = validate(&ctx, module, &[], &mut Default::default());
+    assert!(
+        messages(&result).contains("declared kind does not match the resolved declaration"),
+        "{result}"
+    );
+}
+
+#[test]
+fn a_binding_prints_its_declared_kind_only_when_it_differs() {
+    let (mut ctx, module) = parse_fixture(FN_ARM_FOR_OP_OPERATION);
+    let handle = Handle::from_op(&ctx, control_op(&ctx, module, Handle::NAME)).unwrap();
+    let mut binding = handle.handlers(&ctx).next().unwrap();
+
+    let attr = binding.to_attribute(&mut ctx);
+    let Attribute::Dict(entries) = &attr else {
+        panic!("a binding is a dictionary");
+    };
+    assert_eq!(entries.len(), 5);
+    assert_eq!(
+        HandlerBinding::from_attribute(&ctx, &attr).unwrap(),
+        binding
+    );
+    assert_eq!(binding.header(&ctx).to_string(), "fn op @State @get");
+
+    binding.declared = OperationKind::Fn;
+    let attr = binding.to_attribute(&mut ctx);
+    let Attribute::Dict(entries) = &attr else {
+        panic!("a binding is a dictionary");
+    };
+    assert_eq!(entries.len(), 4);
+    assert_eq!(binding.header(&ctx).to_string(), "fn @State @get");
+}
+
+#[test]
+fn a_binding_rejects_an_op_arm_for_an_fn_operation_and_unknown_entries() {
+    let (mut ctx, module) = parse_fixture(FN_ARM_FOR_OP_OPERATION);
+    let handle = Handle::from_op(&ctx, control_op(&ctx, module, Handle::NAME)).unwrap();
+    let binding = handle.handlers(&ctx).next().unwrap();
+    let op = ctx.string_attr("op");
+    let fn_kind = ctx.string_attr("fn");
+    let bogus = ctx.string_attr("bogus");
+    let dict = |ctx: &mut IrContext, kind: &Attribute, extra: (&'static str, &Attribute)| {
+        Attribute::Dict(AttributeMap::from_entries(
+            ctx,
+            [
+                ("ability", Attribute::SymbolRef(binding.ability.clone())),
+                ("op_name", Attribute::String(binding.op_name)),
+                ("kind", kind.clone()),
+                (
+                    "operation_result_type",
+                    Attribute::Type(binding.operation_result_type),
+                ),
+                (extra.0, extra.1.clone()),
+            ],
+        ))
+    };
+
+    let op_for_fn = dict(&mut ctx, &op, ("declared_kind", &fn_kind));
+    assert_eq!(
+        HandlerBinding::from_attribute(&ctx, &op_for_fn).unwrap_err(),
+        "an op arm cannot handle an fn operation"
+    );
+
+    let unknown_declared = dict(&mut ctx, &fn_kind, ("declared_kind", &bogus));
+    assert_eq!(
+        HandlerBinding::from_attribute(&ctx, &unknown_declared).unwrap_err(),
+        "handlers declared_kind must be fn or op"
+    );
+
+    let fifth_unknown = dict(&mut ctx, &fn_kind, ("extra", &bogus));
+    assert!(
+        HandlerBinding::from_attribute(&ctx, &fifth_unknown)
+            .unwrap_err()
+            .contains("must have exactly")
+    );
+
+    let valid = dict(&mut ctx, &fn_kind, ("declared_kind", &op));
+    assert_eq!(
+        HandlerBinding::from_attribute(&ctx, &valid).unwrap(),
+        binding
+    );
+}
+
 #[test]
 fn ability_instances_are_symbol_references() {
     let (ctx, module) = parse_fixture(&evidence_plan_module(

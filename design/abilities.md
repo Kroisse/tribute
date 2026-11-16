@@ -356,7 +356,7 @@ handle computation() {
 | arm | 대상 | 의미 |
 | --- | ---- | ---- |
 | `do value { expr }` | completion | Computation 완료, 결과값 바인딩 (생략 시 identity) |
-| `fn Op(args) { body }` | `fn` operation만 | Tail-resumptive: body의 반환값이 operation의 결과 |
+| `fn Op(args) { body }` | `fn` 또는 `op` operation | Tail-resumptive: body의 반환값이 operation의 결과 |
 | `op Op(args) { body }` | `op` operation만 | body에서 `resume`으로 명시적 resume |
 
 Handler arm은 `handle` 표현식 내에서만 사용할 수 있다.
@@ -372,9 +372,13 @@ Handler arm은 `handle` 표현식 내에서만 사용할 수 있다.
 **Handler arm과 선언의 관계:**
 
 - `fn`으로 선언된 operation → handler에서 반드시 `fn`으로 구현 (`op`으로 구현 시 컴파일 에러)
-- `op`으로 선언된 operation → handler에서 반드시 `op`으로 구현 (`fn`으로 구현 시 컴파일 에러)
-- Arm의 종류는 선언의 종류와 같다. 꼬리에서 바로 `resume`하는 `op` arm은 `fn` arm과
-  뜻이 다르다. `resume`이 재개한 계산은 그 handle 아래에 있지 않다.
+- `op`으로 선언된 operation → handler에서 `op` 또는 `fn`으로 구현. `fn` arm은 값으로
+  operation에 답하고 계산을 같은 handle 아래에서 계속한다
+  ([`fn` Operation Handler](#fn-operation-handler)).
+- `op` arm은 `op`으로 선언된 operation만 처리한다. `fn`으로 선언된 operation을 `op`
+  arm으로 구현하면 컴파일 에러다.
+- 꼬리에서 바로 `resume`하는 `op` arm은 `fn` arm과 뜻이 다르다. `resume`이 재개한
+  계산은 그 handle 아래에 있지 않다.
 
 **Handler arm의 완전성:**
 
@@ -414,10 +418,31 @@ fn run_logger(comp: fn() ->{e, Logger} a) ->{e, Io} a {
 
 `fn` handler arm에서는 `resume`을 사용할 수 **없다** (컴파일 에러).
 
-`fn` handler arm은 계산을 멈추거나(suspend) 버릴(abort) 수 없다. `fn` operation은
-어떤 handler 아래에서도 continuation을 handler에 넘기지 않고 perform 지점으로
-반환한다고 선언이 보증하고, `fn` arm은 그 operation의 구현이기 때문이다. 따라서 `fn`
-arm 본문은 다음을 할 수 없다. `Throw`와 `-> Never` operation도 포함한다.
+`fn` arm은 `op`으로 선언된 operation도 처리할 수 있다. Arm의 값이 operation의 결과가
+되고 계산이 같은 handle 아래에서 계속된다. 같은 handler를 다시 설치하고 arm의 값으로
+`resume`하는 `op` arm과 뜻이 같되, 재귀 함수를 쓰지 않는다. Arm 본문은 operation의
+결과 타입에 대해 검사한다:
+
+```rust
+ability Ask {
+    op ask() -> Nat
+}
+
+fn always_42(comp: fn() ->{e, Ask} a) ->{e} a {
+    handle comp() {
+        fn Ask::ask() { 42 } // `ask`가 `op`이어도 `fn` arm으로 답한다
+    }
+}
+```
+
+결과가 `Never`인 `op` operation은 돌아오지 않으므로 이어 갈 계산이 없다. 그런 operation을
+`fn` arm으로 처리하면 컴파일 에러다.
+
+`fn` handler arm은 계산을 멈추거나(suspend) 버릴(abort) 수 없다. 이 제한은 선언이
+아니라 arm의 종류를 따른다. `fn` arm은 continuation을 받지 않고 값으로 operation에
+답하는 구현이며, `fn` operation은 어떤 handler 아래에서도 perform 지점으로 반환한다고
+선언이 보증한다. 따라서 `fn` arm 본문은 다음을 할 수 없다. `Throw`와 `-> Never`
+operation도 포함한다.
 
 - `op` operation을 직접 perform한다.
 - Ability row에 `op` operation을 선언한 ability가 있는 callable을 호출한다. 그런
@@ -510,7 +535,9 @@ Continuation은 자신을 캡처한 handler 스코프 내에서만 resume될 수
 처리한 label이 빠진 row로 검사되므로, arm이 직접 수행하는 operation은 그 handle
 바깥의 handler가 처리한다. 계속 같은 방식으로 처리하려는 handler는 `resume`을 감싸
 자신을 다시 설치한다. 아래 `run_state`의 `run_state(fn() resume state, state)`가
-그렇게 하며, 재개된 계산은 새로 설치한 handler 아래에서 실행된다.
+그렇게 하며, 재개된 계산은 새로 설치한 handler 아래에서 실행된다. 모든 operation에
+값으로 답하고 계속 처리하는 handler는 자신을 다시 설치하는 대신 `fn` arm을 쓸 수 있다
+([`fn` Operation Handler](#fn-operation-handler)).
 
 Handler 없이 arm 본문에서 바로 `resume`하면 재개된 계산의 label이 handle 바깥으로
 나가므로, 그 handle 식의 row가 처리한 label을 다시 담는다:
@@ -635,7 +662,7 @@ fn main() ->{Io} Nil {
 | 암시적 effect | Operation은 자신이 속한 ability의 effect를 암시적으로 수행 |
 | ability annotation 금지 | Operation 시그니처에 ability annotation을 적을 수 없음 |
 | 다른 effect 필요 시 | Handler 구현부에서 처리 |
-| 선언과 arm 일치 | `fn`/`op`으로 선언 → 모든 handler에서 같은 키워드로 구현 |
+| 선언과 arm 일치 | `fn`으로 선언 → `fn` arm만, `op`으로 선언 → `op` arm 또는 `fn` arm |
 | `fn` arm의 effect | `fn` arm 본문은 `op` operation을 perform하거나 그런 ability를 요구하는 callable을 호출할 수 없음 |
 
 ### 전체 문법 요약
@@ -651,7 +678,7 @@ fn main() ->{Io} Nil {
 | `fn(x) expr` | 람다 |
 | `handle expr { ... }` | effect handling |
 | `do value { expr }` | completion arm (handle 내, 생략 시 identity) |
-| `fn Op(args) { body }` | `fn` operation handler (handle 내) |
+| `fn Op(args) { body }` | 값으로 답하고 계속하는 handler (handle 내) |
 | `op Op(args) { body }` | `op` operation handler (handle 내) |
 
 ## Checked effect instances across compilation

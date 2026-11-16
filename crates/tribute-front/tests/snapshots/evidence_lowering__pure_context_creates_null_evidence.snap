@@ -13,7 +13,7 @@ core.module @test {tribute.entry = @"pkg::main"} {
           tribute_control.yield %1
       } do(%2: core.i32) {
           tribute_control.yield %2
-      } op @"ability_1_8_pkg::Ask" @ask() : core.i32 {
+      } fn op @"ability_1_8_pkg::Ask" @ask() : core.i32 {
           %3 = arith.constant 42 : core.i32
           tribute_control.yield %3
       }
