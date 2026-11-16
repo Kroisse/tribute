@@ -327,12 +327,12 @@ schema-violating operation in generic form to exercise a pass. A check
 that reads only the operation itself belongs in its `#[verify]` hook; the
 `tribute_control` local validator reaches each operation's checks on its
 placement and regions through the `LocalValidation` interface.
-Debug builds also run `validate_op_schemas`, the declarative stages and
-terminator placement without the `#[verify]` hook, after every pipeline
-pass, reporting the pass that left an operation in violation. A pass that
-retypes a value before target type conversion inserts
-`core.unrealized_conversion_cast` back to the type its uses declare.
-`PatternApplicator` does this for a staged conversion with
+Debug builds also run `validate_op_schemas`, the declarative stages, the
+flag verifiers (`OpDef::verify_flags`), and the block-ending rule without
+the `#[verify]` hook, after every pipeline pass, reporting the pass that
+left an operation in violation. A pass that retypes a value before target
+type conversion inserts `core.unrealized_conversion_cast` back to the type
+its uses declare. `PatternApplicator` does this for a staged conversion with
 `with_auto_type_conversion(true)` and a `ConversionTarget`. It casts the
 operands only of operations the target declares illegal. Where it retypes a
 block argument or a replaced result that an operation the target has no rule
@@ -571,8 +571,11 @@ naming the flag. The verifier may walk the operation's regions:
 defined outside the operation, and does not enter a nested operation with
 the flag, which checks itself. `validate_value_integrity` still checks value
 visibility between regions, starting a new scope at each `IsolatedFromAbove`
-operation. The per-pass debug checkpoint (`validate_op_schemas`) runs no
-verifier except `Terminator`'s, below.
+operation. A flag's invariant holds at every stage of the pipeline, unlike
+a `#[verify]` hook's, so the per-pass debug checkpoint
+(`validate_op_schemas`) runs every flag verifier through
+`OpDef::verify_flags` and reports a broken invariant at the pass that
+broke it.
 
 `Pure` states no invariant. `NoTerminator` changes the rule for the blocks
 of operations without it, so it has no verifier.
@@ -585,8 +588,7 @@ it, as does `wasm.yield`, which ends a Wasm structured region. A
 conditional branch that may fall through (`wasm.br_if`, `clif.trapnz`)
 does not. Its verifier, as `IsTerminator::verifyTrait` is, rejects a
 flagged operation that is detached or that some operation follows, so every
-caller of `OpDef::verify` checks it; the debug schema checkpoint after each
-pass (`validate_op_schemas`) runs this one verifier too. Test whether an
+caller of `OpDef::verify` and the debug checkpoint check it. Test whether an
 operation ends its block with `Terminator::is_set` rather than a list of
 names, and leave its placement to the flag rather than repeating it in a
 dialect validator.

@@ -61,17 +61,7 @@ impl OpDef {
         if !violations.is_empty() {
             return violations.into_iter().map(OpViolation::Schema).collect();
         }
-        let violations: Vec<_> = self
-            .flags
-            .iter()
-            .filter_map(|flag| {
-                let error = (flag.verifier?)(ctx, op).err()?;
-                Some(OpViolation::Flag {
-                    flag: flag.name,
-                    message: error.to_string(),
-                })
-            })
-            .collect();
+        let violations: Vec<_> = self.verify_flags(ctx, op).collect();
         if !violations.is_empty() {
             return violations;
         }
@@ -79,6 +69,22 @@ impl OpDef {
             Some(Err(error)) => vec![OpViolation::Verifier(error.to_string())],
             _ => Vec::new(),
         }
+    }
+
+    /// Run the verifier of each declared flag, as an [`OpViolation::Flag`]
+    /// for each that fails. It assumes the operation satisfies its schema.
+    pub fn verify_flags<'a>(
+        &'a self,
+        ctx: &'a IrContext,
+        op: OpRef,
+    ) -> impl Iterator<Item = OpViolation> + 'a {
+        self.flags.iter().filter_map(move |flag| {
+            let error = (flag.verifier?)(ctx, op).err()?;
+            Some(OpViolation::Flag {
+                flag: flag.name,
+                message: error.to_string(),
+            })
+        })
     }
 
     /// The registered definition written `dialect.name`.

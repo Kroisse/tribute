@@ -24,8 +24,8 @@ use derive_more::{Display, Error};
 use super::analysis::AnalysisCache;
 use super::context::IrContext;
 use super::dialect::core;
-use super::op_def::{OpDef, OpViolation};
-use super::op_flag::{IsolatedFromAbove, NoTerminator, OpFlag, Terminator, VerifyFlag};
+use super::op_def::OpDef;
+use super::op_flag::{IsolatedFromAbove, NoTerminator, OpFlag, Terminator};
 use super::op_interface::{
     DynBranch, DynCallableOwner, DynRegionBranch, DynRegionBranchTerminator, RegionBranchPoint,
     RegionSuccessor, RegionValueTransfer,
@@ -354,30 +354,22 @@ pub fn validate_operation_verifiers(ctx: &IrContext, module: Module) -> Validati
 }
 
 /// Check `root` and every operation nested in it against its declarative
-/// schema only.
+/// schema and the verifiers of its declared flags.
 ///
-/// It also checks terminator placement: the verifier of the [`Terminator`]
-/// flag, and that every block ends in a `Terminator` unless its owner
+/// It also checks that every block ends in a [`Terminator`] unless its owner
 /// declares `NoTerminator`. Unlike [`validate_operation_verifiers`], this
-/// skips `#[verify]` hooks, the other flags' verifiers, the hand-written
-/// operation checks, and interface verification. It is the debug checkpoint
-/// run after each pipeline pass, where the IR must satisfy the declared
-/// constraints again; a pass nested under an operation checks only that
-/// operation's subtree.
+/// skips `#[verify]` hooks, the hand-written operation checks, and interface
+/// verification. It is the debug checkpoint run after each pipeline pass,
+/// where the IR must satisfy the declared constraints again; a pass nested
+/// under an operation checks only that operation's subtree.
 pub fn validate_op_schemas(ctx: &IrContext, root: OpRef) -> ValidationResult {
     let mut errors = Vec::new();
     let _ = walk::walk_op::<std::convert::Infallible>(ctx, root, &mut |op| {
-        if let Some(def) = OpDef::of(ctx, op) {
-            report_schema_violations(ctx, op, def.schema.verify(ctx, op), &mut errors);
-        }
-        if Terminator::is_set(ctx, op)
-            && let Err(error) = <Terminator as VerifyFlag>::verify(ctx, op)
+        if let Some(def) = OpDef::of(ctx, op)
+            && report_schema_violations(ctx, op, def.schema.verify(ctx, op), &mut errors)
         {
-            let violation = OpViolation::Flag {
-                flag: Terminator::DEF.name,
-                message: error.to_string(),
-            };
-            errors.push(operation_verifier_error(ctx, op, violation.to_string()));
+            let violations = def.verify_flags(ctx, op).collect();
+            report_schema_violations(ctx, op, violations, &mut errors);
         }
         validate_block_ending(ctx, op, &mut errors);
         std::ops::ControlFlow::Continue(walk::WalkAction::Advance)
