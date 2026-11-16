@@ -1747,6 +1747,140 @@ fn whole_ir_allows_a_carrier_called_from_each_body_of_a_lambda() {
     );
 }
 
+fn assert_single_carrier_escape(result: &ValidationResult) {
+    let carrier_errors = result
+        .errors
+        .iter()
+        .map(|error| error.message.as_str())
+        .filter(|message| message.contains("resumption carrier"))
+        .collect::<Vec<_>>();
+    assert!(
+        matches!(carrier_errors[..], [only] if only.contains("resumption carrier escapes through")),
+        "{result}"
+    );
+}
+
+/// A lambda that closes over a carrier and calls it once is its one path.
+#[test]
+fn whole_ir_allows_a_carrier_called_once_inside_a_lambda() {
+    let (ctx, module) = parse_fixture(
+        r#"core.module @test {
+  %handled = tribute_control.handle : core.i32 {
+    %body = arith.constant 0 : core.i32
+    tribute_control.yield %body
+  } do(%value: core.i32) {
+      tribute_control.yield %value
+  } op @State @get(%argument: core.i32) : core.i32 {
+      %inner = tribute_control.lambda() -> core.i32 {
+        %resumed = tribute_control.resume %argument : core.i32 -> core.i32
+        tribute_control.return %resumed
+      }
+      %outer = tribute_control.lambda() -> core.i32 {
+        %called = tribute_control.call_indirect %inner() : () -> core.i32
+        tribute_control.return %called
+      }
+      %answer = tribute_control.call_indirect %outer() : () -> core.i32
+      tribute_control.yield %answer
+  }
+}"#,
+    );
+    let result = validate_whole_ir(&ctx, module, &[]);
+    assert!(
+        !messages(&result).contains("resumption carrier"),
+        "{result}"
+    );
+}
+
+#[test]
+fn whole_ir_rejects_a_carrier_stored_inside_a_lambda() {
+    let (ctx, module) = parse_fixture(
+        r#"core.module @test {
+  !Continuation = tribute_control.func_sig<() -> core.i32>
+  !Holder = adt.struct<"Holder", (!Continuation)>
+  %handled = tribute_control.handle : core.i32 {
+    %body = arith.constant 0 : core.i32
+    tribute_control.yield %body
+  } do(%value: core.i32) {
+      tribute_control.yield %value
+  } op @State @get(%argument: core.i32) : core.i32 {
+      %inner = tribute_control.lambda() -> core.i32 {
+        %resumed = tribute_control.resume %argument : core.i32 -> core.i32
+        tribute_control.return %resumed
+      }
+      %outer = tribute_control.lambda() -> core.i32 {
+        %holder = adt.struct_new(%inner) : (!Continuation) -> !Holder
+        tribute_control.return %argument
+      }
+      %answer = tribute_control.call_indirect %outer() : () -> core.i32
+      tribute_control.yield %answer
+  }
+}"#,
+    );
+    let result = validate_whole_ir(&ctx, module, &[]);
+    assert_single_carrier_escape(&result);
+}
+
+#[test]
+fn whole_ir_rejects_a_carrier_returned_from_a_lambda() {
+    let (ctx, module) = parse_fixture(
+        r#"core.module @test {
+  !Continuation = tribute_control.func_sig<() -> core.i32>
+  %handled = tribute_control.handle : core.i32 {
+    %body = arith.constant 0 : core.i32
+    tribute_control.yield %body
+  } do(%value: core.i32) {
+      tribute_control.yield %value
+  } op @State @get(%argument: core.i32) : core.i32 {
+      %inner = tribute_control.lambda() -> core.i32 {
+        %resumed = tribute_control.resume %argument : core.i32 -> core.i32
+        tribute_control.return %resumed
+      }
+      %outer = tribute_control.lambda() -> !Continuation {
+        tribute_control.return %inner
+      }
+      %returned = tribute_control.call_indirect %outer() : () -> !Continuation
+      tribute_control.yield %argument
+  }
+}"#,
+    );
+    let result = validate_whole_ir(&ctx, module, &[]);
+    assert_single_carrier_escape(&result);
+}
+
+/// Only the callee operand of an indirect call consumes a carrier; an
+/// argument hands it to a callable that may keep it.
+#[test]
+fn whole_ir_rejects_a_carrier_passed_as_an_argument_inside_a_lambda() {
+    let (ctx, module) = parse_fixture(
+        r#"core.module @test {
+  !Continuation = tribute_control.func_sig<() -> core.i32>
+  %handled = tribute_control.handle : core.i32 {
+    %body = arith.constant 0 : core.i32
+    tribute_control.yield %body
+  } do(%value: core.i32) {
+      tribute_control.yield %value
+  } op @State @get(%argument: core.i32) : core.i32 {
+      %inner = tribute_control.lambda() -> core.i32 {
+        %resumed = tribute_control.resume %argument : core.i32 -> core.i32
+        tribute_control.return %resumed
+      }
+      %apply = tribute_control.lambda(%callback: !Continuation) -> core.i32 {
+        %called = tribute_control.call_indirect %callback() : () -> core.i32
+        tribute_control.return %called
+      }
+      %outer = tribute_control.lambda() -> core.i32 {
+        %applied = tribute_control.call_indirect %apply(%inner) : (!Continuation) -> core.i32
+        tribute_control.return %applied
+      }
+      %answer = tribute_control.call_indirect %outer() : () -> core.i32
+      tribute_control.yield %answer
+  }
+}"#,
+    );
+    let result = validate_whole_ir(&ctx, module, &[]);
+    assert_single_carrier_escape(&result);
+}
+
 #[test]
 fn a_resume_in_an_op_never_arm_is_rejected_where_it_stands() {
     let (ctx, module) = parse_fixture(

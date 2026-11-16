@@ -175,7 +175,9 @@ mod tests {
     use crate::IrContext;
     use crate::op_def::OpDef;
     use crate::parser::parse_test_module;
-    use crate::validation::{validate_operation_verifiers, validate_value_integrity};
+    use crate::validation::{
+        validate_op_schemas, validate_operation_verifiers, validate_value_integrity,
+    };
 
     #[crate::dialect]
     mod isolation_test {
@@ -233,6 +235,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, input);
         assert!(validate_operation_verifiers(&ctx, module).is_ok());
+        assert!(validate_op_schemas(&ctx, module.op()).is_ok());
         assert!(validate_value_integrity(&ctx, module).is_ok());
     }
 
@@ -268,6 +271,9 @@ mod tests {
         let module = parse_test_module(&mut ctx, input);
         let verified = validate_operation_verifiers(&ctx, module);
         assert_eq!(verified.errors.len(), 2, "{verified}");
+        // The per-pass checkpoint runs the same flag verifier.
+        let checkpoint = validate_op_schemas(&ctx, module.op());
+        assert_eq!(checkpoint.errors.len(), 2, "{checkpoint}");
         let scoped = validate_value_integrity(&ctx, module);
         assert_eq!(scoped.errors.len(), 2, "{scoped}");
     }
