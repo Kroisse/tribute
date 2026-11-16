@@ -138,6 +138,9 @@ Flag가 불변식을 말하면 그 불변식은 operation 이름이 아니라 fl
 trait의 `verifyTrait`). `#[op_flag(verify)]`로 선언한 flag는 verifier를 하나 가지며,
 operation 정의의 검증은 그 flag를 선언한 모든 operation에서 이를 실행한다. 새
 operation이 flag를 선언하면 검사도 함께 따라오므로 검사할 이름 목록을 두지 않는다.
+Flag의 불변식은 `#[verify]` hook과 달리 pipeline의 어느 단계에서든 성립해야
+하므로, 각 pass 뒤의 debug schema 검사도 선언적 단계를 통과한 operation에서 모든
+flag verifier를 실행한다. 불변식을 깨뜨린 pass가 그 자리에서 드러난다.
 Flag verifier는 operation의 region을 걸어도 된다. `IsolatedFromAbove`는 operation의
 region 어디에서든 operation 밖에서 정의된 값을 operand로 쓰면 거부하며, 같은 flag를
 가진 중첩 operation 안으로는 들어가지 않는다. 그 operation이 스스로 검사한다.
@@ -165,8 +168,8 @@ region은 `wasm.yield`로 끝난다
 
 Flag는 operation 정의의 선언이므로 이름을 나열하지 않고 검사한다. `Terminator`가
 block의 마지막이어야 한다는 성질은 flag verifier가 검사하므로(MLIR의
-`IsTerminator::verifyTrait`) operation 정의의 검증을 거치는 모든 곳이 이를
-거부하고, 각 pass 뒤의 debug schema 검사도 이 verifier는 실행한다. Dialect
+`IsTerminator::verifyTrait`) operation 정의의 검증을 거치는 모든 곳과 각 pass
+뒤의 debug schema 검사가 이를 거부한다. Dialect
 validator는 이 위치를 따로 다시 검사하지 않는다. `NoTerminator`가 아닌
 operation의 block이 `Terminator`로 끝나야 한다는 규칙은 flag가 없는 operation에
 대한 것이므로 구조 검사로 남고, operation verifier, debug schema 검사, native와
