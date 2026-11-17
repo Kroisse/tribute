@@ -336,7 +336,8 @@ impl<'a> Instance<'a> {
 
     /// A lambda has a body for exactly the conventions the rows of the
     /// callables its instantiations make may require, or, without
-    /// instantiations, its own row; function references enter their table
+    /// instantiations, its own row, and a `Cps` entry body when its own flow
+    /// hands a frame on; function references enter their table
     /// no stronger than their row, and indirect transfers have the class of
     /// their callee's row, or its bound.
     fn check_body(&self, disagreements: &mut Vec<Disagreement>) {
@@ -373,14 +374,14 @@ impl<'a> Instance<'a> {
                     .map(|signature| self.conventions(&signature.row(self.ctx), lambda))
                     .unwrap_or_default(),
             };
-            // Every lambda has a `Cps` body, its `Cps` entry body when its
-            // uses select none.
-            let expected: Vec<_> = selected
-                .into_iter()
-                .chain([CallingConvention::Cps])
-                .sorted()
-                .dedup()
-                .collect();
+            // A lambda whose own flow hands a frame on has a `Cps` body, its
+            // `Cps` entry body when its uses select none.
+            let entry = self
+                .ctx
+                .op_region(lambda, 0)
+                .is_some_and(|body| tribute_cps::own_flow_hands_on_frame(self.ctx, body))
+                .then_some(CallingConvention::Cps);
+            let expected: Vec<_> = selected.into_iter().chain(entry).sorted().dedup().collect();
             let actual = tribute_cps::body_conventions(self.ctx, lambda);
             if actual.as_ref() != Some(&expected) {
                 disagreements.push(Disagreement {

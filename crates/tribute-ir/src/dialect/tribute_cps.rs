@@ -144,9 +144,10 @@ mod tribute_cps {
     ///   its own row's tail, when that tail reads as an upper bound, as an
     ///   upper bound narrowed to that convention. A lambda whose classes
     ///   give it no `Cps` body has one more, its `Cps` entry body
-    ///   (`design/cps-effects.md`, "`Cps` 진입 본문"), which reads its
-    ///   binders as its strongest other body does and runs as a `Cps` flow.
-    ///   So every lambda has a `cps` body. Calling the value with a
+    ///   (`design/cps-effects.md`, "`Cps` 진입 본문"), when its own flow
+    ///   hands a frame on ([`own_flow_hands_on_frame`]). That body reads
+    ///   its binders as its strongest other body does and runs as a `Cps`
+    ///   flow. Calling the value with a
     ///   convention that has a body runs that body; legalization fills the
     ///   other convention entries.
     /// - **Verification:** the verifier checks that the conventions are
@@ -295,8 +296,9 @@ mod tribute_cps {
     /// - **Meaning:** a proper tail call of the callee's convention entry of
     ///   `convention`. In a `Cps` flow ([`flow_convention`]) `convention` is
     ///   `Cps` whatever class the callee type reads, so the transfer hands
-    ///   the flow's `ContinuationFrame<R>` to the callee's `Cps` entry, which
-    ///   is a body for every source callable value
+    ///   the flow's `ContinuationFrame<R>` to the callee's `Cps` entry: a
+    ///   body, or an adapter for a lambda whose own flow hands no frame on
+    ///   and for a definition without a body
     ///   (`design/tribute-dialects.md`, "Convention entry"). Elsewhere it is
     ///   the class class specialization reads from the callee type's row.
     /// - **Verification:** the schema checks the convention keyword, and the
@@ -467,6 +469,31 @@ pub fn flow_convention(ctx: &IrContext, op: trunk_ir::refs::OpRef) -> Option<Cal
         }
         current = parent;
     }
+}
+
+/// Whether the own flow of `body`, a lambda body, has an operation that
+/// hands a `Cps` flow's frame on (`design/cps-effects.md`, "`Cps` 진입
+/// 본문"): a source tail transfer, a `tribute_control.handle`, or a
+/// `tribute_control.resume`. The bodies of nested lambdas are flows of
+/// their own and do not count.
+pub fn own_flow_hands_on_frame(ctx: &IrContext, body: RegionRef) -> bool {
+    use std::ops::ControlFlow;
+    use trunk_ir::walk::{WalkAction, walk_region};
+
+    walk_region(ctx, body, &mut |op| {
+        if SourceLambda::is_set(ctx, op) {
+            ControlFlow::Continue(WalkAction::Skip)
+        } else if tribute_control::TailCall::matches(ctx, op)
+            || SourceTailCallIndirect::is_set(ctx, op)
+            || tribute_control::Handle::matches(ctx, op)
+            || tribute_control::Resume::matches(ctx, op)
+        {
+            ControlFlow::Break(())
+        } else {
+            ControlFlow::Continue(WalkAction::Advance)
+        }
+    })
+    .is_break()
 }
 
 /// Replace `op`, a `tribute_control` func, lambda, func_ref, call_indirect,

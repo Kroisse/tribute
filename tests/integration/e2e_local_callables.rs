@@ -7,6 +7,7 @@
 //! alias are deferred to issue #1007 and are intentionally absent here.
 use crate::common;
 
+use itertools::Itertools;
 use salsa_test_macros::salsa_test;
 use tribute::pipeline::frontend_diagnostics;
 use tribute_core::diagnostic::DiagnosticSeverity;
@@ -32,6 +33,92 @@ fn main() ->{Io} Nil {
 "#,
         b"3\n",
     );
+}
+
+/// A curried lambda nested 16 deep compiles in time: a lambda whose own
+/// flow hands no frame on has no `Cps` entry body, which would copy every
+/// lambda nested in it (`design/cps-effects.md`, "`Cps` 진입 본문").
+#[test]
+fn deeply_curried_lambda_prints_its_sum() {
+    const DEPTH: usize = 16;
+    let params = (1..=DEPTH).map(|i| format!("fn(a{i}: Int)")).join(" ");
+    let sum = (1..=DEPTH).map(|i| format!("a{i}")).join(" + ");
+    let applications = (1..=DEPTH)
+        .map(|i| format!("    let g{i} = g{}(+1)\n", i - 1))
+        .collect::<String>();
+    assert_native(
+        &format!(
+            r#"
+use std::io::{{Io, print_line}}
+fn main() ->{{Io}} Nil {{
+    let g0 = {params} {sum}
+{applications}    print_line(g{DEPTH}.to_string)
+}}
+"#
+        ),
+        format!("{DEPTH}\n").as_bytes(),
+    );
+}
+
+/// A `become` in an `op` arm enters a lambda whose own flow hands no frame
+/// on through its `Cps` adapter, which passes the lambda's result to the
+/// arm's frame.
+#[test]
+fn become_of_a_returning_lambda_in_an_op_arm_prints_its_result() {
+    assert_native(
+        r#"
+use std::io::{Io, print_line}
+ability Step {
+    op step() -> Nil
+}
+fn ping() ->{Step} Int {
+    Step::step()
+    +0
+}
+fn drive(k: fn(Int) ->{} Int, n: Int) ->{} Int {
+    handle ping() {
+        do r { r }
+        op Step::step() { become k(n) }
+    }
+}
+fn main() ->{Io} Nil {
+    let k = +5
+    print_line(drive(fn(m: Int) m * +2 + k, +20).to_string)
+}
+"#,
+        b"45\n",
+    );
+}
+
+/// A loop that enters a returning lambda's `Cps` adapter from an `op` arm
+/// in each of its iterations leaves no frame behind.
+#[test]
+fn become_of_a_returning_lambda_in_a_loop_runs_in_constant_space() {
+    let code = r#"
+ability Step {
+    op step() -> Nil
+}
+fn ping() ->{Step} Int {
+    Step::step()
+    +0
+}
+fn drive(k: fn(Int) ->{} Int, n: Int) ->{} Int {
+    handle ping() {
+        do r { r }
+        op Step::step() { become k(n) }
+    }
+}
+fn count(n: Int, acc: Int) ->{} Int {
+    case n == +0 {
+        True -> acc
+        False -> become count(n - +1, drive(fn(m: Int) m + +1, acc))
+    }
+}
+fn main() ->{std::io::Io} Nil {
+    std::io::print_line(count(+100000, +0).to_string)
+}
+"#;
+    common::assert_output_on_both_targets("become_adapter_loop.trb", code, "100000");
 }
 
 #[test]

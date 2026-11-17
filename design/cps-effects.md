@@ -411,8 +411,10 @@ frame의 `Dispatch<R>`에 닿는 operation은 없다.
 
 여기서 **flow**는 한 convention으로 적법화되는 실행 단위다. `Cps` flow는 `Cps`
 callable의 본문, `Cps` 진입 본문, 그리고 값 delimiter의 region이다. `Direct`나
-`EvidenceDirect` callable 안에 있는 handle의 arm과 `do` arm은 delimiter의 region에
-속하므로 `Cps` flow다.
+`EvidenceDirect` callable 안에 있는 handle의 body, `op` arm, `do` arm은 delimiter의
+region에 속하므로 `Cps` flow다. `fn` arm은 어느 callable 안에서든 operation의 결과를
+수행한 지점으로 돌려주는 `EvidenceDirect` flow다. 람다의 **자기 flow**는 그 본문에서
+안쪽 람다의 본문을 뺀 부분이다. 안쪽 람다의 본문은 따로 들어오는 callable이기 때문이다.
 
 `Cps` 진입 본문은 [proper tail transfer](#source-proper-tail-call의-적법화)가 frame을
 넘길 대상이 값을 반환하는 callable일 때 필요하다. 값을 반환하는 본문을 일반 호출한 뒤
@@ -422,10 +424,19 @@ callable의 본문, `Cps` 진입 본문, 그리고 값 delimiter의 region이다
 - **Named 정의:** `Cps` flow 안의 source `become`이 가리키는 인스턴스가 `Cps`가
   아니면, 그 이전은 같은 정의와 class 인자의 `Cps` 진입 인스턴스를 대상으로 한다.
   진입 인스턴스의 본문도 `Cps` flow이므로 이 요구는 `become`을 따라 이어진다.
-- **Source callable 값:** 람다와 `func_ref`의 `Cps`
-  [convention entry](tribute-dialects.md#convention-entry)는 `Cps` 진입 본문이다.
-  람다는 더 약한 본문만 가질 때 `Cps` 진입 본문을 하나 더 가지고, `func_table`의
-  `Cps` 대상은 가장 강한 대상의 `Cps` 진입 인스턴스다.
+- **람다:** 더 약한 본문만 가지는 람다는 자기 flow에 frame을 넘기는 operation이
+  있을 때 `Cps` 진입 본문을 하나 더 가지며, 그것이 람다의 `Cps`
+  [convention entry](tribute-dialects.md#convention-entry)다. Frame을 넘기는
+  operation은 source tail transfer(`tail_call`, `tail_call_indirect`), `handle`,
+  `resume`이다. 그런 operation이 없는 람다의 `Cps` entry는 가장 강한 본문을 부른 뒤
+  결과를 `Done<R>`로 넘기는 adapter다. 그 본문을 지나 이어지는 반복은 본문의 일반
+  호출을 거친다. 일반 호출은 어느 본문에서든 proper tail transfer가 아니며, `Cps`
+  진입 본문 안의 `Cps` 호출도 suffix frame을 남기므로
+  ([frame을 그대로 넘기는 자리](#frame을-그대로-넘기는-자리)) adapter는 반복의 공간
+  보장을 바꾸지 않는다. `Cps` 진입 본문은 안쪽 람다를 포함한 본문 전체를 복제하므로,
+  이 조건은 frame을 넘기지 않는 람다가 본문 수를 늘리지 않게 한다.
+- **함수 참조:** `func_ref`의 `Cps` convention entry는 `Cps` 진입 본문이다.
+  `func_table`의 `Cps` 대상은 가장 강한 대상의 `Cps` 진입 인스턴스다.
 - **본문이 없는 정의:** `extern` 정의와 compiler intrinsic은 `Cps` 진입 본문을 갖지
   않는다. 이들의 `Cps` entry는 일반 호출 뒤 `Done<R>`로 넘기는 adapter다. 본문이
   없는 정의는 handle을 설치하거나 `become`하지 않으므로 그 호출이 더하는 native
@@ -479,16 +490,18 @@ ability row는 flow의 row에 포함되므로 row가 정한 callee convention은
   정한 convention이 `Cps`가 아니면 그 `Cps` 진입 인스턴스다. 호출 결과의
   continuation은 flow의 continuation이다.
 - **`Cps` flow와 callable value:** 값의 `Cps` convention entry로 flow의 frame을 그대로
-  넘긴다. Callee type을 읽은 class가 더 약해도 `Cps` entry로 들어간다. Source callable
-  값의 `Cps` entry는 본문이므로 이 이전도 native frame을 남기지 않는다.
+  넘긴다. Callee type을 읽은 class가 더 약해도 `Cps` entry로 들어간다. 그 entry가
+  본문이면 이 이전은 native frame을 남기지 않는다. [자기 flow](#cps-진입-본문)가
+  frame을 넘기지 않는 람다의 adapter이면 더하는 native 깊이는 adapter가 본문을 부르는 호출 한 번이다.
 - **`Cps` flow와 본문이 없는 callee:** callee를 일반 호출한 뒤 결과를 flow의
   `Done<R>`로 proper tail transfer한다. 더하는 native 깊이는 그 호출 한 번이다.
 
 Flow의 frame은 `Cps` callable과 `Cps` 진입 본문에서는 받은 frame이고, 값 delimiter의
-region에서는 delimiter의 frame이다. Handle의 arm과 `do` arm에서는 그 handle의 exit
-frame이며, [꼬리 위치의 handle](#frame을-그대로-넘기는-자리)에서는 handle을 감싼 flow의
-frame과 같다. 그래서 값을 반환하는 callable의 꼬리 handle에서 arm이 `become`으로
-이어지는 반복은 delimiter 하나와 그 frame 하나 위에서 실행된다.
+region에서는 delimiter의 frame이다. Handle의 `op` arm과 `do` arm에서는 그 handle의
+exit frame이며, [꼬리 위치의 handle](#frame을-그대로-넘기는-자리)에서는 handle을 감싼 flow의
+frame과 같다. `fn` arm은 `EvidenceDirect` flow이므로 frame을 받지 않는다. 그래서 값을
+반환하는 callable의 꼬리 handle에서 arm이 `become`으로 이어지는 반복은 delimiter
+하나와 그 frame 하나 위에서 실행된다.
 
 꼬리 위치 structured arm 안의 `become`은 그 operation을 terminal로 만든다. 값을 내는
 arm(`scf.yield`)은 operation 뒤에 남은 suffix(감싼 callable의 `return` 또는 바깥 꼬리

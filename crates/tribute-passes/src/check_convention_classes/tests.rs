@@ -52,8 +52,9 @@ fn calls(callback: &str, own: &str, lambda: &[&str], callee: &str) -> String {
     )
 }
 
-/// The bodies of a pure lambda: its own class and its `Cps` entry body.
-const PURE: &[&str] = &["direct", "cps"];
+/// The body of a pure lambda whose own flow hands no frame on: its own
+/// class alone.
+const PURE: &[&str] = &["direct"];
 
 #[test]
 fn a_reference_selects_the_instance_of_its_rows() {
@@ -77,14 +78,84 @@ fn an_instance_has_its_classes_in_its_transfers_and_convention() {
     );
 }
 
-/// Every lambda has a `Cps` body: its `Cps` entry body when its uses
-/// select none.
+/// A lambda whose own flow hands no frame on has no `Cps` entry body.
 #[test]
-fn a_lambda_without_a_cps_class_has_a_cps_entry_body() {
+fn a_lambda_without_a_frame_transfer_has_no_cps_entry_body() {
     assert_eq!(
-        rules(&calls("direct", "direct", &["direct"], "app$9D")),
+        rules(&calls("direct", "direct", &["direct", "cps"], "app$9D")),
         ["lambda"]
     );
+}
+
+/// `main` calls a lambda whose bodies are `OUTER`. A body of a convention
+/// in `transfers` ends with a `become` of `id`'s instance for that flow;
+/// the others return their parameter.
+const TRANSFER: &str = r#"core.module @m {
+  tribute_cps.func @id(%x: core.i32) -> core.i32 convention(direct) {
+    tribute_control.return %x
+  }
+  tribute_cps.func @"id$7"(%x: core.i32) -> core.i32 convention(cps) attributes {entry_of = "id"} {
+    tribute_control.return %x
+  }
+  tribute_cps.func @main(%x: core.i32) -> core.i32 convention(direct) {
+    %f = tribute_cps.lambda(%y: core.i32) -> core.i32 entries {
+OUTER
+    }
+    %r = tribute_cps.call_indirect %f(%x) attributes {convention = "direct"} : (core.i32) -> core.i32
+    tribute_control.return %r
+  }
+}"#;
+
+/// Bodies of a lambda over `%y`, one per convention; a body of a convention
+/// in `transfers` ends with a `become` of `id`.
+fn transfer_bodies(conventions: &[&str], transfers: &[&str]) -> String {
+    conventions
+        .iter()
+        .map(|&convention| {
+            let exit = match (transfers.contains(&convention), convention) {
+                (false, _) => "tribute_control.return %y".to_owned(),
+                (true, "cps") => {
+                    r#"tribute_control.tail_call @"id$7"(%y) : (core.i32) -> ()"#.to_owned()
+                }
+                (true, _) => "tribute_control.tail_call @id(%y) : (core.i32) -> ()".to_owned(),
+            };
+            format!("      {convention} {{\n        {exit}\n      }}")
+        })
+        .join("\n")
+}
+
+/// A lambda whose own flow has a `become` has a `Cps` entry body.
+#[test]
+fn a_lambda_with_a_frame_transfer_has_a_cps_entry_body() {
+    let input = |bodies: &[&str]| TRANSFER.replace("OUTER", &transfer_bodies(bodies, bodies));
+    assert_eq!(rules(&input(&["direct"])), ["lambda"]);
+    assert_eq!(rules(&input(&["direct", "cps"])), [""; 0]);
+}
+
+/// A nested lambda's `become` belongs to its own flow, not to the lambda
+/// that holds it.
+#[test]
+fn a_nested_frame_transfer_gives_only_the_nested_lambda_a_cps_entry_body() {
+    let input = |outer: &[&str], inner: &[&str]| {
+        let inner = transfer_bodies(inner, inner)
+            .replace("%y", "%z")
+            .replace('\n', "\n    ");
+        let outer = outer
+            .iter()
+            .map(|convention| {
+                format!(
+                    "      {convention} {{\n        %g = tribute_cps.lambda(%z: core.i32) -> core.i32 entries {{\n    {inner}\n        }}\n        tribute_control.return %y\n      }}"
+                )
+            })
+            .join("\n");
+        TRANSFER.replace("OUTER", &outer)
+    };
+    assert_eq!(rules(&input(&["direct"], &["direct", "cps"])), [""; 0]);
+    assert_eq!(
+        rules(&input(&["direct", "cps"], &["direct", "cps"])),
+        ["lambda"]
+    );
+    assert_eq!(rules(&input(&["direct"], &["direct"])), ["lambda"]);
 }
 
 /// An instance of an upper bound calls through the bound, and a lambda over
@@ -105,12 +176,9 @@ fn an_instance_of_an_upper_bound_has_a_body_per_class_up_to_it() {
 }}"#
         )
     };
-    assert_eq!(
-        rules(&input(&identity_bodies(&["direct", "cps"]))),
-        ["lambda"]
-    );
-    let all = identity_bodies(&["direct", "evidence_direct", "cps"]);
-    assert_eq!(rules(&input(&all)), [""; 0]);
+    assert_eq!(rules(&input(&identity_bodies(&["direct"]))), ["lambda"]);
+    let both = identity_bodies(&["direct", "evidence_direct"]);
+    assert_eq!(rules(&input(&both)), [""; 0]);
 }
 
 #[test]
@@ -130,8 +198,6 @@ fn instances_of_one_definition_select_the_same_class_variables() {
     assert!(rules(&input).contains(&"siblings"), "{:?}", rules(&input));
 }
 
-/// `%h`'s `Cps` entry body reads its local binder `'a1` as its `direct`
-/// body does.
 const LOCAL: &str = r#"core.module @m {
   !l0 = tribute_control.func_sig<(core.i32) -> core.i32>
   !la = tribute_control.func_sig<(core.i32) -> core.i32 row(@Ask)>
@@ -151,12 +217,6 @@ BODIES
         %v = tribute_cps.call_indirect %s(%c) attributes {convention = "direct"} : (core.i32) -> core.i32 row(| 'a1)
         tribute_control.return %v
       }
-      cps {
-        %s = tribute_control.instantiate %g {row_args = [{tail = 1}]} : !l1
-        %c = arith.constant 1 : core.i32
-        %v = tribute_cps.call_indirect %s(%c) attributes {convention = "direct"} : (core.i32) -> core.i32 row(| 'a1)
-        tribute_control.return %v
-      }
     }
     %a = tribute_control.instantiate %g {row_args = [{}]} : !l0
     %i = tribute_control.instantiate %h {row_args = [{}]} : !h0
@@ -169,7 +229,7 @@ BODIES
 #[test]
 fn a_local_class_settles_from_direct_through_other_locals() {
     let input = LOCAL
-        .replace("BODIES", &identity_bodies(&["direct", "cps"]))
+        .replace("BODIES", &identity_bodies(PURE))
         .replace("USE", "");
     assert_eq!(rules(&input), [""; 0]);
 }
@@ -182,11 +242,8 @@ fn a_lambda_has_a_body_for_each_class_its_instantiations_select() {
             "%b = tribute_control.instantiate %g {row_args = [{instances = [@Ask]}]} : !la",
         )
     };
-    assert_eq!(rules(&input(&["direct", "cps"])), ["lambda"]);
-    assert_eq!(
-        rules(&input(&["direct", "evidence_direct", "cps"])),
-        [""; 0]
-    );
+    assert_eq!(rules(&input(&["direct"])), ["lambda"]);
+    assert_eq!(rules(&input(&["direct", "evidence_direct"])), [""; 0]);
 }
 
 /// Instantiations that select one body may pass different classes for a

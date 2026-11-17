@@ -732,9 +732,7 @@ fn main() -> Nil {{}}
 #[salsa_test]
 fn caller_of_a_cps_worker_keeps_the_convention_of_its_row(db: &salsa::DatabaseImpl) {
     // `g` quantifies its row, and `entry` instantiates it only at the pure
-    // row, so `g` and the callback it passes to `app$9D` are Direct. The
-    // `Cps` entry body of `g` copies the callback, which reads as in its
-    // `direct` body.
+    // row, so `g` and the callback it passes to `app$9D` are Direct.
     let source = SourceCst::from_source_str(
         db,
         "original_cps_lambda.trb",
@@ -752,11 +750,7 @@ fn main() -> Nil {}
     let header = entry.lines().next().expect("a function has a header");
     let lambdas = lambda_headers(entry);
     assert!(!header.contains("convention(cps)"), "{ir}");
-    assert_eq!(lambdas.len(), 3, "{ir}");
-    assert!(
-        entry.matches("call @\"pkg::app$Int$9D\"(").count() == 2,
-        "both bodies of g call the Direct instance of app:\n{ir}"
-    );
+    assert_eq!(lambdas.len(), 2, "{ir}");
     assert!(
         lambdas.iter().all(|line| line.ends_with(" direct {")),
         "{ir}"

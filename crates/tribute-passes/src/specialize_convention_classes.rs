@@ -444,9 +444,15 @@ impl Instance<'_> {
                 lambda.conventions = self.reader.conventions(ctx, &row, lambda.op);
                 lambda.reads.extend(row.tail);
             }
-            // A lambda whose classes select no `Cps` body has a `Cps` entry
-            // body (`design/cps-effects.md`, "`Cps` 진입 본문").
-            lambda.conventions.push(CallingConvention::Cps);
+            // A lambda whose own flow hands a frame on has a `Cps` entry
+            // body when its classes select no `Cps` body
+            // (`design/cps-effects.md`, "`Cps` 진입 본문").
+            if ctx
+                .op_region(lambda.op, 0)
+                .is_some_and(|body| tribute_cps::own_flow_hands_on_frame(ctx, body))
+            {
+                lambda.conventions.push(CallingConvention::Cps);
+            }
             lambda.conventions.sort_unstable();
             lambda.conventions.dedup();
         }

@@ -56,9 +56,9 @@ fn generic_callback_selects_a_direct_instance_and_executes_wasm(db: &salsa::Data
 }
 
 /// Whether printed IR declares the `Cps` convention for a definition or a
-/// transfer anywhere, or has a lambda whose only class is `Cps`. Every
-/// lambda has a `cps` body, its `Cps` entry body when its class is weaker,
-/// which runs no `Cps` control of its own; bodies are printed weakest first.
+/// transfer anywhere, or has a lambda whose only class is `Cps`. A lambda
+/// whose class is weaker may have a `cps` body, its `Cps` entry body, which
+/// runs no `Cps` control of its own; bodies are printed weakest first.
 fn is_cps(ir: &str) -> bool {
     let lines: Vec<&str> = ir.lines().collect();
     ir.contains("convention(cps)")
@@ -428,13 +428,7 @@ fn main() ->{Io} Nil {
     );
     // The pure callback is lowered at the instantiated, closed row.
     assert!(
-        main.contains("tribute_cps.lambda(%9: core.i32) -> core.i32 entries {\n        direct {"),
-        "{main}"
-    );
-    // The let-bound lambda's `Cps` entry body reads its binder as its
-    // strongest body, `evidence_direct`, does.
-    assert!(
-        main.contains("cps {\n            %5 = tribute_control.call @\"pkg::app$9E\"("),
+        main.contains("tribute_cps.lambda(%8: core.i32) -> core.i32 entries {\n        direct {"),
         "{main}"
     );
 }
