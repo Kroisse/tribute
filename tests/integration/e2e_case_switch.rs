@@ -57,7 +57,7 @@ fn asked(n: Nat) ->{Ask} Nat {
 fn answer_ask(comp: fn() ->{e, Ask} Nat) ->{e} Nat {
     handle comp() {
         do value { value }
-        op Ask::ask() { answer_ask(fn() { resume 40 }) }
+        op Ask::ask() { become answer_ask(fn() { resume 40 }) }
     }
 }
 
@@ -194,7 +194,7 @@ fn asked(shape: Shape) ->{Ask} Nat {
 fn answer_ask(comp: fn() ->{e, Ask} Nat) ->{e} Nat {
     handle comp() {
         do value { value }
-        op Ask::ask() { answer_ask(fn() { resume 40 }) }
+        op Ask::ask() { become answer_ask(fn() { resume 40 }) }
     }
 }
 

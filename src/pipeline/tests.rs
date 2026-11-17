@@ -333,8 +333,8 @@ fn set_then_get() ->{State(Int)} Int {
 fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
     handle comp() {
         do result { result }
-        op State::get() { run_state(fn() { resume init }, init) }
-        op State::set(v) { run_state(fn() { resume Nil }, v) }
+        op State::get() { become run_state(fn() { resume init }, init) }
+        op State::set(v) { become run_state(fn() { resume Nil }, v) }
     }
 }
 
@@ -826,7 +826,7 @@ fn run(seed: fn() ->{r} Int) ->{r} Int { apply(fn(x) { x + +1 }, seed()) }
 fn handle_tick(comp: fn() ->{e, Tick} Int) ->{e} Int {
     handle comp() {
         do value { value }
-        op Tick::tick() { handle_tick(fn() { resume +41 }) }
+        op Tick::tick() { become handle_tick(fn() { resume +41 }) }
     }
 }
 
@@ -1211,7 +1211,7 @@ fn count() ->{Counter} Int {
 fn handle_counter(comp: fn() ->{e, Counter} Int) ->{e} Int {
     handle comp() {
         do result { result }
-        op Counter::next() { handle_counter(fn() { resume +1 }) }
+        op Counter::next() { become handle_counter(fn() { resume +1 }) }
     }
 }
 
@@ -2148,8 +2148,8 @@ ability State(s) {
 fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
     handle comp() {
         do result { result }
-        op State::get() { run_state(fn() { resume init }, init) }
-        op State::set(value) { run_state(fn() { resume Nil }, value) }
+        op State::get() { become run_state(fn() { resume init }, init) }
+        op State::set(value) { become run_state(fn() { resume Nil }, value) }
     }
 }
 

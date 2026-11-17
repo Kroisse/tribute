@@ -299,8 +299,8 @@ fn count_vowels_in(runes: fn() ->{Stream(Rune)} Nil, count: Nat) -> Nat {
         do _ { count }
         op Stream::emit(r) {
             case "aeiouAEIOU".contains(r.to_string()) {
-                True -> count_vowels_in(fn() resume Nil, count + 1)
-                False -> count_vowels_in(fn() resume Nil, count)
+                True -> become count_vowels_in(fn() resume Nil, count + 1)
+                False -> become count_vowels_in(fn() resume Nil, count)
             }
         }
     }
@@ -317,7 +317,7 @@ fn first_word_in(runes: fn() ->{Stream(Rune)} Nil, word: String) -> String {
         op Stream::emit(r) {
             case r.is_whitespace() {
                 True -> word         // resume 안 함 → 중단
-                False -> first_word_in(fn() resume Nil, word <> String::from_rune(r))
+                False -> become first_word_in(fn() resume Nil, word <> String::from_rune(r))
             }
         }
     }

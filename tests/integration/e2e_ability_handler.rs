@@ -316,7 +316,7 @@ fn run_first(comp: fn() ->{e, First} String) ->{e} String {
     handle comp() {
         do value { "inner-do:" <> value }
         op First::first() {
-            run_first(fn() {
+            become run_first(fn() {
                 let resumed = resume "first-value"
                 "resume-suffix:" <> resumed
             })
@@ -383,8 +383,8 @@ fn get_state() ->{State(Int)} Int {
 fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
     handle comp() {
         do result { result }
-        op State::get() { run_state(fn() { resume init }, init) }
-        op State::set(v) { run_state(fn() { resume Nil }, v) }
+        op State::get() { become run_state(fn() { resume init }, init) }
+        op State::set(v) { become run_state(fn() { resume Nil }, v) }
     }
 }
 
@@ -417,8 +417,8 @@ fn set_then_get() ->{State(Int)} Int {
 fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
     handle comp() {
         do result { result }
-        op State::get() { run_state(fn() { resume init }, init) }
-        op State::set(v) { run_state(fn() { resume Nil }, v) }
+        op State::get() { become run_state(fn() { resume init }, init) }
+        op State::set(v) { become run_state(fn() { resume Nil }, v) }
     }
 }
 
@@ -458,8 +458,8 @@ fn double_increment() ->{State(Nat)} Nat {
 fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
     handle comp() {
         do result { result }
-        op State::get() { run_state(fn() { resume init }, init) }
-        op State::set(v) { run_state(fn() { resume Nil }, v) }
+        op State::get() { become run_state(fn() { resume init }, init) }
+        op State::set(v) { become run_state(fn() { resume Nil }, v) }
     }
 }
 
@@ -503,8 +503,8 @@ fn triple_increment() ->{State(Nat)} Nat {
 fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
     handle comp() {
         do result { result }
-        op State::get() { run_state(fn() { resume init }, init) }
-        op State::set(v) { run_state(fn() { resume Nil }, v) }
+        op State::get() { become run_state(fn() { resume init }, init) }
+        op State::set(v) { become run_state(fn() { resume Nil }, v) }
     }
 }
 
@@ -536,8 +536,8 @@ fn no_effects() ->{State(Int)} Int {
 fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
     handle comp() {
         do result { result }
-        op State::get() { run_state(fn() { resume init }, init) }
-        op State::set(v) { run_state(fn() { resume Nil }, v) }
+        op State::get() { become run_state(fn() { resume init }, init) }
+        op State::set(v) { become run_state(fn() { resume Nil }, v) }
     }
 }
 
@@ -773,7 +773,7 @@ fn count() ->{MyMod::Counter} Nat {
 fn run_counter(comp: fn() ->{e, MyMod::Counter} a) ->{e} a {
     handle comp() {
         do result { result }
-        op MyMod::Counter::inc() { run_counter(fn() { resume 1 }) }
+        op MyMod::Counter::inc() { become run_counter(fn() { resume 1 }) }
     }
 }
 
@@ -878,7 +878,7 @@ fn pure_value() ->{Ask} Nat {
 fn run_ask(comp: fn() ->{e, Ask} a) ->{e} a {
     handle comp() {
         do result { result }
-        op Ask::ask() { run_ask(fn() { resume 0 }) }
+        op Ask::ask() { become run_ask(fn() { resume 0 }) }
     }
 }
 
@@ -906,7 +906,7 @@ fn pure_value() ->{Ask} Nat {
 fn run_ask(comp: fn() ->{e, Ask} Nat) ->{e} Nat {
     handle comp() {
         do result { 42 }
-        op Ask::ask() { run_ask(fn() { resume 0 }) }
+        op Ask::ask() { become run_ask(fn() { resume 0 }) }
     }
 }
 
@@ -938,8 +938,8 @@ fn pure_value() ->{State(Nat)} Nat {
 fn run_state(comp: fn() ->{e, State(Nat)} Nat) ->{e} Nat {
     handle comp() {
         do result { result + result }
-        op State::get() { run_state(fn() { resume 0 }) }
-        op State::set(v) { run_state(fn() { resume Nil }) }
+        op State::get() { become run_state(fn() { resume 0 }) }
+        op State::set(v) { become run_state(fn() { resume Nil }) }
     }
 }
 
@@ -976,7 +976,7 @@ fn effectful_value() ->{State(Nat)} Nat {
 fn run_state(comp: fn() ->{e, State(Nat)} Nat) ->{e} Nat {
     handle comp() {
         do result { result + result }
-        op State::get() { run_state(fn() { resume 10 }) }
+        op State::get() { become run_state(fn() { resume 10 }) }
     }
 }
 
@@ -1014,8 +1014,8 @@ fn counter() ->{State(Nat)} Nat {
 fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
     handle comp() {
         do result { result }
-        op State::get() { run_state(fn() { resume init }, init) }
-        op State::set(v) { run_state(fn() { resume Nil }, v) }
+        op State::get() { become run_state(fn() { resume init }, init) }
+        op State::set(v) { become run_state(fn() { resume Nil }, v) }
     }
 }
 
@@ -1048,8 +1048,8 @@ fn counter() ->{State(Nat)} Nat {
 fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
     handle comp() {
         do result { result }
-        op State::get() { run_state(fn() { resume init }, init) }
-        op State::set(v) { run_state(fn() { resume Nil }, v) }
+        op State::get() { become run_state(fn() { resume init }, init) }
+        op State::set(v) { become run_state(fn() { resume Nil }, v) }
     }
 }
 
@@ -1087,8 +1087,8 @@ fn mutate() ->{State(Nat)} Nat {
 fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
     handle comp() {
         do result { result }
-        op State::get() { run_state(fn() { resume init }, init) }
-        op State::set(v) { run_state(fn() { resume Nil }, v) }
+        op State::get() { become run_state(fn() { resume init }, init) }
+        op State::set(v) { become run_state(fn() { resume Nil }, v) }
     }
 }
 
@@ -1124,8 +1124,8 @@ fn compute() ->{State(Nat)} Nat {
 fn run_state(comp: fn() ->{e, State(Nat)} Nat) ->{e} Nat {
     handle comp() {
         do result { result + 1 }
-        op State::get() { run_state(fn() { resume 5 }) }
-        op State::set(v) { run_state(fn() { resume Nil }) }
+        op State::get() { become run_state(fn() { resume 5 }) }
+        op State::set(v) { become run_state(fn() { resume Nil }) }
     }
 }
 
@@ -1167,8 +1167,8 @@ fn compute() ->{State(Nat)} Nat {
 fn run_state(comp: fn() ->{e, State(Nat)} Nat) ->{e} Nat {
     handle comp() {
         do result { result }
-        op State::get() { run_state(fn() { resume 5 }) }
-        op State::set(v) { run_state(fn() { resume Nil }) }
+        op State::get() { become run_state(fn() { resume 5 }) }
+        op State::set(v) { become run_state(fn() { resume Nil }) }
     }
 }
 
@@ -1203,8 +1203,8 @@ fn compute() ->{State(Nat)} Nat {
 fn run_state(comp: fn() ->{e, State(Nat)} Nat) ->{e} Nat {
     handle comp() {
         do result { result }
-        op State::get() { run_state(fn() { resume 7 }) }
-        op State::set(v) { run_state(fn() { resume Nil }) }
+        op State::get() { become run_state(fn() { resume 7 }) }
+        op State::set(v) { become run_state(fn() { resume Nil }) }
     }
 }
 
@@ -1242,7 +1242,7 @@ fn use_multi() ->{Multi} Nat {
 fn run_multi(comp: fn() ->{e, Multi} a) ->{e} a {
     handle comp() {
         do result { result }
-        op Multi::combine(x, y, z) { run_multi(fn() { resume x + y + z }) }
+        op Multi::combine(x, y, z) { become run_multi(fn() { resume x + y + z }) }
     }
 }
 
@@ -1270,7 +1270,7 @@ fn use_pair() ->{Pair} Nat {
 fn run_pair(comp: fn() ->{e, Pair} a) ->{e} a {
     handle comp() {
         do result { result }
-        op Pair::make(a, b) { run_pair(fn() { resume a + b }) }
+        op Pair::make(a, b) { become run_pair(fn() { resume a + b }) }
     }
 }
 
@@ -1298,7 +1298,7 @@ fn use_pick() ->{Pick} Nat {
 fn run_pick(comp: fn() ->{e, Pick} a) ->{e} a {
     handle comp() {
         do result { result }
-        op Pick::choose(a, _, c) { run_pick(fn() { resume a + c }) }
+        op Pick::choose(a, _, c) { become run_pick(fn() { resume a + c }) }
     }
 }
 
@@ -1352,7 +1352,7 @@ fn computation() ->{Math} Nat {
 fn run_math(comp: fn() ->{e, Math} a) ->{e} a {
     handle comp() {
         do result { result }
-        op Math::mul(a, b) { run_math(fn() { resume a * b }) }
+        op Math::mul(a, b) { become run_math(fn() { resume a * b }) }
     }
 }
 
@@ -1633,7 +1633,7 @@ ability Ask {
 fn answer_with(comp: fn() ->{Ask} Int) ->{} Int {
     handle comp() {
         do value { value }
-        op Ask::ask() { answer_with(fn() { resume +21 }) }
+        op Ask::ask() { become answer_with(fn() { resume +21 }) }
     }
 }
 
@@ -1693,7 +1693,7 @@ ability Tell {
 fn inner_with(comp: fn() ->{Ask} Int) ->{} Int {
     handle comp() {
         do value { value }
-        op Ask::ask() { inner_with(fn() { resume +10 }) }
+        op Ask::ask() { become inner_with(fn() { resume +10 }) }
     }
 }
 
@@ -1732,7 +1732,7 @@ ability Ask {
 fn show_with(comp: fn() ->{Ask} String) ->{} String {
     handle comp() {
         do value { value }
-        op Ask::ask() { show_with(fn() { resume +7 }) }
+        op Ask::ask() { become show_with(fn() { resume +7 }) }
     }
 }
 
@@ -1768,7 +1768,7 @@ ability Ask {
 fn collect_with(comp: fn() ->{Ask} List(Nat)) ->{} List(Nat) {
     handle comp() {
         do value { value }
-        op Ask::ask() { collect_with(fn() { resume 7 }) }
+        op Ask::ask() { become collect_with(fn() { resume 7 }) }
     }
 }
 
@@ -1820,7 +1820,7 @@ fn counted() ->{Next} Int {
 fn run_next(comp: fn() ->{e, Next} Int, step: Cell) ->{e} Int {
     handle comp() {
         do result { result }
-        op Next::next() { run_next(fn() { resume step.value }, step) }
+        op Next::next() { become run_next(fn() { resume step.value }, step) }
     }
 }
 
@@ -1875,7 +1875,7 @@ fn counted() ->{Next} Int {
 fn run_next(comp: fn() ->{e, Next} Int, step: Cell) ->{e} Int {
     handle comp() {
         do result { result }
-        op Next::next() { run_next(fn() { resume step.value }, step) }
+        op Next::next() { become run_next(fn() { resume step.value }, step) }
     }
 }
 
@@ -1952,7 +1952,7 @@ fn apply_cell(n: Int) ->{Cell(fn(Int) ->{} Int)} Int {
 fn run_cell(comp: fn() ->{e, Cell(fn(Int) ->{} Int)} Int) ->{e} Int {
     handle comp() {
         do result { result }
-        op Cell::get() { run_cell(fn() { resume fn(n) n * +2 }) }
+        op Cell::get() { become run_cell(fn() { resume fn(n) n * +2 }) }
     }
 }
 
@@ -2002,7 +2002,7 @@ fn handled() -> Int {
 fn run_gen(comp: fn() ->{e, Gen} fn(Int) ->{} Int) ->{e} fn(Int) ->{} Int {
     handle comp() {
         op Gen::next() {
-            run_gen(fn() {
+            become run_gen(fn() {
                 let g = resume +40
                 let h = fn(n: Int) g(n) + +1
                 h
@@ -2163,7 +2163,7 @@ fn stop_early() ->{Stop} Int {
 
 fn run_ask(comp: fn() ->{e, Ask} a) ->{e} a {
     handle comp() {
-        op Ask::ask() { run_ask(fn() { resume +4 }) }
+        op Ask::ask() { become run_ask(fn() { resume +4 }) }
     }
 }
 
@@ -2367,8 +2367,8 @@ ability State(s) {
 fn run_state(comp: fn() ->{e, State(s)} a, state: s) ->{e} a {
     handle comp() {
         do result { result }
-        op State::get() { run_state(fn() { resume state }, state) }
-        op State::set(v) { run_state(fn() { resume Nil }, v) }
+        op State::get() { become run_state(fn() { resume state }, state) }
+        op State::set(v) { become run_state(fn() { resume Nil }, v) }
     }
 }
 
@@ -2424,8 +2424,8 @@ fn run_state(comp: fn() ->{e, State(Int)} Int, state: Int) ->{e, Io} Int {
             print_line("done")
             result
         }
-        op State::get() { run_state(fn() { resume state }, state) }
-        op State::set(v) { run_state(fn() { resume Nil }, v) }
+        op State::get() { become run_state(fn() { resume state }, state) }
+        op State::set(v) { become run_state(fn() { resume Nil }, v) }
     }
 }
 
@@ -2572,7 +2572,7 @@ fn run(comp: fn() ->{e, Tick} Int) ->{e, Io} Int {
         fn Tick::next() { +2 }
         op Tick::ping() {
             print_line("ping")
-            run(fn() { resume Nil })
+            become run(fn() { resume Nil })
         }
     }
 }
@@ -2607,7 +2607,7 @@ fn work() ->{Tick, Ping} Int {
 fn inner(comp: fn() ->{e, Ping} Int) ->{e} Int {
     handle comp() {
         do result { result }
-        op Ping::ping() { inner(fn() { resume Nil }) }
+        op Ping::ping() { become inner(fn() { resume Nil }) }
     }
 }
 
@@ -2670,7 +2670,7 @@ fn poly(comp: fn() ->{e, Tick} Int) ->{e} Int {
 fn pinged(comp: fn() ->{e, Ping} Int) ->{e} Int {
     handle comp() {
         do result { result }
-        op Ping::ping() { pinged(fn() { resume Nil }) }
+        op Ping::ping() { become pinged(fn() { resume Nil }) }
     }
 }
 
@@ -2723,7 +2723,7 @@ fn labelled(comp: fn() ->{e, Say} String, label: Label) ->{e} String {
 fn pinged(comp: fn() ->{e, Ping} String, label: Label) ->{e} String {
     handle comp() {
         do result { result }
-        op Ping::ping() { pinged(fn() { resume Nil }, label) }
+        op Ping::ping() { become pinged(fn() { resume Nil }, label) }
     }
 }
 

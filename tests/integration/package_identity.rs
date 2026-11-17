@@ -25,7 +25,7 @@ fn count() ->{std::Tick} Int { std::Tick::tick() }
 fn answer_tick(comp: fn() ->{e, std::Tick} Int) ->{e} Int {
     handle comp() {
         do result { result }
-        op std::Tick::tick() { answer_tick(fn() { resume +2 }) }
+        op std::Tick::tick() { become answer_tick(fn() { resume +2 }) }
     }
 }
 

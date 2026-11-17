@@ -91,8 +91,8 @@ fn set_then_get() ->{State(Int)} Int {
 fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
     handle comp() {
         do result { result }
-        op State::get() { run_state(fn() { resume init }, init) }
-        op State::set(v) { run_state(fn() { resume Nil }, v) }
+        op State::get() { become run_state(fn() { resume init }, init) }
+        op State::set(v) { become run_state(fn() { resume Nil }, v) }
     }
 }
 
@@ -143,8 +143,8 @@ fn tick(n: Int) ->{State(Int)} Int {
 fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
     handle comp() {
         do result { result }
-        op State::get() { run_state(fn() { resume init }, init) }
-        op State::set(v) { run_state(fn() { resume Nil }, v) }
+        op State::get() { become run_state(fn() { resume init }, init) }
+        op State::set(v) { become run_state(fn() { resume Nil }, v) }
     }
 }
 

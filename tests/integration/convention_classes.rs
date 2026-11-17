@@ -684,7 +684,7 @@ ability State(s) {
 fn run(f: fn() ->{e, State(Int)} Int) ->{e} Int {
     handle f() {
         do result { result }
-        op State::get() { run(fn() { resume +0 }) }
+        op State::get() { become run(fn() { resume +0 }) }
     }
 }
 
@@ -808,7 +808,7 @@ ability State(s) {
 fn with_state(f: fn() ->{e, State(s)} a, init: s) ->{e} a {
     handle f() {
         do result { result }
-        op State::get() { with_state(fn() { resume init }, init) }
+        op State::get() { become with_state(fn() { resume init }, init) }
     }
 }
 

@@ -701,7 +701,7 @@ fn comp() ->{Foo, Bar} Nil {
 fn handle_foo(body: fn() ->{e, Foo} Nil) ->{e} Nil {
     handle body() {
         do result { result }
-        op Foo::foo() { handle_foo(fn() { resume Nil }) }
+        op Foo::foo() { become handle_foo(fn() { resume Nil }) }
     }
 }
 

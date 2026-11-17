@@ -17,16 +17,14 @@ core.module @test {
               %6 = tribute_control.resume %5 : core.i32 -> core.i32
               tribute_control.return %6
           }
-          %7 = tribute_control.call @"pkg::run_with_state"(%4) attributes {row_args = [{tail = 0}]} : (!t0) -> core.i32
-          tribute_control.yield %7
-      } op @"ability_2_10_pkg::State_3_int" @set(%8: core.i32) : core.nil {
-          %9 = tribute_control.lambda() -> core.i32 row(@"ability_2_10_pkg::State_3_int") {
-              %10 = core.nil_value : core.nil
-              %11 = tribute_control.resume %10 : core.nil -> core.i32
-              tribute_control.return %11
+          tribute_control.tail_call @"pkg::run_with_state"(%4) attributes {row_args = [{tail = 0}]} : (!t0) -> ()
+      } op @"ability_2_10_pkg::State_3_int" @set(%7: core.i32) : core.nil {
+          %8 = tribute_control.lambda() -> core.i32 row(@"ability_2_10_pkg::State_3_int") {
+              %9 = core.nil_value : core.nil
+              %10 = tribute_control.resume %9 : core.nil -> core.i32
+              tribute_control.return %10
           }
-          %12 = tribute_control.call @"pkg::run_with_state"(%9) attributes {row_args = [{tail = 0}]} : (!t0) -> core.i32
-          tribute_control.yield %12
+          tribute_control.tail_call @"pkg::run_with_state"(%8) attributes {row_args = [{tail = 0}]} : (!t0) -> ()
       }
       tribute_control.return %1
   }

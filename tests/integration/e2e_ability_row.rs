@@ -37,8 +37,8 @@ fn apply(f: fn(Nat) ->{e} Nat, x: Nat) ->{e} Nat {
 fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
     handle comp() {
         do result { result }
-        op State::get() { run_state(fn() { resume init }, init) }
-        op State::set(v) { run_state(fn() { resume Nil }, v) }
+        op State::get() { become run_state(fn() { resume init }, init) }
+        op State::set(v) { become run_state(fn() { resume Nil }, v) }
     }
 }
 
@@ -80,15 +80,15 @@ fn apply(f: fn() ->{e} Nat) ->{e} Nat {
 fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
     handle comp() {
         do result { result }
-        op State::get() { run_state(fn() { resume init }, init) }
-        op State::set(v) { run_state(fn() { resume Nil }, v) }
+        op State::get() { become run_state(fn() { resume init }, init) }
+        op State::set(v) { become run_state(fn() { resume Nil }, v) }
     }
 }
 
 fn run_reader(comp: fn() ->{e, Reader(r)} a, value: r) ->{e} a {
     handle comp() {
         do result { result }
-        op Reader::ask() { run_reader(fn() { resume value }, value) }
+        op Reader::ask() { become run_reader(fn() { resume value }, value) }
     }
 }
 
@@ -154,15 +154,15 @@ fn apply(f: fn() ->{e} Nat) ->{e} Nat {
 fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
     handle comp() {
         do result { result }
-        op State::get() { run_state(fn() { resume init }, init) }
-        op State::set(v) { run_state(fn() { resume Nil }, v) }
+        op State::get() { become run_state(fn() { resume init }, init) }
+        op State::set(v) { become run_state(fn() { resume Nil }, v) }
     }
 }
 
 fn run_reader(comp: fn() ->{e, Reader(r)} a, value: r) ->{e} a {
     handle comp() {
         do result { result }
-        op Reader::ask() { run_reader(fn() { resume value }, value) }
+        op Reader::ask() { become run_reader(fn() { resume value }, value) }
     }
 }
 
@@ -234,14 +234,14 @@ fn tell() ->{Tell} Nat { Tell::tell() }
 fn run_ask(comp: fn() ->{Ask} Nat) -> Nat {
     handle comp() {
         do result { result }
-        op Ask::ask() { run_ask(fn() { resume 40 }) }
+        op Ask::ask() { become run_ask(fn() { resume 40 }) }
     }
 }
 
 fn run_tell(comp: fn() ->{Tell} Nat) -> Nat {
     handle comp() {
         do result { result }
-        op Tell::tell() { run_tell(fn() { resume 2 }) }
+        op Tell::tell() { become run_tell(fn() { resume 2 }) }
     }
 }
 
@@ -289,7 +289,7 @@ fn run() ->{Ask} Nat {
 fn run_ask(comp: fn() ->{Ask} Nat) -> Nat {
     handle comp() {
         do result { result }
-        op Ask::ask() { run_ask(fn() { resume 20 }) }
+        op Ask::ask() { become run_ask(fn() { resume 20 }) }
     }
 }
 
@@ -316,8 +316,8 @@ ability State(s) {
 fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
     handle comp() {
         do result { result }
-        op State::get() { run_state(fn() { resume init }, init) }
-        op State::set(v) { run_state(fn() { resume Nil }, v) }
+        op State::get() { become run_state(fn() { resume init }, init) }
+        op State::set(v) { become run_state(fn() { resume Nil }, v) }
     }
 }
 
@@ -380,7 +380,7 @@ fn asks() ->{Ask} Int { Ask::ask() + Ask::ask() }
 fn run_ask(comp: fn() ->{Ask} Int) -> Int {
     handle comp() {
         do result { result }
-        op Ask::ask() { run_ask(fn() { resume +20 }) }
+        op Ask::ask() { become run_ask(fn() { resume +20 }) }
     }
 }
 

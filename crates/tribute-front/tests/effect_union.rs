@@ -137,7 +137,7 @@ fn combine(left: fn() ->{e1} Nil, right: fn() ->{e2} Nil) ->{e1, e2} Nil {
 fn ignore_pings(comp: fn() ->{e, Ping} Nil) ->{e} Nil {
     handle comp() {
         do value { value }
-        op Ping::ping() { ignore_pings(fn() resume Nil) }
+        op Ping::ping() { become ignore_pings(fn() resume Nil) }
     }
 }
 fn main() ->{} Nil {
@@ -180,7 +180,7 @@ fn other() ->{Other} Nil { Other::other() }
 fn handled(comp: fn() ->{{e, Ping}} Nil) ->{{e}} Nil {{
     handle comp() {{
         do value {{ value }}
-        op Ping::ping() {{ handled(fn() resume Nil) }}
+        op Ping::ping() {{ become handled(fn() resume Nil) }}
     }}
 }}
 fn main() ->{{}} Nil {{ handled({callback}) }}
@@ -283,7 +283,7 @@ fn use_writer() ->{Writer(Nat)} Nat { Writer::tell(5)
 5 }
 fn run_writer(comp: fn() ->{e, Writer(w)} a) ->{e} a {
  handle comp() { do result { result }
-op Writer::tell(v) { run_writer(fn() { resume Nil }) } }
+op Writer::tell(v) { become run_writer(fn() { resume Nil }) } }
 }
 fn relay(comp: fn() ->{e} a) ->{e} a { comp() }
 fn main() -> Nil { print(run_writer(fn() { relay(use_writer) })) }
@@ -331,8 +331,8 @@ ability State(s) {
 fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
     handle comp() {
         do result { result }
-        op State::get() { run_state(fn() { resume init }, init) }
-        op State::set(v) { run_state(fn() { resume Nil }, v) }
+        op State::get() { become run_state(fn() { resume init }, init) }
+        op State::set(v) { become run_state(fn() { resume Nil }, v) }
     }
 }
 fn both(f: fn() ->{e1} Nil, g: fn() ->{e2} Nil) ->{e1, e2} Nil {
@@ -517,7 +517,7 @@ fn sum(x: Int, y: Int, z: Int) ->{} Int { x + y + z }
 fn answer(comp: fn() ->{e, Ask} Int) ->{e} Int {
     handle comp() {
         do result { result }
-        op Ask::ask() { answer(fn() resume +3) }
+        op Ask::ask() { become answer(fn() resume +3) }
     }
 }
 fn omitted() -> Int {

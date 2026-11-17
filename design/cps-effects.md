@@ -1243,8 +1243,8 @@ ability marker가 같은 `prompt_tag`를 공유한다.
 ```rust
 fn inner(comp: fn() ->{e, State(Int)} Int) ->{e} Int {
     handle comp() {                      // prompt_tag = P2
-        op State::get() { inner(fn() resume 10) }
-        op State::set(v) { inner(fn() resume Nil) }
+        op State::get() { become inner(fn() resume 10) }
+        op State::set(v) { become inner(fn() resume Nil) }
     }
 }
 

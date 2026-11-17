@@ -3152,7 +3152,7 @@ fn asked(x: Option(Int)) ->{Ask, Io} Option(Int) {
 fn answer_ask(comp: fn() ->{e, Ask} Option(Int)) ->{e} Option(Int) {
     handle comp() {
         do value { value }
-        op Ask::ask() { answer_ask(fn() { resume +40 }) }
+        op Ask::ask() { become answer_ask(fn() { resume +40 }) }
     }
 }
 
@@ -3218,7 +3218,7 @@ fn asking(g: fn(Int) ->{Ask} Int) ->{Ask} Int { g(+5) }
 fn answer_ask(comp: fn() ->{e, Ask} Int) ->{e} Int {
     handle comp() {
         do value { value }
-        op Ask::ask() { answer_ask(fn() { resume +0 }) }
+        op Ask::ask() { become answer_ask(fn() { resume +0 }) }
     }
 }
 
@@ -3308,7 +3308,7 @@ fn run(suffix: String, callback: fn(String) ->{r} String) ->{r} String {
 fn answer_ask(comp: fn() ->{e, Ask} String) ->{e} String {
     handle comp() {
         do value { value }
-        op Ask::ask() { answer_ask(fn() { resume "+" }) }
+        op Ask::ask() { become answer_ask(fn() { resume "+" }) }
     }
 }
 
@@ -3354,7 +3354,7 @@ fn run(suffix: String, callback: fn(String) ->{r} String) ->{r} String {
 fn answer_ask(comp: fn() ->{e, Ask} String) ->{e} String {
     handle comp() {
         do value { value }
-        op Ask::ask() { answer_ask(fn() { resume "+" }) }
+        op Ask::ask() { become answer_ask(fn() { resume "+" }) }
     }
 }
 
@@ -3393,7 +3393,7 @@ fn ask_once(f: fn(String) ->{Ask} String, s: String) ->{Ask} String { f(s) }
 fn plus(comp: fn() ->{e, Ask} String) ->{e} String {
     handle comp() {
         do value { value }
-        op Ask::ask() { plus(fn() { resume "+" }) }
+        op Ask::ask() { become plus(fn() { resume "+" }) }
     }
 }
 
@@ -3404,7 +3404,7 @@ fn answer_ask(comp: fn() ->{e, Ask} String) ->{e} String {
             let g = fn(s: String) app(s, fn(t) t <> "!")
             let pure = twice(g, "x")
             let asked = plus(fn() ask_once(g, "y"))
-            answer_ask(fn() { resume pure <> asked })
+            become answer_ask(fn() { resume pure <> asked })
         }
     }
 }
@@ -3606,7 +3606,7 @@ fn asking(x: A, f: fn(A) ->{Ask} Int) ->{Ask} Int { f(x) + Ask::ask() }
 fn answer(comp: fn() ->{e, Ask} Int) ->{e} Int {
     handle comp() {
         do result { result }
-        op Ask::ask() { answer(fn() { resume +10 }) }
+        op Ask::ask() { become answer(fn() { resume +10 }) }
     }
 }
 fn named() -> fn(A) -> Int { a::size }
@@ -3717,7 +3717,7 @@ fn tagged() ->{Tag(fn(Int) ->{} Int)} Int {
 fn tag_handler(comp: fn() ->{e, Tag(fn(Int) ->{} Int)} Int) ->{e} Int {
     handle comp() {
         do result { result }
-        op Tag::tag() { tag_handler(fn() { resume +40 }) }
+        op Tag::tag() { become tag_handler(fn() { resume +40 }) }
         fn Tag::label() { +2 }
     }
 }

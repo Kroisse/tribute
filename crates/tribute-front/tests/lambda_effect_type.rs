@@ -78,8 +78,8 @@ ability State(s) {
 fn run_with_state(f: fn() ->{State(Int)} Int) -> Int {
     handle f() {
         do result { result }
-        op State::get() { run_with_state(fn() resume +42) }
-        op State::set(v) { run_with_state(fn() resume Nil) }
+        op State::get() { become run_with_state(fn() resume +42) }
+        op State::set(v) { become run_with_state(fn() resume Nil) }
     }
 }
 
@@ -117,8 +117,8 @@ fn counter() ->{State(Int)} Int {
 fn run_with_state(f: fn() ->{State(Int)} Int) -> Int {
     handle f() {
         do result { result }
-        op State::get() { run_with_state(fn() resume +0) }
-        op State::set(v) { run_with_state(fn() resume Nil) }
+        op State::get() { become run_with_state(fn() resume +0) }
+        op State::set(v) { become run_with_state(fn() resume Nil) }
     }
 }
 
@@ -147,8 +147,8 @@ ability State(s) {
 fn run_with_state(f: fn() ->{State(Int)} Int) -> Int {
     handle f() {
         do result { result }
-        op State::get() { run_with_state(fn() resume +0) }
-        op State::set(v) { run_with_state(fn() resume Nil) }
+        op State::get() { become run_with_state(fn() resume +0) }
+        op State::set(v) { become run_with_state(fn() resume Nil) }
     }
 }
 
@@ -222,8 +222,8 @@ ability State(s) {
 fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
     handle comp() {
         do result { result }
-        op State::get() { run_state(fn() { resume init }, init) }
-        op State::set(v) { run_state(fn() { resume Nil }, v) }
+        op State::get() { become run_state(fn() { resume init }, init) }
+        op State::set(v) { become run_state(fn() { resume Nil }, v) }
     }
 }
 
@@ -256,8 +256,8 @@ fn counter() ->{State(Int)} Int {
 fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
     handle comp() {
         do result { result }
-        op State::get() { run_state(fn() { resume init }, init) }
-        op State::set(v) { run_state(fn() { resume Nil }, v) }
+        op State::get() { become run_state(fn() { resume init }, init) }
+        op State::set(v) { become run_state(fn() { resume Nil }, v) }
     }
 }
 
@@ -295,7 +295,7 @@ ability State(s) {
 fn run_with_state(f: fn() ->{State(Int)} Int) -> Int {
     handle f() {
         do result { result }
-        op State::get() { run_with_state(fn() resume +99) }
+        op State::get() { become run_with_state(fn() resume +99) }
     }
 }
 
@@ -335,8 +335,8 @@ ability State(s) {
 fn with_state(f: fn() ->{e, State(s)} a, init: s) ->{e} a {
     handle f() {
         do result { result }
-        op State::get() { with_state(fn() { resume init }, init) }
-        op State::set(v) { with_state(fn() { resume Nil }, v) }
+        op State::get() { become with_state(fn() { resume init }, init) }
+        op State::set(v) { become with_state(fn() { resume Nil }, v) }
     }
 }
 

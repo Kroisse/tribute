@@ -383,8 +383,8 @@ fn bump() ->{State(Int)} Int {
 fn run_state(comp: fn() ->{e, State(Int)} Int) ->{e} Int {
     handle comp() {
         do result { result }
-        op State::get() { run_state(fn() { resume +41 }) }
-        op State::set(value) { run_state(fn() { resume Nil }) }
+        op State::get() { become run_state(fn() { resume +41 }) }
+        op State::set(value) { become run_state(fn() { resume Nil }) }
     }
 }
 
