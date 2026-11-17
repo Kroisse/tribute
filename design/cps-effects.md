@@ -282,8 +282,9 @@ row와 [row binder](tribute-dialects.md#row-binder), 참조의 `row_args`, 지�
   적는다. 타입 인자 조각은 숫자로 시작하지 않으므로 이 접미사와 섞이지
   않는다. Row가 정한 convention이 `Cps`가 아닌데 진입이 `Cps`인 인스턴스의 이름은
   그 뒤에 `$7`을 더 붙인 것이다. 참조는 자기 class 인자와 진입의 인스턴스를
-  가리키도록 바꾼다. 이름은 인스턴스를 구별할 뿐이며, 인스턴스의 convention은
-  `tribute_cps.func`가 선언한 값으로만 읽는다.
+  가리키도록 바꾼다. 이름은 인스턴스를 구별할 뿐이다. 인스턴스의 convention은
+  `tribute_cps.func`가 선언한 값으로만 읽고, `Cps` 진입 인스턴스는 같은 정의와 class
+  인자의 row 진입 인스턴스 이름을 `entry_of` 속성으로 선언한다.
 
   ```text
   map$Int$Bool + [Direct]          → map$Int$Bool$9D

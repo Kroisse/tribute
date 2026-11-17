@@ -1052,8 +1052,9 @@ fn is_odd(n: Int) -> Bool {
 }
 ```
 
-Proper tail call을 보장하는 것은 `become`뿐이다. `become`이 없는 꼬리 위치 호출은
-일반 호출의 의미를 가지며, 컴파일러는 최적화로 이를 tail transfer로 바꿀 수 있지만
+함수 호출의 proper tail call을 보장하는 것은 `become`뿐이다. 예외는
+[frame을 남기지 않는 자리](#frame을-남기지-않는-자리)의 handle body 결과 호출
+하나다. `become`이 없는 꼬리 위치 호출은 일반 호출의 의미를 가지며, 컴파일러는 최적화로 이를 tail transfer로 바꿀 수 있지만
 보장하지 않는다. 이 최적화는 target, 최적화 수준, RC 정리 여부에 따라 적용되거나
 적용되지 않는다. 반복 횟수에 제한이 없는 재귀는 `become`으로 써야 한다.
 
@@ -1077,7 +1078,8 @@ Proper tail call을 보장하는 것은 `become`뿐이다. `become`이 없는 �
   position에 있으면 그 결과도 감싼 callable의 결과다. `handle` body는 handler가
   설치된 채 실행되고 그 결과는 `do` arm으로 가므로 tail position이 아니다. `fn` arm의
   결과는 operation의 결과가 되어 perform 지점으로 돌아가므로 tail position이 아니다.
-- **타입:** 피연산자의 타입은 감싼 callable의 결과 타입과 같아야 하고, 피연산자의
+- **타입:** 함수 호출과 `resume`의 타입은 감싼 callable의 결과 타입과 같아야 한다.
+  `handle` 식은 `become` 없이 그 자리에 있을 때와 똑같이 검사한다. 피연산자의
   effect row는 `become`이 없을 때처럼 감싼 callable의 ability row에 포함되어야 한다.
   `become` 식의 타입은 피연산자의 타입이다.
 - **Handler 전달:** 호출과 `resume`은 감싼 callable이 받은 handler를 그대로 넘겨야

@@ -76,7 +76,13 @@ mod tribute_cps {
     /// - **Verification:** the schema checks the convention keyword.
     ///   The convention check of class specialization checks that the
     ///   convention is the one the row and class arguments determine, or
-    ///   `Cps` with `entry_of` when that one is weaker.
+    ///   `Cps` with `entry_of` when that one is weaker. It rejects
+    ///   `entry_of` on an instance whose row determines `Cps`, and a `Cps`
+    ///   entry instance whose name is not the one class specialization gives
+    ///   that entry of the instance `entry_of` names. The carrier check of
+    ///   `tribute_control.handle` reads `entry_of` to tell a transfer back
+    ///   into the same definition and class arguments. Legalization does
+    ///   not copy `entry_of` to the physical function.
     ///   Otherwise as `tribute_control.func`.
     /// - **Ownership and value flow:** as `tribute_control.func`.
     /// - **Symbol:** as `tribute_control.func`.
