@@ -524,10 +524,9 @@ mod tribute_control {
     /// ```
     ///
     /// - **Shape:** the source arguments in declaration order,
-    ///   `callee: Symbol`, and optional `evidence_plan` (`design/tribute-dialects.md`,
-    ///   "Evidence 선택 속성") and `row_args` (`design/tribute-dialects.md`, "Row 인자와
-    ///   치환"). A terminator with no result or region, registered as a
-    ///   `CallableExit`.
+    ///   `callee: Symbol`, and optional `row_args` (`design/tribute-dialects.md`,
+    ///   "Row 인자와 치환"). A terminator with no result or region, registered
+    ///   as a `CallableExit`. It has no `evidence_plan`.
     /// - **Placement:** it may end the body of a `tribute_control.func` or
     ///   `lambda`, and in place of `scf.yield` it may end an arm of a
     ///   one-result operation that selects one region
@@ -541,7 +540,10 @@ mod tribute_control {
     ///   `tribute_control.handle` body or arm.
     /// - **Meaning:** a proper tail call of a named source callable. When the
     ///   call finishes, the callee's result becomes the enclosing callable's
-    ///   result, and no caller frame remains.
+    ///   result, and no caller frame remains. The callee receives the
+    ///   caller's evidence unchanged, so the operation carries no
+    ///   `evidence_plan`; typechecking rejects a `become` whose call would
+    ///   select different evidence.
     /// - **Verification:** the local verifier checks the attributes, the
     ///   placement rule, and that the callee result type equals the enclosing
     ///   callable's result type. Whole-IR verification, as for
@@ -562,13 +564,7 @@ mod tribute_control {
     #[flags(Terminator)]
     #[implements(CallLike, CallableExit, LocalValidation)]
     #[asm_format(callee "(" args ")" attr_dict ":" functional_type(args))]
-    fn tail_call(
-        callee: Attr<SymbolRef>,
-        row_args: Option<Attr<[Row]>>,
-        evidence_plan: Option<Attr<[EvidenceStep]>>,
-        args: Variadic<_>,
-    ) {
-    }
+    fn tail_call(callee: Attr<SymbolRef>, row_args: Option<Attr<[Row]>>, args: Variadic<_>) {}
 
     /// A proper tail call of a callable value, from source `become`.
     ///
@@ -577,16 +573,16 @@ mod tribute_control {
     /// ```
     ///
     /// - **Shape:** a `tribute_control.func_sig` callee, the source
-    ///   arguments, and an optional `evidence_plan` (`design/tribute-dialects.md`,
-    ///   "Evidence 선택 속성"). A terminator with no result or region,
-    ///   registered as a `CallableExit`.
+    ///   arguments. A terminator with no result or region, registered as a
+    ///   `CallableExit`. It has no `evidence_plan`.
     /// - **Placement:** the same as `tribute_control.tail_call`.
-    /// - **Meaning:** a proper tail call of a callable value.
+    /// - **Meaning:** a proper tail call of a callable value. The callee
+    ///   receives the caller's evidence unchanged, so the operation carries
+    ///   no `evidence_plan`; typechecking rejects a `become` whose call would
+    ///   select different evidence.
     /// - **Verification:** the local verifier checks the callee signature and
-    ///   argument types, the placement rule, that the callee result type
-    ///   equals the enclosing callable's result type, and the shape of
-    ///   `evidence_plan`. Typechecking owns whether the selection matches the
-    ///   ability row.
+    ///   argument types, the placement rule, and that the callee result type
+    ///   equals the enclosing callable's result type.
     /// - **Ownership and value flow:** as for `tribute_control.call_indirect`,
     ///   the environment, evidence, and `ContinuationFrame<R>` are not
     ///   operands.
@@ -597,12 +593,7 @@ mod tribute_control {
     #[asm_format(callee "(" args ")" attr_dict ":" signature(callee))]
     #[flags(SourceTailCallIndirect, Terminator)]
     #[implements(CallableExit, LocalValidation)]
-    fn tail_call_indirect<S: FuncSig>(
-        evidence_plan: Option<Attr<[EvidenceStep]>>,
-        callee: Value<S>,
-        args: Values<S::Inputs>,
-    ) {
-    }
+    fn tail_call_indirect<S: FuncSig>(callee: Value<S>, args: Values<S::Inputs>) {}
 
     /// Return the enclosing callable's logical result.
     ///

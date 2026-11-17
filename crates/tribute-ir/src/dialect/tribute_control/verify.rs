@@ -46,22 +46,13 @@ impl trunk_ir::ops::Verify for TailCall {
     fn verify(&self, ctx: &IrContext) -> Result<(), trunk_ir::ops::VerificationError> {
         verify_resolved_types(ctx, self.op_ref())?;
         row_args(ctx, self.op_ref())?;
-        Ok(verify_evidence_plan(
-            ctx,
-            self.op_ref(),
-            EvidencePlanSite::Source,
-        )?)
+        Ok(())
     }
 }
 
 impl trunk_ir::ops::Verify for TailCallIndirect {
     fn verify(&self, ctx: &IrContext) -> Result<(), trunk_ir::ops::VerificationError> {
-        verify_resolved_types(ctx, self.op_ref())?;
-        Ok(verify_evidence_plan(
-            ctx,
-            self.op_ref(),
-            EvidencePlanSite::Source,
-        )?)
+        Ok(verify_resolved_types(ctx, self.op_ref())?)
     }
 }
 

@@ -298,3 +298,97 @@ fn handled(comp: fn() ->{{e, Ping}} Nat) ->{{e, Ping}} Bool {{
         assert_eq!(plans, expected, "{resume}");
     }
 }
+
+fn loop_plans(db: &dyn salsa::Database, both: &str) -> Vec<String> {
+    let source = format!(
+        "{STATE}{}",
+        r#"
+fn both(f: fn() ->{e1} Nil, g: fn() ->{e2} Nil, done: Bool) ->{e1, e2} Nil {
+    f()
+    case done {
+        True -> Nil
+        False -> BOTH
+    }
+}
+"#
+        .replace("BOTH", both),
+    );
+    plans(db, &source)
+        .into_iter()
+        .filter(|plan| plan.starts_with("both("))
+        .collect()
+}
+
+#[salsa_test]
+fn a_callee_taking_the_callers_tails_in_order_has_no_plan(db: &salsa::DatabaseImpl) {
+    assert_eq!(loop_plans(db, "both(f, g, True)"), Vec::<String>::new());
+}
+
+#[salsa_test]
+fn a_callee_taking_the_callers_tails_swapped_selects_them(db: &salsa::DatabaseImpl) {
+    assert_eq!(
+        loop_plans(db, "both(g, f, True)"),
+        ["both(g, f, True): tails [select 1] [select 0]"]
+    );
+}
+
+#[salsa_test]
+fn a_let_bound_lambda_with_an_open_row_has_no_plan(db: &salsa::DatabaseImpl) {
+    let source = r#"
+ability State(s) {
+    op get() -> s
+    op set(value: s) -> Nil
+}
+
+fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
+    let go = fn(c: fn() ->{e, State(s)} a, i: s) ->{e} a {
+        handle c() {
+            do result { result }
+            op State::get() { run_state(fn() { resume i }, i) }
+            op State::set(v) { run_state(fn() { resume Nil }, v) }
+        }
+    }
+    go(comp, init)
+}
+"#;
+    assert!(
+        plans(db, source)
+            .iter()
+            .all(|plan| !plan.starts_with("go(")),
+        "{:#?}",
+        plans(db, source)
+    );
+}
+
+/// A callee whose tails all take an empty selection keeps its tails when the
+/// caller does not pass its own.
+#[salsa_test]
+fn a_callee_dropping_every_tail_keeps_its_tails(db: &salsa::DatabaseImpl) {
+    let source = format!(
+        "{STATE}{}",
+        r#"
+fn both2(f: fn() ->{e1} Nil, g: fn() ->{e2} Nil) ->{e1, e2} Int {
+    handle {
+        f()
+        g()
+        State::get()
+    } {
+        do r { r }
+        op State::get() { +1000 }
+        op State::set(v) { +2000 }
+    }
+}
+
+fn caller() ->{State(Int)} Int {
+    both2(fn() { State::set(State::get()) }, fn() { State::set(State::get()) })
+}
+"#
+    );
+    let plans = plans(db, &source);
+    assert!(
+        plans
+            .iter()
+            .any(|plan| plan.starts_with("both2(") && plan.ends_with(": tails [] []")),
+        "{plans:#?}"
+    );
+}

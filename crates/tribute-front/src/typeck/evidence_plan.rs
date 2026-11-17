@@ -34,7 +34,10 @@
 //! evidence after that tail's own selection, and the callee's calls whose
 //! callee row ends in one of those tails select that tail's evidence. A
 //! selected tail holds none of the handlers the callable itself names, so
-//! each position that takes one pushes it.
+//! each position that takes one pushes it. A callee whose every tail takes
+//! the caller's tail of the same index and nothing else attaches no tails: its
+//! tail slots are the caller's own. A union one of whose sources is its own
+//! result declares no separate tails.
 //!
 //! Checking records each call against the evidence scope it runs in and
 //! computes the selections only after solving, when every row is known.
@@ -83,6 +86,8 @@ pub(crate) struct EvidenceTracker<'db> {
     /// The handle body each continuation local resumes.
     continuations: HashMap<LocalId, usize>,
     sites: HashMap<NodeId, EvidenceSite<'db>>,
+    /// Each `become` with the call it applies.
+    becomes: Vec<(NodeId, NodeId)>,
     /// The unions of every instantiated scheme, with their unsolved rows.
     unions: Vec<RowUnion<'db>>,
     /// The unions the checked function's own signature declares.
@@ -171,6 +176,27 @@ impl<'db> EvidenceTracker<'db> {
         }
     }
 
+    /// Record that `call` is the operand of the `become` expression `site`.
+    pub(crate) fn record_become(&mut self, site: NodeId, call: NodeId) {
+        if !self.becomes.contains(&(site, call)) {
+            self.becomes.push((site, call));
+        }
+    }
+
+    /// The `become` nodes whose call has a selection in `plans`: the callee
+    /// receives evidence other than the caller's own, which a tail call has no
+    /// frame to restore.
+    pub(crate) fn becomes_with_plan(
+        &self,
+        plans: &HashMap<NodeId, Vec<EvidenceStep<'db>>>,
+    ) -> Vec<NodeId> {
+        self.becomes
+            .iter()
+            .filter(|(_, call)| plans.contains_key(call))
+            .map(|(site, _)| *site)
+            .collect()
+    }
+
     /// Record a resume of the continuation bound to `local`. It passes the
     /// evidence of the scope it is written in, as a call does.
     pub(crate) fn record_resume(&mut self, resume: NodeId, local: LocalId) {
@@ -206,14 +232,21 @@ impl<'db> EvidenceTracker<'db> {
                     let (positions, callee_tail) = callee_positions(db, *callee, &resolve);
                     let mut plan = caller.select(&positions, callee_tail);
                     if let Some(sources) = self.callee_tails(db, *callee) {
-                        let plans = sources
+                        let plans: Vec<_> = sources
                             .map(|source| {
                                 let source = resolve(source);
                                 let positions = unique(source.instances(db).iter().cloned());
                                 caller.select(&positions, source.rest(db))
                             })
                             .collect();
-                        plan.push(EvidenceStep::Tails(plans));
+                        // Each callee tail takes the caller's own tail of the
+                        // same index, which the evidence already holds.
+                        let own_tails = plans.iter().enumerate().all(|(index, plan)| {
+                            matches!(plan[..], [EvidenceStep::Select(i)] if i as usize == index)
+                        });
+                        if !own_tails {
+                            plan.push(EvidenceStep::Tails(plans));
+                        }
                     }
                     plan
                 }
@@ -278,7 +311,9 @@ impl<'db> EvidenceTracker<'db> {
         self.unions
             .iter()
             .find(|union| {
-                union.result.rest(db) == Some(tail) && open_sources(db, union).count() > 1
+                union.result.rest(db) == Some(tail)
+                    && open_sources(db, union).count() > 1
+                    && open_sources(db, union).all(|source| source.rest(db) != Some(tail))
             })
             .map(|union| open_sources(db, union))
     }

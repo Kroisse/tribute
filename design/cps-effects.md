@@ -417,6 +417,8 @@ target이 담당하는 물리적인 빈 결과 표현을 변경하지 않는다.
 Source `become`인 [`tribute_control.tail_call`](../crates/tribute-ir/src/dialect/tribute_control.rs)과
 `tribute_cps.tail_call_indirect`는
 `tribute_control_to_cps`가 모든 convention 조합에서 proper tail transfer로 바꾼다.
+Source `become`은 [evidence 선택](tribute-dialects.md#evidence-선택-속성)을 갖지
+않으므로 이전은 caller의 evidence를 그대로 넘긴다.
 Callee convention은 caller convention보다 강할 수 없으므로(`Direct < EvidenceDirect <
 Cps`, callee ability row는 caller row에 포함) 조합은 다음 셋이다:
 

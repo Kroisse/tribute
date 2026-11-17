@@ -258,3 +258,98 @@ fn value() -> fn(Int) -> Int {
         ["`become` requires a function call with an argument list"]
     );
 }
+
+const STATE: &str = r#"
+ability State(s) {
+    op get() -> s
+    op set(value: s) -> Nil
+}
+"#;
+
+const BECOME_SELECTION: &str = "`become` cannot be used for this call: the callee receives a \
+                                different selection of handlers than the enclosing callable, \
+                                which must be kept until the callee finishes; call it without \
+                                `become`";
+
+/// A `become` whose callee takes a different selection of the caller's
+/// handlers is rejected: `select`, `tails` and `mask` selections.
+#[salsa_test]
+fn become_with_a_different_handler_selection_is_rejected(db: &salsa::DatabaseImpl) {
+    let select = errors(
+        db,
+        r#"
+fn both(f: fn() ->{e1} Nil, g: fn() ->{e2} Nil) ->{e1, e2} Nil {
+    f()
+    become g()
+}
+"#,
+    );
+    assert_eq!(select, [BECOME_SELECTION]);
+
+    let tails = errors(
+        db,
+        r#"
+fn both(f: fn() ->{e1} Nil, g: fn() ->{e2} Nil, n: Int) ->{e1, e2} Nil {
+    f()
+    case n == +0 {
+        True -> Nil
+        False -> become both(g, f, n - +1)
+    }
+}
+"#,
+    );
+    assert_eq!(tails, [BECOME_SELECTION]);
+
+    let mask = errors(
+        db,
+        &format!(
+            "{STATE}{}",
+            r#"
+fn f(n: Int, k: fn(Int) ->{e} Int) ->{State(Int), e} Int {
+    State::set(n)
+    become k(n - +1)
+}
+"#
+        ),
+    );
+    assert_eq!(mask, [BECOME_SELECTION]);
+}
+
+/// A `become` of a callee that takes the caller's handlers unchanged is
+/// accepted, including a callee whose tails are the caller's own.
+#[salsa_test]
+fn become_with_the_callers_own_handlers_is_accepted(db: &salsa::DatabaseImpl) {
+    let same_order = errors(
+        db,
+        r#"
+fn both(f: fn() ->{e1} Nil, g: fn() ->{e2} Nil, n: Int) ->{e1, e2} Nil {
+    f()
+    case n == +0 {
+        True -> Nil
+        False -> become both(f, g, n - +1)
+    }
+}
+"#,
+    );
+    assert!(same_order.is_empty(), "{same_order:?}");
+
+    let lambda = errors(
+        db,
+        &format!(
+            "{STATE}{}",
+            r#"
+fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
+    let go = fn(c: fn() ->{e, State(s)} a, i: s) ->{e} a {
+        handle c() {
+            do result { result }
+            op State::get() { run_state(fn() { resume i }, i) }
+            op State::set(v) { run_state(fn() { resume Nil }, v) }
+        }
+    }
+    become go(comp, init)
+}
+"#
+        ),
+    );
+    assert!(lambda.is_empty(), "{lambda:?}");
+}
