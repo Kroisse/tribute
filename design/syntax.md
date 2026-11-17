@@ -673,13 +673,16 @@ OpHandlerArm   ::= 'op' ValuePath '(' PatternList? ')' Block   // op Op(args) { 
 `handle expr { arms }`는 computation을 실행하고 handler arm으로 결과를 처리한다.
 
 Handler arm은 함수 정의와 대칭적인 구조를 가진다. Ability 선언에서 `fn`/`op`으로
-operation을 정의하듯, handler에서도 같은 키워드로 각 operation의 구현을 작성한다:
+operation을 정의하듯, handler에서도 각 operation의 구현을 `fn`/`op` arm으로 작성한다:
 
-| arm                    | 대상           | 의미                                               |
-| ---------------------- | -------------- | -------------------------------------------------- |
-| `do value { expr }`    | completion     | Computation 완료, 결과값 바인딩 (생략 시 identity) |
-| `fn Op(args) { body }` | `fn` operation | Tail-resumptive: body의 반환값이 operation의 결과  |
-| `op Op(args) { body }` | `op` operation | body에서 `resume` 키워드로 명시적 resume           |
+| arm                    | 대상                     | 의미                                               |
+| ---------------------- | ------------------------ | -------------------------------------------------- |
+| `do value { expr }`    | completion               | Computation 완료, 결과값 바인딩 (생략 시 identity) |
+| `fn Op(args) { body }` | `fn` 또는 `op` operation | Tail-resumptive: body의 반환값이 operation의 결과  |
+| `op Op(args) { body }` | `op` operation           | body에서 `resume` 키워드로 명시적 resume           |
+
+`fn`으로 선언된 operation에 `op` arm을 쓰거나, 결과가 `Never`인 `op` operation에 `fn`
+arm을 쓰면 컴파일 에러다.
 
 **`fn` handler arm:**
 

@@ -70,8 +70,18 @@ impl HandlerArm {
         })
     }
 
+    /// Whether the arm takes the CPS ABI: a frame, and a token when it
+    /// resumes. This is the arm's own kind.
     fn general(&self) -> bool {
         self.binding.kind == OperationKind::Op
+    }
+
+    /// Whether an `fn` arm answers an operation declared `op`. A perform of
+    /// such an operation never reaches the marker's tail dispatcher, so the
+    /// handle's local dispatcher serves the arm and continues the body under
+    /// the same handle.
+    fn answers_op(&self) -> bool {
+        self.binding.kind == OperationKind::Fn && self.binding.declared == OperationKind::Op
     }
 
     fn op_index(&self, ctx: &IrContext) -> u32 {
@@ -249,7 +259,9 @@ fn push_handle_dispatch(
             .arms
             .iter()
             .zip(values.arms.iter().copied())
-            .filter(|(arm, _)| arm.binding.ability == *ability && !arm.general())
+            .filter(|(arm, _)| {
+                arm.binding.ability == *ability && !arm.general() && !arm.answers_op()
+            })
             .collect();
         let (dispatcher_op, dispatcher) =
             build_tail_dispatcher(ctx, location, &arms, outer_evidence)?;
@@ -459,12 +471,12 @@ fn build_local_dispatcher_instance(
     ctx.push_op(block, foreign_op);
     let never = core::Never::params().intern(ctx).as_type_ref();
     let mut switch_arms = Vec::new();
-    let general_arms = layer
+    let local_arms = layer
         .arms
         .iter()
         .zip(&values.arms)
-        .filter(|(arm, _)| arm.general());
-    for (arm, &arm_value) in general_arms {
+        .filter(|(arm, _)| arm.general() || arm.answers_op());
+    for (arm, &arm_value) in local_arms {
         let case_block = make_block(ctx, location, &[]);
         let same_prompt = arith::Cmpi::operands(args[2], values.prompt)
             .predicate(arith::CmpiPredicate::Eq)
@@ -472,31 +484,52 @@ fn build_local_dispatcher_instance(
         ctx.push_op(case_block, same_prompt.op_ref());
 
         let local_block = make_block(ctx, location, &[]);
-        let mut call_args = vec![outer_evidence, exit_frame];
-        call_args.extend(unpack_handler_payload(
-            ctx,
-            local_block,
-            location,
-            args[5],
-            arm,
-        ));
-        if arm.resumptive {
-            let input_type = *arm.params.last().expect("resumptive arm has a token");
-            let token_input = cps_closure_function_type(ctx, input_type)
-                .and_then(|function| func::FuncSig::from_type_ref(ctx, function))
-                .and_then(|function| function.inputs(ctx).get(2).copied())
-                .ok_or_else(|| {
-                    TributeControlToCpsError::post_at(
-                        location,
-                        "handler resume token lacks an exact callable input",
-                    )
-                })?;
-            let (token_op, token) =
-                build_exact_handler_token(ctx, location, layer, token_input, args[1])?;
-            ctx.push_op(local_block, token_op);
-            call_args.push(token);
+        if arm.answers_op() {
+            let answer = call_fn_arm(
+                ctx,
+                local_block,
+                location,
+                arm,
+                arm_value,
+                outer_evidence,
+                args[5],
+            )?;
+            let rebound =
+                call_layer_resume_factory(ctx, local_block, location, layer, values, args[1]);
+            emit_cps_tail_call_indirect(
+                ctx,
+                local_block,
+                location,
+                rebound,
+                [outer_evidence, exit_frame, answer],
+            )?;
+        } else {
+            let mut call_args = vec![outer_evidence, exit_frame];
+            call_args.extend(unpack_handler_payload(
+                ctx,
+                local_block,
+                location,
+                args[5],
+                arm,
+            ));
+            if arm.resumptive {
+                let input_type = *arm.params.last().expect("resumptive arm has a token");
+                let token_input = cps_closure_function_type(ctx, input_type)
+                    .and_then(|function| func::FuncSig::from_type_ref(ctx, function))
+                    .and_then(|function| function.inputs(ctx).get(2).copied())
+                    .ok_or_else(|| {
+                        TributeControlToCpsError::post_at(
+                            location,
+                            "handler resume token lacks an exact callable input",
+                        )
+                    })?;
+                let (token_op, token) =
+                    build_exact_handler_token(ctx, location, layer, token_input, args[1])?;
+                ctx.push_op(local_block, token_op);
+                call_args.push(token);
+            }
+            emit_cps_tail_call_indirect(ctx, local_block, location, arm_value, call_args)?;
         }
-        emit_cps_tail_call_indirect(ctx, local_block, location, arm_value, call_args)?;
         let local_region = single_block_region(ctx, location, local_block);
         let fallback_block = make_block(ctx, location, &[]);
         emit_cps_tail_call_indirect(
@@ -576,6 +609,38 @@ fn unpack_handler_payload(
         .collect()
 }
 
+/// Call an `fn` arm with the operation's `payload` in `block` and return its
+/// result as an erased `anyref`.
+fn call_fn_arm(
+    ctx: &mut IrContext,
+    block: BlockRef,
+    location: Location,
+    arm: &HandlerArm,
+    arm_value: ValueRef,
+    outer_evidence: ValueRef,
+    payload: ValueRef,
+) -> Result<ValueRef, TributeControlToCpsError> {
+    let mut call_args = vec![outer_evidence];
+    call_args.extend(unpack_handler_payload(ctx, block, location, payload, arm));
+    let signature =
+        physical_closure_function_type(ctx, arm.closure_type, CallingConvention::EvidenceDirect)
+            .ok_or_else(|| {
+                TributeControlToCpsError::post_at(
+                    location,
+                    "fn handler indirect callee has no exact closure contract",
+                )
+            })?;
+    let call = func::CallIndirect::operands(arm_value, call_args)
+        .signature(signature)
+        .build(ctx, location);
+    call.set_calling_convention(ctx, CallingConvention::EvidenceDirect);
+    ctx.push_op(block, call.op_ref());
+    let anyref = anyref_type(ctx);
+    let erased = tribute_rt::convert_value(ctx, location, call.result(ctx), anyref);
+    ctx.push_op(block, erased);
+    Ok(ctx.op_result(erased, 0))
+}
+
 /// Build the marker's dispatcher for the `fn` arms of one ability
 /// instance. The arms run with `outer_evidence`, the evidence of the
 /// layer that installed the marker, not with the evidence of the
@@ -596,29 +661,16 @@ fn build_tail_dispatcher(
     let mut switch_arms = Vec::new();
     for &(arm, arm_value) in arms {
         let case_block = make_block(ctx, location, &[]);
-        let mut call_args = vec![outer_evidence];
-        call_args.extend(unpack_handler_payload(
-            ctx, case_block, location, payload, arm,
-        ));
-        let signature = physical_closure_function_type(
+        let answer = call_fn_arm(
             ctx,
-            arm.closure_type,
-            CallingConvention::EvidenceDirect,
-        )
-        .ok_or_else(|| {
-            TributeControlToCpsError::post_at(
-                location,
-                "fn handler indirect callee has no exact closure contract",
-            )
-        })?;
-        let call = func::CallIndirect::operands(arm_value, call_args)
-            .signature(signature)
-            .build(ctx, location);
-        call.set_calling_convention(ctx, CallingConvention::EvidenceDirect);
-        ctx.push_op(case_block, call.op_ref());
-        let erased = tribute_rt::convert_value(ctx, location, call.result(ctx), anyref);
-        ctx.push_op(case_block, erased);
-        let ret = func::Return::operands([ctx.op_result(erased, 0)]).build(ctx, location);
+            case_block,
+            location,
+            arm,
+            arm_value,
+            outer_evidence,
+            payload,
+        )?;
+        let ret = func::Return::operands([answer]).build(ctx, location);
         ctx.push_op(case_block, ret.op_ref());
         let case_region = single_block_region(ctx, location, case_block);
         switch_arms.push((i64::from(arm.op_index(ctx)), case_region));

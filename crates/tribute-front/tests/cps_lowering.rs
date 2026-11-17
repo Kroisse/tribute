@@ -197,6 +197,92 @@ fn run() -> Int {
     );
 }
 
+fn fn_arm_errors(db: &salsa::DatabaseImpl, abilities: &str, arm: &str) -> Vec<String> {
+    fn_arm_errors_in_row(db, abilities, "", arm)
+}
+
+fn fn_arm_errors_in_row(
+    db: &salsa::DatabaseImpl,
+    abilities: &str,
+    row: &str,
+    arm: &str,
+) -> Vec<String> {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        &format!(
+            r#"
+{abilities}
+
+fn run() ->{{{row}}} Int {{
+    handle +0 {{
+        do r {{ r }}
+        {arm}
+    }}
+}}
+"#
+        ),
+    );
+    ast_pipeline_error_messages(db, source)
+}
+
+#[salsa_test]
+fn fn_arm_may_handle_an_op_operation(db: &salsa::DatabaseImpl) {
+    let errors = fn_arm_errors(
+        db,
+        "ability Ask {\n    op ask() -> Int\n}",
+        "fn Ask::ask() { +1 }",
+    );
+    assert!(errors.is_empty(), "{errors:#?}");
+}
+
+#[salsa_test]
+fn op_arm_on_an_fn_operation_is_still_an_error(db: &salsa::DatabaseImpl) {
+    let errors = fn_arm_errors(
+        db,
+        "ability Ask {\n    fn ask() -> Int\n}",
+        "op Ask::ask() { resume 1 }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("handler arm uses @Op")),
+        "{errors:#?}"
+    );
+}
+
+#[salsa_test]
+fn fn_arm_on_a_never_op_operation_is_an_error(db: &salsa::DatabaseImpl) {
+    let errors = fn_arm_errors(
+        db,
+        "ability Stop {\n    op stop() -> Never\n}",
+        "fn Stop::stop() { panic(\"x\") }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error
+                .contains("an fn arm cannot handle 'stop': the operation never returns")),
+        "{errors:#?}"
+    );
+}
+
+#[salsa_test]
+fn fn_arm_on_an_op_operation_still_cannot_perform_an_op_operation(db: &salsa::DatabaseImpl) {
+    let errors = fn_arm_errors_in_row(
+        db,
+        "ability Ask {\n    op ask() -> Int\n}\n\nability Stop {\n    op stop() -> Never\n}",
+        "Stop",
+        "fn Ask::ask() { Stop::stop() }",
+    );
+    assert!(
+        errors.iter().any(|error| error.contains(
+            "`fn` handler arm for `Ask::ask` cannot perform effects that suspend or abort: Stop"
+        )),
+        "{errors:#?}"
+    );
+}
+
 /// Handler-operation metadata is fail-closed: a generic handled ability must
 /// have exactly one body-effect instance, and the arm still diagnoses unknown
 /// operations and incorrect source arity before logical lowering can run.

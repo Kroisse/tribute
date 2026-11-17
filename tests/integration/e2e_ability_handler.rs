@@ -2443,3 +2443,299 @@ fn main() ->{Io} Nil {
 "#;
     assert_output_on_both_targets("reinstalled_state_do_once.trb", source, "done\n7");
 }
+
+/// An `fn` arm answers an `op` operation with its value and the computation
+/// continues under the same handle, so the arm answers every perform and the
+/// `do` arm runs once, at the end.
+#[test]
+fn test_fn_arm_answers_an_op_operation_repeatedly() {
+    let source = r#"
+use std::io::{Io, print_line}
+
+ability Count {
+    op next() -> Int
+}
+
+ability Beat {
+    op beat() -> Nil
+}
+
+ability Word {
+    op word() -> String
+}
+
+fn ints() ->{Count} Int {
+    Count::next() + Count::next() + Count::next()
+}
+
+fn beats() ->{Beat} Nat {
+    Beat::beat()
+    Beat::beat()
+    2
+}
+
+fn words() ->{Word} String {
+    Word::word() <> "-" <> Word::word()
+}
+
+fn main() ->{Io} Nil {
+    let n = handle ints() {
+        do result {
+            print_line("ints done")
+            result
+        }
+        fn Count::next() { +7 }
+    }
+    print_line(n.to_string)
+    let b = handle beats() {
+        do result {
+            print_line("beats done")
+            result
+        }
+        fn Beat::beat() { Nil }
+    }
+    print_line(b.to_string)
+    let w = handle words() {
+        do result {
+            print_line("words done")
+            result
+        }
+        fn Word::word() { "tick" }
+    }
+    print_line(w)
+}
+"#;
+    assert_output_on_both_targets(
+        "fn_arm_answers_op_operation.trb",
+        source,
+        "ints done\n21\nbeats done\n2\nwords done\ntick-tick",
+    );
+}
+
+/// An `fn` arm answers an `op` operation whose result is a callable: the
+/// lambda the arm returns, with its capture, is the value of the perform.
+#[test]
+fn test_fn_arm_answers_an_op_operation_with_a_callable() {
+    let source = r#"
+use std::io::{Io, print_line}
+
+ability Make {
+    op make() -> fn() -> Int
+}
+
+fn use_make() ->{Make} Int {
+    let f = Make::make()
+    let g = Make::make()
+    f() + g()
+}
+
+fn run(comp: fn() ->{e, Make} a, base: Int) ->{e} a {
+    handle comp() {
+        fn Make::make() { fn() base + +1 }
+    }
+}
+
+fn main() ->{Io} Nil {
+    print_line(run(use_make, +20).to_string)
+}
+"#;
+    assert_output_on_both_targets("fn_arm_answers_op_with_callable.trb", source, "42");
+}
+
+/// One handle holds an `fn` arm for an `op` operation and a resuming `op` arm
+/// for another operation of the same ability.
+#[test]
+fn test_handle_mixes_an_fn_arm_for_an_op_operation_with_a_resuming_op_arm() {
+    let source = r#"
+use std::io::{Io, print_line}
+
+ability Tick {
+    op next() -> Int
+    op ping() -> Nil
+}
+
+fn sum(n: Nat, acc: Int) ->{Tick} Int {
+    case n {
+        0 -> acc
+        _ -> sum(n - 1, acc + Tick::next())
+    }
+}
+
+fn start(n: Nat) ->{Tick} Int {
+    Tick::ping()
+    sum(n, +0)
+}
+
+fn run(comp: fn() ->{e, Tick} Int) ->{e, Io} Int {
+    handle comp() {
+        do result { result }
+        fn Tick::next() { +2 }
+        op Tick::ping() {
+            print_line("ping")
+            run(fn() { resume Nil })
+        }
+    }
+}
+
+fn main() ->{Io} Nil {
+    print_line(run(fn() { start(5) }).to_string)
+}
+"#;
+    assert_output_on_both_targets("fn_arm_mixed_with_op_arm.trb", source, "ping\n10");
+}
+
+/// An operation an inner handle does not handle reaches the `fn` arm of an
+/// outer handle, which answers it and continues under that handle.
+#[test]
+fn test_inner_handle_forwards_an_op_operation_to_an_outer_fn_arm() {
+    let source = r#"
+use std::io::{Io, print_line}
+
+ability Tick {
+    op next() -> Int
+}
+
+ability Ping {
+    op ping() -> Nil
+}
+
+fn work() ->{Tick, Ping} Int {
+    Ping::ping()
+    Tick::next() + Tick::next() + Tick::next()
+}
+
+fn inner(comp: fn() ->{e, Ping} Int) ->{e} Int {
+    handle comp() {
+        do result { result }
+        op Ping::ping() { inner(fn() { resume Nil }) }
+    }
+}
+
+fn outer(comp: fn() ->{e, Tick} Int) ->{e} Int {
+    handle comp() {
+        do result { result + +100 }
+        fn Tick::next() { +4 }
+    }
+}
+
+fn main() ->{Io} Nil {
+    print_line(outer(fn() { inner(work) }).to_string)
+}
+"#;
+    assert_output_on_both_targets("fn_arm_forwarded_from_inner.trb", source, "112");
+}
+
+/// A handler function with a closed row and one that is effect-polymorphic
+/// under another ability's handler both answer an `op` operation with an
+/// `fn` arm.
+#[test]
+fn test_fn_arm_for_an_op_operation_in_closed_and_polymorphic_rows() {
+    let source = r#"
+use std::io::{Io, print_line}
+
+ability Tick {
+    op next() -> Int
+}
+
+ability Ping {
+    op ping() -> Nil
+}
+
+fn sum(n: Nat, acc: Int) ->{Tick} Int {
+    case n {
+        0 -> acc
+        _ -> sum(n - 1, acc + Tick::next())
+    }
+}
+
+fn start(n: Nat) ->{Tick, Ping} Int {
+    Ping::ping()
+    sum(n, +0)
+}
+
+fn closed(n: Nat) ->{} Int {
+    handle sum(n, +0) {
+        do result { result }
+        fn Tick::next() { +1 }
+    }
+}
+
+fn poly(comp: fn() ->{e, Tick} Int) ->{e} Int {
+    handle comp() {
+        do result { result }
+        fn Tick::next() { +1 }
+    }
+}
+
+fn pinged(comp: fn() ->{e, Ping} Int) ->{e} Int {
+    handle comp() {
+        do result { result }
+        op Ping::ping() { pinged(fn() { resume Nil }) }
+    }
+}
+
+fn main() ->{Io} Nil {
+    print_line(closed(4).to_string)
+    print_line(pinged(fn() { poly(fn() { start(6) }) }).to_string)
+}
+"#;
+    assert_output_on_both_targets("fn_arm_closed_and_polymorphic.trb", source, "4\n6");
+}
+
+/// The arm's value is a reference-typed `String` built from captured values,
+/// and every perform rebuilds the handle layer and releases the resumption.
+/// The sanitizer run reports a use of anything released too early and any
+/// leak.
+#[test]
+fn test_fn_arm_for_an_op_operation_releases_resumption_and_layer() {
+    let source = r#"
+use std::io::{Io, print_line}
+
+ability Say {
+    op say() -> String
+}
+
+ability Ping {
+    op ping() -> Nil
+}
+
+struct Label { text: String, suffix: String }
+
+fn speak(n: Nat, acc: String) ->{Say} String {
+    case n {
+        0 -> acc
+        _ -> speak(n - 1, acc <> Say::say())
+    }
+}
+
+fn start(n: Nat) ->{Say, Ping} String {
+    Ping::ping()
+    speak(n, "")
+}
+
+fn labelled(comp: fn() ->{e, Say} String, label: Label) ->{e} String {
+    handle comp() {
+        do result { result <> label.suffix }
+        fn Say::say() { label.text <> label.suffix }
+    }
+}
+
+fn pinged(comp: fn() ->{e, Ping} String, label: Label) ->{e} String {
+    handle comp() {
+        do result { result }
+        op Ping::ping() { pinged(fn() { resume Nil }, label) }
+    }
+}
+
+fn main() ->{Io} Nil {
+    let label = Label { text: "tick", suffix: "." }
+    print_line(labelled(fn() { speak(3, "") }, label))
+    print_line(pinged(fn() { labelled(fn() { start(2) }, label) }, label))
+}
+"#;
+    common::assert_output_on_both_targets_with_native_asan(
+        "fn_arm_op_operation_released.trb",
+        source,
+        "tick.tick.tick..\ntick.tick..",
+    );
+}
