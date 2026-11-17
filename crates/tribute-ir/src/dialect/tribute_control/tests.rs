@@ -2395,6 +2395,16 @@ fn tail_call_arms_must_belong_to_a_one_result_if_or_switch_in_tail_position() {
     );
     assert!(!tail_if.contains("tail position"), "{tail_if}");
 
+    let unused_if = validate_body(
+        r#"    %value = scf.if %flag -> (core.i32) {
+      tribute_control.tail_call @f(%n) : (core.i32) -> ()
+    } else {
+      scf.yield %n
+    }
+    tribute_control.return %n"#,
+    );
+    assert!(unused_if.contains("tail position"), "{unused_if}");
+
     let resultless_if = validate_body(
         r#"    scf.if %flag {
       tribute_control.tail_call @f(%n) : (core.i32) -> ()

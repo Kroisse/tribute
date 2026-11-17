@@ -128,9 +128,14 @@ fn f(n: Int) -> Int { n }
 fn asks() ->{Ask} Int { Ask::ask() + Ask::peek() }
 "#;
 
+/// Every diagnostic of `ASK` followed by `text`.
+fn ask_errors(db: &salsa::DatabaseImpl, text: &str) -> Vec<String> {
+    errors(db, &format!("{ASK}{text}"))
+}
+
 /// The `become` diagnostics of `ASK` followed by `text`.
 fn become_errors(db: &salsa::DatabaseImpl, text: &str) -> Vec<String> {
-    errors(db, &format!("{ASK}{text}"))
+    ask_errors(db, text)
         .into_iter()
         .filter(|message| message.contains("`become`"))
         .collect()
@@ -140,7 +145,7 @@ fn become_errors(db: &salsa::DatabaseImpl, text: &str) -> Vec<String> {
 /// arms tail positions, through blocks and `case` arms, and in a lambda.
 #[salsa_test]
 fn become_in_the_arms_of_a_tail_handle_is_accepted(db: &salsa::DatabaseImpl) {
-    let messages = become_errors(
+    let messages = ask_errors(
         db,
         r#"
 fn arms(n: Int) -> Int {
@@ -186,10 +191,10 @@ fn in_lambda(n: Int) -> Int {
 /// `become handle ..` and `become resume v` assert a tail position.
 #[salsa_test]
 fn become_applies_to_a_handle_and_a_resume_in_tail_position(db: &salsa::DatabaseImpl) {
-    let messages = become_errors(
+    let messages = ask_errors(
         db,
         r#"
-fn installs(n: Int) -> Int {
+fn installs(n: Int) ->{Ask} Int {
     become handle asks() {
         do result { result }
         op Ask::ask() { become resume n }
@@ -203,7 +208,7 @@ fn installs(n: Int) -> Int {
     let not_tail = become_errors(
         db,
         r#"
-fn resumes(n: Int) -> Int {
+fn resumes(n: Int) ->{Ask} Int {
     handle asks() {
         do result { result }
         op Ask::ask() {
@@ -214,7 +219,7 @@ fn resumes(n: Int) -> Int {
     }
 }
 
-fn installs(n: Int) -> Int {
+fn installs(n: Int) ->{Ask} Int {
     let r = become handle asks() {
         do result { result }
         op Ask::ask() { resume n }

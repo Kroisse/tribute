@@ -8,8 +8,8 @@
 use crate::common;
 
 use common::{
-    assert_output_on_both_targets, assert_output_on_both_targets_with_native_asan,
-    compile_and_run_native_asan,
+    assert_output_on_both_targets, assert_target_outputs, compile_and_run_native_asan,
+    compile_and_run_wasm,
 };
 
 /// Deep enough that a frame per call overflows any default stack.
@@ -700,8 +700,8 @@ fn main() ->{std::io::Io} Nil {
     assert_released_on_both_targets("become_do_arm.trb", &do_arm, loops);
 }
 
-/// Like [`assert_output_on_both_targets_with_native_asan`], and the native
-/// run reports no leak: every allocation is released exactly once.
+/// Like [`common::assert_output_on_both_targets_with_native_asan`], and the
+/// native run reports no leak: every allocation is released exactly once.
 fn assert_released_on_both_targets(source_name: &str, source_code: &str, expected_stdout: &str) {
     let native = compile_and_run_native_asan(source_name, source_code);
     let stderr = String::from_utf8_lossy(&native.stderr);
@@ -709,5 +709,10 @@ fn assert_released_on_both_targets(source_name: &str, source_code: &str, expecte
         !stderr.contains("detected memory leaks"),
         "native leaks for {source_name}: {stderr}"
     );
-    assert_output_on_both_targets_with_native_asan(source_name, source_code, expected_stdout);
+    assert_target_outputs(
+        source_name,
+        expected_stdout,
+        native,
+        compile_and_run_wasm(source_name, source_code),
+    );
 }

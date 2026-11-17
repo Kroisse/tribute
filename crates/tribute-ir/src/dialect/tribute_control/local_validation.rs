@@ -138,9 +138,9 @@ pub(super) fn tail_call_owner(
     }
 }
 
-/// The terminator of the block of `op` when only conversion casts, if
-/// `casts` allows them, come between `op` and it, and it takes `op`'s
-/// result (or a cast of it) as its only operand.
+/// The terminator of the block of `op` when it takes `op`'s one result as
+/// its only operand and nothing comes between them, or, if `casts` allows
+/// them, only conversion casts that each cast the value before it.
 fn result_terminator(ctx: &IrContext, op: OpRef, casts: bool) -> Option<OpRef> {
     let block = ctx.op(op).parent_block?;
     let ops = &ctx.block(block).ops;
@@ -150,16 +150,16 @@ fn result_terminator(ctx: &IrContext, op: OpRef, casts: bool) -> Option<OpRef> {
     if !casts && !between.is_empty() {
         return None;
     }
-    if !between
-        .iter()
-        .all(|&cast| core::UnrealizedConversionCast::matches(ctx, cast))
-    {
+    let &[mut value] = ctx.op_results(op) else {
         return None;
+    };
+    for &cast in between {
+        if !core::UnrealizedConversionCast::matches(ctx, cast) || ctx.op_operands(cast) != [value] {
+            return None;
+        }
+        value = ctx.op_results(cast)[0];
     }
-    if !casts && ctx.op_operands(terminator) != ctx.op_results(op) {
-        return None;
-    }
-    Some(terminator)
+    (ctx.op_operands(terminator) == [value]).then_some(terminator)
 }
 
 /// Whether `inner`, an operation in a region of `handle`, is in its
