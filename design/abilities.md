@@ -252,7 +252,8 @@ Ability operation은 두 종류로 선언한다:
 - **`op`**: General operation. Handler에서 `resume` 키워드를 통해
   resume 여부와 시점을 제어한다. `-> Never`를 반환하면 절대 resume하지 않는
   abort/exception 패턴을 표현한다.
-  `op`으로 선언된 operation은 handler에서 반드시 `op`으로 구현한다.
+  `op`으로 선언된 operation은 handler에서 `op` arm이나
+  [`fn` arm](#fn-operation-handler)으로 구현한다. 결과가 `Never`이면 `op` arm만 쓸 수 있다.
 
 ```rust
 ability Http {
@@ -652,7 +653,7 @@ fn main() ->{Io} Nil {
 | 선언 | resume | continuation 캡처 | handler arm | 용례 |
 | ---- | ------ | ----------------- | ----------- | ---- |
 | `fn log(msg: String) -> Nil` | 1회, 암시적 | 없음 | `fn`만 가능 | Reader, Logger |
-| `op get() -> s` | 0~1회, `resume` (affine) | 있음 | `op`만 가능 | State, Stream, Coroutine |
+| `op get() -> s` | 0~1회, `resume` (affine) | 있음 | `op` 또는 `fn` | State, Stream, Coroutine |
 | `op fail(msg: String) -> Never` | 0회 | 없음 | `op`만 가능 | Fail, Exception |
 
 ### Operation 규칙

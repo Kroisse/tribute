@@ -1025,8 +1025,9 @@ Native entrypoint와 Wasm `_start`는 source calling convention을 읽지 않는
   `fn`으로 선언된 operation의 `fn` arm용이며 marker에 저장된다. `anyref`는 erased
   source result다.
 
-`op`으로 선언된 operation의 perform은 arm의 종류와 관계없이 raw resumption을 capture해
-frame의 dispatcher로 보내며 marker의 `tr_dispatch_fn`을 거치지 않는다.
+`op`으로 선언된 operation의 perform은 arm의 종류와 관계없이 frame의 dispatcher로 가며
+marker의 `tr_dispatch_fn`을 거치지 않는다. 결과가 `Never`가 아니면 raw resumption을
+capture해 보내고, `op -> Never`는 resumption 없이 `ability.abort`로 보낸다.
 General operation은 marker에서 prompt만 읽고 dispatch는 frame이 담은 handle 층의
 dispatcher가 맡는다. 이 dispatcher들은 source에서 handle 식이 중첩된 순서를 따라
 안쪽에서 바깥쪽으로 이어지는 사슬을 이룬다. 어느 handle 식의 dispatcher인지는

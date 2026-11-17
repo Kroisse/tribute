@@ -212,8 +212,9 @@ mod ability {
     /// the arm's kind. The optional `declared_kind` is the declaration's
     /// kind, present only when it differs from `kind`; the format writes it
     /// as a second keyword, `fn op @Ability @op_name`. An `op` arm for an
-    /// `fn` operation is invalid, and validation compares the declared kind
-    /// with the resolved declaration. With `I`
+    /// `fn` operation is invalid. Verification does not resolve the
+    /// declaration; `tribute_control.handle` validation compares the
+    /// declared kind with it. With `I`
     /// the `operation_result_type` and `M` the value type of the body frame,
     /// a `kind = "op"` arm is the following `Cps` closure, where
     /// `ResumeExact<I, M>` is `(Evidence, ability.frame<M>, I) -> core.never`;

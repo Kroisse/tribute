@@ -485,33 +485,15 @@ fn build_local_dispatcher_instance(
 
         let local_block = make_block(ctx, location, &[]);
         if arm.answers_op() {
-            let mut call_args = vec![outer_evidence];
-            call_args.extend(unpack_handler_payload(
+            let answer = call_fn_arm(
                 ctx,
                 local_block,
                 location,
-                args[5],
                 arm,
-            ));
-            let signature = physical_closure_function_type(
-                ctx,
-                arm.closure_type,
-                CallingConvention::EvidenceDirect,
-            )
-            .ok_or_else(|| {
-                TributeControlToCpsError::post_at(
-                    location,
-                    "fn handler indirect callee has no exact closure contract",
-                )
-            })?;
-            let call = func::CallIndirect::operands(arm_value, call_args)
-                .signature(signature)
-                .build(ctx, location);
-            call.set_calling_convention(ctx, CallingConvention::EvidenceDirect);
-            ctx.push_op(local_block, call.op_ref());
-            let anyref = anyref_type(ctx);
-            let erased = tribute_rt::convert_value(ctx, location, call.result(ctx), anyref);
-            ctx.push_op(local_block, erased);
+                arm_value,
+                outer_evidence,
+                args[5],
+            )?;
             let rebound =
                 call_layer_resume_factory(ctx, local_block, location, layer, values, args[1]);
             emit_cps_tail_call_indirect(
@@ -519,7 +501,7 @@ fn build_local_dispatcher_instance(
                 local_block,
                 location,
                 rebound,
-                [outer_evidence, exit_frame, ctx.op_result(erased, 0)],
+                [outer_evidence, exit_frame, answer],
             )?;
         } else {
             let mut call_args = vec![outer_evidence, exit_frame];
@@ -627,6 +609,38 @@ fn unpack_handler_payload(
         .collect()
 }
 
+/// Call an `fn` arm with the operation's `payload` in `block` and return its
+/// result as an erased `anyref`.
+fn call_fn_arm(
+    ctx: &mut IrContext,
+    block: BlockRef,
+    location: Location,
+    arm: &HandlerArm,
+    arm_value: ValueRef,
+    outer_evidence: ValueRef,
+    payload: ValueRef,
+) -> Result<ValueRef, TributeControlToCpsError> {
+    let mut call_args = vec![outer_evidence];
+    call_args.extend(unpack_handler_payload(ctx, block, location, payload, arm));
+    let signature =
+        physical_closure_function_type(ctx, arm.closure_type, CallingConvention::EvidenceDirect)
+            .ok_or_else(|| {
+                TributeControlToCpsError::post_at(
+                    location,
+                    "fn handler indirect callee has no exact closure contract",
+                )
+            })?;
+    let call = func::CallIndirect::operands(arm_value, call_args)
+        .signature(signature)
+        .build(ctx, location);
+    call.set_calling_convention(ctx, CallingConvention::EvidenceDirect);
+    ctx.push_op(block, call.op_ref());
+    let anyref = anyref_type(ctx);
+    let erased = tribute_rt::convert_value(ctx, location, call.result(ctx), anyref);
+    ctx.push_op(block, erased);
+    Ok(ctx.op_result(erased, 0))
+}
+
 /// Build the marker's dispatcher for the `fn` arms of one ability
 /// instance. The arms run with `outer_evidence`, the evidence of the
 /// layer that installed the marker, not with the evidence of the
@@ -647,29 +661,16 @@ fn build_tail_dispatcher(
     let mut switch_arms = Vec::new();
     for &(arm, arm_value) in arms {
         let case_block = make_block(ctx, location, &[]);
-        let mut call_args = vec![outer_evidence];
-        call_args.extend(unpack_handler_payload(
-            ctx, case_block, location, payload, arm,
-        ));
-        let signature = physical_closure_function_type(
+        let answer = call_fn_arm(
             ctx,
-            arm.closure_type,
-            CallingConvention::EvidenceDirect,
-        )
-        .ok_or_else(|| {
-            TributeControlToCpsError::post_at(
-                location,
-                "fn handler indirect callee has no exact closure contract",
-            )
-        })?;
-        let call = func::CallIndirect::operands(arm_value, call_args)
-            .signature(signature)
-            .build(ctx, location);
-        call.set_calling_convention(ctx, CallingConvention::EvidenceDirect);
-        ctx.push_op(case_block, call.op_ref());
-        let erased = tribute_rt::convert_value(ctx, location, call.result(ctx), anyref);
-        ctx.push_op(case_block, erased);
-        let ret = func::Return::operands([ctx.op_result(erased, 0)]).build(ctx, location);
+            case_block,
+            location,
+            arm,
+            arm_value,
+            outer_evidence,
+            payload,
+        )?;
+        let ret = func::Return::operands([answer]).build(ctx, location);
         ctx.push_op(case_block, ret.op_ref());
         let case_region = single_block_region(ctx, location, case_block);
         switch_arms.push((i64::from(arm.op_index(ctx)), case_region));
