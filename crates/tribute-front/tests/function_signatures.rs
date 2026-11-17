@@ -212,10 +212,9 @@ fn callback_effects_need_a_shared_row_variable(db: &salsa::DatabaseImpl) {
              use the same row variable in its own ability row"
         ],
     );
-    // TODO(#1974): answer `Ask::ask` with an `fn` arm so the computation continues.
     let shared = format!(
         "{ASK}fn apply(f: fn(Nat) ->{{e}} Nat, x: Nat) ->{{e}} Nat {{ f(x) }}\n\n\
-         fn main() -> Nil {{\n    let _ = handle apply(fn(x) Ask::ask() + x, 1) {{\n        do v {{ v }}\n        op Ask::ask() {{ 41 }}\n    }}\n}}\n"
+         fn main() -> Nil {{\n    let _ = handle apply(fn(x) Ask::ask() + x, 1) {{\n        do v {{ v }}\n        fn Ask::ask() {{ 41 }}\n    }}\n}}\n"
     );
     assert!(errors(db, &shared).is_empty());
 }

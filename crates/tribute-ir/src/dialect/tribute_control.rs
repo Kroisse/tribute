@@ -701,7 +701,7 @@ mod tribute_control {
     /// A handled body. Its result is a callable origin when every value that
     /// becomes it is: the completion region's yield and each general (`op`)
     /// arm's yield. The completion argument is one when the body's yield is.
-    /// An arm argument is one when the arm claims the kind of the
+    /// An arm argument is one when the arm's declared kind is that of the
     /// declaration it names and the argument has the declaration's
     /// parameter type at its position.
     ///
@@ -729,7 +729,11 @@ mod tribute_control {
     /// - **Attributes:** `handlers` is required: one `HandlerBinding` per
     ///   arm, in the order of `arms`, each with `ability: SymbolRef`,
     ///   `op_name: String`, `kind: OperationKind`, and
-    ///   `operation_result_type: Type`. The optional `evidence_plan`
+    ///   `operation_result_type: Type`. `kind` is the arm's kind, which
+    ///   fixes the arm closure's ABI. The optional `declared_kind` is the
+    ///   declaration's kind, present only when it differs from `kind`: an
+    ///   `fn` arm may handle an `op` operation (`fn op @A @name`), and an
+    ///   `op` arm for an `fn` operation is invalid. The optional `evidence_plan`
     ///   (`design/tribute-dialects.md`, "Evidence 선택 속성") selects the handlers to
     ///   mask in the outer evidence before the body evidence is made. Dynamic
     ///   prompt/owner tags and the physical tail-call representation are
@@ -751,7 +755,10 @@ mod tribute_control {
     ///   A general arm returns its value as the handle result, whether or
     ///   not it resumed, and skips `completion`. A tail-resumptive `fn` arm returns
     ///   the operation result supplied automatically to the suspended
-    ///   computation.
+    ///   computation. For an `fn` arm that handles an `op` operation the
+    ///   computation continues under this same handle, as if an `op` arm
+    ///   had reinstalled the handler and resumed with the arm's value; the
+    ///   operation's result is not `Never`.
     /// - **Verification:** the verifier checks that there is one arm per
     ///   binding and that no `(ability, op_name)` is bound twice. The local
     ///   verifier enforces the single-block shapes, the block-argument
@@ -765,10 +772,11 @@ mod tribute_control {
     ///   own local validation reports it, and the converter checks the same
     ///   before rewriting and reports a violation as a conversion failure.
     ///   Whole-IR verification checks the affine rule below. The symbol-aware
-    ///   frontend conformance check also confirms that each arm's `kind`,
-    ///   argument types, and `operation_result_type` are those of the
-    ///   declaration it names. No verifier reclassifies a general `op` from
-    ///   the shape of its arm.
+    ///   frontend conformance check also confirms that each arm's declared
+    ///   kind, argument types, and `operation_result_type` are those of the
+    ///   declaration it names. A binding of an `fn` arm for an `op`
+    ///   operation with a `Never` result is malformed. No verifier
+    ///   reclassifies a general `op` from the shape of its arm.
     /// - **Resumption scope:** `body` and `completion` are transparent to a
     ///   `resume` under them, which consumes the resumption of an outer arm.
     ///   A resumptive `op` arm provides a resumption whose input is its

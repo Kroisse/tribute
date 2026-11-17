@@ -151,3 +151,59 @@ fn main() ->{std::io::Io} Nil {
 "#;
     assert_output_on_both_targets("become_reinstalled_handler.trb", code, "2000");
 }
+
+/// An `fn` arm answers an `op` operation performed in every iteration of a
+/// tail loop. The loop runs in constant stack, both directly under the
+/// handle and under an effect-polymorphic handler beneath another ability's
+/// handler.
+#[test]
+fn test_fn_arm_for_an_op_operation_answers_a_tail_loop_in_constant_stack() {
+    let code = r#"
+ability Tick {
+    op next() -> Int
+}
+
+ability Ping {
+    op ping() -> Nil
+}
+
+fn loop_(n: Nat, acc: Int) ->{Tick} Int {
+    case n {
+        0 -> acc
+        _ -> become loop_(n - 1, acc + Tick::next())
+    }
+}
+
+fn start(n: Nat) ->{Tick, Ping} Int {
+    Ping::ping()
+    loop_(n, +0)
+}
+
+fn run_direct(n: Nat) ->{} Int {
+    handle loop_(n, +0) {
+        do result { result }
+        fn Tick::next() { +1 }
+    }
+}
+
+fn run(comp: fn() ->{e, Tick} Int) ->{e} Int {
+    handle comp() {
+        do result { result }
+        fn Tick::next() { +1 }
+    }
+}
+
+fn pinged(comp: fn() ->{e, Ping} Int) ->{e} Int {
+    handle comp() {
+        do result { result }
+        op Ping::ping() { pinged(fn() { resume Nil }) }
+    }
+}
+
+fn main() ->{std::io::Io} Nil {
+    std::io::print_line(run_direct(100000).to_string)
+    std::io::print_line(pinged(fn() { run(fn() { start(100000) }) }).to_string)
+}
+"#;
+    assert_output_on_both_targets("become_fn_arm_for_op.trb", code, "100000\n100000");
+}

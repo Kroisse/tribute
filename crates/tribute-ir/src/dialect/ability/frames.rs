@@ -584,6 +584,7 @@ mod tests {
                 ability: state.clone(),
                 op_name,
                 kind,
+                declared: kind,
                 operation_result_type: result,
             };
             let attr = <super::HandlerBinding as trunk_ir::attr_kind::AttrKind>::write(
@@ -694,6 +695,91 @@ mod tests {
                 "binding that is not a dictionary",
                 with_extra(&arms, &handle(&["1".to_string()], "%get", "")),
                 "must be a [Dict<any>] attribute",
+            ),
+        ];
+        for (name, text, expected) in cases {
+            let error = errors(&text);
+            assert!(
+                error.contains(expected),
+                "{name}: expected {expected:?}, got {error:?}"
+            );
+        }
+    }
+
+    fn fn_arm_for_op_operation() -> String {
+        module(
+            ARMS,
+            &handle(
+                &[
+                    binding("op", "get", "core.i32"),
+                    binding("op", "fail", "core.never"),
+                    r#"{ability = @State, declared_kind = "op", kind = "fn", op_name = "peek", operation_result_type = core.i32}"#
+                        .to_string(),
+                ],
+                "%get, %fail, %peek",
+                "",
+            ),
+        )
+    }
+
+    #[test]
+    fn an_fn_arm_for_an_op_operation_writes_both_keywords() {
+        let text = fn_arm_for_op_operation();
+        assert_eq!(errors(&text), "");
+        let (ctx, module) = parse(&text);
+        let printed = module.op().display(&ctx).to_string();
+        assert!(
+            printed.contains("fn op @State @peek : core.i32 = %4"),
+            "{printed}"
+        );
+        let (reparsed, reparsed_module) = parse(&printed);
+        assert_eq!(printed, reparsed_module.op().display(&reparsed).to_string());
+        assert_eq!(errors(&printed), "");
+
+        // A binding whose kinds are equal writes one keyword.
+        let (ctx, module) = parse(&valid_handle());
+        let printed = module.op().display(&ctx).to_string();
+        assert!(printed.contains("fn @State @peek"), "{printed}");
+        assert!(!printed.contains("fn op "), "{printed}");
+        assert!(!printed.contains("op op "), "{printed}");
+    }
+
+    #[test]
+    fn malformed_declared_kinds_are_rejected() {
+        let raw = |entries: &str| {
+            module(
+                ARMS,
+                &handle(&[format!("{{{entries}}}")], "%get, %fail, %peek", ""),
+            )
+        };
+        let cases = [
+            (
+                "op arm for an fn operation",
+                raw(
+                    r#"ability = @State, declared_kind = "fn", kind = "op", op_name = "get", operation_result_type = core.i32"#,
+                ),
+                "an op arm cannot handle an fn operation",
+            ),
+            (
+                "unknown declared kind",
+                raw(
+                    r#"ability = @State, declared_kind = "bogus", kind = "fn", op_name = "peek", operation_result_type = core.i32"#,
+                ),
+                "declared_kind must be fn or op",
+            ),
+            (
+                "six entries",
+                raw(
+                    r#"ability = @State, extra = "op", kind = "fn", op_name = "peek", operation_result_type = core.i32, other = 1"#,
+                ),
+                "must have exactly",
+            ),
+            (
+                "fifth entry that is not declared_kind",
+                raw(
+                    r#"ability = @State, extra = "op", kind = "fn", op_name = "peek", operation_result_type = core.i32"#,
+                ),
+                "must have exactly",
             ),
         ];
         for (name, text, expected) in cases {

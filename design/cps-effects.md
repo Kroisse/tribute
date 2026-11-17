@@ -153,7 +153,7 @@ transfer로 바꾸며 대체 carrier를 선택하지 않는다.
 
 따라서 `fn`과 `op`를 함께 선언한 ability는 함수 ABI를 정할 때 `Cps`로
 분류한다. 이는 안전한 **ability 단위 상한**이다. 다만 CPS 함수 안에서도 개별
-`fn` operation 호출은 `tr_dispatch_fn`을 통한 evidence-direct fast path를
+`fn`으로 선언된 operation 호출은 `tr_dispatch_fn`을 통한 evidence-direct fast path를
 사용할 수 있다. 함수 표현을 결정하는 상한과 operation call-site의 dispatch
 최적화는 서로 다른 결정이다.
 
@@ -317,6 +317,8 @@ source-logical IR이고, 적법화는 이 IR만 받는다.
 드러나는 위반은 class 특수화가 인스턴스를 만든 뒤, 적법화 전에 검사한다. Row 인자가
 닿는 인스턴스가 이 pass에서 처음 생기기 때문이다. 판정 기준은 그 규칙의 row 조건이며,
 pass가 정한 convention이 아니다. Arm의 정의에 드러나는 위반은 typechecking이 거부한다.
+검사 대상은 arm의 종류가 `fn`인 arm이며, `op`으로 선언된 operation을 처리하는 `fn` arm도
+같은 검사를 받는다.
 
 - 검사 대상은 참조되지 않는 정의 제거와 같은 root, 곧 root `main`, `_start`, 외부
   ABI를 가진 정의, runtime 함수, 함수 밖의 operation이 참조하는 정의에서 참조로 닿는
@@ -664,7 +666,9 @@ branch, guard, 오른쪽 항만 실행한다.
    yield는 enclosing `exit_k`를 계속 실행한다.
 2. Operation을 수행한 지점의 row에서 그 label에 묶인 handler가 operation
    argument를 받는다([Row 위치에 따른 evidence 선택](#row-directed-evidence)).
-   `fn` arm은 operation result를 yield하고 자동으로 resume한다.
+   `fn` arm은 operation result를 yield하고 자동으로 resume한다. `op`으로 선언된
+   operation의 `fn` arm은 같은 handle 층을 다시 설치해 계속한다
+   ([`handle`](#handle-evidence-extension--handler-closures)).
 3. Resumptive general `op` arm은 affine resumption을 받는다.
    `tribute_control.resume`은 수행된 operation result를 공급하고, perform 지점부터
    body 끝까지 capture한 continuation을 그 handle 없이 실행한 뒤, 반환된 body의
@@ -825,7 +829,8 @@ CPS legalization은 이 표면으로 다음을 표현한다.
   frame으로 이 층을 다시 만든 뒤 안쪽 계산에 선택을 적용한 evidence를 넘긴다.
 - `ability.handle`은 [dispatch 계층](#dispatch-layers)과
   [`handle`](#handle-evidence-extension--handler-closures) 절의 장치를 만든다. Fresh
-  prompt, `fn` arm의 marker dispatcher, 층의 dispatcher와 그 factory, 처리하지 않은
+  prompt, `fn` operation의 `fn` arm을 담는 marker dispatcher, 층의 dispatcher와 그
+  factory, 처리하지 않은
   operation의 재개가 층을 다시 설치하는 resume factory, exact resume token,
   `ability.handle_dispatch`가 여기서 생긴다.
 - `ability.perform`은 raw resumption을 one-shot 상태로 감싸 erased `Resume<R>`로 만든 뒤
@@ -1015,9 +1020,14 @@ Native entrypoint와 Wasm `_start`는 source calling convention을 읽지 않는
   OperationIndex, Payload) -> ()`. General `op` handler용이며 body의
   `ContinuationFrame`이 [내부 `Dispatch<R>`](#dispatch-layers)로 운반한다. Prompt가
   자기 handle의 것이면 arm으로, 아니면 바깥 dispatcher로 indirect tail transfer한다.
+  `op`으로 선언된 operation을 처리하는 `fn` arm도 이 dispatcher가 맡는다.
 - `tr_dispatch_fn`: `(Evidence, Environment, OperationIndex, Payload) -> anyref`.
-  `fn` handler용이며 marker에 저장된다. `anyref`는 erased source result다.
+  `fn`으로 선언된 operation의 `fn` arm용이며 marker에 저장된다. `anyref`는 erased
+  source result다.
 
+`op`으로 선언된 operation의 perform은 arm의 종류와 관계없이 frame의 dispatcher로 가며
+marker의 `tr_dispatch_fn`을 거치지 않는다. 결과가 `Never`가 아니면 raw resumption을
+capture해 보내고, `op -> Never`는 resumption 없이 `ability.abort`로 보낸다.
 General operation은 marker에서 prompt만 읽고 dispatch는 frame이 담은 handle 층의
 dispatcher가 맡는다. 이 dispatcher들은 source에서 handle 식이 중첩된 순서를 따라
 안쪽에서 바깥쪽으로 이어지는 사슬을 이룬다. 어느 handle 식의 dispatcher인지는
@@ -1038,8 +1048,13 @@ Handle 하나는 실행 중 여러 번 설치될 수 있다. 처음 설치한 �
   Token은 body에서 capture한 raw resumption으로 completion과 handle 층 없이 곧바로
   전달한다. Arm 본문의 `resume`과 resumption을 운반하는 lambda 본문의 `resume`이 같은
   token을 쓰며, 그 lambda의 closure는 token을 담는다.
-- `fn` arm: `(Evidence, operation argument...)`. 층의 `tr_dispatch_fn`이 그 층의
-  바깥 evidence를 capture해 넘기며, operation을 수행한 지점의 evidence는 쓰지 않는다.
+- `fn` arm: `(Evidence, operation argument...)`. `fn` operation의 arm이면 층의
+  `tr_dispatch_fn`이 그 층의 바깥 evidence를 capture해 넘기며, operation을 수행한
+  지점의 evidence는 쓰지 않는다. `op` operation의 arm이면 층의 dispatcher가 같은
+  guard 아래에서 층의 바깥 evidence로 arm을 EvidenceDirect로 부른 뒤, 그 층을 다시
+  설치하는 resumption(외부 dispatch가 쓰는 층의 resume factory와 같다)을 바깥
+  evidence, exit frame, arm의 값으로 부른다. Marker의 `tr_dispatch_fn`은 `fn`
+  operation의 `fn` arm만 담는다.
 
 `resolve_evidence`는 explicit handler delimiter의 prompt와 dispatch closure를
 소비하여 `effect.extend`를 만든다. Fresh prompt placeholder는 해당 delimiter에서
@@ -1229,11 +1244,12 @@ Handler와 evidence의 연결은 다음과 같다.
   ([type-inference.md](type-inference.md#호출의-evidence-선택)).
 - **Handler arm, `do` arm:** handle을 설치한 층의 바깥 evidence로 실행한다.
   General arm은 handle 층의 dispatcher에게서 이 evidence와 exit frame을 받고,
-  `fn` arm은 층의 `tr_dispatch_fn`이 capture한 evidence를 받는다. Perform 지점
-  evidence는 arm에 전달하지 않는다. 언어는 `fn` arm 본문이 `op`를 선언한 ability에
-  닿지 않음을 보증하므로([abilities.md](abilities.md#fn-operation-handler)),
-  `tr_dispatch_fn`은 non-CPS callable이고 `fn` perform 지점은 continuation frame을
-  만들지 않는다.
+  `fn` operation의 `fn` arm은 층의 `tr_dispatch_fn`이 capture한 evidence를 받는다.
+  `op` operation의 `fn` arm은 층의 dispatcher에게서 이 evidence를 받는다. Perform
+  지점 evidence는 arm에 전달하지 않는다. 언어는 `fn` arm 본문이 `op`를 선언한
+  ability에 닿지 않음을 보증하므로([abilities.md](abilities.md#fn-operation-handler)),
+  `fn` arm은 non-CPS callable이다. `tr_dispatch_fn`은 non-CPS callable이고 `fn`
+  operation의 perform 지점은 continuation frame을 만들지 않는다.
 - **Arm 안의 `resume`:** [abilities.md](abilities.md#resume이-재개하는-계산)에 따라
   `resume`이 놓인 위치와 관계없이 그 지점의 evidence를 continuation에 넘긴다. Arm
   본문의 resume은 arm evidence를, arm 안 lambda의 resume은 그 lambda가 받은

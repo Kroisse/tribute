@@ -208,7 +208,13 @@ mod ability {
     /// `(Evidence, ability.frame<R>, M) -> core.never`. Each `handlers`
     /// element is a dictionary with `ability` (SymbolRef), `op_name`
     /// (String), `kind` (`"fn"` or `"op"`), and `operation_result_type`
-    /// (Type), and one `(ability, op_name)` appears at most once. With `I`
+    /// (Type), and one `(ability, op_name)` appears at most once. `kind` is
+    /// the arm's kind. The optional `declared_kind` is the declaration's
+    /// kind, present only when it differs from `kind`; the format writes it
+    /// as a second keyword, `fn op @Ability @op_name`. An `op` arm for an
+    /// `fn` operation is invalid. Verification does not resolve the
+    /// declaration; `tribute_control.handle` validation compares the
+    /// declared kind with it. With `I`
     /// the `operation_result_type` and `M` the value type of the body frame,
     /// a `kind = "op"` arm is the following `Cps` closure, where
     /// `ResumeExact<I, M>` is `(Evidence, ability.frame<M>, I) -> core.never`;
@@ -227,7 +233,13 @@ mod ability {
     /// A `kind = "fn"` arm is the `EvidenceDirect` closure
     /// `(Evidence, operation arguments...) -> I`. A closure type records no
     /// convention, so verification checks each callable's shape, and the
-    /// handle enters an arm through the convention its `kind` names. The optional
+    /// handle enters an arm through the convention its `kind` names. A
+    /// `kind = "fn"` arm for an `op` operation is entered by the layer's own
+    /// dispatcher: under the same-prompt guard it calls the arm with the
+    /// layer's outer evidence, then calls the resumption that pushes this
+    /// layer again with the outer evidence, the exit frame, and the arm's
+    /// value. The marker's tail dispatcher holds only `fn` arms of `fn`
+    /// operations. The optional
     /// `evidence_plan` holds only `mask`. The body entry block receives the
     /// extended Evidence and an `ability.frame<M>`, and every path ends in a
     /// proper tail transfer or `func.unreachable`.
