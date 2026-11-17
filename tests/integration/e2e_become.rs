@@ -152,6 +152,90 @@ fn main() ->{std::io::Io} Nil {
     assert_output_on_both_targets("become_reinstalled_handler.trb", code, "2000");
 }
 
+const STATE_HANDLER: &str = r#"
+ability State(s) {
+    op get() -> s
+    op set(value: s) -> Nil
+}
+
+fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
+    handle comp() {
+        do result { result }
+        op State::get() { run_state(fn() { resume init }, init) }
+        op State::set(v) { run_state(fn() { resume Nil }, v) }
+    }
+}
+"#;
+
+/// A callee that takes each of the caller's row tails in the same order
+/// keeps the evidence unchanged, so a self tail call loops without a frame.
+#[test]
+fn test_become_with_the_callers_own_tails_loops() {
+    let code = format!(
+        "{STATE_HANDLER}{}",
+        r#"
+fn both(f: fn() ->{e1} Nil, g: fn() ->{e2} Nil, n: Int) ->{e1, e2} Nil {
+    f()
+    g()
+    case n == +0 {
+        True -> Nil
+        False -> become both(f, g, n - +1)
+    }
+}
+
+fn count_calls(h: fn() ->{t} Nil) ->{t} Int {
+    run_state(fn() {
+        both(fn() { State::set(State::get() + +1) }, h, +999)
+        State::get()
+    }, +0)
+}
+
+fn main() ->{std::io::Io} Nil {
+    let outer = run_state(fn() {
+        let calls = count_calls(fn() { State::set(State::get() + +10) })
+        std::io::print_line(calls.to_string)
+        State::get()
+    }, +0)
+    std::io::print_line(outer.to_string)
+}
+"#
+    );
+    assert_output_on_both_targets("become_own_tails.trb", &code, "1000\n10000");
+}
+
+/// With an ordinary last call, the callee's handlers are those the call
+/// selects.
+#[test]
+fn test_last_call_selects_the_handlers_of_each_tail() {
+    let code = format!(
+        "{STATE_HANDLER}{}",
+        r#"
+fn both(f: fn() ->{e1} Nil, g: fn() ->{e2} Nil) ->{e1, e2} Nil {
+    f()
+    g()
+    f()
+    g()
+}
+
+fn count_calls(h: fn() ->{t} Nil) ->{t} Int {
+    run_state(fn() {
+        both(fn() { State::set(State::get() + +1) }, h)
+        State::get()
+    }, +0)
+}
+
+fn main() ->{std::io::Io} Nil {
+    let total = run_state(fn() {
+        let calls = count_calls(fn() { State::set(State::get() + +10) })
+        calls * +100 + State::get()
+    }, +0)
+    std::io::print_line(total.to_string)
+}
+"#
+    );
+    assert_output_on_both_targets("become_plain_last_call.trb", &code, "220");
+}
+
 /// An `fn` arm answers an `op` operation performed in every iteration of a
 /// tail loop. The loop runs in constant stack, both directly under the
 /// handle and under an effect-polymorphic handler beneath another ability's

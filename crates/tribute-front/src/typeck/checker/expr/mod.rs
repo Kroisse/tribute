@@ -638,6 +638,7 @@ impl<'db> TypeChecker<'db> {
         call: &Expr<ResolvedRef<'db>>,
     ) -> Type<'db> {
         let call_ty = self.infer_expr_type_with_ctx(ctx, call);
+        ctx.evidence.record_become(become_id, call.id);
         if let Some(result) = ctx.become_result_type() {
             ctx.constrain_eq_at(call_ty, result, become_id, ConstraintOriginKind::Expression);
         }

@@ -523,7 +523,6 @@ impl Converter<'_> {
                     .callee(target_symbol)
                     .build(self.ctx, location);
                 tail.set_calling_convention(self.ctx, CallingConvention::Cps);
-                carry_evidence_plan(self.ctx, source, tail.op_ref());
                 self.ctx.push_op(block, tail.op_ref());
             }
             (CallingConvention::Cps, _) => {
@@ -544,9 +543,6 @@ impl Converter<'_> {
                     .callee(self.written_callee(source))
                     .build(self.ctx, location);
                 tail.set_calling_convention(self.ctx, target.convention);
-                if target.convention.needs_evidence() {
-                    carry_evidence_plan(self.ctx, source, tail.op_ref());
-                }
                 self.ctx.push_op(block, tail.op_ref());
             }
         }
@@ -589,9 +585,7 @@ impl Converter<'_> {
             ];
             args.extend(source_args);
             let signature = self.lower_callable_signature(logical_type, convention);
-            let transfer =
-                emit_cps_entry_transfer(self.ctx, block, location, callee, signature, args)?;
-            carry_evidence_plan(self.ctx, source, transfer);
+            emit_cps_entry_transfer(self.ctx, block, location, callee, signature, args)?;
             return Ok(());
         }
         let mut args = Vec::new();
@@ -605,9 +599,6 @@ impl Converter<'_> {
                 .signature(signature)
                 .build(self.ctx, location);
             call.set_calling_convention(self.ctx, convention);
-            if convention.needs_evidence() {
-                carry_evidence_plan(self.ctx, source, call.op_ref());
-            }
             self.ctx.push_op(block, call.op_ref());
             let result = call.result(self.ctx);
             self.emit_exit(block, location, result, flow)?;
@@ -617,9 +608,6 @@ impl Converter<'_> {
             .signature(signature)
             .build(self.ctx, location);
         tail.set_calling_convention(self.ctx, convention);
-        if convention.needs_evidence() {
-            carry_evidence_plan(self.ctx, source, tail.op_ref());
-        }
         self.ctx.push_op(block, tail.op_ref());
         Ok(())
     }

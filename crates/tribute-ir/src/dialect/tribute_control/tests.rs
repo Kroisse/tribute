@@ -3388,6 +3388,28 @@ fn evidence_plan_verifier_rejects_malformed_selections() {
 }
 
 #[test]
+fn source_tail_calls_reject_an_evidence_plan() {
+    let (ctx, module) = parse_fixture(
+        r#"core.module @test {
+  tribute_control.func @f(%n: core.i32) -> core.i32 {
+    tribute_control.return %n
+  }
+  tribute_control.func @g(%n: core.i32) -> core.i32 {
+    tribute_control.tail_call @f(%n) attributes {evidence_plan = [{mask = @State}]} : (core.i32) -> ()
+  }
+}"#,
+    );
+    let result = validate_local(&ctx, module);
+    assert_eq!(result.errors.len(), 1, "{result}");
+    assert!(
+        result
+            .to_string()
+            .contains("has unsupported attribute 'evidence_plan'"),
+        "{result}"
+    );
+}
+
+#[test]
 fn evidence_plan_elements_must_be_type_dictionaries() {
     let (ctx, module) = parse_fixture(&evidence_plan_module("[1]", "[{mask = @State}]"));
     let result = validate_local(&ctx, module);

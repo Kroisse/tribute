@@ -873,13 +873,19 @@ pub(super) fn finish_call<'db>(
     declarations: &mut Declarations<'db>,
     position: CallPosition,
 ) -> Option<ValueRef> {
-    attach_evidence_plan(builder.ctx, builder.ir, call, call_id, declarations);
     match position {
         CallPosition::Value => {
+            attach_evidence_plan(builder.ctx, builder.ir, call, call_id, declarations);
             let value = result(builder.ir, call);
             Some(builder.cast_if_needed(location, value, result_ty))
         }
-        CallPosition::Tail => None,
+        CallPosition::Tail => {
+            assert!(
+                !declarations.evidence_plans.contains_key(&call_id),
+                "typechecking rejects a `become` whose call selects evidence"
+            );
+            None
+        }
     }
 }
 

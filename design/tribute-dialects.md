@@ -616,9 +616,10 @@ operation이, block 인자이면 그 block을 가진 operation이 자기 선언�
 
 `evidence_plan`은 호출이 callee에게 넘길 evidence를 caller evidence에서 고르는
 선택이며 [type-inference.md](type-inference.md#호출의-evidence-선택)가 정한 값을
-typechecking 결과로 복사한다. `call`, `call_indirect`, `tail_call`,
-`tail_call_indirect`, `resume`, `handle`이 가질 수 있다. `handle`의 선택은 body
-evidence를 만들기 전에 적용하며 `mask`만 담는다.
+typechecking 결과로 복사한다. `call`, `call_indirect`, `resume`, `handle`이 가질 수
+있다. `handle`의 선택은 body evidence를 만들기 전에 적용하며 `mask`만 담는다.
+Source `become`인 `tail_call`과 `tail_call_indirect`는 caller의 evidence를 그대로
+넘기며 이 속성을 갖지 않는다. 선택을 다시 적용할 suffix가 남지 않기 때문이다.
 
 ```text
 {evidence_plan = [{mask = @"<instance key>"}, {dup = ...}]}

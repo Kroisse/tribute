@@ -273,7 +273,6 @@ mod tribute_cps {
     #[implements(CallableExit, LocalValidation)]
     fn tail_call_indirect<S: FuncSig>(
         convention: Attr<CallingConvention>,
-        evidence_plan: Option<Attr<[EvidenceStep]>>,
         callee: Value<S>,
         args: Values<S::Inputs>,
     ) {
@@ -505,12 +504,7 @@ impl trunk_ir::ops::Verify for CallIndirect {
 
 impl trunk_ir::ops::Verify for TailCallIndirect {
     fn verify(&self, ctx: &IrContext) -> Result<(), trunk_ir::ops::VerificationError> {
-        tribute_control::verify_resolved_types(ctx, self.op_ref())?;
-        Ok(tribute_control::verify_evidence_plan(
-            ctx,
-            self.op_ref(),
-            EvidencePlanSite::Source,
-        )?)
+        Ok(tribute_control::verify_resolved_types(ctx, self.op_ref())?)
     }
 }
 

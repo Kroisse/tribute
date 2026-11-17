@@ -495,7 +495,8 @@ tail 인스턴스가 caller의 tail로 이어질 때뿐이다. Tail이 닫혔거
 caller tail의 handler에 닿는 자리가 없으므로 그대로 전달한다. Caller row가 명시하지 않은 label과
 handler marker가 없는 ambient `Io`는 그대로 전달한다. 이 결과는 typechecking이
 각 호출에 확정하는 metadata이며 이후 단계는 signature나 본문 형상에서 다시
-계산하지 않는다. 표현과 lowering은
+계산하지 않는다. 모든 label을 그대로 전달하고 tail을 고르거나 붙이지 않는 호출만
+[`become`](syntax.md#tail-call-become)의 피연산자가 될 수 있다. 표현과 lowering은
 [cps-effects.md](cps-effects.md#row-directed-evidence)를 따른다.
 
 ##### 여러 tail의 합집합인 row
@@ -504,11 +505,15 @@ handler marker가 없는 ambient `Io`는 그대로 전달한다. 이 결과는 t
 (`fn both(f: fn() ->{e1} a, g: fn() ->{e2} b) ->{e1, e2} (a, b)`)은 자기 evidence와
 함께 tail마다 evidence를 하나씩 받는다. Tail의 순서는 선언된 합집합이 열어 둔
 source의 순서이며, caller와 callee가 같은 순서로 센다. Ability별 marker 순서
-하나로는 각 tail에 넘길 handler를 구별할 수 없기 때문이다.
+하나로는 각 tail에 넘길 handler를 구별할 수 없기 때문이다. 본문의 effect 누적이
+남긴 관계 가운데 결과가 자기 원천의 하나인 것은 tail을 나누지 않으므로 이런
+합집합이 아니다.
 
 - **이런 callee의 호출:** callee 자신의 evidence는 위 표의 규칙으로 고른다. 여기에
   tail마다 그 tail의 인스턴스 row를 callee row로 보고 같은 규칙으로 고른 evidence를
-  붙인다. Tail의 선택은 서로 독립이고 모두 caller의 evidence에서 출발한다.
+  붙인다. Tail의 선택은 서로 독립이고 모두 caller의 evidence에서 출발한다. 모든
+  tail이 caller의 같은 번호 tail을 그대로 고르면 caller의 evidence가 이미 그 tail
+  evidence를 담고 있으므로 tail을 붙이지 않는다.
 - **이런 callable 안의 호출:** callee row의 tail이 자기 tail 가운데 하나이면 그
   tail의 evidence를 고른다. 그 evidence에는 이 callable이 명시한 label의 handler가
   없으므로, callee가 그 label을 받는 자리마다 handler를 얹는다(첫 자리는 `push`,

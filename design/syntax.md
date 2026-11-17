@@ -1076,6 +1076,12 @@ Proper tail call을 보장하는 것은 `become`뿐이다. `become`이 없는 �
 - **타입:** 호출 결과 타입은 감싼 callable의 결과 타입과 같아야 하고, callee의 effect
   row는 일반 호출처럼 감싼 callable의 ability row에 포함되어야 한다. `become` 식의
   타입은 호출 결과 타입이다.
+- **Handler 전달:** 호출은 감싼 callable이 받은 handler를 callee에게 그대로 넘겨야
+  한다([호출의 evidence 선택](type-inference.md#호출의-evidence-선택)). Callee가 다른
+  handler 선택을 받는 호출은 callee가 끝날 때까지 그 선택을 기억해야 하므로 frame을
+  넘길 수 없다. Row tail로 받은 callback을 명시한 ability 아래에서 부르는 호출,
+  여러 row 변수의 합집합을 가진 callable이 그 가운데 하나만 받는 callee를 부르는
+  호출이 그렇다. 이런 호출은 `become` 없이 쓴다.
 
 인자는 일반 호출처럼 왼쪽에서 오른쪽으로 평가한다. 모든 인자를 평가한 뒤 현재
 callable의 지역 값을 정리하고 이전한다. 이 정리는 관찰할 수 없으므로 reference
