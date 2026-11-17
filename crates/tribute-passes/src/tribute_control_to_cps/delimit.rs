@@ -5,7 +5,7 @@ use super::*;
 impl Converter<'_> {
     /// Whether `source` needs CPS control from the flow that evaluates it: a
     /// handle, a resume, or a call of a Cps callable. Pre-CPS validation
-    /// rejects a `become` of a Cps callable in a callable that is not Cps.
+    /// rejects a `become` of a Cps callable in a flow that is not Cps.
     pub(super) fn needs_cps_control(&self, source: OpRef) -> bool {
         if tribute_control::Handle::matches(self.ctx, source)
             || tribute_control::Resume::matches(self.ctx, source)

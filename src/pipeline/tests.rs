@@ -790,7 +790,12 @@ fn main() ->{Io} Nil {
         .iter()
         .find_map(|(ty, data)| (data.name.is(&ctx, "core.i32")).then_some(ty))
         .expect("fixture must contain core.i32");
-    let calls = clif_indirect_calls(&ctx, module);
+    // The lambda's `Cps` entry body exits through its frame with a tail
+    // transfer; the call of the lambda is the one ordinary indirect call.
+    let calls: Vec<_> = clif_indirect_calls(&ctx, module)
+        .into_iter()
+        .filter(|&call| clif::CallIndirect::matches(&ctx, call))
+        .collect();
     assert_eq!(
         calls.len(),
         1,

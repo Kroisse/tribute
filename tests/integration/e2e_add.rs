@@ -501,9 +501,10 @@ fn assert_indirect_signature(ctx: &IrContext, owner: func::Func, call: OpRef) {
     }
 }
 
-/// The entry function that implements a convention table's closure. The
-/// other slots hold shared adapters and trap entries, which are not lifted
-/// lambdas.
+/// The entry function that implements a convention table's closure at the
+/// class of its row. A source lambda whose row is weaker than `Cps` also
+/// implements the `Cps` slot, with its `Cps` entry body; the other slots
+/// hold shared adapters and trap entries, which are not lifted lambdas.
 fn implemented_entry<'a>(
     ctx: &IrContext,
     module: Module,
@@ -512,13 +513,17 @@ fn implemented_entry<'a>(
     let entries: Vec<_> = entries
         .into_iter()
         .map(ToString::to_string)
-        .filter(|entry| {
+        .enumerate()
+        .filter(|(_, entry)| {
             !entry.starts_with("__tribute_trap_entry_")
                 && !entry.starts_with("__tribute_entry_adapter_")
         })
         .collect();
-    let [entry] = &entries[..] else {
-        panic!("one implemented convention entry, found {entries:?}");
+    let cps_slot = tribute_ir::calling_convention::CallingConvention::Cps.slot() as usize;
+    let entry = match &entries[..] {
+        [(_, entry)] => entry,
+        [(_, entry), (slot, _)] if *slot == cps_slot => entry,
+        _ => panic!("one implemented convention entry and a Cps entry body, found {entries:?}"),
     };
     named_function(ctx, module, entry)
 }

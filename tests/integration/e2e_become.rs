@@ -7,7 +7,10 @@
 
 use crate::common;
 
-use common::assert_output_on_both_targets;
+use common::{
+    assert_output_on_both_targets, assert_output_on_both_targets_with_native_asan,
+    compile_and_run_native_asan,
+};
 
 /// Deep enough that a frame per call overflows any default stack.
 const DEPTH: &str = "10000000";
@@ -290,4 +293,421 @@ fn main() ->{std::io::Io} Nil {
 }
 "#;
     assert_output_on_both_targets("become_fn_arm_for_op.trb", code, "100000\n100000");
+}
+
+/// Operations a loop performs in the arms of a handler that installs itself
+/// again with `become`: far more than a frame per operation could hold.
+const HANDLER_LOOP: &str = "100000";
+
+/// `State` handled by a handler that installs itself again with `become`,
+/// in tail position of `run_state`, and a loop that performs `State`.
+const STATE_LOOP: &str = r#"
+ability State(s) {
+    op get() -> s
+    op set(value: s) -> Nil
+}
+
+fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
+    handle comp() {
+        do result { result }
+        op State::get() { become run_state(fn() { resume init }, init) }
+        op State::set(v) { become run_state(fn() { resume Nil }, v) }
+    }
+}
+
+fn count(n: Int) ->{State(Int)} Int {
+    case n == +0 {
+        True -> State::get()
+        False -> {
+            State::set(State::get() + +1)
+            become count(n - +1)
+        }
+    }
+}
+"#;
+
+/// A handler that installs itself again with `become` from its `op` arms
+/// leaves neither a handler nor a frame per operation (issue #1963). Its
+/// handle is in tail position, so the arms hand on the frame `run_state`
+/// received; a resume in a lambda's tail position and the call that makes
+/// the handle body's result pass their frames on as well.
+#[test]
+fn test_become_in_op_arms_runs_a_state_loop_in_constant_space() {
+    let code = format!(
+        "{STATE_LOOP}{}",
+        r#"
+fn main() ->{std::io::Io} Nil {
+    std::io::print_line(run_state(fn() count(+N), +0).to_string)
+}
+"#
+        .replace("+N", &format!("+{HANDLER_LOOP}"))
+    );
+    assert_output_on_both_targets("become_state_loop.trb", &code, HANDLER_LOOP);
+}
+
+/// `become handle ..` and `become resume v` assert their tail positions and
+/// run as the handle and the resume alone.
+#[test]
+fn test_become_handle_and_become_resume_run_the_state_loop() {
+    let code = format!(
+        "{}{}",
+        STATE_LOOP
+            .replace("    handle comp() {", "    become handle comp() {")
+            .replace("{ resume init }", "{ become resume init }"),
+        r#"
+fn main() ->{std::io::Io} Nil {
+    std::io::print_line(run_state(fn() count(+N), +0).to_string)
+}
+"#
+        .replace("+N", &format!("+{HANDLER_LOOP}"))
+    );
+    assert!(code.contains("become handle comp()") && code.contains("become resume init"));
+    assert_output_on_both_targets("become_handle_resume.trb", &code, HANDLER_LOOP);
+}
+
+/// The arms of a tail handle in each kind of callable: `EvidenceDirect`
+/// and `Cps` callables, whose callee is a `Cps` instance, and a lambda.
+#[test]
+fn test_become_in_op_arms_of_each_enclosing_convention() {
+    let evidence_direct = format!(
+        "{STATE_LOOP}{}",
+        r#"
+fn count_io(n: Int) ->{State(Int), std::io::Io} Int {
+    case n == +0 {
+        True -> State::get()
+        False -> {
+            State::set(State::get() + +1)
+            become count_io(n - +1)
+        }
+    }
+}
+
+fn main() ->{std::io::Io} Nil {
+    std::io::print_line(run_state(fn() count_io(+N), +0).to_string)
+}
+"#
+        .replace("+N", &format!("+{HANDLER_LOOP}"))
+    );
+    assert_output_on_both_targets(
+        "become_arm_evidence_direct.trb",
+        &evidence_direct,
+        HANDLER_LOOP,
+    );
+
+    // `run_state` runs at a `Cps` instance under `Log`, an `op` ability.
+    let cps = format!(
+        "{STATE_LOOP}{}",
+        r#"
+ability Log {
+    op log() -> Nil
+}
+
+fn with_log(comp: fn() ->{Log} Int) ->{} Int {
+    handle comp() {
+        do r { r }
+        op Log::log() { +0 }
+    }
+}
+
+fn main() ->{std::io::Io} Nil {
+    std::io::print_line(with_log(fn() run_state(fn() count(+N), +0)).to_string)
+}
+"#
+        .replace("+N", &format!("+{HANDLER_LOOP}"))
+    );
+    assert_output_on_both_targets("become_arm_cps.trb", &cps, HANDLER_LOOP);
+
+    let lambda = r#"
+ability State(s) {
+    op get() -> s
+    op set(value: s) -> Nil
+}
+
+fn run_state(comp: fn() ->{State(Int)} Int, init: Int) ->{} Int {
+    let go = fn(c: fn() ->{State(Int)} Int, i: Int) -> Int {
+        handle c() {
+            do result { result }
+            op State::get() { become run_state(fn() { resume i }, i) }
+            op State::set(v) { become run_state(fn() { resume Nil }, v) }
+        }
+    }
+    become go(comp, init)
+}
+
+fn count(n: Int) ->{State(Int)} Int {
+    case n == +0 {
+        True -> State::get()
+        False -> {
+            State::set(State::get() + +1)
+            become count(n - +1)
+        }
+    }
+}
+
+fn main() ->{std::io::Io} Nil {
+    std::io::print_line(run_state(fn() count(+N), +0).to_string)
+}
+"#
+    .replace("+N", &format!("+{HANDLER_LOOP}"));
+    assert_output_on_both_targets("become_arm_lambda.trb", &lambda, HANDLER_LOOP);
+}
+
+/// A `do` arm that loops with `become` in `Direct`, `EvidenceDirect`, and
+/// `Cps` callables.
+#[test]
+fn test_become_in_do_arms_runs_in_constant_space() {
+    let program = |row: &str, main: &str| {
+        format!(
+            r#"
+ability Tick {{
+    fn tick() -> Nil
+}}
+
+ability Log {{
+    op log() -> Nil
+}}
+
+fn work() ->{{Tick}} Int {{
+    Tick::tick()
+    +1
+}}
+
+fn fin(acc: Int) -> Int {{ acc }}
+
+fn rep(n: Int, acc: Int) ->{{{row}}} Int {{
+    handle work() {{
+        do r {{
+            case n == +0 {{
+                True -> become fin(acc)
+                False -> become rep(n - +1, acc + r)
+            }}
+        }}
+        fn Tick::tick() {{ Nil }}
+    }}
+}}
+
+fn main() ->{{std::io::Io}} Nil {{
+    {main}
+}}
+"#
+        )
+    };
+    let direct = format!("std::io::print_line(rep(+{HANDLER_LOOP}, +0).to_string)");
+    assert_output_on_both_targets(
+        "become_do_arm_direct.trb",
+        &program("", &direct),
+        HANDLER_LOOP,
+    );
+    assert_output_on_both_targets(
+        "become_do_arm_evidence_direct.trb",
+        &program("std::io::Io", &direct),
+        HANDLER_LOOP,
+    );
+    let cps = format!(
+        "let v = handle rep(+{HANDLER_LOOP}, +0) {{\n        do r {{ r }}\n        op Log::log() {{ +0 }}\n    }}\n    std::io::print_line(v.to_string)"
+    );
+    assert_output_on_both_targets("become_do_arm_cps.trb", &program("Log", &cps), HANDLER_LOOP);
+}
+
+/// `Step` drops its resumption: each arm hands the frame on to a callable
+/// value, `tick` as a named function and as a lambda, which enters it at its
+/// `Cps` entry body.
+const STEP_LOOP: &str = r#"
+ability Step {
+    op step() -> Nil
+}
+
+fn ping(n: Int) ->{Step} Int {
+    case n == +0 {
+        True -> +0
+        False -> {
+            Step::step()
+            +1
+        }
+    }
+}
+
+fn drive(k: fn(Int) ->{} Int, n: Int) ->{} Int {
+    handle ping(n) {
+        do r { r }
+        op Step::step() { become k(n - +1) }
+    }
+}
+"#;
+
+/// A `become` of a callable value in an arm enters the value's `Cps` entry
+/// with the arm's frame, whatever class the callee type reads.
+#[test]
+fn test_become_of_a_callable_value_in_an_op_arm_runs_in_constant_space() {
+    let named = format!(
+        "{STEP_LOOP}{}",
+        r#"
+fn tick(n: Int) ->{} Int {
+    become drive(tick, n)
+}
+
+fn main() ->{std::io::Io} Nil {
+    std::io::print_line(tick(+N).to_string)
+}
+"#
+        .replace("+N", &format!("+{HANDLER_LOOP}"))
+    );
+    assert_output_on_both_targets("become_arm_func_value.trb", &named, "0");
+    let lambda = format!(
+        "{STEP_LOOP}{}",
+        r#"
+fn tick(n: Int) ->{} Int {
+    become drive(fn(m: Int) -> Int { become tick(m) }, n)
+}
+
+fn main() ->{std::io::Io} Nil {
+    std::io::print_line(tick(+N).to_string)
+}
+"#
+        .replace("+N", &format!("+{HANDLER_LOOP}"))
+    );
+    assert_output_on_both_targets("become_arm_lambda_value.trb", &lambda, "0");
+}
+
+/// The call that makes a handle body's result passes the body's frame on
+/// when it is the last expression of a block or a `case` arm too.
+#[test]
+fn test_a_call_in_a_handle_body_result_position_leaves_no_frame() {
+    for (name, body) in [
+        (
+            "block",
+            "{\n        let unused = init\n        comp()\n    }",
+        ),
+        (
+            "case",
+            "case flag {\n        True -> comp()\n        False -> comp()\n    }",
+        ),
+    ] {
+        let code = format!(
+            "{}{}",
+            STATE_LOOP.replace(
+                "    handle comp() {",
+                &format!("    let flag = True\n    handle {body} {{")
+            ),
+            r#"
+fn main() ->{std::io::Io} Nil {
+    std::io::print_line(run_state(fn() count(+N), +0).to_string)
+}
+"#
+            .replace("+N", &format!("+{HANDLER_LOOP}"))
+        );
+        assert_output_on_both_targets(&format!("become_body_{name}.trb"), &code, HANDLER_LOOP);
+    }
+}
+
+/// A `resume` whose resumed computation takes another selection of
+/// handlers keeps its frame, which applies the selection again on the
+/// resumed path: the computation's `Other` reaches the handler in `main`,
+/// not the one around the `resume`.
+#[test]
+fn test_a_resume_with_a_selection_keeps_its_frame() {
+    let code = r#"
+ability Ping {
+    op ping() -> Int
+}
+
+ability Other {
+    op other() -> Int
+}
+
+fn handled(comp: fn() ->{e, Ping} Int) ->{e, Ping} Int {
+    handle comp() {
+        do n { n }
+        op Ping::ping() {
+            handle {
+                let inner = Other::other()
+                resume inner
+            } {
+                fn Other::other() { +1 }
+            }
+        }
+    }
+}
+
+fn main() ->{std::io::Io} Nil {
+    let v = handle handled(fn() { Ping::ping() + Other::other() }) {
+        do r { r }
+        fn Other::other() { +100 }
+        fn Ping::ping() { +1000 }
+    }
+    std::io::print_line(v.to_string)
+}
+"#;
+    assert_output_on_both_targets("resume_with_selection.trb", code, "101");
+}
+
+/// The resumptions an arm drops, captures in the lambda it hands on, or
+/// never has (a `do` arm) are released exactly once.
+#[test]
+fn test_become_in_arms_releases_resumptions_under_asan() {
+    let loops = "1000";
+    let dropped = format!(
+        "{STEP_LOOP}{}",
+        r#"
+fn tick(n: Int) ->{} Int {
+    become drive(tick, n)
+}
+
+fn main() ->{std::io::Io} Nil {
+    std::io::print_line(tick(+N).to_string)
+}
+"#
+        .replace("+N", &format!("+{loops}"))
+    );
+    assert_released_on_both_targets("become_arm_dropped.trb", &dropped, "0");
+    let captured = format!(
+        "{STATE_LOOP}{}",
+        r#"
+fn main() ->{std::io::Io} Nil {
+    std::io::print_line(run_state(fn() count(+N), +0).to_string)
+}
+"#
+        .replace("+N", &format!("+{loops}"))
+    );
+    assert_released_on_both_targets("become_arm_captured.trb", &captured, loops);
+    let do_arm = r#"
+ability Tick {
+    fn tick() -> Nil
+}
+
+fn work() ->{Tick} Int {
+    Tick::tick()
+    +1
+}
+
+fn rep(n: Int, acc: Int) ->{} Int {
+    handle work() {
+        do r {
+            case n == +0 {
+                True -> acc
+                False -> become rep(n - +1, acc + r)
+            }
+        }
+        fn Tick::tick() { Nil }
+    }
+}
+
+fn main() ->{std::io::Io} Nil {
+    std::io::print_line(rep(+N, +0).to_string)
+}
+"#
+    .replace("+N", &format!("+{loops}"));
+    assert_released_on_both_targets("become_do_arm.trb", &do_arm, loops);
+}
+
+/// Like [`assert_output_on_both_targets_with_native_asan`], and the native
+/// run reports no leak: every allocation is released exactly once.
+fn assert_released_on_both_targets(source_name: &str, source_code: &str, expected_stdout: &str) {
+    let native = compile_and_run_native_asan(source_name, source_code);
+    let stderr = String::from_utf8_lossy(&native.stderr);
+    assert!(
+        !stderr.contains("detected memory leaks"),
+        "native leaks for {source_name}: {stderr}"
+    );
+    assert_output_on_both_targets_with_native_asan(source_name, source_code, expected_stdout);
 }

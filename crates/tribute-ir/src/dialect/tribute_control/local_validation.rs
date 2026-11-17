@@ -89,8 +89,9 @@ pub(super) fn validate_return(ctx: &IrContext, op: OpRef, errors: &mut Vec<Valid
 }
 
 /// The callable whose body contains `op` and its source signature, or an
-/// error when `op` is not in its tail position or a handle lies between
-/// them.
+/// error when `op` is not in its tail position. A `handle` in tail
+/// position makes its completion and `op` arms tail positions; its body and
+/// `fn` arms are not.
 pub(super) fn tail_call_owner(
     ctx: &IrContext,
     op: OpRef,
@@ -106,46 +107,116 @@ pub(super) fn tail_call_owner(
                 .map(|ty| (owner, ty))
                 .ok_or("must be inside a tribute_control.func or lambda body");
         }
-        if Handle::matches(ctx, owner) {
-            return Err("must not be inside a tribute_control.handle body or arm");
-        }
-        // A structured arm may end with a tail call only when the structured
-        // operation selects one region and has one result, whose value flows
-        // straight into its own block's terminator.
-        if !DynRegionBranch::selects_one_region(ctx, owner) || ctx.op_results(owner).len() != 1 {
-            return Err("must be in tail position of its callable");
-        }
-        let Some(block) = ctx.op(owner).parent_block else {
-            return Err("must be inside a tribute_control.func or lambda body");
+        let terminator = if let Ok(handle) = Handle::from_op(ctx, owner) {
+            if !is_tail_handle_region(ctx, handle, exit) {
+                return Err("must not be inside a tribute_control.handle body or fn arm");
+            }
+            // The handle's frame is the one its result flows into, so its
+            // result is that terminator's operand itself.
+            result_terminator(ctx, owner, false)
+        } else {
+            // A structured arm may end with a tail call only when the
+            // structured operation selects one region and has one result,
+            // whose value flows straight into its own block's terminator.
+            if !DynRegionBranch::selects_one_region(ctx, owner) || ctx.op_results(owner).len() != 1
+            {
+                return Err("must be in tail position of its callable");
+            }
+            result_terminator(ctx, owner, true)
         };
-        let ops = &ctx.block(block).ops;
-        let position = ops
-            .iter()
-            .position(|&candidate| candidate == owner)
-            .expect("an operation is listed in its parent block");
-        let mut rest = ops[position + 1..].iter().copied();
-        let terminator =
-            rest.find(|&candidate| !core::UnrealizedConversionCast::matches(ctx, candidate));
         let Some(terminator) = terminator else {
             return Err("must be in tail position of its callable");
         };
-        if ops.last().copied() != Some(terminator) {
-            return Err("must be in tail position of its callable");
-        }
-        if Return::matches(ctx, terminator) {
+        if Return::matches(ctx, terminator)
+            || Yield::matches(ctx, terminator)
+            || trunk_ir::dialect::scf::Yield::matches(ctx, terminator)
+        {
             exit = terminator;
-            continue;
-        }
-        if trunk_ir::dialect::scf::Yield::matches(ctx, terminator) {
-            exit = owner;
             continue;
         }
         return Err("must be in tail position of its callable");
     }
 }
 
+/// The terminator of the block of `op` when only conversion casts, if
+/// `casts` allows them, come between `op` and it, and it takes `op`'s
+/// result (or a cast of it) as its only operand.
+fn result_terminator(ctx: &IrContext, op: OpRef, casts: bool) -> Option<OpRef> {
+    let block = ctx.op(op).parent_block?;
+    let ops = &ctx.block(block).ops;
+    let position = ops.iter().position(|&candidate| candidate == op)?;
+    let following = &ops[position + 1..];
+    let (&terminator, between) = following.split_last()?;
+    if !casts && !between.is_empty() {
+        return None;
+    }
+    if !between
+        .iter()
+        .all(|&cast| core::UnrealizedConversionCast::matches(ctx, cast))
+    {
+        return None;
+    }
+    if !casts && ctx.op_operands(terminator) != ctx.op_results(op) {
+        return None;
+    }
+    Some(terminator)
+}
+
+/// Whether `inner`, an operation in a region of `handle`, is in its
+/// completion or an `op` arm, whose results are the handle's.
+fn is_tail_handle_region(ctx: &IrContext, handle: Handle, inner: OpRef) -> bool {
+    let Some(region) = parent_region(ctx, inner) else {
+        return false;
+    };
+    if handle.completion(ctx) == region {
+        return true;
+    }
+    handle.arm_bindings(ctx).any(|(binding, arm)| {
+        arm == region && binding.is_some_and(|binding| binding.kind == OperationKind::Op)
+    })
+}
+
+/// Whether `block`, the completion or an arm of a handle, ends with a
+/// source tail call in place of its `yield`.
+pub(super) fn ends_with_tail_call(ctx: &IrContext, block: BlockRef) -> bool {
+    ctx.block(block).ops.last().is_some_and(|&last| {
+        TailCall::matches(ctx, last) || SourceTailCallIndirect::is_set(ctx, last)
+    })
+}
+
+/// That the tail transfer `op`, whose callee has the convention `callee`,
+/// suits the flow that holds it: in a `Cps` flow a transfer to a callee
+/// with a body enters it as `Cps`, and elsewhere the callee is not stronger
+/// than the flow (`design/tribute-dialects.md`, "Convention과 class 특수화").
+pub(super) fn check_transfer_convention(
+    ctx: &IrContext,
+    op: OpRef,
+    callee: CallingConvention,
+    has_body: bool,
+    errors: &mut Vec<ValidationError>,
+) {
+    let Some(flow) = tribute_cps::flow_convention(ctx, op) else {
+        return;
+    };
+    if flow == CallingConvention::Cps && has_body && callee != CallingConvention::Cps {
+        push_op_error(
+            ctx,
+            op,
+            errors,
+            "a tail transfer in a Cps flow must enter its callee as Cps",
+        );
+    } else if callee > flow {
+        push_op_error(
+            ctx,
+            op,
+            errors,
+            "callee convention must not be stronger than the flow that holds the transfer",
+        );
+    }
+}
+
 pub(crate) fn validate_tail_call(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
-    let (owner, owner_ty) = match tail_call_owner(ctx, op) {
+    let (_, owner_ty) = match tail_call_owner(ctx, op) {
         Ok(owner) => owner,
         Err(message) => {
             push_op_error(ctx, op, errors, message);
@@ -168,17 +239,10 @@ pub(crate) fn validate_tail_call(ctx: &IrContext, op: OpRef, errors: &mut Vec<Va
                 "callee result type does not match enclosing callable result",
             );
         }
-        if let (Some(callee_cc), Some(owner_cc)) = (
-            tribute_cps::declared_convention(ctx, op),
-            tribute_cps::convention_at(ctx, owner, op),
-        ) && callee_cc > owner_cc
-        {
-            push_op_error(
-                ctx,
-                op,
-                errors,
-                "callee convention must not be stronger than the enclosing callable",
-            );
+        // In a `Cps` flow it enters the value's `Cps` entry, whatever class
+        // the callee type reads.
+        if let Some(convention) = tribute_cps::declared_convention(ctx, op) {
+            check_transfer_convention(ctx, op, convention, true, errors);
         }
     }
 }
@@ -207,7 +271,13 @@ pub(super) fn validate_handle(ctx: &IrContext, op: OpRef, errors: &mut Vec<Valid
         );
     }
     let body_yield = terminator(ctx, op, body_block, Yield::DEF, errors);
-    let completion_yield = terminator(ctx, op, completion_block, Yield::DEF, errors);
+    // A source tail call that ends the completion leaves the callable; its
+    // own validation checks the placement.
+    let completion_yield = if ends_with_tail_call(ctx, completion_block) {
+        None
+    } else {
+        terminator(ctx, op, completion_block, Yield::DEF, errors)
+    };
     if let (Some(body_yield), Some(&completion_arg)) =
         (body_yield, ctx.block_args(completion_block).first())
         && let Some(&body_value) = ctx.op_operands(body_yield).first()
@@ -254,6 +324,9 @@ fn validate_arm(
     let Some(block) = single_block(ctx, op, arm, "arm", errors) else {
         return;
     };
+    if binding.kind == OperationKind::Op && ends_with_tail_call(ctx, block) {
+        return;
+    }
     let yield_op = terminator(ctx, op, block, Yield::DEF, errors);
     let yielded = yield_op
         .and_then(|yield_op| ctx.op_operands(yield_op).first().copied())

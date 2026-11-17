@@ -38,7 +38,7 @@ use trunk_ir::types::Attribute;
 use trunk_ir::{Symbol, SymbolPath};
 
 use crate::convention_classes::{
-    Class, Function, Reader, TABLE_SUFFIX, class_suffix, instantiation, requirements,
+    Class, Entry, Function, Reader, TABLE_SUFFIX, instance_name, instantiation, requirements,
     settle_class_variables,
 };
 
@@ -97,7 +97,7 @@ pub fn specialize(ctx: &mut IrContext, module: Module) -> Result<(), ClassSpecia
         .iter()
         .map(|f| (f.name.as_str(), ctx.clone_op(f.op, &mut IrMapping::new())))
         .collect();
-    let mut known: HashMap<&str, Vec<Vec<Class>>> = HashMap::default();
+    let mut known: HashMap<&str, Vec<(Vec<Class>, Entry)>> = HashMap::default();
     let mut anchors: HashMap<&str, OpRef> = HashMap::default();
     let mut queue = VecDeque::new();
     for function in &functions {
@@ -107,13 +107,13 @@ pub fn specialize(ctx: &mut IrContext, module: Module) -> Result<(), ClassSpecia
             Class::CPS
         };
         let classes = vec![primary; variables(&function.name).len()];
-        known.insert(&function.name, vec![classes.clone()]);
+        known.insert(&function.name, vec![(classes.clone(), Entry::Row)]);
         anchors.insert(&function.name, function.op);
-        queue.push_back((function, function.op, classes));
+        queue.push_back((function, function.op, classes, Entry::Row));
     }
     let mut instances = Vec::new();
     let mut tables = Tables::new();
-    while let Some((function, op, classes)) = queue.pop_front() {
+    while let Some((function, op, classes, entry)) = queue.pop_front() {
         let mut instance = Instance {
             function,
             positions: &positions,
@@ -123,22 +123,27 @@ pub fn specialize(ctx: &mut IrContext, module: Module) -> Result<(), ClassSpecia
                 variables(&function.name)
                     .iter()
                     .copied()
-                    .zip(classes)
+                    .zip(classes.iter().copied())
                     .collect(),
             ),
+            convention: CallingConvention::Cps,
         };
+        if entry == Entry::Row {
+            instance.convention = instance.own_class(ctx, op).bound();
+        }
         let selected = instance.rewrite(ctx, op, &mut tables);
-        instances.push((op, instance.own_class(ctx, op).bound()));
-        for (callee, classes) in selected {
+        let entry_of =
+            (entry == Entry::Cps).then(|| instance_name(&function.name, &classes, Entry::Row));
+        instances.push((op, instance.convention, entry_of));
+        for (callee, classes, entry) in selected {
             let callee = by_name[callee.as_str()];
-            let vectors = known.entry(&callee.name).or_default();
-            if vectors.contains(&classes) {
+            let keys = known.entry(&callee.name).or_default();
+            if keys.contains(&(classes.clone(), entry)) {
                 continue;
             }
-            vectors.push(classes.clone());
+            keys.push((classes.clone(), entry));
             let clone = ctx.clone_op(templates[callee.name.as_str()], &mut IrMapping::new());
-            let name = format!("{}{}", callee.name, class_suffix(&classes));
-            let name = ctx.intern_str(&name);
+            let name = ctx.intern_str(&instance_name(&callee.name, &classes, entry));
             ctx.op_attrs_mut(clone)
                 .insert("sym_name", Attribute::String(name));
             let anchor = anchors
@@ -146,14 +151,19 @@ pub fn specialize(ctx: &mut IrContext, module: Module) -> Result<(), ClassSpecia
                 .expect("every definition has an anchor");
             insert_after(ctx, *anchor, clone);
             *anchor = clone;
-            queue.push_back((callee, clone, classes));
+            queue.push_back((callee, clone, classes, entry));
         }
     }
     for (_, template) in templates {
         ctx.remove_op(template);
     }
-    for (op, convention) in instances {
-        tribute_cps::replace_control_op(ctx, op, convention);
+    for (op, convention, entry_of) in instances {
+        let replacement = tribute_cps::replace_control_op(ctx, op, convention);
+        if let Some(entry_of) = entry_of {
+            let entry_of = ctx.string_attr(&entry_of);
+            ctx.op_attrs_mut(replacement)
+                .insert(tribute_cps::ENTRY_OF_ATTR, entry_of);
+        }
     }
     add_func_tables(ctx, module, tables);
     Ok(())
@@ -311,6 +321,9 @@ struct Instance<'a> {
     /// The module's definitions, by name.
     by_name: &'a HashMap<&'a str, &'a Function>,
     reader: Reader<'a>,
+    /// The convention it declares: its row's, or `Cps` for a `Cps` entry
+    /// instance.
+    convention: CallingConvention,
 }
 
 impl Instance<'_> {
@@ -322,7 +335,7 @@ impl Instance<'_> {
         ctx: &mut IrContext,
         op: OpRef,
         tables: &mut Tables,
-    ) -> Vec<(String, Vec<Class>)> {
+    ) -> Vec<(String, Vec<Class>, Entry)> {
         if let Some(body) = ctx.op_region(op, 0) {
             self.give_bodies(ctx, body);
         }
@@ -431,6 +444,9 @@ impl Instance<'_> {
                 lambda.conventions = self.reader.conventions(ctx, &row, lambda.op);
                 lambda.reads.extend(row.tail);
             }
+            // A lambda whose classes select no `Cps` body has a `Cps` entry
+            // body (`design/cps-effects.md`, "`Cps` 진입 본문").
+            lambda.conventions.push(CallingConvention::Cps);
             lambda.conventions.sort_unstable();
             lambda.conventions.dedup();
         }
@@ -535,7 +551,7 @@ impl Instance<'_> {
         ctx: &mut IrContext,
         op: OpRef,
         tables: &mut Tables,
-    ) -> Vec<(String, Vec<Class>)> {
+    ) -> Vec<(String, Vec<Class>, Entry)> {
         let is_func_ref = tribute_control::FuncRef::matches(ctx, op);
         let key = if is_func_ref {
             "value"
@@ -566,35 +582,90 @@ impl Instance<'_> {
                     .map_or(Class::CPS, |row| self.reader.class(ctx, row, op))
             })
             .collect();
-        let name = format!("{callee}{}", class_suffix(&classes));
         if !is_func_ref {
+            // A `become` in a `Cps` flow hands the flow's frame to the
+            // callee's `Cps` entry (`design/cps-effects.md`, "`Cps` 진입
+            // 본문").
+            let cps_flow = tribute_control::TailCall::matches(ctx, op)
+                && tribute_cps::flow_convention(ctx, op).unwrap_or(self.convention)
+                    == CallingConvention::Cps;
+            let entry = if cps_flow {
+                self.entry_for_cps(ctx, definition, positions, &classes)
+            } else {
+                Entry::Row
+            };
+            let name = instance_name(&callee, &classes, entry);
             if name != callee {
                 ctx.op_attrs_mut(op).insert(
                     key,
                     Attribute::SymbolRef(SymbolPath::new([Symbol::new(&name)])),
                 );
             }
-            return vec![(callee, classes)];
+            return vec![(callee, classes, entry)];
         }
-        let table = format!("{name}{TABLE_SUFFIX}");
+        let table = format!(
+            "{}{TABLE_SUFFIX}",
+            instance_name(&callee, &classes, Entry::Row)
+        );
         ctx.op_attrs_mut(op).insert(
             key,
             Attribute::SymbolRef(SymbolPath::new([Symbol::new(&table)])),
         );
-        let targets = self.table_targets(ctx, definition, positions, &classes);
+        let mut targets: Vec<_> = self
+            .table_targets(ctx, definition, positions, &classes)
+            .into_iter()
+            .map(|(convention, classes)| (convention, classes, Entry::Row))
+            .collect();
+        // A table without a `Cps` target enters the `Cps` entry instance of
+        // its strongest target, which a definition with a body has.
+        if let Some((strongest, classes, _)) = targets.last()
+            && *strongest != CallingConvention::Cps
+            && ctx.op_has_regions(definition.op)
+        {
+            let classes = classes.clone();
+            targets.push((CallingConvention::Cps, classes, Entry::Cps));
+        }
         if tables.iter().all(|(known, _)| *known != table) {
             let entries = targets
                 .iter()
-                .map(|(convention, classes)| {
-                    (*convention, format!("{callee}{}", class_suffix(classes)))
+                .map(|(convention, classes, entry)| {
+                    (*convention, instance_name(&callee, classes, *entry))
                 })
                 .collect();
             tables.push((table, entries));
         }
         targets
             .into_iter()
-            .map(|(_, classes)| (callee.clone(), classes))
+            .map(|(_, classes, entry)| (callee.clone(), classes, entry))
             .collect()
+    }
+
+    /// The entry a transfer in a `Cps` flow takes into `definition` with
+    /// `classes`: its `Cps` entry when it has a body and its row determines
+    /// a weaker convention, and otherwise the instance its row determines,
+    /// which is `Cps` itself or has no body.
+    fn entry_for_cps(
+        &self,
+        ctx: &IrContext,
+        definition: &Function,
+        positions: &[u32],
+        classes: &[Class],
+    ) -> Entry {
+        if !ctx.op_has_regions(definition.op) {
+            return Entry::Row;
+        }
+        let params: HashMap<u32, Class> = positions
+            .iter()
+            .copied()
+            .zip(classes.iter().copied())
+            .collect();
+        let row = definition.own_row(ctx, definition.op, |tail| params.contains_key(&tail));
+        let reader = definition.reader(self.reader.requirements, params);
+        if reader.class(ctx, &row, definition.op).bound() == CallingConvention::Cps {
+            Entry::Row
+        } else {
+            Entry::Cps
+        }
     }
 
     /// The targets of the table of `definition` for `classes`, by
@@ -634,13 +705,19 @@ impl Instance<'_> {
 
     /// The convention of a `func_ref` or indirect transfer: the class of the
     /// row of the callable it makes or calls, or its bound when that class is
-    /// an upper bound.
+    /// an upper bound. A `become` in a `Cps` flow enters the value's `Cps`
+    /// entry whatever that class is.
     fn transfer_convention(&self, ctx: &IrContext, op: OpRef) -> Option<CallingConvention> {
         let ty = if tribute_control::FuncRef::matches(ctx, op) {
             ctx.op_result_types(op)[0]
-        } else if tribute_control::CallIndirect::matches(ctx, op)
-            || tribute_control::TailCallIndirect::matches(ctx, op)
-        {
+        } else if tribute_control::CallIndirect::matches(ctx, op) {
+            ctx.value_ty(ctx.op_operands(op)[0])
+        } else if tribute_control::TailCallIndirect::matches(ctx, op) {
+            if tribute_cps::flow_convention(ctx, op).unwrap_or(self.convention)
+                == CallingConvention::Cps
+            {
+                return Some(CallingConvention::Cps);
+            }
             ctx.value_ty(ctx.op_operands(op)[0])
         } else {
             return None;

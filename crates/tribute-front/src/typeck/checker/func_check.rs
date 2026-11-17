@@ -563,14 +563,17 @@ impl<'db> TypeChecker<'db> {
                 substitution.apply(ty)
             })
         });
-        for site in evidence.becomes_with_plan(&checked.evidence_plans) {
-            self.report_type_error(
-                site,
+        for (site, resume) in evidence.becomes_with_plan(&checked.evidence_plans) {
+            let message = if resume {
+                "`become` cannot be used for this `resume`: the resumed computation receives a \
+                 different selection of handlers than the enclosing callable, which must be kept \
+                 until it finishes; resume without `become`"
+            } else {
                 "`become` cannot be used for this call: the callee receives a different \
                  selection of handlers than the enclosing callable, which must be kept until \
                  the callee finishes; call it without `become`"
-                    .to_owned(),
-            );
+            };
+            self.report_type_error(site, message.to_owned());
         }
         for (arm_id, operation) in func_handler_operations {
             checked.handler_operations.insert(

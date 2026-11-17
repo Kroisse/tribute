@@ -3,6 +3,26 @@
 
 use super::*;
 
+/// The parent operation of `op`.
+fn parent_op(ctx: &IrContext, op: OpRef) -> Option<OpRef> {
+    let block = ctx.op(op).parent_block?;
+    ctx.region(ctx.block(block).parent_region?).parent_op
+}
+
+/// Whether `op` is the `tribute_control.yield` that ends the body of a
+/// handle.
+fn is_handle_body_yield(ctx: &IrContext, op: OpRef) -> bool {
+    tribute_control::Yield::matches(ctx, op)
+        && parent_op(ctx, op).is_some_and(|parent| {
+            tribute_control::Handle::from_op(ctx, parent).is_ok_and(|handle| {
+                ctx.op(op)
+                    .parent_block
+                    .and_then(|block| ctx.block(block).parent_region)
+                    == Some(handle.body(ctx))
+            })
+        })
+}
+
 impl Converter<'_> {
     pub(super) fn fresh_helper(&mut self, prefix: &str) -> Symbol {
         let index = self.helper_index;
@@ -16,6 +36,70 @@ impl Converter<'_> {
         ability::Frame::params(answer)
             .intern(self.ctx)
             .as_type_ref()
+    }
+
+    /// The terminator of the flow that the result of `source`, followed by
+    /// `rest`, flows into unchanged: a `return` or `tribute_control.yield`
+    /// that takes the result right after `source`, or the `scf.yield` of an
+    /// arm of a structured operation in tail position (`join`), whose own
+    /// result flows the same way.
+    pub(super) fn flow_exit(
+        &self,
+        source: OpRef,
+        rest: Rest<'_>,
+        join: Option<&TailJoin>,
+    ) -> Option<OpRef> {
+        let &[terminator] = rest.ops.get(rest.start..)? else {
+            return None;
+        };
+        if self.ctx.op_operands(terminator) != self.ctx.op_results(source) {
+            return None;
+        }
+        if tribute_control::Return::matches(self.ctx, terminator)
+            || tribute_control::Yield::matches(self.ctx, terminator)
+        {
+            return Some(terminator);
+        }
+        let join = join?;
+        if !scf::Yield::matches(self.ctx, terminator)
+            || parent_op(self.ctx, terminator) != Some(join.structured)
+        {
+            return None;
+        }
+        let rest = Rest {
+            ops: &join.ops,
+            start: join.start,
+        };
+        self.flow_exit(join.structured, rest, join.outer.as_deref())
+    }
+
+    /// The frame of `flow` when `source`, a handle or a resume without an
+    /// `evidence_plan`, or a call without one that makes the result of a
+    /// handle body, can pass it on instead of a suffix frame: its result
+    /// flows into the flow's terminator unchanged
+    /// (`design/cps-effects.md`, "Frame을 그대로 넘기는 자리").
+    pub(super) fn tail_exit_frame(
+        &self,
+        source: OpRef,
+        rest: Rest<'_>,
+        flow: &Flow,
+    ) -> Option<ValueRef> {
+        if flow.convention != CallingConvention::Cps {
+            return None;
+        }
+        let handle = tribute_control::Handle::matches(self.ctx, source);
+        // A selection is applied again on the resumed path by the layer of
+        // its suffix frame.
+        if !handle && evidence_plan_of(self.ctx, source).is_some() {
+            return None;
+        }
+        let exit = self.flow_exit(source, rest, flow.tail_join.as_deref())?;
+        let passes_frame = handle
+            || tribute_control::Resume::matches(self.ctx, source)
+            || is_handle_body_yield(self.ctx, exit);
+        // The result is the terminator's operand, so its type is the
+        // flow's answer type and the flow's frame takes it.
+        passes_frame.then_some(flow.exit_k).flatten()
     }
 
     /// Build the frame a suffix continuation is entered through. `plan` is

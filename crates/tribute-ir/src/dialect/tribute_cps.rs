@@ -13,7 +13,7 @@
 
 use trunk_ir::IrContext;
 use trunk_ir::attr_kind::{Dict, SymbolRef};
-use trunk_ir::op_flag::{IsolatedFromAbove, Pure, Terminator};
+use trunk_ir::op_flag::{IsolatedFromAbove, OpFlag, Pure, Terminator};
 use trunk_ir::op_interface::CallableExit;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{RegionRef, ValueRef};
@@ -28,6 +28,10 @@ use crate::dialect::tribute_control::{
 
 /// The attribute that holds a `tribute_cps` operation's convention.
 pub const CONVENTION_ATTR: &str = "convention";
+
+/// The attribute of a `Cps` entry instance that names the instance of the
+/// same definition and class arguments its row's convention enters.
+pub const ENTRY_OF_ATTR: &str = "entry_of";
 
 /// The attribute that holds the conventions of a `tribute_cps.lambda`'s
 /// bodies, in body order.
@@ -46,18 +50,33 @@ mod tribute_cps {
     ///
     /// - **Shape:** `tribute_control.func` with a required
     ///   `convention: String`, one of `"direct"`, `"evidence_direct"`, and
-    ///   `"cps"`.
+    ///   `"cps"`, and an optional `entry_of: String`.
     /// - **Format:** that of `tribute_control.func`, with `convention(direct)`,
     ///   `convention(evidence_direct)`, or `convention(cps)` after the row
     ///   (and `inferred`) and before ` attributes {..}`. The concise form
     ///   always writes it and the parser requires it; the printer never
     ///   infers it from the body, and the callable type never writes one.
-    /// - **Meaning:** one class instance of a source function. Class
+    ///   `entry_of` is written in ` attributes {..}`.
+    /// - **Meaning:** one class instance of a source function, identified by
+    ///   its definition, its class arguments, and its entry
+    ///   (`design/cps-effects.md`, "Row 변수의 convention class"). Class
     ///   specialization computes the convention from the row with the
-    ///   instance's classes (`design/cps-effects.md`, "Row와 호출 규약").
+    ///   instance's classes (`design/cps-effects.md`, "Row와 호출 규약"), or
+    ///   declares `Cps` for the `Cps` entry instance of a definition with a
+    ///   body whose row determines a weaker convention
+    ///   (`design/cps-effects.md`, "`Cps` 진입 본문"). Such an instance
+    ///   carries `entry_of`, the name of the instance of the same definition
+    ///   and class arguments that its row's convention enters. That instance
+    ///   need not exist, and `entry_of` is not a symbol reference. The name
+    ///   only tells instances apart; a reader learns the convention from
+    ///   `convention` and the entry from `entry_of`, never from the name.
     ///   The signature, row, and body keep the meaning they have on
-    ///   `tribute_control.func`.
+    ///   `tribute_control.func`; the body of a `Cps` entry instance runs as
+    ///   a `Cps` flow.
     /// - **Verification:** the schema checks the convention keyword.
+    ///   The convention check of class specialization checks that the
+    ///   convention is the one the row and class arguments determine, or
+    ///   `Cps` with `entry_of` when that one is weaker.
     ///   Otherwise as `tribute_control.func`.
     /// - **Ownership and value flow:** as `tribute_control.func`.
     /// - **Symbol:** as `tribute_control.func`.
@@ -77,6 +96,7 @@ mod tribute_cps {
         sym_name: Attr<String>,
         r#type: Attr<TypeOf<S>>,
         convention: Attr<CallingConvention>,
+        entry_of: Option<Attr<String>>,
         row_binders: Option<Attr<[RowBinder]>>,
         row_unions: Option<Attr<[RowUnion]>>,
         #[default(false)] inferred_row: Attr<bool>,
@@ -116,7 +136,11 @@ mod tribute_cps {
     ///   reads each binder it quantifies with the class its uses of that
     ///   class pass, as an upper bound when they pass different ones, and
     ///   its own row's tail, when that tail reads as an upper bound, as an
-    ///   upper bound narrowed to that convention. Calling the value with a
+    ///   upper bound narrowed to that convention. A lambda whose classes
+    ///   give it no `Cps` body has one more, its `Cps` entry body
+    ///   (`design/cps-effects.md`, "`Cps` 진입 본문"), which reads its
+    ///   binders as its strongest other body does and runs as a `Cps` flow.
+    ///   So every lambda has a `cps` body. Calling the value with a
     ///   convention that has a body runs that body; legalization fills the
     ///   other convention entries.
     /// - **Verification:** the verifier checks that the conventions are
@@ -201,8 +225,13 @@ mod tribute_cps {
     ///   directly. When a classless tail makes the instance `Cps` and its
     ///   convention is weaker, the entry is the `func_ref` adapter that
     ///   calls the worker through a value delimiter
-    ///   (`design/cps-effects.md`, 값 delimiter). Legalization fills the
-    ///   other entries by the same rule as a lambda's, once for the table.
+    ///   (`design/cps-effects.md`, 값 delimiter). When the definition has a
+    ///   body and those conventions do not include `Cps`, the `cps` entry
+    ///   is the `Cps` entry instance of the strongest target
+    ///   (`design/cps-effects.md`, "`Cps` 진입 본문"). Legalization fills the
+    ///   other entries by the same rule as a lambda's, once for the table;
+    ///   only the table of a definition without a body has an adapter for
+    ///   `cps`.
     /// - **Verification:** the local verifier checks the attributes and that
     ///   each key of `entries` is a convention keyword. Whole-IR verification checks that each target
     ///   names a `tribute_cps.func` of the table's own module by one name,
@@ -258,10 +287,15 @@ mod tribute_cps {
     ///   `convention: String`.
     /// - **Placement:** as `tribute_control.tail_call`.
     /// - **Meaning:** a proper tail call of the callee's convention entry of
-    ///   `convention`.
+    ///   `convention`. In a `Cps` flow ([`flow_convention`]) `convention` is
+    ///   `Cps` whatever class the callee type reads, so the transfer hands
+    ///   the flow's `ContinuationFrame<R>` to the callee's `Cps` entry, which
+    ///   is a body for every source callable value
+    ///   (`design/tribute-dialects.md`, "Convention entry"). Elsewhere it is
+    ///   the class class specialization reads from the callee type's row.
     /// - **Verification:** the schema checks the convention keyword, and the
-    ///   local verifier that `convention` is not stronger than the enclosing
-    ///   callable's.
+    ///   local verifier that `convention` is `Cps` in a `Cps` flow and not
+    ///   stronger than the flow's convention elsewhere.
     ///   Otherwise as `tribute_control.tail_call_indirect`.
     /// - **Ownership and value flow:** as
     ///   `tribute_control.tail_call_indirect`.
@@ -391,6 +425,42 @@ pub fn convention_at(
     };
     let index = ctx.op_regions(owner).position(|region| region == body)?;
     conventions.get(index).copied()
+}
+
+/// The convention of the flow that runs `op` (`design/cps-effects.md`,
+/// "`Cps` 진입 본문"): `Cps` in the body, the completion, or an `op` arm of a
+/// `tribute_control.handle`, which run in a `Cps` closure or under a value
+/// delimiter, `EvidenceDirect` in an `fn` arm, and otherwise the convention
+/// of the `tribute_cps.lambda` body or `tribute_cps.func` that holds `op`.
+/// `None` when the nearest such callable has no convention yet.
+pub fn flow_convention(ctx: &IrContext, op: trunk_ir::refs::OpRef) -> Option<CallingConvention> {
+    let mut current = op;
+    loop {
+        let region = ctx
+            .op(current)
+            .parent_block
+            .and_then(|block| ctx.block(block).parent_region)?;
+        let parent = ctx.region(region).parent_op?;
+        if let Ok(handle) = tribute_control::Handle::from_op(ctx, parent) {
+            let fn_arm = handle.arm_bindings(ctx).any(|(binding, arm)| {
+                arm == region
+                    && binding
+                        .is_some_and(|binding| binding.kind == tribute_control::OperationKind::Fn)
+            });
+            return Some(if fn_arm {
+                CallingConvention::EvidenceDirect
+            } else {
+                CallingConvention::Cps
+            });
+        }
+        if Lambda::matches(ctx, parent) || SourceFunc::is_set(ctx, parent) {
+            return convention_at(ctx, parent, op);
+        }
+        if SourceLambda::is_set(ctx, parent) {
+            return None;
+        }
+        current = parent;
+    }
 }
 
 /// Replace `op`, a `tribute_control` func, lambda, func_ref, call_indirect,

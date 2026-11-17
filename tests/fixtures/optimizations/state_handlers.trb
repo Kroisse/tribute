@@ -51,6 +51,20 @@ fn run_state_once_more() ->{} Int {
     handle_state_once_more(bump)
 }
 
+// The handles above are in tail position, so their arms continue with the
+// frame their callable received. A handle whose result is used after it in
+// a `Cps` callable continues through a new frame, which its arms and
+// completion share with the closures that capture it.
+fn handled_then_bumped(comp: fn() ->{e, State(Int)} Int) ->{e, State(Int)} Int {
+    let n = handle comp() {
+        do result { result }
+        op State::get() { resume +1 }
+        op State::set(value) { resume Nil }
+    }
+    n + bump()
+}
+
 fn main() ->{Io} Nil {
+    let _ = handle_state(fn() handled_then_bumped(bump))
     print_line(Int::to_string(run_state()))
 }

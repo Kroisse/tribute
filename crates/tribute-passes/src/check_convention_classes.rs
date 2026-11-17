@@ -10,7 +10,7 @@ use std::ops::ControlFlow;
 use itertools::Itertools;
 use rustc_hash::FxHashMap as HashMap;
 use tribute_ir::calling_convention::CallingConvention;
-use tribute_ir::dialect::tribute_control::{FuncSig, Row};
+use tribute_ir::dialect::tribute_control::{self, FuncSig, Row};
 use tribute_ir::dialect::tribute_cps;
 use trunk_ir::SymbolPath;
 use trunk_ir::context::IrContext;
@@ -20,8 +20,8 @@ use trunk_ir::rewrite::Module;
 use trunk_ir::walk::{WalkAction, walk_region};
 
 use crate::convention_classes::{
-    Class, Function, Reader, class_suffix, func_tables, instantiation, requirements,
-    settle_class_variables, split_name,
+    Class, Entry, Function, Reader, func_tables, instance_name, instantiation, key_references,
+    requirements, settle_class_variables, split_name,
 };
 
 /// A place where the IR's rows imply another class than specialization chose.
@@ -76,29 +76,86 @@ pub fn check(ctx: &IrContext, module: Module) -> Vec<Disagreement> {
         .iter()
         .filter_map(|&op| Function::read(ctx, op, &tables))
         .collect();
+    key_references(&mut functions, ctx);
     let positions = settle_class_variables(&mut functions);
+    let mut definitions: HashMap<&str, &Function> = HashMap::default();
+    for function in &functions {
+        definitions
+            .entry(function.base.as_str())
+            .or_insert(function);
+    }
+    let module = Definitions {
+        positions: &positions,
+        requirements: &requirements,
+        tables: &tables,
+        definitions: &definitions,
+    };
     let mut disagreements = Vec::new();
     for function in &functions {
-        Instance::new(
-            ctx,
-            function,
-            &positions,
-            &requirements,
-            &tables,
-            &mut disagreements,
-        )
-        .check(&mut disagreements);
+        Instance::new(ctx, function, module, &mut disagreements).check(&mut disagreements);
     }
+    check_cps_targets(ctx, &functions, &tables, &mut disagreements);
     disagreements
+}
+
+/// A function table of a definition with a body has a `cps` target, the
+/// `Cps` entry instance of its strongest target when no other target is
+/// `Cps` (`design/tribute-dialects.md`, "Convention entry", 함수 참조).
+fn check_cps_targets(
+    ctx: &IrContext,
+    functions: &[Function],
+    tables: &HashMap<String, OpRef>,
+    disagreements: &mut Vec<Disagreement>,
+) {
+    let by_name: HashMap<&str, &Function> = functions
+        .iter()
+        .map(|function| (function.name.as_str(), function))
+        .collect();
+    for (name, &table) in tables.iter().sorted_by_key(|(name, _)| name.as_str()) {
+        let Some(entries) = tribute_cps::table_entries(ctx, table) else {
+            continue;
+        };
+        let has_body = entries.iter().any(|(_, target)| {
+            target
+                .leaf()
+                .and_then(|leaf| by_name.get(leaf.as_str()))
+                .is_some_and(|function| ctx.op_has_regions(function.op))
+        });
+        let has_cps = entries
+            .iter()
+            .any(|&(convention, _)| convention == CallingConvention::Cps);
+        if has_body && !has_cps {
+            disagreements.push(Disagreement {
+                op: table,
+                rule: "table",
+                message: format!(
+                    "function table {name} of a definition with a body has no cps target"
+                ),
+            });
+        }
+    }
+}
+
+/// What the instances of a module share: the class variables and an
+/// instance of each definition, the requirements of its abilities, and its
+/// function tables.
+#[derive(Clone, Copy)]
+struct Definitions<'a> {
+    positions: &'a HashMap<String, Vec<u32>>,
+    requirements: &'a HashMap<SymbolPath, CallingConvention>,
+    /// The module's function tables, by name.
+    tables: &'a HashMap<String, OpRef>,
+    /// An instance of each definition, by its base name.
+    definitions: &'a HashMap<&'a str, &'a Function>,
 }
 
 /// One function instance with the classes its name fixes.
 struct Instance<'a> {
     ctx: &'a IrContext,
     function: &'a Function,
-    positions: &'a HashMap<String, Vec<u32>>,
-    /// The module's function tables, by name.
-    tables: &'a HashMap<String, OpRef>,
+    module: Definitions<'a>,
+    /// The classes of its class variables.
+    classes: Vec<Class>,
     reader: Reader<'a>,
 }
 
@@ -106,11 +163,10 @@ impl<'a> Instance<'a> {
     fn new(
         ctx: &'a IrContext,
         function: &'a Function,
-        positions: &'a HashMap<String, Vec<u32>>,
-        requirements: &'a HashMap<SymbolPath, CallingConvention>,
-        tables: &'a HashMap<String, OpRef>,
+        module: Definitions<'a>,
         disagreements: &mut Vec<Disagreement>,
     ) -> Self {
+        let positions = module.positions;
         let variables = positions.get(&function.base).map_or(&[][..], Vec::as_slice);
         if function.selected != variables {
             disagreements.push(Disagreement {
@@ -146,8 +202,12 @@ impl<'a> Instance<'a> {
             }
         };
         let mut reader = function.reader(
-            requirements,
-            variables.iter().copied().zip(claimed).collect(),
+            module.requirements,
+            variables
+                .iter()
+                .copied()
+                .zip(claimed.iter().copied())
+                .collect(),
         );
         if let Some(body) = ctx.op_region(function.op, 0) {
             reader.settle_locals(ctx, body);
@@ -155,10 +215,15 @@ impl<'a> Instance<'a> {
         Self {
             ctx,
             function,
-            positions,
-            tables,
+            module,
+            classes: claimed,
             reader,
         }
+    }
+
+    /// The convention of the flow that runs `op` in this instance.
+    fn flow(&self, op: OpRef) -> Option<CallingConvention> {
+        tribute_cps::flow_convention(self.ctx, op)
     }
 
     /// The class a row requires at `at` inside this instance.
@@ -177,33 +242,53 @@ impl<'a> Instance<'a> {
         self.check_body(disagreements);
     }
 
-    /// A definition's own convention is the class of its own row.
+    /// A definition's own convention is the class of its own row, and a
+    /// `Cps` entry instance's is `Cps` while its row's is weaker
+    /// (`design/cps-effects.md`, "`Cps` 진입 본문").
     fn check_own_convention(&self, disagreements: &mut Vec<Disagreement>) {
         let row = self.function.own_row(self.ctx, self.function.op, |tail| {
             self.reader.params.contains_key(&tail)
         });
-        let expected = self.class(&row, self.function.op).bound();
+        let implied = self.class(&row, self.function.op).bound();
         let actual = tribute_cps::declared_convention(self.ctx, self.function.op);
+        let (expected, message) = match self.function.entry {
+            Entry::Row => (implied, "its row implies"),
+            Entry::Cps => (CallingConvention::Cps, "as a Cps entry instance it needs"),
+        };
         if Some(expected) != actual {
             disagreements.push(Disagreement {
                 op: self.function.op,
                 rule: "own",
                 message: format!(
-                    "{} has convention {actual:?}, its row implies {expected:?}",
+                    "{} has convention {actual:?}, {message} {expected:?}",
                     self.function.name
                 ),
             });
         }
+        if self.function.entry == Entry::Cps {
+            let name = instance_name(&self.function.base, &self.classes, Entry::Cps);
+            if implied == CallingConvention::Cps || name != self.function.name {
+                disagreements.push(Disagreement {
+                    op: self.function.op,
+                    rule: "entry",
+                    message: format!(
+                        "{} is a Cps entry instance named {name} whose row implies {implied:?}",
+                        self.function.name
+                    ),
+                });
+            }
+        }
     }
 
     /// A reference names the instance of its callee for the classes of the
-    /// rows it passes for the callee's class variables.
+    /// rows it passes for the callee's class variables. A `become` in a `Cps`
+    /// flow names the callee's `Cps` entry instance when the callee has a
+    /// body and its row implies a weaker convention.
     fn check_references(&self, disagreements: &mut Vec<Disagreement>) {
         for reference in &self.function.references {
-            let (callee, _) = split_name(&reference.callee);
-            let classes: Vec<_> = self
-                .positions
-                .get(callee)
+            let (callee, _) = split_name(&reference.key);
+            let positions = self.module.positions.get(callee);
+            let classes: Vec<_> = positions
                 .into_iter()
                 .flatten()
                 .map(|&position| {
@@ -213,7 +298,29 @@ impl<'a> Instance<'a> {
                         .map_or(Class::CPS, |row| self.class(row, reference.op))
                 })
                 .collect();
-            let expected = format!("{callee}{}", class_suffix(&classes));
+            let cps_flow = tribute_control::TailCall::matches(self.ctx, reference.op)
+                && self.flow(reference.op) == Some(CallingConvention::Cps);
+            let entry = match self.module.definitions.get(callee) {
+                Some(definition) if cps_flow && self.ctx.op_has_regions(definition.op) => {
+                    let params: HashMap<u32, Class> = positions
+                        .into_iter()
+                        .flatten()
+                        .copied()
+                        .zip(classes.iter().copied())
+                        .collect();
+                    let row = definition
+                        .own_row(self.ctx, definition.op, |tail| params.contains_key(&tail));
+                    let reader = definition.reader(self.module.requirements, params);
+                    if reader.class(self.ctx, &row, definition.op).bound() == CallingConvention::Cps
+                    {
+                        Entry::Row
+                    } else {
+                        Entry::Cps
+                    }
+                }
+                _ => Entry::Row,
+            };
+            let expected = instance_name(callee, &classes, entry);
             if expected != reference.callee {
                 disagreements.push(Disagreement {
                     op: reference.op,
@@ -260,12 +367,20 @@ impl<'a> Instance<'a> {
             ControlFlow::Continue(WalkAction::Advance)
         });
         for lambda in lambdas {
-            let expected: Vec<_> = match selections.get(&lambda) {
-                Some(selected) => selected.iter().copied().sorted().dedup().collect(),
+            let selected: Vec<_> = match selections.get(&lambda) {
+                Some(selected) => selected.clone(),
                 None => FuncSig::from_type_ref(self.ctx, self.ctx.op_result_types(lambda)[0])
                     .map(|signature| self.conventions(&signature.row(self.ctx), lambda))
                     .unwrap_or_default(),
             };
+            // Every lambda has a `Cps` body, its `Cps` entry body when its
+            // uses select none.
+            let expected: Vec<_> = selected
+                .into_iter()
+                .chain([CallingConvention::Cps])
+                .sorted()
+                .dedup()
+                .collect();
             let actual = tribute_cps::body_conventions(self.ctx, lambda);
             if actual.as_ref() != Some(&expected) {
                 disagreements.push(Disagreement {
@@ -293,7 +408,7 @@ impl<'a> Instance<'a> {
         let weakest = tribute_cps::FuncRef::from_op(self.ctx, op)
             .ok()
             .and_then(|reference| reference.value(self.ctx).as_simple().cloned())
-            .and_then(|name| self.tables.get(name.as_str()))
+            .and_then(|name| self.module.tables.get(name.as_str()))
             .and_then(|&table| tribute_cps::table_entries(self.ctx, table))
             .and_then(|entries| entries.first().map(|&(convention, _)| convention));
         if weakest.is_none_or(|weakest| weakest > expected) {
@@ -318,7 +433,14 @@ impl<'a> Instance<'a> {
         let Some(signature) = FuncSig::from_type_ref(self.ctx, callable) else {
             return;
         };
-        let expected = self.class(&signature.row(self.ctx), op).bound();
+        // A `become` in a `Cps` flow enters the value's `Cps` entry.
+        let expected = if tribute_cps::TailCallIndirect::matches(self.ctx, op)
+            && self.flow(op) == Some(CallingConvention::Cps)
+        {
+            CallingConvention::Cps
+        } else {
+            self.class(&signature.row(self.ctx), op).bound()
+        };
         let actual = tribute_cps::declared_convention(self.ctx, op);
         if actual != Some(expected) {
             disagreements.push(Disagreement {

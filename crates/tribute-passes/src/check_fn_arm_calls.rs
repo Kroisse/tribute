@@ -26,7 +26,8 @@ use trunk_ir::types::Location;
 use trunk_ir::walk::{WalkAction, walk_region};
 
 use crate::convention_classes::{
-    Class, Function, Reader, func_tables, reference_callee, requirements, settle_class_variables,
+    Class, Function, Reader, func_tables, key_references, reference_callee, requirements,
+    settle_class_variables,
 };
 use crate::unreferenced_source_functions::source_dce_config;
 
@@ -102,6 +103,7 @@ pub fn check(ctx: &IrContext, module: Module) -> Vec<FnArmCall> {
         .iter()
         .filter_map(|&op| Function::read(ctx, op, &tables))
         .collect();
+    key_references(&mut functions, ctx);
     let positions = settle_class_variables(&mut functions);
     let by_name: HashMap<&str, &Function> =
         functions.iter().map(|f| (f.name.as_str(), f)).collect();

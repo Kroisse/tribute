@@ -153,11 +153,18 @@ fn op_is_within_region(ctx: &IrContext, op: OpRef, target: RegionRef) -> bool {
     false
 }
 
+/// Whether `op`, a direct call or a source tail call, calls the source
+/// function that encloses it: the same definition with the same class
+/// arguments, through either of its entries.
 pub(super) fn direct_call_reenters_enclosing_func(ctx: &IrContext, op: OpRef) -> bool {
-    if !Call::matches(ctx, op) {
+    if !Call::matches(ctx, op) && !TailCall::matches(ctx, op) {
         return false;
     }
-    let Some(callee) = ctx.op_attrs(op).get_symbol_ref("callee") else {
+    let Some(callee) = ctx
+        .op_attrs(op)
+        .get_symbol_ref("callee")
+        .and_then(|callee| callee.as_simple())
+    else {
         return false;
     };
     let mut owner = parent_op(ctx, op);
@@ -165,16 +172,38 @@ pub(super) fn direct_call_reenters_enclosing_func(ctx: &IrContext, op: OpRef) ->
         if SourceFunc::is_set(ctx, current) {
             // The call is looked up in the module enclosing the function,
             // where the function is a symbol under its own name.
-            return parent_op(ctx, current)
-                .is_some_and(|module| trunk_ir::dialect::core::Module::matches(ctx, module))
-                && ctx
-                    .op_attrs(current)
-                    .get_str("sym_name")
-                    .is_some_and(|name| *callee == [name]);
+            let Some(module) = parent_op(ctx, current)
+                .filter(|&module| trunk_ir::dialect::core::Module::matches(ctx, module))
+            else {
+                return false;
+            };
+            let Some(module) = trunk_ir::dialect::core::Module::from_op(ctx, module)
+                .ok()
+                .map(Module::from)
+            else {
+                return false;
+            };
+            let target = module.ops(ctx).iter().copied().find(|&candidate| {
+                SourceFunc::is_set(ctx, candidate)
+                    && ctx.op_attrs(candidate).get_str("sym_name") == Some(callee.as_str())
+            });
+            return target.is_some_and(|target| {
+                instance_key_name(ctx, target).is_some()
+                    && instance_key_name(ctx, target) == instance_key_name(ctx, current)
+            });
         }
         owner = parent_op(ctx, current);
     }
     false
+}
+
+/// The name that stands for a function instance's definition and class
+/// arguments: the `entry_of` of a `Cps` entry instance, or its own name.
+fn instance_key_name(ctx: &IrContext, func: OpRef) -> Option<&str> {
+    let attrs = ctx.op_attrs(func);
+    attrs
+        .get_str(tribute_cps::ENTRY_OF_ATTR)
+        .or_else(|| attrs.get_str("sym_name"))
 }
 
 fn validate_affine_lambda_carrier(
@@ -223,9 +252,10 @@ fn validate_affine_lambda_carrier(
         }
         if (SourceCallIndirect::is_set(ctx, use_.user) && use_.operand_index == 0)
             // A carrier may be passed to the enclosing source
-            // function's recursive logical call (for example
-            // `run_state(fn() { resume value }, value)`). Other direct calls
-            // are rejected: their parameter ownership is not yet proven.
+            // function's recursive logical call or source tail call (for
+            // example `become run_state(fn() { resume value }, value)`).
+            // Other calls and tail transfers are rejected: their parameter
+            // ownership is not yet proven.
             || direct_call_reenters_enclosing_func(ctx, use_.user)
         {
             terminals.push(use_.user);

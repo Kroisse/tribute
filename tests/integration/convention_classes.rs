@@ -179,9 +179,13 @@ fn main() -> Nil {}
             .contains(&format!("(%0: {}, ", without_row(callback_ty))),
         "the fresh function reference must have apply's callback type, up to its row:\n{ir}"
     );
-    // The value enters `double` directly; an adapter fills the `Cps` slot
-    // that `apply` calls.
-    assert_eq!(table_conventions(&ir, "pkg::double$8"), ["direct"]);
+    // The value enters `double` directly, and its `Cps` slot, which `apply`
+    // calls, enters the `Cps` entry instance of `double`.
+    assert_eq!(table_conventions(&ir, "pkg::double$8"), ["cps", "direct"]);
+    assert!(
+        named_function_header(&ir, "double$7").contains("convention(cps)"),
+        "the Cps entry instance of double declares Cps:\n{ir}"
+    );
     assert!(
         named_function_header(&ir, "double").contains("convention(direct)"),
         "the original named worker must remain Direct:\n{ir}"
@@ -213,7 +217,7 @@ fn main() -> Nil {}
     let reference_values = refs.iter().map(|line| value_name(line)).collect::<Vec<_>>();
     assert_ne!(reference_values[0], reference_values[1]);
     // Both references share the table of the one instance they name.
-    assert_eq!(table_conventions(&ir, "pkg::double$8"), ["direct"]);
+    assert_eq!(table_conventions(&ir, "pkg::double$8"), ["cps", "direct"]);
     for value in reference_values {
         assert_not_cast(logical_function(&ir, "forward"), value);
     }
@@ -728,7 +732,9 @@ fn main() -> Nil {{}}
 #[salsa_test]
 fn caller_of_a_cps_worker_keeps_the_convention_of_its_row(db: &salsa::DatabaseImpl) {
     // `g` quantifies its row, and `entry` instantiates it only at the pure
-    // row, so `g` and the callback it passes to `app$9D` are Direct.
+    // row, so `g` and the callback it passes to `app$9D` are Direct. The
+    // `Cps` entry body of `g` copies the callback, which reads as in its
+    // `direct` body.
     let source = SourceCst::from_source_str(
         db,
         "original_cps_lambda.trb",
@@ -746,7 +752,11 @@ fn main() -> Nil {}
     let header = entry.lines().next().expect("a function has a header");
     let lambdas = lambda_headers(entry);
     assert!(!header.contains("convention(cps)"), "{ir}");
-    assert_eq!(lambdas.len(), 2, "{ir}");
+    assert_eq!(lambdas.len(), 3, "{ir}");
+    assert!(
+        entry.matches("call @\"pkg::app$Int$9D\"(").count() == 2,
+        "both bodies of g call the Direct instance of app:\n{ir}"
+    );
     assert!(
         lambdas.iter().all(|line| line.ends_with(" direct {")),
         "{ir}"

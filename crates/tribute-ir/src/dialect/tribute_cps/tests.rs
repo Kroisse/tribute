@@ -192,7 +192,7 @@ fn a_module_holds_one_form_of_its_callables() {
 }
 
 #[test]
-fn an_indirect_tail_call_is_not_stronger_than_its_callable() {
+fn an_indirect_tail_call_is_not_stronger_than_its_flow() {
     let errors = messages(
         r#"core.module @test {
   tribute_cps.func @f(%k: tribute_control.func_sig<() -> core.i32>) -> core.i32 convention(direct) {
@@ -203,7 +203,43 @@ fn an_indirect_tail_call_is_not_stronger_than_its_callable() {
     );
     assert_eq!(
         errors,
-        ["callee convention must not be stronger than the enclosing callable"]
+        ["callee convention must not be stronger than the flow that holds the transfer"]
+    );
+}
+
+/// A tail transfer in a `Cps` flow enters its callee as `Cps`: the arms of
+/// a handle in a `Direct` callable are one (`design/tribute-dialects.md`,
+/// "Convention과 class 특수화").
+#[test]
+fn a_tail_transfer_in_a_cps_flow_enters_its_callee_as_cps() {
+    let module = |convention: &str, callee: &str| {
+        format!(
+            r#"core.module @test {{
+  ability.decl @Ctl {{
+    ability.operation {{kind = "op", op_name = "ctl", param_types = [], result_type = core.i32}}
+  }}
+  tribute_cps.func @g(%x: core.i32) -> core.i32 convention({callee}) {{
+    tribute_control.return %x
+  }}
+  tribute_cps.func @f(%x: core.i32, %k: tribute_control.func_sig<(core.i32) -> core.i32>) -> core.i32 convention(direct) {{
+    %r = tribute_control.handle : core.i32 {{
+      %c = tribute_control.perform op @Ctl @ctl() : () -> core.i32
+      tribute_control.yield %c
+    }} do(%v: core.i32) {{
+        tribute_cps.tail_call_indirect %k(%v) attributes {{convention = "{convention}"}} : (core.i32) -> core.i32
+    }} op @Ctl @ctl() : core.i32 {{
+        tribute_control.tail_call @g(%x) : (core.i32) -> ()
+    }}
+    tribute_control.return %r
+  }}
+}}
+"#
+        )
+    };
+    assert_eq!(messages(&module("cps", "cps")), Vec::<String>::new());
+    assert_eq!(
+        messages(&module("direct", "direct")),
+        ["a tail transfer in a Cps flow must enter its callee as Cps"; 2]
     );
 }
 
@@ -326,7 +362,7 @@ fn every_body_takes_the_parameters_and_its_own_convention() {
     assert!(
         messages(&stronger)
             .iter()
-            .any(|message| message.contains("must not be stronger than the enclosing callable")),
+            .any(|message| message.contains("must not be stronger than the flow")),
         "{:?}",
         messages(&stronger)
     );

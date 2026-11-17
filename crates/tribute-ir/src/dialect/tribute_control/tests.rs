@@ -1904,6 +1904,58 @@ fn assert_single_carrier_escape(result: &ValidationResult) {
     );
 }
 
+/// A carrier may be passed to a source tail call of the enclosing function
+/// as to its recursive call, including the transfer that enters the
+/// function's `Cps` entry instance, which names the instance it enters
+/// for in `entry_of`. A tail transfer to another function or to a callable
+/// value lets it escape, as a call does.
+#[test]
+fn whole_ir_allows_a_carrier_in_a_tail_call_of_the_enclosing_function() {
+    let validate = |tail: &str| {
+        let (ctx, module) = parse_fixture(&format!(
+            r#"core.module @test {{
+  tribute_cps.func @other(%k: tribute_control.func_sig<() -> core.i32>) -> core.i32 convention(cps) {{
+    %r = tribute_cps.call_indirect %k() attributes {{convention = "cps"}} : () -> core.i32
+    tribute_control.return %r
+  }}
+  tribute_cps.func @"run$7"(%k: tribute_control.func_sig<() -> core.i32>) -> core.i32 convention(cps) attributes {{entry_of = "run"}} {{
+    %r = tribute_cps.call_indirect %k() attributes {{convention = "cps"}} : () -> core.i32
+    tribute_control.return %r
+  }}
+  tribute_cps.func @run(%k: tribute_control.func_sig<() -> core.i32>) -> core.i32 convention(direct) {{
+    %handled = tribute_control.handle : core.i32 {{
+      %body = arith.constant 0 : core.i32
+      tribute_control.yield %body
+    }} do(%value: core.i32) {{
+        tribute_control.yield %value
+    }} op @State @get(%argument: core.i32) : core.i32 {{
+        %carrier = tribute_cps.lambda() -> core.i32 entries {{
+          cps {{
+            %resumed = tribute_control.resume %argument : core.i32 -> core.i32
+            tribute_control.return %resumed
+          }}
+        }}
+        {tail}
+    }}
+    tribute_control.return %handled
+  }}
+}}"#
+        ));
+        validate_whole_ir(&ctx, module, &[])
+    };
+    let own = validate(
+        r#"tribute_control.tail_call @"run$7"(%carrier) : (tribute_control.func_sig<() -> core.i32>) -> ()"#,
+    );
+    assert!(!messages(&own).contains("resumption carrier"), "{own}");
+    assert_single_carrier_escape(&validate(
+        "tribute_control.tail_call @other(%carrier) : (tribute_control.func_sig<() -> core.i32>) -> ()",
+    ));
+    assert_single_carrier_escape(&validate(
+        r#"%other = tribute_cps.func_ref @"other$8" : tribute_control.func_sig<(tribute_control.func_sig<() -> core.i32>) -> core.i32>
+        tribute_cps.tail_call_indirect %other(%carrier) attributes {convention = "cps"} : (tribute_control.func_sig<() -> core.i32>) -> core.i32"#,
+    ));
+}
+
 /// A lambda that closes over a carrier and calls it once is its one path.
 #[test]
 fn whole_ir_allows_a_carrier_called_once_inside_a_lambda() {
@@ -2388,6 +2440,85 @@ fn tail_call_arms_must_belong_to_a_one_result_if_or_switch_in_tail_position() {
     tribute_control.return %value"#,
     );
     assert!(loop_arm.contains("tail position"), "{loop_arm}");
+}
+
+/// A handle in tail position makes its completion and `op` arms tail
+/// positions; its body, its `fn` arms, and the arms of a handle whose result
+/// does not flow straight into the callable's `return` are not.
+#[test]
+fn tail_calls_end_the_completion_and_op_arms_of_a_tail_handle() {
+    let validate = |completion: &str, op_arm: &str, after: &str| {
+        let (ctx, module) = parse_fixture(&format!(
+            r#"core.module @test {{
+  ability.decl @Ctl {{
+    ability.operation {{kind = "op", op_name = "ctl", param_types = [], result_type = core.i32}}
+    ability.operation {{kind = "fn", op_name = "peek", param_types = [], result_type = core.i32}}
+  }}
+  tribute_control.func @f(%n: core.i32) -> core.i32 {{
+    tribute_control.return %n
+  }}
+  tribute_control.func @g(%n: core.i32) -> core.i32 {{
+    %r = tribute_control.handle : core.i32 {{
+      %c = tribute_control.perform op @Ctl @ctl() : () -> core.i32
+      tribute_control.yield %c
+    }} do(%v: core.i32) {{
+        {completion}
+    }} op @Ctl @ctl() : core.i32 {{
+        {op_arm}
+    }} fn @Ctl @peek() : core.i32 {{
+        tribute_control.yield %n
+    }}
+{after}
+  }}
+}}"#
+        ));
+        messages(&validate_local(&ctx, module))
+    };
+    let tail = "tribute_control.tail_call @f(%n) : (core.i32) -> ()";
+    let yield_n = "tribute_control.yield %n";
+    let ret = "    tribute_control.return %r";
+    assert_eq!(validate(tail, tail, ret), "");
+    let not_tail = validate(
+        tail,
+        yield_n,
+        "    %s = arith.addi %r, %n : core.i32\n    tribute_control.return %s",
+    );
+    assert!(not_tail.contains("tail position"), "{not_tail}");
+    let cast = validate(
+        yield_n,
+        tail,
+        "    %s = core.unrealized_conversion_cast %r : core.i32 to core.i32\n    tribute_control.return %s",
+    );
+    assert!(cast.contains("tail position"), "{cast}");
+
+    let in_body_or_fn_arm = |body: &str, fn_arm: &str| {
+        let (ctx, module) = parse_fixture(&format!(
+            r#"core.module @test {{
+  ability.decl @Ctl {{
+    ability.operation {{kind = "fn", op_name = "peek", param_types = [], result_type = core.i32}}
+  }}
+  tribute_control.func @f(%n: core.i32) -> core.i32 {{
+    tribute_control.return %n
+  }}
+  tribute_control.func @g(%n: core.i32) -> core.i32 {{
+    %r = tribute_control.handle : core.i32 {{
+      {body}
+    }} do(%v: core.i32) {{
+        tribute_control.yield %v
+    }} fn @Ctl @peek() : core.i32 {{
+        {fn_arm}
+    }}
+    tribute_control.return %r
+  }}
+}}"#
+        ));
+        messages(&validate_local(&ctx, module))
+    };
+    let handle_arm = "must not be inside a tribute_control.handle body or fn arm";
+    let body = in_body_or_fn_arm(tail, yield_n);
+    assert!(body.contains(handle_arm), "{body}");
+    let fn_arm = in_body_or_fn_arm(yield_n, tail);
+    assert!(fn_arm.contains(handle_arm), "{fn_arm}");
 }
 
 #[test]

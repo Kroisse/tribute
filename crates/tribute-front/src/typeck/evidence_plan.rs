@@ -176,24 +176,29 @@ impl<'db> EvidenceTracker<'db> {
         }
     }
 
-    /// Record that `call` is the operand of the `become` expression `site`.
-    pub(crate) fn record_become(&mut self, site: NodeId, call: NodeId) {
-        if !self.becomes.contains(&(site, call)) {
-            self.becomes.push((site, call));
+    /// Record that `operand`, a call or a `resume`, is the operand of the
+    /// `become` expression `site`.
+    pub(crate) fn record_become(&mut self, site: NodeId, operand: NodeId) {
+        if !self.becomes.contains(&(site, operand)) {
+            self.becomes.push((site, operand));
         }
     }
 
-    /// The `become` nodes whose call has a selection in `plans`: the callee
-    /// receives evidence other than the caller's own, which a tail call has no
-    /// frame to restore.
+    /// The `become` nodes whose call or `resume` has a selection in `plans`,
+    /// each with whether its operand is a `resume`: the callee or resumed
+    /// computation receives evidence other than the caller's own, which a
+    /// transfer of the caller's frame has no frame to restore.
     pub(crate) fn becomes_with_plan(
         &self,
         plans: &HashMap<NodeId, Vec<EvidenceStep<'db>>>,
-    ) -> Vec<NodeId> {
+    ) -> Vec<(NodeId, bool)> {
         self.becomes
             .iter()
-            .filter(|(_, call)| plans.contains_key(call))
-            .map(|(site, _)| *site)
+            .filter(|(_, operand)| plans.contains_key(operand))
+            .map(|(site, operand)| {
+                let resume = matches!(self.sites.get(operand), Some(EvidenceSite::Resume { .. }));
+                (*site, resume)
+            })
             .collect()
     }
 
