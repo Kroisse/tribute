@@ -82,8 +82,8 @@ struct Converter<'a> {
     /// conversion moves anything.
     targets: HashMap<OpRef, OpRef>,
     /// The `Cps` entry instance each source function declares in
-    /// `cps_entry`, and the reference to it.
-    cps_entries: HashMap<OpRef, (OpRef, SymbolPath)>,
+    /// `cps_entry`, and its name in the function's module.
+    cps_entries: HashMap<OpRef, (OpRef, Symbol)>,
     /// The table each `func_ref` names, resolved the same way.
     func_tables: HashMap<OpRef, FuncTable>,
     /// The convention entries built for each table and closure type.
@@ -430,7 +430,7 @@ fn is_source_logical(ctx: &IrContext, op: OpRef) -> bool {
 struct CallableGraph {
     funcs: HashMap<OpRef, CallableInfo>,
     targets: HashMap<OpRef, OpRef>,
-    cps_entries: HashMap<OpRef, (OpRef, SymbolPath)>,
+    cps_entries: HashMap<OpRef, (OpRef, Symbol)>,
     func_tables: HashMap<OpRef, FuncTable>,
 }
 
@@ -508,12 +508,13 @@ fn collect_callable_graph(ctx: &IrContext, module: Module, symbols: &SymbolTable
         // Only the `Cps` entry instance of `op` is entered in its place.
         if funcs.contains_key(&op)
             && let Some(reference) = attributes.get_symbol_ref(tribute_cps::CPS_ENTRY_ATTR)
+            && let Some(name) = reference.as_simple()
             && let Some(entry) = callable(Some(reference))
             && funcs[&entry].convention == CallingConvention::Cps
             && ctx.op_attrs(entry).get_str(tribute_cps::ENTRY_OF_ATTR)
                 == attributes.get_str("sym_name")
         {
-            cps_entries.insert(op, (entry, reference.clone()));
+            cps_entries.insert(op, (entry, name.clone()));
         }
         ControlFlow::Continue(WalkAction::Advance)
     });

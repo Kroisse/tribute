@@ -652,9 +652,12 @@ impl Converter<'_> {
             && named.convention != CallingConvention::Cps)
             .then(|| self.cps_entries.get(&callee).cloned())
             .flatten();
+        // The entry is a definition of the callee's module, so the transfer
+        // reaches it as it reaches the callee.
+        let written = self.written_callee(source);
         let (target_symbol, target) = match cps_entry {
-            Some((entry, symbol)) => (symbol, self.funcs[&entry].clone()),
-            None => (self.written_callee(source), named),
+            Some((entry, name)) => (written.sibling(name), self.funcs[&entry].clone()),
+            None => (written, named),
         };
         let source_args = self
             .ctx

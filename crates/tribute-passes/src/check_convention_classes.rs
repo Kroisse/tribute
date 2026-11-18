@@ -75,21 +75,25 @@ fn check_cps_entries(
     functions: &[Function],
     disagreements: &mut Vec<Disagreement>,
 ) {
+    let mut entries: HashMap<&str, &str> = HashMap::default();
+    for entry in functions {
+        if entry.entry == Entry::Cps
+            && let Some(instance) = instance_key_name(ctx, entry.op)
+        {
+            entries.entry(instance).or_insert(entry.name.as_str());
+        }
+    }
     for function in functions {
-        let expected = functions
-            .iter()
-            .find(|entry| {
-                entry.entry == Entry::Cps
-                    && instance_key_name(ctx, entry.op) == Some(function.name.as_str())
-            })
-            .filter(|_| function.entry == Entry::Row)
-            .map(|entry| entry.name.clone());
+        let expected = entries
+            .get(function.name.as_str())
+            .copied()
+            .filter(|_| function.entry == Entry::Row);
         let declared = ctx
             .op_attrs(function.op)
             .get_symbol_ref(tribute_cps::CPS_ENTRY_ATTR);
         let agrees = match (declared, &expected) {
             (None, None) => true,
-            (Some(declared), Some(expected)) => *declared == [expected.as_str()],
+            (Some(declared), Some(expected)) => *declared == [*expected],
             _ => false,
         };
         if !agrees {

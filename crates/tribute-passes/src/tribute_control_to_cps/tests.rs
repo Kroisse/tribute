@@ -3642,6 +3642,65 @@ fn a_cps_entry_lambda_converts_its_body_twice_and_its_nested_lambda_once() {
     assert_eq!(first[0][0], ["outer::__lambda_0"], "{printed}");
 }
 
+/// A `Cps` entry's tail call to a callee in a nested module keeps the module
+/// prefix of the written path and replaces only its last component.
+#[test]
+fn a_cps_entry_tail_call_to_a_nested_module_callee_keeps_its_module_prefix() {
+    let (mut ctx, module) = parse(
+        r#"core.module @test {
+  core.module @inner {
+    tribute_cps.func @callee(%x: core.i32) -> core.i32 convention(direct) attributes {cps_entry = @"callee$7"} {
+      tribute_control.return %x
+    }
+    tribute_cps.func @"callee$7"(%x: core.i32) -> core.i32 convention(cps) attributes {entry_of = "callee"} {
+      tribute_control.return %x
+    }
+  }
+  tribute_cps.func @outer(%first: core.i32) -> core.i32 convention(direct) {
+    %f = tribute_cps.lambda(%a: core.i32) -> core.i32 attributes {cps_entry = true} entries {
+      direct {
+        tribute_control.tail_call @inner::@callee(%a) : (core.i32) -> ()
+      }
+    }
+    tribute_control.return %first
+  }
+}"#,
+    );
+    tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default()).unwrap();
+    let printed = module.op().display(&ctx).to_string();
+
+    let tail_of = |name: &str| {
+        let function = function_named(&ctx, module, name);
+        let mut tails = Vec::new();
+        let _ = trunk_ir::walk::walk_op::<()>(&ctx, function.op_ref(), &mut |op| {
+            if let Ok(tail) = func::TailCall::from_op(&ctx, op) {
+                tails.push((
+                    tail.callee(&ctx).clone(),
+                    DynConventionBearing::of(&ctx, op),
+                ));
+            }
+            std::ops::ControlFlow::Continue(trunk_ir::walk::WalkAction::Advance)
+        });
+        tails
+    };
+    assert_eq!(
+        tail_of("outer::__lambda_0"),
+        [(
+            SymbolPath::new(["inner", "callee"]),
+            Some(CallingConvention::Direct)
+        )],
+        "{printed}"
+    );
+    assert_eq!(
+        tail_of("outer::__lambda_1"),
+        [(
+            SymbolPath::new(["inner", "callee$7"]),
+            Some(CallingConvention::Cps)
+        )],
+        "{printed}"
+    );
+}
+
 /// A `tribute_control.tail_call` in the own flow of a `cps_entry` lambda's
 /// body that names a weaker callee with a body and no `cps_entry` has no
 /// `Cps` instance to enter, so legalization fails.
