@@ -1225,9 +1225,9 @@ Object는 두 종류다. `heap.box`가 가리키는 object는 만든 뒤 내용�
 - 갱신: `heap.struct_update`, `heap.array_set`. 같은 이름의 `adt` 갱신처럼 필드나 원소
   하나를 바꾼 새 값을 내며, source box를 소비하고 결과 box를 낸다. 소비한 box가 object의
   유일한 참조이면 lowering은 그 object를 제자리에서 고쳐 결과로 쓰고, 아니면 새 object를
-  만든다. 유일성은 ownership 계획이 정적으로 증명하거나 실행 때 refcount로 확인한다.
-  어느 쪽이든 다른 참조가 보는 object는 바뀌지 않으므로, 제자리 갱신은 의미가 아니라
-  할당을 아끼는 구현이다.
+  만든다([유일성 판정](rc.md#1-typed-ownership-and-rtti-plan)). 어느 쪽이든 다른
+  참조가 보는 object는 바뀌지 않으므로, 제자리 갱신은 의미가 아니라 할당을 아끼는
+  구현이다.
 - Cell: `heap.cell_new`, `heap.cell_get`, `heap.cell_set`.
 - Literal: `heap.array_const`. `adt.array_const`가 만드는 배열 값을 담은 object의
   box를 낸다.
@@ -1249,7 +1249,7 @@ Object는 두 종류다. `heap.box`가 가리키는 object는 만든 뒤 내용�
   target lowering이 이를 내린다.
 - `Bytes`와 `String` literal(`adt.bytes_const`, `adt.string_const`)은 표현 선택보다
   앞에서 `adt` 값으로 펼친다([string.md](string.md#constant-lowering)). 배열 상수
-  `adt.array_const`는 배열이라 언제나 boxed이므로, 표현 선택이 `heap.array_const`로
+  `adt.array_const`는 표현 선택이 `heap.array_const`로
   바꾸고 target의 상수 lowering이 이를 내린다. 그 결과는 다른 할당처럼 unit 하나를
   가진 object다.
 

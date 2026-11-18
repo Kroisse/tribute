@@ -632,11 +632,9 @@ into control flow and atomic operations by RC lowering.
     해당한다. Retained 매개변수로의 ordinary call은 callee가 스스로 unit을 획득하고
     caller의 root가 호출 동안 살아 있으므로 caller-side 획득이 없다.
   - Box가 가리키는 object는 다른 참조가 보는 동안 바뀌지 않으므로, box에서 읽은
-    projection은 borrow할 수 있다. `heap.struct_update`와 `heap.array_set`이 object를
-    제자리에서 고치는 것은 source의 unit이 유일할 때뿐이고, source의 alias root의
-    unit을 소비하는 것은 그 root의 마지막 사용이므로 그 뒤에 쓰이는 파생 borrow가 있을
-    수 없다. Cast를 거친 alias도 같은 root이므로 여기에 든다. 파생 borrow가 갱신 뒤에도
-    쓰이면 갱신은 root의 마지막 사용이 아니므로 새 unit을 획득해 넘기고, 갱신은 복사로
+    projection은 borrow할 수 있다. `heap.struct_update`와 `heap.array_set`이 source
+    alias root(cast를 거친 alias 포함)의 unit을 소비하는 것은 그 root의 마지막 사용일
+    때뿐이므로, 파생 borrow가 갱신 뒤에도 쓰이면 갱신은 새 unit을 획득하고 복사로
     끝난다.
   - `heap.cell_get`의 결과는 borrow하지 않고 읽은 직후 자신의 unit을 획득한다.
     `heap.cell_set`은 이전 값의 unit을 release하고, 쓰는 쪽은 다른 참조나 호출된
@@ -935,7 +933,7 @@ managed 참조는 항상 그 저장보다 먼저 만들어진 object를 가리�
   따른다. 공유된 배열을 제자리에서 바꾸는 쓰기는 없다.
 - **Inline 값은 간선을 더하지 않는다.** Object 안에 inline으로 놓인 값의 managed
   leaf는 바깥 object가 직접 가진 필드이며, 만들 때 채우는 다른 필드처럼 이미 있는
-  object만 가리킨다. Unboxed 값은 object가 아니므로 참조의 대상이 되지 않는다.
+  object만 가리킨다.
 - **Closure는 자신을 capture하지 않는다.** Code 함수는 closure 자신을 environment
   입력으로 받는다([Closure captures](#closure-captures)). 지역 함수가 자기 자신을
   재귀 호출한다면 그 참조는 environment 입력으로 해결하며 capture로 만들지 않는다.
@@ -1028,8 +1026,8 @@ Managed 판정을 받은 타입은 managed 참조나 동적 값이고, `Int`·`N
 Inline 값 필드가 가리키는 descriptor는 그 struct가 object로 할당되지 않더라도 index와
 레코드를 가진다. Ownership 계획은 할당 layout을 모을 때 inline 값 필드의 layout도 함께
 모으며, 그런 descriptor의 번호도 할당 descriptor와 같은 순서 규칙으로, 처음 나타나는
-순서대로 예약 범위 다음에서 정한다. Release 함수는 inline 값의 managed leaf를 컴파일할 때 펼쳐 직접
-release하며, 이 분류를 읽어 재귀하지 않는다.
+순서대로 예약 범위 다음에서 정한다. 해제는 [inline 값 필드의 규칙](runtime-types.md#descriptor-내용)을
+따른다.
 
 Variant의 필드 이름은 선언 순서의 위치 번호(`"0"`, `"1"`, …)다. 예약 index의 값은
 `kind = 3`인 레코드를 가지며, payload가 하나인 boxing된 scalar는 그 scalar를 필드

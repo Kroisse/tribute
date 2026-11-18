@@ -77,9 +77,8 @@ compiler가 값마다 표현을 고른다. 표현 선택은 값 의미론인 [`a
   ([같은 소스 타입을 서로 다른 layout으로 표현하는 일은 없다](runtime-types.md#descriptor-단위)).
 - **Unboxed 값은 쪼개고 펼친다.** SSA에서는 필드마다 값 하나로 쪼갠다. 매개변수,
   결과, block 인자, structured control의 결과가 모두 그렇다. 다른 object의 필드로 저장할
-  때는 그 object의 layout 안에 inline으로 놓는다. 그래서 출구 뒤에 aggregate 타입을 가진
-  SSA 값은 없다. `core.nil` 필드는 값이 하나뿐이므로 leaf를 만들지 않는다. 그래서
-  값을 쪼갠 결과 목록에는 `core.nil`이 없다.
+  때는 그 object의 layout 안에 inline으로 놓는다. `core.nil` 필드는 값이 하나뿐이므로
+  leaf를 만들지 않는다.
 - **Boxed 값은 `heap.box`에 담는다.** 생성은 `heap` 할당이 되고 필드 읽기는 box를
   빌린 읽기가 되며, `adt.struct_update`와 `adt.array_set`은 source box를 소비하는
   `heap` 갱신이 된다. Unboxed 값의 갱신은 바뀌는 leaf만 바꿔 끼운다.
@@ -88,7 +87,7 @@ compiler가 값마다 표현을 고른다. 표현 선택은 값 의미론인 [`a
   따르므로, unboxed 값은 cell 안에 inline으로 놓인다.
 - **강제 위치에서는 언제나 box에 담는다.** Unboxed로 고른 타입도 이 위치를 지날 때는
   필드 값으로 object를 할당하고, 거기서 나올 때는 필드를 읽는다.
-  - 배열의 원소. Target이 원소를 inline으로 저장하지 못하는 동안이다.
+  - 배열의 원소.
   - `tribute_rt.anyref`로 지워지는 자리. Effect payload, 제네릭으로 지운 값, Cps
     convention의 결과가 여기에 든다. Cps 결과는 continuation을 지나며 지워지므로, 결과를
     쪼개는 일은 Direct와 EvidenceDirect callable에만 해당한다.
@@ -109,9 +108,8 @@ compiler가 값마다 표현을 고른다. 표현 선택은 값 의미론인 [`a
 - **Ownership 계획보다 앞선다.** 표현 선택은 경계 안에서 끝나므로 ownership 계획이
   보는 managed 값은 `heap.box`, `heap.cell`, `tribute_rt.anyref`, `tribute_rt.intref`뿐이다.
   Unboxed 값의 leaf는 다른 값과 같은 ownership unit이다.
-- **필드 타입 변환.** 표현 선택은 layout의 필드 타입을 저장 표현으로 바꾼다. Box에
-  담는 타입의 필드는 `heap.box`, unboxed 타입의 필드는 그 layout을 inline으로 둔다.
-  이 변환은 [nominal layout 변환](tribute-dialects.md#nominal-layout-변환)을 따른다.
+- **필드 타입 변환.** 표현 선택은 layout의 필드 타입도
+  [저장 표현으로 바꾼다](tribute-dialects.md#heapbox).
 
 ### 출구에서 확정되는 물리 계약
 

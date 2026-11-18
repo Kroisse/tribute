@@ -378,14 +378,11 @@ struct 할당과 함께 낮춘다. [할당 크기](rc.md#array)로 `__tribute_al
   `elements`를 쓴다.
 - 원소가 managed 참조이면 `heap.array_new`와 `heap.array_splice`는 채우거나 복사한
   원소마다 retain한다. 이 획득은 [operation이 소유한다](rc.md#1-typed-ownership-and-rtti-plan).
-- `heap.array_set`은 source 배열의 refcount를 읽는다. 1이면 그 배열을 결과로 쓰며,
-  plan이 새 원소의 저장 자리에 둔 unit을 먼저 확보한 뒤(기준 동작의 획득이나 last-use
-  move), 이전 원소를 읽어 replaced-field release를 적용하고 새 원소를 쓴다. 새 원소가
-  이전 원소와 같은 object여도 release가 그것을 먼저 해제하지 않는다. 1보다 크면 같은
-  길이의 새 배열을 할당해 다른 원소를 복사하고(managed 원소는 retain), 새 원소를 쓴
-  뒤 source의 unit을 release한다. Plan이 source의 유일성을 증명한 자리는 refcount를
-  읽지 않는다. `heap.struct_update`도 같은 두 경로로 내려가며, 복사 경로의 크기는
-  layout의 정적 할당 크기다.
+- `heap.array_set`과 `heap.struct_update`는 [rc.md](rc.md#1-typed-ownership-and-rtti-plan)가
+  정한 제자리 경로와 복사 경로로 내려간다. 제자리 경로는 새 값의 unit을 먼저 확보한
+  뒤 이전 값에 replaced-field release를 적용하므로, 새 값이 이전 값과 같은 object여도
+  release가 그것을 먼저 해제하지 않는다. 복사 경로의 크기는 배열이면 같은 길이,
+  struct이면 layout의 정적 할당 크기다.
 - `heap.array_get`, `heap.array_set`, `heap.array_len`은 `len`과 원소 자리의
   `clif.load`/`clif.store`가 된다. 원소 자리는 `payload + 8 + index × stride`다.
 - `heap.cell<T>`는 `T`의 leaf마다 필드 하나를 가진 RC object다. `heap.cell_get`과
