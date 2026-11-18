@@ -60,6 +60,47 @@ fn main() ->{{Io}} Nil {{
     );
 }
 
+/// Lambdas nested 16 deep that each end with a `become` compile in time:
+/// no transfer hands a frame to a callable value, so none has a `Cps` entry
+/// body, which would copy every lambda nested in it
+/// (`design/cps-effects.md`, "`Cps` 진입 본문").
+#[test]
+fn deeply_nested_becoming_lambdas_print_their_sum() {
+    const DEPTH: usize = 16;
+    let ty = |depth: usize| format!("{}Int", "fn(Int) ->{} ".repeat(depth));
+    let keeps = (0..DEPTH)
+        .map(|depth| {
+            let ty = ty(depth);
+            format!("fn keep{depth}(x: Int, f: {ty}) ->{{}} {ty} {{ f }}\n")
+        })
+        .collect::<String>();
+    let lambda = (1..=DEPTH).rev().fold(
+        (1..=DEPTH).map(|i| format!("a{i}")).join(" + "),
+        |body, i| {
+            let depth = DEPTH - i;
+            format!(
+                "fn(a{i}: Int) ->{{}} {} {{ become keep{depth}(+0, {body}) }}",
+                ty(depth)
+            )
+        },
+    );
+    let applications = (1..=DEPTH)
+        .map(|i| format!("    let g{i} = g{}(+1)\n", i - 1))
+        .collect::<String>();
+    assert_native(
+        &format!(
+            r#"
+use std::io::{{Io, print_line}}
+{keeps}fn main() ->{{Io}} Nil {{
+    let g0 = {lambda}
+{applications}    print_line(g{DEPTH}.to_string)
+}}
+"#
+        ),
+        format!("{DEPTH}\n").as_bytes(),
+    );
+}
+
 /// A `become` in an `op` arm enters a lambda whose own flow hands no frame
 /// on through its `Cps` adapter, which passes the lambda's result to the
 /// arm's frame.

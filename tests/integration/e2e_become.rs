@@ -34,6 +34,36 @@ fn main() ->{std::io::Io} Nil {
     assert_output_on_both_targets("become_self.trb", &code, DEPTH);
 }
 
+/// A lambda and a named function value whose bodies loop through `become`,
+/// in a program where no transfer hands a frame to a callable value: their
+/// `Cps` entries are adapters, and their loops still run in constant stack.
+#[test]
+fn test_become_in_callable_values_that_take_no_frame_runs_in_constant_stack() {
+    let code = r#"
+fn count(n: Nat, acc: Nat) -> Nat {
+    case n {
+        0 -> acc
+        _ -> become count(n - 1, acc + 1)
+    }
+}
+
+fn start(n: Nat) -> Nat {
+    become count(n, 0)
+}
+
+fn apply(f: fn(Nat) ->{} Nat, n: Nat) -> Nat {
+    f(n)
+}
+
+fn main() ->{std::io::Io} Nil {
+    let a = apply(fn(n: Nat) -> Nat { become count(n, 0) }, DEPTH)
+    std::io::print_line(apply(start, a).to_string)
+}
+"#
+    .replace("DEPTH", DEPTH);
+    assert_output_on_both_targets("become_values_without_frames.trb", &code, DEPTH);
+}
+
 /// Mutual tail calls through a nested block in a case arm.
 #[test]
 fn test_become_mutual_recursion_runs_in_constant_stack() {

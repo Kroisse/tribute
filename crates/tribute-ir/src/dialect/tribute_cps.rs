@@ -146,8 +146,9 @@ mod tribute_cps {
     ///   its own row's tail, when that tail reads as an upper bound, as an
     ///   upper bound narrowed to that convention. A lambda whose classes
     ///   give it no `Cps` body has one more, its `Cps` entry body
-    ///   (`design/cps-effects.md`, "`Cps` 진입 본문"), when its own flow
-    ///   hands a frame on ([`own_flow_hands_on_frame`]). That body reads
+    ///   (`design/cps-effects.md`, "`Cps` 진입 본문"), when its module hands
+    ///   frames to callable values ([`hands_frames_to_values`]) and its own
+    ///   flow hands a frame on ([`own_flow_hands_on_frame`]). That body reads
     ///   its binders as its strongest other body does and runs as a `Cps`
     ///   flow. Calling the value with a
     ///   convention that has a body runs that body; legalization fills the
@@ -235,12 +236,12 @@ mod tribute_cps {
     ///   convention is weaker, the entry is the `func_ref` adapter that
     ///   calls the worker through a value delimiter
     ///   (`design/cps-effects.md`, 값 delimiter). When the definition has a
-    ///   body and those conventions do not include `Cps`, the `cps` entry
-    ///   is the `Cps` entry instance of the strongest target
+    ///   body, those conventions do not include `Cps`, and the module hands
+    ///   frames to callable values ([`hands_frames_to_values`]), the `cps`
+    ///   entry is the `Cps` entry instance of the strongest target
     ///   (`design/cps-effects.md`, "`Cps` 진입 본문"). Legalization fills the
-    ///   other entries by the same rule as a lambda's, once for the table;
-    ///   only the table of a definition without a body has an adapter for
-    ///   `cps`.
+    ///   other entries by the same rule as a lambda's, once for the table,
+    ///   so a table without a `cps` entry has an adapter for `cps`.
     /// - **Verification:** the local verifier checks the attributes and that
     ///   each key of `entries` is a convention keyword. Whole-IR verification checks that each target
     ///   names a `tribute_cps.func` of the table's own module by one name,
@@ -305,7 +306,9 @@ mod tribute_cps {
     ///   the flow's `ContinuationFrame<R>` to the callee's `Cps` entry: a
     ///   body, or an adapter for a lambda whose own flow hands no frame on
     ///   and for a definition without a body
-    ///   (`design/tribute-dialects.md`, "Convention entry"). Elsewhere it is
+    ///   (`design/tribute-dialects.md`, "Convention entry"). Its module
+    ///   therefore hands frames to callable values
+    ///   ([`hands_frames_to_values`]). Elsewhere it is
     ///   the class class specialization reads from the callee type's row.
     /// - **Verification:** the schema checks the convention keyword, and the
     ///   local verifier that `convention` is `Cps` in a `Cps` flow and not
@@ -493,6 +496,30 @@ pub fn own_flow_hands_on_frame(ctx: &IrContext, body: RegionRef) -> bool {
             || SourceTailCallIndirect::is_set(ctx, op)
             || tribute_control::Handle::matches(ctx, op)
             || tribute_control::Resume::matches(ctx, op)
+        {
+            ControlFlow::Break(())
+        } else {
+            ControlFlow::Continue(WalkAction::Advance)
+        }
+    })
+    .is_break()
+}
+
+/// Whether `op` holds a transfer that can hand a received frame to a
+/// callable value's `Cps` entry (`design/cps-effects.md`, "`Cps` 진입
+/// 본문"): a source tail transfer of a callable value, or a source indirect
+/// call that hands a handle body's frame on ([`passes_body_frame_on`]).
+/// Only then do lambdas get `Cps` entry bodies and function tables `Cps`
+/// entry instances. It reads no convention or flow, so it answers the same
+/// before and after class specialization, and both that pass and its check
+/// read it.
+pub fn hands_frames_to_values(ctx: &IrContext, op: trunk_ir::refs::OpRef) -> bool {
+    use std::ops::ControlFlow;
+    use trunk_ir::walk::{WalkAction, walk_op};
+
+    walk_op(ctx, op, &mut |inner| {
+        if SourceTailCallIndirect::is_set(ctx, inner)
+            || (SourceCallIndirect::is_set(ctx, inner) && passes_body_frame_on(ctx, inner))
         {
             ControlFlow::Break(())
         } else {

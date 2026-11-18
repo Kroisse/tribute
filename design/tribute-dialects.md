@@ -444,9 +444,10 @@ class는 하한보다 약하지 않다.
 Class `c`의 본문은 위 읽기를 따르되, 자기 row의 tail이 상한이면 그 상한을
 `c`로 좁혀 상한으로 읽는다.
 
-위 규칙이 `Cps` 본문을 주지 않는 source 람다는 자기 flow에 frame을 넘기는
-operation이 있으면 [`Cps` 진입 본문](cps-effects.md#cps-진입-본문)을 하나 더
-가진다. 이 본문은 가장 강한 본문과 같은 class 읽기를 쓰고 `Cps` flow로 실행된다.
+위 규칙이 `Cps` 본문을 주지 않는 source 람다는 module에 값에 frame을 넘기는
+이전이 있고 자기 flow에 frame을 넘기는 operation이 있으면
+[`Cps` 진입 본문](cps-effects.md#cps-진입-본문)을 하나 더 가진다. 이 본문은 가장
+강한 본문과 같은 class 읽기를 쓰고 `Cps` flow로 실행된다.
 
 **값은 나누지 않는다.** 같은 class를 고르는 사용들이 양화한 binder에 서로 다른
 class를 넘겨도 람다는 값 하나다. 앞의 `wrap`이 그 예다. 상한으로 읽어도 결과는
@@ -468,7 +469,7 @@ above가 아닌 region으로서 lexical scope를 닫으며, 본문은 바깥 SSA
 **Adapter.** `EvidenceDirect` entry의 adapter는 evidence를 받고 쓰지 않으며,
 `Cps` entry의 adapter는 본문의 결과를 `Done<R>`로 넘긴다. Adapter는 본문을 한
 번 부르고 끝나며 CPS 제어를 만들지 않는다. `Cps` entry의 adapter는 `Cps` 본문이
-없는 람다와 본문이 없는 정의의 `func_table`에만 있다.
+없는 람다와 `Cps` 대상이 없는 `func_table`에만 있다.
 
 Adapter는 본문을 이름으로 부르지 않는다. Environment 입력으로 받은 closure
 자신의 convention table에서 본문 class의 entry를 `closure.entry`로 읽고, 같은
@@ -506,9 +507,10 @@ Class `c`의 대상은 정의의 row의 tail인 class 변수의 인자를 람다
 요구하는 것보다 강한 `Cps` 인스턴스이면, 더 약한 convention entry는
 [값 delimiter](cps-effects.md#값-delimiter)로 worker를 부르는
 [`func_ref` adapter](cps-effects.md#cps-변환의-호출-대상-형상)다. 위 규칙이 `Cps`
-대상을 주지 않는 table은 가장 강한 대상의
-[`Cps` 진입 인스턴스](cps-effects.md#cps-진입-본문)를 `Cps` 대상으로 둔다. 본문이 없는
-정의의 table은 `Cps` 대상을 두지 않고 adapter로 채운다.
+대상을 주지 않는 table은 module에 값에 frame을 넘기는 이전이 있으면 가장 강한
+대상의 [`Cps` 진입 인스턴스](cps-effects.md#cps-진입-본문)를 `Cps` 대상으로 둔다.
+그런 이전이 없는 module의 table과 본문이 없는 정의의 table은 `Cps` 대상을 두지 않고
+adapter로 채운다.
 
 **생성된 closure.** CPS legalization이 만드는 closure(continuation, handler
 arm, delimiter region)는 source callable 값이 아니다. 그 closure type의

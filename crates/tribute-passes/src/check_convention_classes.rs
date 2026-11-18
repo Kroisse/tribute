@@ -89,29 +89,40 @@ pub fn check(ctx: &IrContext, module: Module) -> Vec<Disagreement> {
         requirements: &requirements,
         tables: &tables,
         definitions: &definitions,
+        hands_frames: tribute_cps::hands_frames_to_values(ctx, module.op()),
     };
     let mut disagreements = Vec::new();
     for function in &functions {
         Instance::new(ctx, function, module, &mut disagreements).check(&mut disagreements);
     }
-    check_cps_targets(ctx, &functions, &tables, &mut disagreements);
+    check_cps_targets(ctx, &functions, module, &mut disagreements);
     disagreements
 }
 
-/// A function table of a definition with a body has a `cps` target, the
-/// `Cps` entry instance of its strongest target when no other target is
-/// `Cps` (`design/tribute-dialects.md`, "Convention entry", 함수 참조).
+/// In a module that hands frames to callable values, a function table of a
+/// definition with a body has a `cps` target, the `Cps` entry instance of
+/// its strongest target when no other target is `Cps`
+/// (`design/tribute-dialects.md`, "Convention entry", 함수 참조). Removing
+/// unreferenced definitions after class specialization may remove the only
+/// such transfer, so a module that hands none may still have one.
 fn check_cps_targets(
     ctx: &IrContext,
     functions: &[Function],
-    tables: &HashMap<String, OpRef>,
+    module: Definitions<'_>,
     disagreements: &mut Vec<Disagreement>,
 ) {
+    if !module.hands_frames {
+        return;
+    }
     let by_name: HashMap<&str, &Function> = functions
         .iter()
         .map(|function| (function.name.as_str(), function))
         .collect();
-    for (name, &table) in tables.iter().sorted_by_key(|(name, _)| name.as_str()) {
+    for (name, &table) in module
+        .tables
+        .iter()
+        .sorted_by_key(|(name, _)| name.as_str())
+    {
         let Some(entries) = tribute_cps::table_entries(ctx, table) else {
             continue;
         };
@@ -147,6 +158,8 @@ struct Definitions<'a> {
     tables: &'a HashMap<String, OpRef>,
     /// An instance of each definition, by its base name.
     definitions: &'a HashMap<&'a str, &'a Function>,
+    /// Whether the module hands frames to callable values.
+    hands_frames: bool,
 }
 
 /// One function instance with the classes its name fixes.
@@ -338,8 +351,10 @@ impl<'a> Instance<'a> {
 
     /// A lambda has a body for exactly the conventions the rows of the
     /// callables its instantiations make may require, or, without
-    /// instantiations, its own row, and a `Cps` entry body when its own flow
-    /// hands a frame on; function references enter their table
+    /// instantiations, its own row, and a `Cps` entry body when its module
+    /// hands frames to callable values and its own flow hands a frame on,
+    /// which it may have elsewhere too;
+    /// function references enter their table
     /// no stronger than their row, and indirect transfers have the class of
     /// their callee's row, or its bound.
     fn check_body(&self, disagreements: &mut Vec<Disagreement>) {
@@ -376,16 +391,31 @@ impl<'a> Instance<'a> {
                     .map(|signature| self.conventions(&signature.row(self.ctx), lambda))
                     .unwrap_or_default(),
             };
-            // A lambda whose own flow hands a frame on has a `Cps` body, its
-            // `Cps` entry body when its uses select none.
-            let entry = self
+            // In a module that hands frames to callable values, a lambda
+            // whose own flow hands a frame on has a `Cps` body, its `Cps`
+            // entry body when its uses select none. Elsewhere it may have
+            // one: removing unreferenced definitions after class
+            // specialization may remove the only such transfer.
+            let hands_on = self
                 .ctx
                 .op_region(lambda, 0)
-                .is_some_and(|body| tribute_cps::own_flow_hands_on_frame(self.ctx, body))
-                .then_some(CallingConvention::Cps);
-            let expected: Vec<_> = selected.into_iter().chain(entry).sorted().dedup().collect();
+                .is_some_and(|body| tribute_cps::own_flow_hands_on_frame(self.ctx, body));
+            let with_entry: Vec<_> = selected
+                .iter()
+                .copied()
+                .chain(hands_on.then_some(CallingConvention::Cps))
+                .sorted()
+                .dedup()
+                .collect();
+            let without_entry: Vec<_> = selected.into_iter().sorted().dedup().collect();
+            let expected = if self.module.hands_frames {
+                with_entry.clone()
+            } else {
+                without_entry
+            };
             let actual = tribute_cps::body_conventions(self.ctx, lambda);
-            if actual.as_ref() != Some(&expected) {
+            let optional_entry = !self.module.hands_frames && actual.as_ref() == Some(&with_entry);
+            if actual.as_ref() != Some(&expected) && !optional_entry {
                 disagreements.push(Disagreement {
                     op: lambda,
                     rule: "lambda",

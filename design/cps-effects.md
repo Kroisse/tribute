@@ -426,23 +426,41 @@ region에 속하므로 `Cps` flow다. `fn` arm은 어느 callable 안에서든 o
   `Cps`가 아니면, 그 이전은 같은 정의와 class 인자의 `Cps` 진입 인스턴스를 대상으로
   한다. 진입 인스턴스의 본문도 `Cps` flow이므로 이 요구는 그 본문의 `become`과 body
   결과 호출을 따라 이어진다.
-- **람다:** 더 약한 본문만 가지는 람다는 자기 flow에 frame을 넘기는 operation이
-  있을 때 `Cps` 진입 본문을 하나 더 가지며, 그것이 람다의 `Cps`
+- **람다:** 더 약한 본문만 가지는 람다는 module에 아래의 값에 frame을 넘기는
+  이전이 있고 자기 flow에 frame을 넘기는 operation이 있을 때 `Cps` 진입 본문을
+  하나 더 가지며, 그것이 람다의 `Cps`
   [convention entry](tribute-dialects.md#convention-entry)다. Frame을 넘기는
   operation은 source tail transfer(`tail_call`, `tail_call_indirect`), `handle`,
-  `resume`이다. 그런 operation이 없는 람다의 `Cps` entry는 가장 강한 본문을 부른 뒤
+  `resume`이다. 그 밖의 람다의 `Cps` entry는 가장 강한 본문을 부른 뒤
   결과를 `Done<R>`로 넘기는 adapter다. 그 본문을 지나 이어지는 반복은 본문의 일반
   호출을 거친다. 일반 호출은 어느 본문에서든 proper tail transfer가 아니며, `Cps`
   진입 본문 안의 `Cps` 호출도 suffix frame을 남기므로
   ([frame을 그대로 넘기는 자리](#frame을-그대로-넘기는-자리)) adapter는 반복의 공간
   보장을 바꾸지 않는다. `Cps` 진입 본문은 안쪽 람다를 포함한 본문 전체를 복제하므로,
-  이 조건은 frame을 넘기지 않는 람다가 본문 수를 늘리지 않게 한다.
-- **함수 참조:** `func_ref`의 `Cps` convention entry는 `Cps` 진입 본문이다.
-  `func_table`의 `Cps` 대상은 가장 강한 대상의 `Cps` 진입 인스턴스다.
+  이 조건은 frame을 넘기지 않는 람다와 frame을 넘겨받지 않는 람다가 본문 수를 늘리지
+  않게 한다.
+- **함수 참조:** module에 값에 frame을 넘기는 이전이 있으면 `func_ref`의 `Cps`
+  convention entry는 `Cps` 진입 본문이다. 그때 `func_table`의 `Cps` 대상은 가장 강한
+  대상의 `Cps` 진입 인스턴스다. 그런 이전이 없으면 `Cps` 대상을 두지 않으며, `Cps`
+  entry는 가장 강한 대상을 일반 호출하는 adapter다.
 - **본문이 없는 정의:** `extern` 정의와 compiler intrinsic은 `Cps` 진입 본문을 갖지
   않는다. 이들의 `Cps` entry는 일반 호출 뒤 `Done<R>`로 넘기는 adapter다. 본문이
   없는 정의는 handle을 설치하거나 `become`하지 않으므로 그 호출이 더하는 native
   깊이는 호출 한 번이다.
+
+**값에 frame을 넘기는 이전**은 source `tail_call_indirect`와
+[frame을 넘기는 body 결과 호출](#frame을-그대로-넘기는-자리)인 `call_indirect`다.
+Callable 값의 `Cps` entry에 flow의 frame을 그대로 넘기는 자리는 이 둘뿐이고,
+그 밖의 `Cps` 간접 호출은 suffix frame을 만든다. Class 특수화는 빌드 전체를
+[하나의 module](linking.md#compilation-unit)로 보므로, 이런 이전이 없는 module에서는
+어떤 값의 `Cps` entry도 frame을 넘겨받지 않으며 그 entry가 adapter여도 반복의 공간
+보장은 바뀌지 않는다. 판정은 source 이전의 operation 종류와 자리만 읽는다.
+`tail_call_indirect`의 flow는 인스턴스와 본문마다 다르므로 flow를 읽지 않고 모두
+센다. 그래서 판정은 class 특수화 앞의 IR과 그 뒤의 IR을 같은 방식으로 읽고, 특수화와
+그 검사가 같은 판정(`tribute_cps::hands_frames_to_values`)을 쓴다. 특수화 뒤의
+참조되지 않는 정의 제거가 그런 이전을 담은 정의를 지울 수 있으므로, 검사는 이전이 남은
+module에서 `Cps` 진입 본문과 진입 인스턴스가 있는지만 확인하고, 이전이 없는 module의
+그것들은 거부하지 않는다.
 
 Frame을 넘기는 body 결과 호출을 뺀 일반 호출은 flow와 관계없이 row가 정한
 convention의 인스턴스를 부르며 `Cps` 진입을 요구하지 않는다. `tribute_cps.func`의

@@ -80,6 +80,7 @@ pub fn specialize(ctx: &mut IrContext, module: Module) -> Result<(), ClassSpecia
         return Err(ClassSpecializationError::ConventionsAssigned);
     }
     let requirements = requirements(ctx, module);
+    let hands_frames = tribute_cps::hands_frames_to_values(ctx, module.op());
     let mut functions: Vec<Function> = module
         .ops(ctx)
         .iter()
@@ -127,6 +128,7 @@ pub fn specialize(ctx: &mut IrContext, module: Module) -> Result<(), ClassSpecia
                     .collect(),
             ),
             convention: CallingConvention::Cps,
+            hands_frames,
         };
         if entry == Entry::Row {
             instance.convention = instance.own_class(ctx, op).bound();
@@ -324,6 +326,9 @@ struct Instance<'a> {
     /// The convention it declares: its row's, or `Cps` for a `Cps` entry
     /// instance.
     convention: CallingConvention,
+    /// Whether the module hands frames to callable values, so that lambdas
+    /// and function tables have `Cps` entries that take them.
+    hands_frames: bool,
 }
 
 impl Instance<'_> {
@@ -444,12 +449,14 @@ impl Instance<'_> {
                 lambda.conventions = self.reader.conventions(ctx, &row, lambda.op);
                 lambda.reads.extend(row.tail);
             }
-            // A lambda whose own flow hands a frame on has a `Cps` entry
-            // body when its classes select no `Cps` body
-            // (`design/cps-effects.md`, "`Cps` 진입 본문").
-            if ctx
-                .op_region(lambda.op, 0)
-                .is_some_and(|body| tribute_cps::own_flow_hands_on_frame(ctx, body))
+            // In a module that hands frames to callable values, a lambda
+            // whose own flow hands a frame on has a `Cps` entry body when
+            // its classes select no `Cps` body (`design/cps-effects.md`,
+            // "`Cps` 진입 본문").
+            if self.hands_frames
+                && ctx
+                    .op_region(lambda.op, 0)
+                    .is_some_and(|body| tribute_cps::own_flow_hands_on_frame(ctx, body))
             {
                 lambda.conventions.push(CallingConvention::Cps);
             }
@@ -623,9 +630,11 @@ impl Instance<'_> {
             .into_iter()
             .map(|(convention, classes)| (convention, classes, Entry::Row))
             .collect();
-        // A table without a `Cps` target enters the `Cps` entry instance of
-        // its strongest target, which a definition with a body has.
-        if let Some((strongest, classes, _)) = targets.last()
+        // In a module that hands frames to callable values, a table without
+        // a `Cps` target enters the `Cps` entry instance of its strongest
+        // target, which a definition with a body has.
+        if self.hands_frames
+            && let Some((strongest, classes, _)) = targets.last()
             && *strongest != CallingConvention::Cps
             && ctx.op_has_regions(definition.op)
         {

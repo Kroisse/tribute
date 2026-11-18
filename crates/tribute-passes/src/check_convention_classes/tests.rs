@@ -87,10 +87,24 @@ fn a_lambda_without_a_frame_transfer_has_no_cps_entry_body() {
     );
 }
 
+/// A function whose `become` of a callable value makes its module hand
+/// frames to values.
+const HAND_ON: &str = r#"  tribute_cps.func @hand_on(%x: core.i32, %k: tribute_control.func_sig<(core.i32) -> core.i32>) -> core.i32 convention(direct) {
+    tribute_cps.tail_call_indirect %k(%x) attributes {convention = "direct"} : (core.i32) -> core.i32
+  }"#;
+
+/// `TRANSFER` with `outer` as the lambda's bodies, with `HAND_ON` when
+/// `hands_frames`.
+fn transfer(outer: &str, hands_frames: bool) -> String {
+    let hand_on = if hands_frames { HAND_ON } else { "" };
+    TRANSFER.replace("OUTER", outer).replace("HANDS", hand_on)
+}
+
 /// `main` calls a lambda whose bodies are `OUTER`. A body of a convention
 /// in `transfers` ends with a `become` of `id`'s instance for that flow;
 /// the others return their parameter.
 const TRANSFER: &str = r#"core.module @m {
+HANDS
   tribute_cps.func @id(%x: core.i32) -> core.i32 convention(direct) {
     tribute_control.return %x
   }
@@ -124,12 +138,17 @@ fn transfer_bodies(conventions: &[&str], transfers: &[&str]) -> String {
         .join("\n")
 }
 
-/// A lambda whose own flow has a `become` has a `Cps` entry body.
+/// A lambda whose own flow has a `become` has a `Cps` entry body in a
+/// module that hands frames to values. Another module needs none, and may
+/// keep one when removing unreferenced definitions removed the transfer.
 #[test]
 fn a_lambda_with_a_frame_transfer_has_a_cps_entry_body() {
-    let input = |bodies: &[&str]| TRANSFER.replace("OUTER", &transfer_bodies(bodies, bodies));
-    assert_eq!(rules(&input(&["direct"])), ["lambda"]);
-    assert_eq!(rules(&input(&["direct", "cps"])), [""; 0]);
+    let input =
+        |bodies: &[&str], hands_frames| transfer(&transfer_bodies(bodies, bodies), hands_frames);
+    assert_eq!(rules(&input(&["direct"], true)), ["lambda"]);
+    assert_eq!(rules(&input(&["direct", "cps"], true)), [""; 0]);
+    assert_eq!(rules(&input(&["direct"], false)), [""; 0]);
+    assert_eq!(rules(&input(&["direct", "cps"], false)), [""; 0]);
 }
 
 /// A nested lambda's `become` belongs to its own flow, not to the lambda
@@ -148,7 +167,7 @@ fn a_nested_frame_transfer_gives_only_the_nested_lambda_a_cps_entry_body() {
                 )
             })
             .join("\n");
-        TRANSFER.replace("OUTER", &outer)
+        transfer(&outer, true)
     };
     assert_eq!(rules(&input(&["direct"], &["direct", "cps"])), [""; 0]);
     assert_eq!(
@@ -290,6 +309,7 @@ fn a_func_ref_enters_its_table_no_stronger_than_the_row_of_its_value() {
   !open = tribute_control.func_sig<(core.i32) -> core.i32 row(@Ctl)>
   !closed = tribute_control.func_sig<(core.i32) -> core.i32>
 {CTL}
+{HAND_ON}
   tribute_cps.func @pure(%y: core.i32) -> core.i32 convention(direct) {{
     tribute_control.return %y
   }}
@@ -308,8 +328,34 @@ fn a_func_ref_enters_its_table_no_stronger_than_the_row_of_its_value() {
     assert_eq!(rules(&input("!open", both)), [""; 0]);
     assert_eq!(rules(&input("!closed", both)), [""; 0]);
     assert_eq!(rules(&input("!closed", r#"cps = @"pure$7""#)), ["func_ref"]);
-    // The table of a definition with a body has a `cps` target.
+    // In a module that hands frames to values, the table of a definition
+    // with a body has a `cps` target.
     assert_eq!(rules(&input("!closed", "direct = @pure")), ["table"]);
+}
+
+/// In a module that hands no frame to a value, a table needs no `cps`
+/// target, and may keep the one it had when removing unreferenced
+/// definitions removed the transfer.
+#[test]
+fn a_table_needs_no_cps_entry_instance_where_no_value_takes_a_frame() {
+    let input = |entries: &str| {
+        format!(
+            r#"core.module @m {{
+  !closed = tribute_control.func_sig<(core.i32) -> core.i32>
+  tribute_cps.func @pure(%y: core.i32) -> core.i32 convention(direct) {{
+    tribute_control.return %y
+  }}
+  {PURE_ENTRY}
+  tribute_cps.func_table @"pure$8" = {{{entries}}}
+  tribute_cps.func @f(%x: core.i32) -> core.i32 convention(direct) {{
+    %p = tribute_cps.func_ref @"pure$8" : !closed
+    tribute_control.return %x
+  }}
+}}"#
+        )
+    };
+    assert_eq!(rules(&input("direct = @pure")), [""; 0]);
+    assert_eq!(rules(&input(r#"cps = @"pure$7", direct = @pure"#)), [""; 0]);
 }
 
 #[test]
@@ -367,8 +413,7 @@ fn a_definition_without_a_body_has_no_class_variables() {
   tribute_cps.func @pure(%y: core.i32) -> core.i32 convention(direct) {{
     tribute_control.return %y
   }}
-  {PURE_ENTRY}
-  tribute_cps.func_table @"pure$8" = {{cps = @"pure$7", direct = @pure}}
+  tribute_cps.func_table @"pure$8" = {{direct = @pure}}
   tribute_cps.func @main(%x: core.i32) -> core.i32 convention(direct) {{
     %f = tribute_cps.func_ref @"pure$8" : !closed
     %r = tribute_control.call @external(%x, %f) attributes {{row_args = [{{}}]}} : (core.i32, !closed) -> core.i32
