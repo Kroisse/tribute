@@ -389,7 +389,10 @@ Convention에 관한 규칙은 다음과 같다.
 - `tribute_control.tail_call`의 callee 인스턴스와
   `tribute_cps.tail_call_indirect`의 convention은 그 이전이 놓인
   [flow](cps-effects.md#cps-진입-본문)보다 강하지 않다. `Cps` flow에서는 본문이 있는
-  callee의 인스턴스와 간접 이전의 convention이 `Cps`다.
+  callee의 인스턴스와 간접 이전의 convention이 `Cps`다. `cps_entry`를 선언한
+  람다의 가장 강한 본문에 쓰인 이전은 그 본문의 convention이 정한 flow로 이 규칙을
+  따른다. `Cps` 진입에서의 callee와 convention은 IR에 쓰이지 않고 legalization이
+  [고른다](cps-effects.md#cps-진입-본문).
 - [Frame을 넘기는 body 결과 호출](cps-effects.md#frame을-그대로-넘기는-자리)인
   `tribute_control.call`의 callee 인스턴스는 callee에 본문이 있으면 `Cps`이고,
   `tribute_cps.call_indirect`의 convention은 `Cps`다.
