@@ -840,7 +840,8 @@ fn main() ->{std::io::Io} Nil {
 /// A lambda whose own flow runs a resumption-carrying lambda in a handler
 /// arm is converted twice, once for each of its entries: `l(+1)` runs it
 /// directly, and `via_arm` enters its `Cps` entry through a `become` in an
-/// `op` arm. Both print their answers, and nothing leaks.
+/// `op` arm. Both print their answers on each target, and the native run
+/// leaks nothing.
 #[test]
 fn test_cps_entry_lambda_with_a_resumption_in_an_arm_releases_under_asan() {
     let code = r#"

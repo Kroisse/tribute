@@ -71,8 +71,11 @@ impl trunk_ir::pass::Pass for CheckConventionClasses {
 fn cps_entry_of(ctx: &IrContext, instance: OpRef) -> Option<String> {
     ctx.op_attrs(instance)
         .get_symbol_ref(tribute_cps::CPS_ENTRY_ATTR)
-        .and_then(|path| path.leaf())
-        .map(ToString::to_string)
+        .map(|path| match path.as_simple() {
+            Some(name) => name.to_string(),
+            // An instance is a definition of its own module.
+            None => path.to_string(),
+        })
 }
 
 /// An instance declares `cps_entry` exactly when its `Cps` entry instance

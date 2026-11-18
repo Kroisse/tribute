@@ -102,6 +102,8 @@ struct Converter<'a> {
     lambdas: HashMap<OpRef, LambdaEntries>,
     /// The number of lambda entry functions named after each source function.
     lambda_entries: HashMap<String, u32>,
+    /// The names the source module's definitions have.
+    source_symbols: HashSet<String>,
 }
 
 /// The entry functions of a source lambda and what a closure of it captures,
@@ -163,6 +165,11 @@ impl<'a> Converter<'a> {
         module_block: BlockRef,
         graph: CallableGraph,
     ) -> Self {
+        let source_symbols = module
+            .ops(ctx)
+            .iter()
+            .filter_map(|&op| ctx.op_attrs(op).get_str("sym_name").map(str::to_owned))
+            .collect();
         Self {
             ctx,
             module,
@@ -178,6 +185,7 @@ impl<'a> Converter<'a> {
             arm_tokens: HashMap::default(),
             lambdas: HashMap::default(),
             lambda_entries: HashMap::default(),
+            source_symbols,
         }
     }
 
@@ -493,9 +501,13 @@ fn collect_callable_graph(ctx: &IrContext, module: Module, symbols: &SymbolTable
         ) {
             targets.insert(op, target);
         }
+        // Only the `Cps` entry instance of `op` is entered in its place.
         if funcs.contains_key(&op)
             && let Some(reference) = attributes.get_symbol_ref(tribute_cps::CPS_ENTRY_ATTR)
             && let Some(entry) = callable(Some(reference))
+            && funcs[&entry].convention == CallingConvention::Cps
+            && ctx.op_attrs(entry).get_str(tribute_cps::ENTRY_OF_ATTR)
+                == attributes.get_str("sym_name")
         {
             cps_entries.insert(op, (entry, reference.clone()));
         }

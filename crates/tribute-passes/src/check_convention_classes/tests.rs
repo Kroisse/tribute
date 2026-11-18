@@ -196,11 +196,13 @@ fn a_lambda_without_a_frame_transfer_declares_no_cps_entry() {
 /// its classes select.
 #[test]
 fn a_copied_cps_body_is_a_disagreement() {
+    // A module that hands no frame to a value asks for no `cps_entry`, so
+    // the extra body is the only disagreement.
     let input = transfer(
         &transfer_bodies(&["direct", "cps"], &["direct", "cps"]),
-        true,
+        false,
     );
-    assert!(rules(&input).contains(&"lambda"), "{:?}", rules(&input));
+    assert_eq!(rules(&input), ["lambda"]);
 }
 
 /// A nested lambda's `become` belongs to its own flow, not to the lambda

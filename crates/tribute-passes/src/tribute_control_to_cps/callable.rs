@@ -254,12 +254,17 @@ impl Converter<'_> {
         }
     }
 
-    /// The name of the next lambda entry function written in `parent`.
+    /// The name of the next lambda entry function written in `parent`, which
+    /// no definition of the source module has.
     fn next_lambda_entry(&mut self, parent: &str) -> Symbol {
         let index = self.lambda_entries.entry(parent.to_owned()).or_insert(0);
-        let symbol = Symbol::new(&format!("{parent}::__lambda_{index}"));
-        *index += 1;
-        symbol
+        loop {
+            let name = format!("{parent}::__lambda_{index}");
+            *index += 1;
+            if !self.source_symbols.contains(&name) {
+                return Symbol::new(&name);
+            }
+        }
     }
 
     pub(super) fn lower_direct_call(

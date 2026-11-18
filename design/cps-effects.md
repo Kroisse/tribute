@@ -478,7 +478,9 @@ Callable 값의 `Cps` entry에 flow의 frame을 그대로 넘기는 자리는 �
 그 검사가 같은 판정(`tribute_cps::hands_frames_to_values`)을 쓴다. 특수화 뒤의
 참조되지 않는 정의 제거가 그런 이전을 담은 정의를 지울 수 있으므로, 검사는 이전이 남은
 module에서 `cps_entry` 선언과 진입 인스턴스가 있는지만 확인하고, 이전이 없는 module의
-그것들은 거부하지 않는다. `cps_entry`를 선언한 람다의 자기 flow에 있는 `tail_call`의
+그것들은 거부하지 않는다. 선택 사항이 되는 것은 조건에 맞는 람다의 선언뿐이다. 가장
+강한 본문의 자기 flow가 frame을 넘기지 않는 람다의 `cps_entry`는 어느 module에서든
+거부한다. `cps_entry`를 선언한 람다의 자기 flow에 있는 `tail_call`의
 callee는 어느 module에서든, 더 약하고 본문이 있으면 `cps_entry`를 선언해야 한다.
 
 Frame을 넘기는 body 결과 호출을 뺀 일반 호출은 flow와 관계없이 row가 정한
@@ -879,7 +881,8 @@ location에서 conversion failure가 된다. 이 경계에는 일관된 physical
 `func.*`/`closure.*`/`func.func_sig` graph, [추상 frame 표면](#abstract-continuation-frames),
 logical `ability.*` dispatch 표면만 남는다. `lower_continuation_frames`가
 추상 frame 표면을 모두 제거한 뒤 `lower_closure_lambda`가 이 shared graph에 남은
-`closure.lambda`, 곧 legalization이 만든 closure의 본문을 추출하지만
+모든 `closure.lambda`, 곧 legalization과 `lower_continuation_frames`가 만든 closure의
+본문을 추출하지만
 `closure.new`, `closure.entry`, `closure.unpack`과 `closure.closure` type은
 target ABI validation까지 유지한다. `lower_ability_call`,
 `resolve_evidence`, `lower_handle_dispatch`가 `ability.*`를 `effect.*`까지 낮춘 뒤,
