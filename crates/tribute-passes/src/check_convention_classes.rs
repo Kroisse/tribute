@@ -282,8 +282,9 @@ impl<'a> Instance<'a> {
 
     /// A reference names the instance of its callee for the classes of the
     /// rows it passes for the callee's class variables. A `become` in a `Cps`
-    /// flow names the callee's `Cps` entry instance when the callee has a
-    /// body and its row implies a weaker convention.
+    /// flow and a call that hands a handle body's frame on name the callee's
+    /// `Cps` entry instance when the callee has a body and its row implies a
+    /// weaker convention.
     fn check_references(&self, disagreements: &mut Vec<Disagreement>) {
         for reference in &self.function.references {
             let (callee, _) = split_name(&reference.key);
@@ -298,8 +299,9 @@ impl<'a> Instance<'a> {
                         .map_or(Class::CPS, |row| self.class(row, reference.op))
                 })
                 .collect();
-            let cps_flow = tribute_control::TailCall::matches(self.ctx, reference.op)
-                && self.flow(reference.op) == Some(CallingConvention::Cps);
+            let cps_flow = (tribute_control::TailCall::matches(self.ctx, reference.op)
+                && self.flow(reference.op) == Some(CallingConvention::Cps))
+                || tribute_cps::passes_body_frame_on(self.ctx, reference.op);
             let entry = match self.module.definitions.get(callee) {
                 Some(definition) if cps_flow && self.ctx.op_has_regions(definition.op) => {
                     let params: HashMap<u32, Class> = positions
@@ -434,9 +436,11 @@ impl<'a> Instance<'a> {
         let Some(signature) = FuncSig::from_type_ref(self.ctx, callable) else {
             return;
         };
-        // A `become` in a `Cps` flow enters the value's `Cps` entry.
-        let expected = if tribute_cps::TailCallIndirect::matches(self.ctx, op)
-            && self.flow(op) == Some(CallingConvention::Cps)
+        // A `become` in a `Cps` flow and a call that hands a handle body's
+        // frame on enter the value's `Cps` entry.
+        let expected = if (tribute_cps::TailCallIndirect::matches(self.ctx, op)
+            && self.flow(op) == Some(CallingConvention::Cps))
+            || tribute_cps::passes_body_frame_on(self.ctx, op)
         {
             CallingConvention::Cps
         } else {

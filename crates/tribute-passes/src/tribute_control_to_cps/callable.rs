@@ -445,13 +445,7 @@ impl Converter<'_> {
                     "a non-CPS callable cannot call a CPS target",
                 ));
             }
-            let frame = match self.tail_exit_frame(source, rest, flow) {
-                Some(frame) => frame,
-                None => {
-                    let plan = evidence_plan_of(self.ctx, source);
-                    self.push_suffix_frame(source, rest, block, mapping, flow, plan)?
-                }
-            };
+            let frame = self.call_frame(source, rest, block, mapping, flow)?;
             let mut args = vec![self.current_evidence(source, flow)?, frame];
             args.extend(
                 self.ctx
@@ -647,13 +641,7 @@ impl Converter<'_> {
                     "a non-CPS callable cannot make a CPS indirect call",
                 ));
             }
-            let frame = match self.tail_exit_frame(source, rest, flow) {
-                Some(frame) => frame,
-                None => {
-                    let plan = evidence_plan_of(self.ctx, source);
-                    self.push_suffix_frame(source, rest, block, mapping, flow, plan)?
-                }
-            };
+            let frame = self.call_frame(source, rest, block, mapping, flow)?;
             let mut args = vec![self.current_evidence(source, flow)?, frame];
             args.extend(
                 source_args

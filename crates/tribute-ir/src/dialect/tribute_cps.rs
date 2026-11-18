@@ -64,8 +64,10 @@ mod tribute_cps {
     ///   instance's classes (`design/cps-effects.md`, "Row와 호출 규약"), or
     ///   declares `Cps` for the `Cps` entry instance of a definition with a
     ///   body whose row determines a weaker convention
-    ///   (`design/cps-effects.md`, "`Cps` 진입 본문"). Such an instance
-    ///   carries `entry_of`, the name of the instance of the same definition
+    ///   (`design/cps-effects.md`, "`Cps` 진입 본문"), which a source tail
+    ///   call in a `Cps` flow and a call that hands a handle body's frame on
+    ///   ([`passes_body_frame_on`]) enter. Such an instance carries
+    ///   `entry_of`, the name of the instance of the same definition
     ///   and class arguments that its row's convention enters. That instance
     ///   need not exist, and `entry_of` is not a symbol reference. The name
     ///   only tells instances apart; a reader learns the convention from
@@ -266,7 +268,11 @@ mod tribute_cps {
     ///   `convention: String`.
     /// - **Meaning:** calls the callee's convention entry of `convention`,
     ///   which class specialization computed from the callee type's row
-    ///   with the enclosing instance's classes.
+    ///   with the enclosing instance's classes. A call that hands a handle
+    ///   body's frame on ([`passes_body_frame_on`]) is `Cps` whatever class
+    ///   the callee type reads, so it passes the body's
+    ///   `ContinuationFrame<R>` to the callee's `Cps` entry: a body, or an
+    ///   adapter (`design/cps-effects.md`, "Frame을 그대로 넘기는 자리").
     /// - **Verification:** the schema checks the convention keyword.
     ///   Otherwise as `tribute_control.call_indirect`.
     /// - **Ownership and value flow:** as `tribute_control.call_indirect`.
@@ -494,6 +500,21 @@ pub fn own_flow_hands_on_frame(ctx: &IrContext, body: RegionRef) -> bool {
         }
     })
     .is_break()
+}
+
+/// Whether `op` is a call that hands the frame of a handle body on
+/// (`design/cps-effects.md`, "Frame을 그대로 넘기는 자리"): a
+/// `tribute_control.call` or a source indirect call without an
+/// `evidence_plan` that makes the body result of a handle in tail position.
+/// It enters its callee as `Cps`, so class specialization, its check, and
+/// legalization read this one predicate.
+pub fn passes_body_frame_on(ctx: &IrContext, op: trunk_ir::refs::OpRef) -> bool {
+    (tribute_control::Call::matches(ctx, op) || SourceCallIndirect::is_set(ctx, op))
+        && !ctx
+            .op_attrs(op)
+            .contains_key(tribute_control::EVIDENCE_PLAN_ATTR)
+        && tribute_control::body_result_handle(ctx, op)
+            .is_some_and(|handle| tribute_control::in_tail_position(ctx, handle.op_ref()))
 }
 
 /// Replace `op`, a `tribute_control` func, lambda, func_ref, call_indirect,

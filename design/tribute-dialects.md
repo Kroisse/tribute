@@ -386,6 +386,9 @@ Convention에 관한 규칙은 다음과 같다.
   `tribute_cps.tail_call_indirect`의 convention은 그 이전이 놓인
   [flow](cps-effects.md#cps-진입-본문)보다 강하지 않다. `Cps` flow에서는 본문이 있는
   callee의 인스턴스와 간접 이전의 convention이 `Cps`다.
+- [Frame을 넘기는 body 결과 호출](cps-effects.md#frame을-그대로-넘기는-자리)인
+  `tribute_control.call`의 callee 인스턴스는 callee에 본문이 있으면 `Cps`이고,
+  `tribute_cps.call_indirect`의 convention은 `Cps`다.
 - 정의의 convention과 간접 이전의 convention은
   [CPS 전략](cps-effects.md#row와-호출-규약)이 그 row와 인스턴스의 class에서
   계산한 값이다.
@@ -483,9 +486,10 @@ tail)는 `Cps`로만 읽는다.
 
 모든 간접 이전의 convention은 그 이전을 담은 인스턴스와 본문의 class 읽기로
 callee type을 읽은 class(상한이면 상한)와 같아야 하며, 다르면 컴파일 오류다. `Cps`
-flow의 `tribute_cps.tail_call_indirect`만 예외로, callee type의 class와 관계없이
-`Cps`다. Source callable 값의 `Cps` entry는 trap entry가 아니므로 이 이전은 언제나
-본문이나 adapter에 들어간다.
+flow의 `tribute_cps.tail_call_indirect`와 frame을 넘기는 body 결과 호출인
+`tribute_cps.call_indirect`만 예외로, callee type의 class와 관계없이 `Cps`다.
+Source callable 값의 `Cps` entry는 trap entry가 아니므로 이 이전은 언제나 본문이나
+adapter에 들어간다.
 
 **함수 참조.** 함수 참조의 convention entry 대상은 module 수준의 `func_table`
 정의 하나가 모아 가지며, `func_ref`는 그 table을 가리킨다. Table은 정의와

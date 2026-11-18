@@ -415,6 +415,169 @@ fn a_function_table_and_its_targets_are_in_the_module_of_its_references() {
     );
 }
 
+/// Each function holds one call; `passes_body_frame_on` holds for the call
+/// that makes the body result of a handle in tail position, directly or
+/// through a structured arm, in a function, an `op` arm, or a lambda.
+const BODY_RESULT_CALLS: &str = r#"core.module @test {
+  !k = tribute_control.func_sig<(core.i32) -> core.i32>
+  ability.decl @Ctl {
+    ability.operation {kind = "op", op_name = "ctl", param_types = [], result_type = core.i32}
+  }
+  tribute_cps.func @g(%x: core.i32) -> core.i32 convention(direct) {
+    tribute_control.return %x
+  }
+  tribute_cps.func @named(%x: core.i32) -> core.i32 convention(direct) {
+    %r = tribute_control.handle : core.i32 {
+      %c = tribute_control.call @g(%x) : (core.i32) -> core.i32
+      tribute_control.yield %c
+    } do(%v: core.i32) {
+        tribute_control.yield %v
+    }
+    tribute_control.return %r
+  }
+  tribute_cps.func @value(%x: core.i32, %k: !k) -> core.i32 convention(direct) {
+    %r = tribute_control.handle : core.i32 {
+      %c = tribute_cps.call_indirect %k(%x) attributes {convention = "cps"} : (core.i32) -> core.i32
+      tribute_control.yield %c
+    } do(%v: core.i32) {
+        tribute_control.yield %v
+    }
+    tribute_control.return %r
+  }
+  tribute_cps.func @select(%x: core.i32, %b: core.i1) -> core.i32 convention(direct) {
+    %r = tribute_control.handle : core.i32 {
+      %s = scf.if %b -> (core.i32) {
+        %c = tribute_control.call @g(%x) : (core.i32) -> core.i32
+        scf.yield %c
+      } else {
+        scf.yield %x
+      }
+      tribute_control.yield %s
+    } do(%v: core.i32) {
+        tribute_control.yield %v
+    }
+    tribute_control.return %r
+  }
+  tribute_cps.func @in_arm(%x: core.i32) -> core.i32 convention(direct) {
+    %r = tribute_control.handle : core.i32 {
+      %p = tribute_control.perform op @Ctl @ctl() : () -> core.i32
+      tribute_control.yield %p
+    } do(%v: core.i32) {
+        tribute_control.yield %v
+    } op @Ctl @ctl() : core.i32 {
+        %i = tribute_control.handle : core.i32 {
+          %c = tribute_control.call @g(%x) : (core.i32) -> core.i32
+          tribute_control.yield %c
+        } do(%w: core.i32) {
+            tribute_control.yield %w
+        }
+        tribute_control.yield %i
+    }
+    tribute_control.return %r
+  }
+  tribute_cps.func @in_lambda(%x: core.i32) -> !k convention(direct) {
+    %l = tribute_cps.lambda(%y: core.i32) -> core.i32 entries {
+      direct {
+        %r = tribute_control.handle : core.i32 {
+          %c = tribute_control.call @g(%y) : (core.i32) -> core.i32
+          tribute_control.yield %c
+        } do(%v: core.i32) {
+            tribute_control.yield %v
+        }
+        tribute_control.return %r
+      }
+    }
+    tribute_control.return %l
+  }
+  tribute_cps.func @not_tail(%x: core.i32) -> core.i32 convention(direct) {
+    %r = tribute_control.handle : core.i32 {
+      %c = tribute_control.call @g(%x) : (core.i32) -> core.i32
+      tribute_control.yield %c
+    } do(%v: core.i32) {
+        tribute_control.yield %v
+    }
+    %s = arith.addi %r, %x : core.i32
+    tribute_control.return %s
+  }
+  tribute_cps.func @in_body(%x: core.i32) -> core.i32 convention(direct) {
+    %r = tribute_control.handle : core.i32 {
+      %i = tribute_control.handle : core.i32 {
+        %c = tribute_control.call @g(%x) : (core.i32) -> core.i32
+        tribute_control.yield %c
+      } do(%w: core.i32) {
+          tribute_control.yield %w
+      }
+      tribute_control.yield %i
+    } do(%v: core.i32) {
+        tribute_control.yield %v
+    }
+    tribute_control.return %r
+  }
+  tribute_cps.func @planned(%x: core.i32) -> core.i32 convention(direct) {
+    %r = tribute_control.handle : core.i32 {
+      %c = tribute_control.call @g(%x) attributes {evidence_plan = [{mask = @Ctl}]} : (core.i32) -> core.i32
+      tribute_control.yield %c
+    } do(%v: core.i32) {
+        tribute_control.yield %v
+    }
+    tribute_control.return %r
+  }
+  tribute_cps.func @other_result(%x: core.i32) -> core.i32 convention(direct) {
+    %r = tribute_control.handle : core.i32 {
+      %c = tribute_control.call @g(%x) : (core.i32) -> core.i32
+      tribute_control.yield %x
+    } do(%v: core.i32) {
+        tribute_control.yield %v
+    }
+    tribute_control.return %r
+  }
+  tribute_cps.func @no_handle(%x: core.i32) -> core.i32 convention(direct) {
+    %c = tribute_control.call @g(%x) : (core.i32) -> core.i32
+    tribute_control.return %c
+  }
+}
+"#;
+
+/// Only the calls at the body result of a tail handle hand its frame on:
+/// not one in a handle whose result is used, one in the body of another
+/// handle, one with an `evidence_plan`, one whose result the body does not
+/// yield, and a tail call outside any handle (`design/cps-effects.md`,
+/// "Frame을 그대로 넘기는 자리").
+#[test]
+fn only_a_call_at_the_body_result_of_a_tail_handle_passes_its_frame_on() {
+    let (ctx, module) = parse(BODY_RESULT_CALLS);
+    let passes: Vec<(&str, bool)> = module
+        .ops(&ctx)
+        .iter()
+        .filter_map(|&func| {
+            let name = ctx.op_attrs(func).get_str("sym_name")?;
+            let mut call = None;
+            let _ = trunk_ir::walk::walk_op::<()>(&ctx, func, &mut |op| {
+                if tribute_control::Call::matches(&ctx, op) || CallIndirect::matches(&ctx, op) {
+                    call = Some(op);
+                }
+                std::ops::ControlFlow::Continue(trunk_ir::walk::WalkAction::Advance)
+            });
+            Some((name, passes_body_frame_on(&ctx, call?)))
+        })
+        .collect();
+    assert_eq!(
+        passes,
+        [
+            ("named", true),
+            ("value", true),
+            ("select", true),
+            ("in_arm", true),
+            ("in_lambda", true),
+            ("not_tail", false),
+            ("in_body", false),
+            ("planned", false),
+            ("other_result", false),
+            ("no_handle", false),
+        ]
+    );
+}
+
 #[test]
 fn the_targets_of_a_function_table_share_one_source_signature() {
     let errors = messages(

@@ -1053,6 +1053,81 @@ fn a_become_in_a_handler_arm_enters_a_cps_entry_instance() {
     );
 }
 
+/// The call that makes the body result of a tail handle enters `g`, whose
+/// row implies `Direct`, at its `Cps` entry instance, and the callable
+/// value `%k` at its `Cps` entry. The bodyless `ext` keeps its instance, and
+/// so does the same call in a handle whose result is used
+/// (`design/cps-effects.md`, "Frame을 그대로 넘기는 자리").
+#[test]
+fn a_body_result_call_of_a_tail_handle_enters_a_cps_entry() {
+    let printed = specialized(
+        r#"core.module @m {
+  !k = tribute_control.func_sig<(core.i32) -> core.i32>
+  tribute_control.func @g(%x: core.i32) -> core.i32 {
+    tribute_control.return %x
+  }
+  tribute_control.func @ext(%x: core.i32) -> core.i32 attributes {abi = "C"}
+  tribute_control.func @named(%x: core.i32) -> core.i32 {
+    %r = tribute_control.handle : core.i32 {
+      %c = tribute_control.call @g(%x) : (core.i32) -> core.i32
+      tribute_control.yield %c
+    } do(%v: core.i32) {
+        tribute_control.yield %v
+    }
+    tribute_control.return %r
+  }
+  tribute_control.func @value(%x: core.i32, %k: !k) -> core.i32 {
+    %r = tribute_control.handle : core.i32 {
+      %c = tribute_control.call_indirect %k(%x) : (core.i32) -> core.i32
+      tribute_control.yield %c
+    } do(%v: core.i32) {
+        tribute_control.yield %v
+    }
+    tribute_control.return %r
+  }
+  tribute_control.func @bodyless(%x: core.i32) -> core.i32 {
+    %r = tribute_control.handle : core.i32 {
+      %c = tribute_control.call @ext(%x) : (core.i32) -> core.i32
+      tribute_control.yield %c
+    } do(%v: core.i32) {
+        tribute_control.yield %v
+    }
+    tribute_control.return %r
+  }
+  tribute_control.func @main(%x: core.i32) -> core.i32 {
+    %r = tribute_control.handle : core.i32 {
+      %c = tribute_control.call @g(%x) : (core.i32) -> core.i32
+      tribute_control.yield %c
+    } do(%v: core.i32) {
+        tribute_control.yield %v
+    }
+    %n = tribute_control.call @named(%r) : (core.i32) -> core.i32
+    %f = tribute_control.func_ref @g : !k
+    %w = tribute_control.call @value(%n, %f) : (core.i32, !k) -> core.i32
+    %b = tribute_control.call @bodyless(%w) : (core.i32) -> core.i32
+    tribute_control.return %b
+  }
+}"#,
+    );
+    assert_contains(
+        &printed,
+        &[
+            "tribute_cps.func @named(%0: core.i32) -> core.i32 convention(direct) {",
+            "tribute_control.call @\"g$7\"(%0) : (core.i32) -> core.i32",
+            "tribute_cps.func @\"g$7\"(%0: core.i32) -> core.i32 convention(cps) attributes {entry_of = \"g\"} {",
+            "tribute_cps.call_indirect %1(%0) attributes {convention = \"cps\"} : (core.i32) -> core.i32",
+            "tribute_control.call @ext(%0) : (core.i32) -> core.i32",
+        ],
+    );
+    let main = &printed[printed
+        .find("tribute_cps.func @main")
+        .expect("main is specialized")..];
+    assert!(
+        main.contains("tribute_control.call @g(%0) : (core.i32) -> core.i32"),
+        "{printed}"
+    );
+}
+
 /// Only a lambda whose own flow hands a frame on gets a `Cps` entry body:
 /// the curried `%o` and `%n` keep one body, and `%t`, nested in `%n`, whose
 /// `become` is its own, gets a `cps` body that enters `id`'s `Cps` entry

@@ -79,7 +79,7 @@ pub use interfaces::{
     DynSourceCallable, LocalValidation, OperationDeclarationUse, Resumption, ResumptionRegions,
     ResumptionScope, SourceCallable,
 };
-pub use local_validation::validate_local;
+pub use local_validation::{body_result_handle, in_tail_position, validate_local};
 pub(crate) use local_validation::{
     validate_func, validate_lambda, validate_tail_call, verify_resolved_types,
     verify_row_declarations,
@@ -462,12 +462,19 @@ mod tribute_control {
     ///   `evidence_plan` (`design/tribute-dialects.md`, "Evidence 선택 속성") and
     ///   `row_args` (`design/tribute-dialects.md`, "Row 인자와 치환"). A non-terminator
     ///   with no region.
-    /// - **Meaning:** calls a named source callable directly.
+    /// - **Meaning:** calls a named source callable directly. After class
+    ///   specialization the callee is the instance the row arguments
+    ///   select, except that a call that hands a handle body's frame on
+    ///   (`tribute_cps::passes_body_frame_on`) names the `Cps` entry
+    ///   instance of a callee with a body whose row determines a weaker
+    ///   convention, and passes it the body's frame
+    ///   (`design/cps-effects.md`, "Frame을 그대로 넘기는 자리").
     /// - **Verification:** the local verifier checks the attributes and the
     ///   resolved operands and result. Whole-IR verification checks that
     ///   `row_args` has as many entries as the callee's quantified binders,
     ///   and that the operands and result equal the callee type with
-    ///   `row_args` substituted.
+    ///   `row_args` substituted. The convention check of class
+    ///   specialization checks the instance it names.
     /// - **Ownership and value flow:** the arguments and result are ordinary
     ///   SSA values, and there is no hidden operand.
     /// - **Location:** the source call span, including the callee and the

@@ -138,6 +138,41 @@ pub(super) fn tail_call_owner(
     }
 }
 
+/// Whether `op`'s one result flows straight into a terminator in tail
+/// position of its callable, the position a source tail call may take.
+pub fn in_tail_position(ctx: &IrContext, op: OpRef) -> bool {
+    result_terminator(ctx, op, false).is_some_and(|terminator| {
+        (Return::matches(ctx, terminator)
+            || Yield::matches(ctx, terminator)
+            || trunk_ir::dialect::scf::Yield::matches(ctx, terminator))
+            && tail_call_owner(ctx, terminator).is_ok()
+    })
+}
+
+/// The handle whose body result `op`'s one result is: the operand of the
+/// body's `yield` right after `op`, or, through the `scf.yield` of an arm,
+/// the result of a one-result operation that selects one region and is
+/// such a result itself (`design/cps-effects.md`, "Frame을 그대로 넘기는
+/// 자리").
+pub fn body_result_handle(ctx: &IrContext, op: OpRef) -> Option<Handle> {
+    let mut source = op;
+    loop {
+        let terminator = result_terminator(ctx, source, false)?;
+        let owner = parent_op(ctx, terminator)?;
+        if Yield::matches(ctx, terminator) {
+            let handle = Handle::from_op(ctx, owner).ok()?;
+            return (parent_region(ctx, terminator) == Some(handle.body(ctx))).then_some(handle);
+        }
+        if !trunk_ir::dialect::scf::Yield::matches(ctx, terminator)
+            || !DynRegionBranch::selects_one_region(ctx, owner)
+            || ctx.op_results(owner).len() != 1
+        {
+            return None;
+        }
+        source = owner;
+    }
+}
+
 /// The terminator of the block of `op` when it takes `op`'s one result as
 /// its only operand and nothing comes between them, or, if `casts` allows
 /// them, only conversion casts that each cast the value before it.

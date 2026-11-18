@@ -421,9 +421,11 @@ region에 속하므로 `Cps` flow다. `fn` arm은 어느 callable 안에서든 o
 `Done<R>`로 넘기면, 그 본문이 다시 delimiter를 열고 그 안의 arm이 `become`으로 이어질
 때마다 native frame이 쌓이기 때문이다.
 
-- **Named 정의:** `Cps` flow 안의 source `become`이 가리키는 인스턴스가 `Cps`가
-  아니면, 그 이전은 같은 정의와 class 인자의 `Cps` 진입 인스턴스를 대상으로 한다.
-  진입 인스턴스의 본문도 `Cps` flow이므로 이 요구는 `become`을 따라 이어진다.
+- **Named 정의:** `Cps` flow 안의 source `become`이나
+  [frame을 넘기는 body 결과 호출](#frame을-그대로-넘기는-자리)이 가리키는 인스턴스가
+  `Cps`가 아니면, 그 이전은 같은 정의와 class 인자의 `Cps` 진입 인스턴스를 대상으로
+  한다. 진입 인스턴스의 본문도 `Cps` flow이므로 이 요구는 그 본문의 `become`과 body
+  결과 호출을 따라 이어진다.
 - **람다:** 더 약한 본문만 가지는 람다는 자기 flow에 frame을 넘기는 operation이
   있을 때 `Cps` 진입 본문을 하나 더 가지며, 그것이 람다의 `Cps`
   [convention entry](tribute-dialects.md#convention-entry)다. Frame을 넘기는
@@ -442,9 +444,10 @@ region에 속하므로 `Cps` flow다. `fn` arm은 어느 callable 안에서든 o
   없는 정의는 handle을 설치하거나 `become`하지 않으므로 그 호출이 더하는 native
   깊이는 호출 한 번이다.
 
-일반 호출은 flow와 관계없이 row가 정한 convention의 인스턴스를 부르며 `Cps` 진입을
-요구하지 않는다. `tribute_cps.func`의 convention은 그 row와 class 인자가 정한
-convention이거나 `Cps`이고, 검증은 그 밖의 값을 거부한다.
+Frame을 넘기는 body 결과 호출을 뺀 일반 호출은 flow와 관계없이 row가 정한
+convention의 인스턴스를 부르며 `Cps` 진입을 요구하지 않는다. `tribute_cps.func`의
+convention은 그 row와 class 인자가 정한 convention이거나 `Cps`이고, 검증은 그 밖의
+값을 거부한다.
 
 Local lambda의 convention도 typechecking이 확정한 ability row에서 계산한다. Lambda
 본문은 닫힌 빈 accumulator로 검사하고, 본문이 남긴 open row 또는 lambda를
@@ -774,6 +777,27 @@ operation은 suffix frame을 만들지 않고 flow의 frame을 그대로 쓴다.
 그 선택을 재개 경로에서 다시 적용할 층이 필요하기 때문이다. Source 규칙은
 [syntax.md](syntax.md#frame을-남기지-않는-자리)가 정하며, 그 밖의 꼬리 위치 `Cps`
 호출은 source `become`일 때만 frame을 넘긴다.
+
+**Frame을 넘기는 body 결과 호출**은 source 규칙이 보장하는 자리의 호출이다. 꼬리
+위치에 있는 handle의 body 결과가 되고 `evidence_plan`이 없는 `tribute_control.call`과
+`call_indirect`다. Body 결과 자리는 위의 규칙과 같이 body의 `yield`로 곧바로 가는
+값이며, 꼬리 위치는 source `become`의 꼬리 위치와 같다
+([`tribute_control.tail_call`](../crates/tribute-ir/src/dialect/tribute_control.rs)).
+이 호출은 callee의 row가 정한 convention과 관계없이 `Cps`로 들어가 body의 frame을
+넘긴다.
+
+- **Named callee:** 본문이 있는 callee의 `Cps` 인스턴스이고, row가 정한 convention이
+  `Cps`가 아니면 그 [`Cps` 진입 인스턴스](#cps-진입-본문)다. 본문이 없는 callee는
+  row가 정한 인스턴스를 일반 호출하며, 그 호출이 더하는 native 깊이는 한 번이다.
+- **Callable value:** 값의 `Cps` convention entry다. 그 entry는 본문이거나
+  adapter다.
+
+Class 특수화, 그 검사, 적법화는 이 자리를 같은 판정
+(`tribute_cps::passes_body_frame_on`)으로 읽는다. 특수화는 이 판정이 참인 호출에만
+`Cps` 진입 인스턴스를 요구하므로, 다른 꼬리 위치 호출과 꼬리 위치가 아닌 handle의
+body 결과 호출은 인스턴스를 늘리지 않는다. 그 결과 `become`으로 다시 들어오는 handler
+반복(callee의 `Cps` 진입 → callee의 `become` → 감싼 정의의 `Cps` 진입 → 꼬리
+handle)은 callee의 convention과 관계없이 native frame을 쌓지 않는다.
 
 Converter는 region, block suffix, `tribute_control.yield`, 검증된
 `operation_kind`, callable convention metadata에서 모든 continuation을

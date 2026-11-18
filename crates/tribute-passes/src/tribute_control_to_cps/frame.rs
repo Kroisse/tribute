@@ -102,6 +102,33 @@ impl Converter<'_> {
         passes_frame.then_some(flow.exit_k).flatten()
     }
 
+    /// The frame a `Cps` call `source` passes: the flow's frame where
+    /// [`Self::tail_exit_frame`] gives it, and otherwise the frame of the
+    /// suffix after it. A call that class specialization entered as `Cps`
+    /// because it hands a handle body's frame on
+    /// ([`tribute_cps::passes_body_frame_on`]) always passes the flow's frame.
+    pub(super) fn call_frame(
+        &mut self,
+        source: OpRef,
+        rest: Rest<'_>,
+        block: BlockRef,
+        mapping: &HashMap<ValueRef, ValueRef>,
+        flow: &Flow,
+    ) -> Result<ValueRef, TributeControlToCpsError> {
+        if let Some(frame) = self.tail_exit_frame(source, rest, flow) {
+            return Ok(frame);
+        }
+        if tribute_cps::passes_body_frame_on(self.ctx, source) {
+            return Err(TributeControlToCpsError::post_op(
+                source,
+                self.ctx.op(source).location,
+                "a call that hands a handle body's frame on has no frame to pass",
+            ));
+        }
+        let plan = evidence_plan_of(self.ctx, source);
+        self.push_suffix_frame(source, rest, block, mapping, flow, plan)
+    }
+
     /// Build the frame a suffix continuation is entered through. `plan` is
     /// the `evidence_plan` that selects the evidence of the computation the
     /// frame is passed to.

@@ -432,6 +432,52 @@ fn a_become_in_a_cps_flow_names_the_cps_entry_instance() {
     );
 }
 
+/// The call that makes the body result of `step`'s tail handle names
+/// `callee` and calls `%k` through `convention`, and `step$7` is `step`'s
+/// `Cps` entry instance.
+fn body_result_calls(callee: &str, convention: &str) -> String {
+    format!(
+        r#"core.module @m {{
+  !k = tribute_control.func_sig<(core.i32) -> core.i32>
+  tribute_cps.func @step(%x: core.i32) -> core.i32 convention(direct) {{
+    tribute_control.return %x
+  }}
+  {entry}
+  tribute_cps.func @named(%x: core.i32) -> core.i32 convention(direct) {{
+    %r = tribute_control.handle : core.i32 {{
+      %c = tribute_control.call @"{callee}"(%x) : (core.i32) -> core.i32
+      tribute_control.yield %c
+    }} do(%v: core.i32) {{
+        tribute_control.yield %v
+    }}
+    tribute_control.return %r
+  }}
+  tribute_cps.func @value(%x: core.i32, %k: !k) -> core.i32 convention(direct) {{
+    %r = tribute_control.handle : core.i32 {{
+      %c = tribute_cps.call_indirect %k(%x) attributes {{convention = "{convention}"}} : (core.i32) -> core.i32
+      tribute_control.yield %c
+    }} do(%v: core.i32) {{
+        tribute_control.yield %v
+    }}
+    tribute_control.return %r
+  }}
+}}"#,
+        entry = step_entry("step$7", "cps", "step"),
+    )
+}
+
+/// A call that hands the frame of a tail handle's body on enters a callee
+/// whose row implies a weaker convention at its `Cps` entry instance, and
+/// a callable value at its `Cps` entry.
+#[test]
+fn a_body_result_call_of_a_tail_handle_enters_as_cps() {
+    assert_eq!(rules(&body_result_calls("step$7", "cps")), [""; 0]);
+    assert_eq!(
+        rules(&body_result_calls("step", "direct")),
+        ["reference", "transfer"]
+    );
+}
+
 /// An indirect `become` in a `Cps` flow enters the value's `Cps` entry,
 /// whatever class the callee type reads.
 #[test]

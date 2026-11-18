@@ -3407,6 +3407,32 @@ fn tail_handles_resumes_and_body_calls_pass_their_flows_frame() {
     );
 }
 
+/// In a `Direct` callable, the call that makes the body result of a tail
+/// handle enters `inner`'s `Cps` entry instance with the body's frame
+/// (`design/cps-effects.md`, "Frame을 그대로 넘기는 자리").
+#[test]
+fn a_body_result_call_enters_a_cps_entry_instance_with_the_body_frame() {
+    let (ctx, module) = convert_state_get(
+        r#"core.module @test {
+  tribute_cps.func @"inner$7"(%x: core.i32) -> core.i32 convention(cps) attributes {entry_of = "inner"} {
+    tribute_control.return %x
+  }
+  tribute_cps.func @run(%input: core.i32) -> core.i32 convention(direct) {
+    %handled = tribute_control.handle : core.i32 {
+      %called = tribute_control.call @"inner$7"(%input) : (core.i32) -> core.i32
+      tribute_control.yield %called
+    } do(%value: core.i32) {
+        tribute_control.yield %value
+    }
+    tribute_control.return %handled
+  }
+}"#,
+    );
+    let (run, _, body, call) = tail_sites(&ctx, module);
+    assert_eq!(suffix_frames(&ctx, run), 0, "{}", module.op().display(&ctx));
+    assert_eq!(ctx.op_operands(call)[1], ctx.block_args(body)[1]);
+}
+
 /// A call or `resume` with an `evidence_plan` keeps its suffix frame, whose
 /// layer applies the selection again on the resumed path.
 #[test]

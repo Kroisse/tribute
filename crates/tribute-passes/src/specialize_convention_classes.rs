@@ -589,12 +589,13 @@ impl Instance<'_> {
             })
             .collect();
         if !is_func_ref {
-            // A `become` in a `Cps` flow hands the flow's frame to the
-            // callee's `Cps` entry (`design/cps-effects.md`, "`Cps` 진입
-            // 본문").
-            let cps_flow = tribute_control::TailCall::matches(ctx, op)
+            // A `become` in a `Cps` flow and a call that hands a handle
+            // body's frame on hand the frame to the callee's `Cps` entry
+            // (`design/cps-effects.md`, "`Cps` 진입 본문").
+            let cps_flow = (tribute_control::TailCall::matches(ctx, op)
                 && tribute_cps::flow_convention(ctx, op).unwrap_or(self.convention)
-                    == CallingConvention::Cps;
+                    == CallingConvention::Cps)
+                || tribute_cps::passes_body_frame_on(ctx, op);
             let entry = if cps_flow {
                 self.entry_for_cps(ctx, definition, positions, &classes)
             } else {
@@ -711,12 +712,16 @@ impl Instance<'_> {
 
     /// The convention of a `func_ref` or indirect transfer: the class of the
     /// row of the callable it makes or calls, or its bound when that class is
-    /// an upper bound. A `become` in a `Cps` flow enters the value's `Cps`
-    /// entry whatever that class is.
+    /// an upper bound. A `become` in a `Cps` flow and a call that hands a
+    /// handle body's frame on enter the value's `Cps` entry whatever that
+    /// class is.
     fn transfer_convention(&self, ctx: &IrContext, op: OpRef) -> Option<CallingConvention> {
         let ty = if tribute_control::FuncRef::matches(ctx, op) {
             ctx.op_result_types(op)[0]
         } else if tribute_control::CallIndirect::matches(ctx, op) {
+            if tribute_cps::passes_body_frame_on(ctx, op) {
+                return Some(CallingConvention::Cps);
+            }
             ctx.value_ty(ctx.op_operands(op)[0])
         } else if tribute_control::TailCallIndirect::matches(ctx, op) {
             if tribute_cps::flow_convention(ctx, op).unwrap_or(self.convention)

@@ -569,6 +569,113 @@ fn main() ->{std::io::Io} Nil {
     assert_output_on_both_targets("become_arm_lambda_value.trb", &lambda, "0");
 }
 
+/// A handle in tail position of `f` whose body result calls `g`, which
+/// loops back with `become f`, as a named callee, a named function value,
+/// and a lambda. `ROW` is the row of both, so `g` is `Direct` or
+/// `EvidenceDirect`.
+const BODY_RESULT_LOOPS: [(&str, &str); 3] = [
+    (
+        "named",
+        r#"
+fn g(n: Int, acc: Int) ->{ROW} Int {
+    case n == +0 {
+        True -> acc
+        False -> become f(n - +1, acc + +1)
+    }
+}
+
+fn f(n: Int, acc: Int) ->{ROW} Int {
+    handle g(n, acc) {
+        do x { x }
+    }
+}
+
+fn main() ->{std::io::Io} Nil {
+    std::io::print_line(f(+N, +0).to_string)
+}
+"#,
+    ),
+    (
+        "func_value",
+        r#"
+fn g(n: Int, acc: Int) ->{ROW} Int {
+    case n == +0 {
+        True -> acc
+        False -> become f(g, n - +1, acc + +1)
+    }
+}
+
+fn f(k: fn(Int, Int) ->{ROW} Int, n: Int, acc: Int) ->{ROW} Int {
+    handle k(n, acc) {
+        do x { x }
+    }
+}
+
+fn main() ->{std::io::Io} Nil {
+    std::io::print_line(f(g, +N, +0).to_string)
+}
+"#,
+    ),
+    (
+        "lambda",
+        r#"
+fn g(n: Int, acc: Int) ->{ROW} Int {
+    case n == +0 {
+        True -> acc
+        False -> become f(fn(m: Int, a: Int) ->{ROW} Int { become g(m, a) }, n - +1, acc + +1)
+    }
+}
+
+fn f(k: fn(Int, Int) ->{ROW} Int, n: Int, acc: Int) ->{ROW} Int {
+    handle k(n, acc) {
+        do x { x }
+    }
+}
+
+fn main() ->{std::io::Io} Nil {
+    std::io::print_line(f(g, +N, +0).to_string)
+}
+"#,
+    ),
+];
+
+/// The call that makes the body result of a tail handle enters a `Direct`
+/// or `EvidenceDirect` callee at its `Cps` entry with the body's frame, so
+/// a loop back through `become` leaves no frame.
+#[test]
+fn test_a_body_result_call_of_a_weaker_callee_leaves_no_frame() {
+    for (row_name, row) in [("direct", ""), ("evidence_direct", "std::io::Io")] {
+        for (shape, program) in BODY_RESULT_LOOPS {
+            let code = program
+                .replace("ROW", row)
+                .replace("+N", &format!("+{HANDLER_LOOP}"));
+            assert_output_on_both_targets(
+                &format!("body_result_{row_name}_{shape}.trb"),
+                &code,
+                HANDLER_LOOP,
+            );
+        }
+    }
+}
+
+/// A lambda whose own flow hands no frame on is entered at the body result
+/// through its `Cps` adapter.
+#[test]
+fn test_a_body_result_call_enters_a_value_returning_lambda() {
+    let code = r#"
+fn f(k: fn(Int) ->{} Int, n: Int) ->{} Int {
+    handle k(n) {
+        do x { x + +1 }
+    }
+}
+
+fn main() ->{std::io::Io} Nil {
+    std::io::print_line(f(fn(m: Int) -> Int { m + m }, +20).to_string)
+}
+"#;
+    assert_output_on_both_targets("body_result_adapter.trb", code, "41");
+}
+
 /// The call that makes a handle body's result passes the body's frame on
 /// when it is the last expression of a block or a `case` arm too.
 #[test]
