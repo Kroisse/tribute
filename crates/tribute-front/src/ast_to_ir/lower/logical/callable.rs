@@ -32,6 +32,16 @@ pub(super) fn ends_with_exit(ir: &IrContext, block: BlockRef) -> bool {
         .is_some_and(|&op| DynCallableExit::prove(ir, op).is_ok())
 }
 
+/// Whether lowering ended `block` with a source `become`, which may end the
+/// completion or an `op` arm of a `handle` in tail position in place of its
+/// `yield`.
+fn ends_with_tail_call(ir: &IrContext, block: BlockRef) -> bool {
+    ir.block(block).ops.last().is_some_and(|&op| {
+        tribute_control::TailCall::matches(ir, op)
+            || tribute_control::TailCallIndirect::matches(ir, op)
+    })
+}
+
 /// Attach the typechecked evidence selection of the source node `node`.
 pub(super) fn attach_evidence_plan<'db>(
     ctx: &IrLoweringCtx<'db>,
@@ -664,14 +674,22 @@ pub(super) fn indirect_call(
     }
 }
 
-/// Lower the operand of `become`. The tail call ends the current block, so
-/// no value continues from it.
+/// Lower the operand of `become`. A call becomes a tail call that ends the
+/// current block, so no value continues from it. `become resume v` and
+/// `become handle ..` only assert their tail position, so they lower as
+/// the operand alone.
 pub(super) fn lower_become<'db>(
     builder: &mut IrBuilder<'_, 'db>,
     location: Location,
     call: Expr<TypedRef<'db>>,
     declarations: &mut Declarations<'db>,
 ) -> Option<ValueRef> {
+    if matches!(
+        &*call.kind,
+        ExprKind::Resume { .. } | ExprKind::Handle { .. }
+    ) {
+        return lower_expr(builder, call, declarations);
+    }
     let ExprKind::Call { callee, args, .. } = *call.kind else {
         // Typechecking has reported any other operand.
         return Some(builder.emit_nil(location));
@@ -1063,19 +1081,27 @@ pub(super) fn lower_handle<'db>(
             &mut IrBuilder::new(&mut scope, builder.ir, completion_block),
             arm.body.clone(),
             declarations,
-        )?;
-        IrBuilder::new(&mut scope, builder.ir, completion_block)
-            .cast_if_needed(location, value, result_ty)
+        );
+        if ends_with_tail_call(builder.ir, completion_block) {
+            None
+        } else {
+            Some(
+                IrBuilder::new(&mut scope, builder.ir, completion_block)
+                    .cast_if_needed(location, value?, result_ty),
+            )
+        }
     } else {
-        complete
+        Some(complete)
     };
-    op(
-        builder.ir,
-        completion_block,
-        location,
-        tribute_control::Yield::DEF,
-        |builder| builder.operand(completion_value),
-    );
+    if let Some(completion_value) = completion_value {
+        op(
+            builder.ir,
+            completion_block,
+            location,
+            tribute_control::Yield::DEF,
+            |builder| builder.operand(completion_value),
+        );
+    }
     let completion_region = builder.ir.create_region(RegionData {
         location,
         blocks: trunk_ir::smallvec::smallvec![completion_block],
@@ -1265,20 +1291,23 @@ pub(super) fn lower_handler<'db>(
             &mut IrBuilder::new(&mut scope, ir, block),
             arm.body,
             declarations,
-        )?;
-        let expected = if kind == OpDeclKind::Fn {
-            operation_result
-        } else {
-            types.answer
-        };
-        let value = IrBuilder::new(&mut scope, ir, block).cast_if_needed(location, value, expected);
-        op(
-            ir,
-            block,
-            location,
-            tribute_control::Yield::DEF,
-            |builder| builder.operand(value),
         );
+        if !(kind == OpDeclKind::Op && ends_with_tail_call(ir, block)) {
+            let expected = if kind == OpDeclKind::Fn {
+                operation_result
+            } else {
+                types.answer
+            };
+            let value =
+                IrBuilder::new(&mut scope, ir, block).cast_if_needed(location, value?, expected);
+            op(
+                ir,
+                block,
+                location,
+                tribute_control::Yield::DEF,
+                |builder| builder.operand(value),
+            );
+        }
     }
     let region = ir.create_region(RegionData {
         location,

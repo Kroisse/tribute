@@ -1052,31 +1052,37 @@ fn is_odd(n: Int) -> Bool {
 }
 ```
 
-Proper tail call을 보장하는 것은 `become`뿐이다. `become`이 없는 꼬리 위치 호출은
-일반 호출의 의미를 가지며, 컴파일러는 최적화로 이를 tail transfer로 바꿀 수 있지만
+함수 호출의 proper tail call을 보장하는 것은 `become`뿐이다. 예외는
+[frame을 남기지 않는 자리](#frame을-남기지-않는-자리)의 handle body 결과 호출
+하나다. `become`이 없는 꼬리 위치 호출은 일반 호출의 의미를 가지며, 컴파일러는 최적화로 이를 tail transfer로 바꿀 수 있지만
 보장하지 않는다. 이 최적화는 target, 최적화 수준, RC 정리 여부에 따라 적용되거나
 적용되지 않는다. 반복 횟수에 제한이 없는 재귀는 `become`으로 써야 한다.
 
 다음 규칙을 어기면 컴파일 오류다. 진단은 보장할 수 없는 이유를 `become` 위치에서
 알려 준다.
 
-- **피연산자:** 인자 목록이 있는 함수 호출이어야 한다. Named function, qualified
-  path, UFCS, callable value(lambda, parameter, capture) 호출이 해당한다. 생성자,
-  ability operation, `resume`, `extern` 함수 호출은 피연산자가 될 수 없다. `extern`
-  함수는 foreign 호출 규약을 쓰므로 frame을 넘길 수 없다.
+- **피연산자:** 인자 목록이 있는 함수 호출, `resume` 식, `handle` 식 가운데
+  하나여야 한다. 함수 호출은 named function, qualified path, UFCS, callable
+  value(lambda, parameter, capture) 호출이 해당한다. 생성자, ability operation,
+  `extern` 함수 호출은 피연산자가 될 수 없다. `extern` 함수는 foreign 호출 규약을
+  쓰므로 frame을 넘길 수 없다. `become resume v`와 `become handle ..`은 그 식이 tail
+  position에 있다는 단언이며 식의 뜻을 바꾸지 않는다
+  ([frame을 남기지 않는 자리](#frame을-남기지-않는-자리)).
 - **위치:** `become` 식은 감싼 callable(`fn` 정의나 lambda)의 tail position에 있어야
   한다. Tail position은 callable body block의 마지막 식, tail position에 있는 block의
-  마지막 식, tail position에 있는 `case`의 각 arm 결과 식이다. 그 밖의 위치(`let`
-  우변, 인자, 연산자 피연산자, `case` scrutinee와 guard)는 tail position이 아니다.
-  Lambda body의 tail position은 그 lambda에 대한 것이며 바깥 callable의 tail
-  position이 아니다.
-- **Handler:** `handle` body는 handler가 설치된 채 실행되므로 그 안은 tail position이
-  아니다. Handler arm(`do`, `fn`, `op`)의 결과는 handle 식의 값이나 resume 값이 되므로
-  역시 tail position이 아니다.
-- **타입:** 호출 결과 타입은 감싼 callable의 결과 타입과 같아야 하고, callee의 effect
-  row는 일반 호출처럼 감싼 callable의 ability row에 포함되어야 한다. `become` 식의
-  타입은 호출 결과 타입이다.
-- **Handler 전달:** 호출은 감싼 callable이 받은 handler를 callee에게 그대로 넘겨야
+  마지막 식, tail position에 있는 `case`의 각 arm 결과 식, tail position에 있는
+  `handle` 식의 `do` arm과 `op` arm의 결과 식이다. 그 밖의 위치(`let` 우변, 인자,
+  연산자 피연산자, `case` scrutinee와 guard)는 tail position이 아니다. Lambda body의
+  tail position은 그 lambda에 대한 것이며 바깥 callable의 tail position이 아니다.
+- **Handler:** `do` arm과 `op` arm의 결과는 handle 식의 값이므로, handle 식이 tail
+  position에 있으면 그 결과도 감싼 callable의 결과다. `handle` body는 handler가
+  설치된 채 실행되고 그 결과는 `do` arm으로 가므로 tail position이 아니다. `fn` arm의
+  결과는 operation의 결과가 되어 perform 지점으로 돌아가므로 tail position이 아니다.
+- **타입:** 함수 호출과 `resume`의 타입은 감싼 callable의 결과 타입과 같아야 한다.
+  `handle` 식은 `become` 없이 그 자리에 있을 때와 똑같이 검사한다. 피연산자의
+  effect row는 `become`이 없을 때처럼 감싼 callable의 ability row에 포함되어야 한다.
+  `become` 식의 타입은 피연산자의 타입이다.
+- **Handler 전달:** 호출과 `resume`은 감싼 callable이 받은 handler를 그대로 넘겨야
   한다([호출의 evidence 선택](type-inference.md#호출의-evidence-선택)). Callee가 다른
   handler 선택을 받는 호출은 callee가 끝날 때까지 그 선택을 기억해야 하므로 frame을
   넘길 수 없다. Row tail로 받은 callback을 명시한 ability 아래에서 부르는 호출,
@@ -1087,6 +1093,38 @@ Proper tail call을 보장하는 것은 `become`뿐이다. `become`이 없는 �
 callable의 지역 값을 정리하고 이전한다. 이 정리는 관찰할 수 없으므로 reference
 counting 같은 구현 세부는 `become`을 거부할 이유가 되지 않는다. 보장은 모든 호출
 규약과 target에 똑같이 적용된다.
+
+#### Frame을 남기지 않는 자리
+
+Handler가 자신을 다시 설치하며 도는 반복이 상수 공간에서 실행되도록, 다음 두 자리는
+`become` 없이도 frame을 남기지 않는다. 둘 다 감싼 callable이 받은 handler를 그대로
+넘기는 경우에 한한다([호출의 evidence 선택](type-inference.md#호출의-evidence-선택)).
+
+- **Tail position의 `resume`:** 재개된 계산의 결과가 곧 감싼 callable의 결과이므로
+  `resume`을 호출한 쪽은 frame을 남기지 않는다. `become resume v`로 적으면 그 자리가
+  tail position이 아닐 때 컴파일 오류가 된다.
+- **Tail position에 있는 `handle`의 body 결과 호출:** body의 결과 자리에 있는 호출은
+  그 결과를 handle에 그대로 넘기므로 호출한 쪽의 frame을 남기지 않는다. Body의 결과
+  자리는 body block의 마지막 식, 그 자리에 있는 block의 마지막 식, 그 자리에 있는
+  `case`의 각 arm 결과 식이다. Body는 tail position이 아니므로 이 호출에 `become`을
+  쓰지 않는다.
+
+Arm의 결과 자리에 있는 함수 호출은 다른 tail position의 호출과 같다. `become`을
+써야 proper tail call이다.
+
+```rust
+fn run_state(comp: fn() ->{e, State(s)} a, state: s) ->{e} a {
+    handle comp() {
+        op State::get() { become run_state(fn() resume state, state) }
+        op State::set(v) { become run_state(fn() resume Nil, v) }
+    }
+}
+```
+
+`run_state`의 `handle`은 tail position에 있으므로 두 arm의 `become`은 `run_state`의
+frame을 넘긴다. Lambda의 `resume`은 그 lambda의 tail position에 있고, 재개된 계산이
+다시 `State` operation을 수행하면 새 handle의 arm이 같은 방식으로 이어진다. 그래서
+operation을 몇 번 수행해도 handler와 frame이 쌓이지 않는다.
 
 ### Binary Operators
 

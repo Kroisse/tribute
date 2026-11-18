@@ -31,8 +31,8 @@ fn counter(comp: fn() ->{e, State(Nat)} Nat) ->{e, State(Nat)} Nat {
 fn run_state(comp: fn() ->{State(Nat)} Nat) -> Nat {
     handle comp() {
         do result { result }
-        op State::get() { run_state(fn() { resume 0 }) }
-        op State::set(v) { run_state(fn() { resume Nil }) }
+        op State::get() { become run_state(fn() { resume 0 }) }
+        op State::set(v) { become run_state(fn() { resume Nil }) }
     }
 }
 
@@ -139,8 +139,8 @@ ability State(s) {
 fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
     handle comp() {
         do result { result }
-        op State::get() { run_state(fn() { resume init }, init) }
-        op State::set(v) { run_state(fn() { resume Nil }, v) }
+        op State::get() { become run_state(fn() { resume init }, init) }
+        op State::set(v) { become run_state(fn() { resume Nil }, v) }
     }
 }
 

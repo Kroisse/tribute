@@ -75,7 +75,7 @@ fn use_writer() ->{{Writer(Nat)}} Nat {{
 fn run_writer(comp: fn() ->{{e, Writer(w)}} a) ->{{e}} a {{
     handle comp() {{
         do value {{ value }}
-        op Writer::tell(value) {{ run_writer(fn() {{ resume Nil }}) }}
+        op Writer::tell(value) {{ become run_writer(fn() {{ resume Nil }}) }}
     }}
 }}
 fn relay(comp: fn() ->{{e}} a) ->{{e}} a {{ comp() }}

@@ -692,7 +692,15 @@ fn database(prelude_extension: Option<&str>) -> TributeDatabaseImpl {
     db
 }
 
-fn assert_target_outputs(source_name: &str, expected_stdout: &str, native: Output, wasm: Output) {
+/// Assert that the native and Wasm runs of `source_name` both succeeded and
+/// printed `expected_stdout`.
+#[allow(dead_code)]
+pub fn assert_target_outputs(
+    source_name: &str,
+    expected_stdout: &str,
+    native: Output,
+    wasm: Output,
+) {
     for (target, output) in [("native", native), ("wasm", wasm)] {
         let stdout = String::from_utf8_lossy(&output.stdout);
         assert!(

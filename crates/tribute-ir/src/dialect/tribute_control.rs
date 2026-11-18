@@ -79,7 +79,7 @@ pub use interfaces::{
     DynSourceCallable, LocalValidation, OperationDeclarationUse, Resumption, ResumptionRegions,
     ResumptionScope, SourceCallable,
 };
-pub use local_validation::validate_local;
+pub use local_validation::{body_result_handle, in_tail_position, validate_local};
 pub(crate) use local_validation::{
     validate_func, validate_lambda, validate_tail_call, verify_resolved_types,
     verify_row_declarations,
@@ -363,7 +363,8 @@ mod tribute_control {
     ///   another lambda, and may be passed to the recursive call of the
     ///   enclosing function, but any other use, such as yielding it, storing
     ///   it, or passing it to another call, lets the resumption escape and
-    ///   is invalid. See
+    ///   is invalid. A source tail call of the enclosing function counts as
+    ///   its recursive call. See
     ///   `tribute_control.handle` for the affine rule.
     /// - **Signature:** a `SourceCallable` whose signature is its result type.
     /// - **Flags:** `SourceLambda`, shared with `tribute_cps.lambda`.
@@ -461,12 +462,19 @@ mod tribute_control {
     ///   `evidence_plan` (`design/tribute-dialects.md`, "Evidence 선택 속성") and
     ///   `row_args` (`design/tribute-dialects.md`, "Row 인자와 치환"). A non-terminator
     ///   with no region.
-    /// - **Meaning:** calls a named source callable directly.
+    /// - **Meaning:** calls a named source callable directly. After class
+    ///   specialization the callee is the instance the row arguments
+    ///   select, except that a call that hands a handle body's frame on
+    ///   (`tribute_cps::passes_body_frame_on`) names the `Cps` entry
+    ///   instance of a callee with a body whose row determines a weaker
+    ///   convention, and passes it the body's frame
+    ///   (`design/cps-effects.md`, "Frame을 그대로 넘기는 자리").
     /// - **Verification:** the local verifier checks the attributes and the
     ///   resolved operands and result. Whole-IR verification checks that
     ///   `row_args` has as many entries as the callee's quantified binders,
     ///   and that the operands and result equal the callee type with
-    ///   `row_args` substituted.
+    ///   `row_args` substituted. The convention check of class
+    ///   specialization checks the instance it names.
     /// - **Ownership and value flow:** the arguments and result are ordinary
     ///   SSA values, and there is no hidden operand.
     /// - **Location:** the source call span, including the callee and the
@@ -533,11 +541,16 @@ mod tribute_control {
     ///   (`DynRegionBranch::selects_one_region`), such as `scf.if` or
     ///   `scf.index_switch`, in tail position. That arm is a terminal
     ///   region, and only the arms that end in `scf.yield` produce the
-    ///   operation's result. Such an operation is in tail position when its
+    ///   operation's result. In place of `tribute_control.yield` it may end
+    ///   the completion or an `op` arm of a `tribute_control.handle` in tail
+    ///   position, whose result is then the operand of the terminator that
+    ///   follows it directly. Such an operation is in tail position when its
     ///   result flows directly into the terminator of the enclosing region:
-    ///   the `return` of a callable body, or the `scf.yield` of an outer arm
-    ///   that is itself in tail position. It is invalid inside a
-    ///   `tribute_control.handle` body or arm.
+    ///   the `return` of a callable body, the `scf.yield` of an outer arm
+    ///   that is itself in tail position, or the `tribute_control.yield` of
+    ///   a completion or `op` arm of a handle in tail position. It is
+    ///   invalid inside the body or an `fn` arm of a handle
+    ///   (`design/syntax.md`, "Tail Call (`become`)").
     /// - **Meaning:** a proper tail call of a named source callable. When the
     ///   call finishes, the callee's result becomes the enclosing callable's
     ///   result, and no caller frame remains. The callee receives the
@@ -549,15 +562,21 @@ mod tribute_control {
     ///   callable's result type. Whole-IR verification, as for
     ///   `tribute_control.call`, matches the callee signature with `row_args`
     ///   substituted against the operands and the enclosing callable's
-    ///   result. Inside a `tribute_cps` callable it also checks that the
-    ///   callee instance's convention is not stronger than that callable's.
+    ///   result. Inside a `tribute_cps` callable it also checks the callee
+    ///   instance's convention against the flow that holds the transfer
+    ///   (`tribute_cps::flow_convention`): in a `Cps` flow, such as the
+    ///   completion or an arm of a handle, a callee with a body is a `Cps`
+    ///   instance, its `Cps` entry instance when its row determines a weaker
+    ///   convention; elsewhere the callee is not stronger than the flow.
     ///   Typechecking owns the source diagnostics for tail position and
     ///   the handler rule; this check confirms that lowering preserved its
     ///   result.
     /// - **Ownership and value flow:** the arguments are ordinary SSA uses,
-    ///   and there is no hidden operand. Shared legalization turns it into a
-    ///   proper tail transfer for every combination of conventions
-    ///   (`design/cps-effects.md`, "Source proper tail call의 적법화").
+    ///   and there is no hidden operand; the transfer moves them to the
+    ///   callee. Shared legalization turns it into a proper tail transfer
+    ///   for every combination of conventions, which in a `Cps` flow hands
+    ///   on the flow's `ContinuationFrame<R>` (`design/cps-effects.md`,
+    ///   "Source proper tail call의 적법화").
     /// - **Location:** the source span including the `become` keyword and
     ///   the call.
     #[verify]
@@ -579,7 +598,8 @@ mod tribute_control {
     /// - **Meaning:** a proper tail call of a callable value. The callee
     ///   receives the caller's evidence unchanged, so the operation carries
     ///   no `evidence_plan`; typechecking rejects a `become` whose call would
-    ///   select different evidence.
+    ///   select different evidence. In a `Cps` flow class specialization
+    ///   enters the value's `Cps` entry (`tribute_cps.tail_call_indirect`).
     /// - **Verification:** the local verifier checks the callee signature and
     ///   argument types, the placement rule, and that the callee result type
     ///   equals the enclosing callable's result type.
@@ -740,7 +760,10 @@ mod tribute_control {
     ///   arguments are the source operation arguments, in declaration order
     ///   and with their logical types, and nothing else, whatever the arm's
     ///   kind. The resumption of a resumptive arm is not an argument.
-    /// - **Terminators:** every region ends in `tribute_control.yield`.
+    /// - **Terminators:** every region ends in `tribute_control.yield`,
+    ///   except that the completion and each `op` arm of a handle in tail
+    ///   position may end in a source tail call instead, which leaves the
+    ///   callable and yields no value (`tribute_control.tail_call`).
     /// - **Meaning:** when `body` completes normally under this handle,
     ///   `completion` is evaluated exactly once and its value is returned.
     ///   A general arm returns its value as the handle result, whether or
@@ -788,9 +811,11 @@ mod tribute_control {
     ///   such a `resume` carries the resumption, and then the static path
     ///   goes through that lambda: its result may be called, used in the body
     ///   of another lambda, which then carries the resumption too, or passed
-    ///   to the recursive call of the enclosing function, and every other
-    ///   use, such as yielding it, storing it, or passing it to another call,
-    ///   is an escape and is invalid. Two lambdas that close over one carrier
+    ///   to a call or source tail call of the enclosing function, the same
+    ///   definition and class arguments through either of its entries
+    ///   (`tribute_cps.func`, `entry_of`), and every other use, such as
+    ///   yielding it, storing it, or passing it to another call or tail
+    ///   transfer, is an escape and is invalid. Two lambdas that close over one carrier
     ///   are on one path when one encloses the other; otherwise they must be
     ///   on mutually exclusive branches, which include the different bodies
     ///   of one lambda, since a call runs one of them. Static
@@ -798,7 +823,11 @@ mod tribute_control {
     ///   once dynamically, so the lowered resumption must also enforce
     ///   one-shot consumption at run time and reject or trap on a second
     ///   call. Values leave an executable region only through
-    ///   `tribute_control.yield`.
+    ///   `tribute_control.yield`. When the handle's result is the result of
+    ///   the flow that holds it, legalization makes the flow's frame its
+    ///   exit frame, and a call without an `evidence_plan` that makes the
+    ///   body's result passes the body's frame on
+    ///   (`design/cps-effects.md`, "Frame을 그대로 넘기는 자리").
     /// - **Location:** the whole source `handle` expression. Region and block
     ///   locations use the matching body, completion arm, and handler arm
     ///   spans.
@@ -871,7 +900,10 @@ mod tribute_control {
     ///   follows carrier lambdas and nested regions, so it is a whole-IR
     ///   check. When a carrier allows repeated dynamic invocation, the
     ///   converted continuation's run-time one-shot state is the final
-    ///   enforcement boundary.
+    ///   enforcement boundary. Legalization passes the resumption the frame
+    ///   of the flow that holds the `resume` when its result is that flow's
+    ///   result and it has no `evidence_plan`, and a suffix frame otherwise
+    ///   (`design/cps-effects.md`, "Frame을 그대로 넘기는 자리").
     /// - **Location:** the source `resume` expression.
     #[verify]
     #[implements(CallableResultOrigin, LocalValidation)]
@@ -887,7 +919,8 @@ mod tribute_control {
     /// - **Operands:** exactly one logical value.
     /// - **Results, attributes, and regions:** none.
     /// - **Terminator:** of a `handle` body, completion region, or arm. It
-    ///   is invalid anywhere else.
+    ///   is invalid anywhere else. A completion or `op` arm of a handle in
+    ///   tail position may end in a source tail call instead.
     /// - **Local verification:** enforces its own shape. The owning operation
     ///   checks the placement and the yield type.
     /// - **Ownership and value flow:** passes an ordinary logical value to
@@ -917,8 +950,9 @@ mod tribute_control {
     ///   region (`DynRegionBranch::selects_one_region`), in any position.
     ///   Only the arms that end in `scf.yield` produce that operation's
     ///   results. It does not end a body, completion, or arm of
-    ///   `tribute_control.handle`, which end in `tribute_control.yield`;
-    ///   inside one it ends an arm of a nested operation.
+    ///   `tribute_control.handle`, which end in `tribute_control.yield` or,
+    ///   for a completion or `op` arm, a source tail call; inside one it
+    ///   ends an arm of a nested operation.
     /// - **Meaning:** the execution ends here, whatever the convention of
     ///   the enclosing callable. No handler observes it, and nothing after
     ///   it in the callable runs. A program may reach it; it is not a

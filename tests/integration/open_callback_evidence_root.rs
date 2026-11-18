@@ -55,11 +55,17 @@ fn generic_callback_selects_a_direct_instance_and_executes_wasm(db: &salsa::Data
     assert!(output.stdout.is_empty());
 }
 
-/// Whether printed IR declares the `Cps` convention anywhere.
+/// Whether printed IR declares the `Cps` convention for a definition or a
+/// transfer anywhere, or has a lambda whose only class is `Cps`. A lambda
+/// whose class is weaker may have a `cps` body, its `Cps` entry body, which
+/// runs no `Cps` control of its own; bodies are printed weakest first.
 fn is_cps(ir: &str) -> bool {
+    let lines: Vec<&str> = ir.lines().collect();
     ir.contains("convention(cps)")
         || ir.contains("convention = \"cps\"")
-        || ir.lines().any(|line| line.trim() == "cps {")
+        || lines
+            .windows(2)
+            .any(|pair| pair[0].contains("tribute_cps.lambda") && pair[1].trim() == "cps {")
 }
 
 /// A pure callback in a pure function selects the `Direct` instance of a

@@ -334,7 +334,7 @@ operation을 정의하듯, handler에서도 `fn`/`op` 키워드로 각 operation
 handle computation() {
     do result { result }
     fn Logger::log(msg) { print_line(msg) }
-    op State::get() { run_state(fn() resume state, state) }
+    op State::get() { become run_state(fn() resume state, state) }
 }
 ```
 
@@ -535,8 +535,10 @@ Continuation은 자신을 캡처한 handler 스코프 내에서만 resume될 수
 이 규칙은 `resume`이 arm 본문에 있든 arm 안의 lambda에 있든 같다. Handler arm은
 처리한 label이 빠진 row로 검사되므로, arm이 직접 수행하는 operation은 그 handle
 바깥의 handler가 처리한다. 계속 같은 방식으로 처리하려는 handler는 `resume`을 감싸
-자신을 다시 설치한다. 아래 `run_state`의 `run_state(fn() resume state, state)`가
-그렇게 하며, 재개된 계산은 새로 설치한 handler 아래에서 실행된다. 모든 operation에
+자신을 다시 설치한다. 아래 `run_state`의 `become run_state(fn() resume state, state)`가
+그렇게 하며, 재개된 계산은 새로 설치한 handler 아래에서 실행된다. Tail position에 있는
+handle의 arm 결과는 tail position이므로 `become`으로 다시 설치하면 handler와 frame이
+쌓이지 않는다([frame을 남기지 않는 자리](syntax.md#frame을-남기지-않는-자리)). 모든 operation에
 값으로 답하고 계속 처리하는 handler는 자신을 다시 설치하는 대신 `fn` arm을 쓸 수 있다
 ([`fn` Operation Handler](#fn-operation-handler)).
 
@@ -566,11 +568,14 @@ fn first_ask(comp: fn() ->{e, Ask} a) ->{e, Ask} a {
 ```rust
 fn run_state(comp: fn() ->{e, State(s)} a, state: s) ->{e} a {
     handle comp() {
-        op State::get() { run_state(fn() resume state, state) }
-        op State::set(v) { run_state(fn() resume Nil, v) }
+        op State::get() { become run_state(fn() resume state, state) }
+        op State::set(v) { become run_state(fn() resume Nil, v) }
     }
 }
 ```
+
+`become`이 없어도 결과는 같지만, operation을 수행할 때마다 `run_state`의 frame이
+하나씩 남는다.
 
 ### Abort 패턴 (op -> Never)
 
@@ -624,8 +629,8 @@ fn counter() ->{Logger, State(Int)} Nil {
 
 fn run_state(comp: fn() ->{e, State(s)} a, state: s) ->{e} a {
     handle comp() {
-        op State::get() { run_state(fn() resume state, state) }
-        op State::set(v) { run_state(fn() resume Nil, v) }
+        op State::get() { become run_state(fn() resume state, state) }
+        op State::set(v) { become run_state(fn() resume Nil, v) }
     }
 }
 

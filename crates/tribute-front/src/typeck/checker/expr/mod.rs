@@ -629,20 +629,38 @@ impl<'db> TypeChecker<'db> {
         expr
     }
 
-    /// Type `become call`: the call's own type, which must equal the result
-    /// type of the enclosing callable.
+    /// Type `become operand`: the operand's own type, which must equal the
+    /// result type of the enclosing callable. A call or `resume` operand
+    /// must pass the callable's handlers unchanged.
     fn infer_become_type_with_ctx(
         &self,
         ctx: &mut FunctionInferenceContext<'_, 'db>,
         become_id: NodeId,
-        call: &Expr<ResolvedRef<'db>>,
+        operand: &Expr<ResolvedRef<'db>>,
     ) -> Type<'db> {
-        let call_ty = self.infer_expr_type_with_ctx(ctx, call);
-        ctx.evidence.record_become(become_id, call.id);
-        if let Some(result) = ctx.become_result_type() {
-            ctx.constrain_eq_at(call_ty, result, become_id, ConstraintOriginKind::Expression);
+        let operand_ty = self.infer_expr_type_with_ctx(ctx, operand);
+        let Some(result) = ctx.become_result_type() else {
+            return operand_ty;
+        };
+        if matches!(&*operand.kind, ExprKind::Handle { .. }) {
+            // A handle's answer joins its arms' results, which flow into the
+            // callable's result as those of a handle in tail position do.
+            ctx.constrain_coerce(operand_ty, result, operand.id);
+            return operand_ty;
         }
-        call_ty
+        if matches!(
+            &*operand.kind,
+            ExprKind::Call { .. } | ExprKind::Resume { .. }
+        ) {
+            ctx.evidence.record_become(become_id, operand.id);
+        }
+        ctx.constrain_eq_at(
+            operand_ty,
+            result,
+            become_id,
+            ConstraintOriginKind::Expression,
+        );
+        operand_ty
     }
 
     /// Infer the type of an expression (just returns the type, doesn't convert).
@@ -1124,14 +1142,18 @@ impl<'db> TypeChecker<'db> {
                     ctx.bind_local_by_name(param.name.clone(), *ty);
                 }
 
-                let body_mode = ctx
-                    .get_node_type(expr_id)
-                    .and_then(|ty| match ty.kind(self.db()) {
-                        TypeKind::Func { result, .. } => Some(Mode::Check(*result)),
-                        _ => None,
-                    })
-                    .unwrap_or(Mode::Infer);
+                let lambda_result =
+                    ctx.get_node_type(expr_id)
+                        .and_then(|ty| match ty.kind(self.db()) {
+                            TypeKind::Func { result, .. } => Some(*result),
+                            _ => None,
+                        });
+                let body_mode = lambda_result.map_or(Mode::Infer, Mode::Check);
+                // A `become` in the body, including one in a handler arm
+                // typed here, produces the lambda's result.
+                ctx.push_callable_result(lambda_result);
                 let converted_body = self.check_expr_with_ctx(ctx, body, body_mode);
+                ctx.pop_callable_result();
 
                 ctx.pop_scope();
                 ctx.evidence.restore(outer_evidence);

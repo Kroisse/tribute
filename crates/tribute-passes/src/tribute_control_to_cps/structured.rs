@@ -209,21 +209,36 @@ impl Converter<'_> {
     }
 
     /// The tail join of a structured operation that a `become` in its arms
-    /// leaves. Pre-CPS validation placed such an operation where only casts
-    /// and the block's `return` or `scf.yield` follow it.
+    /// leaves, or whose result flows into the terminator of a `Cps` flow
+    /// unchanged, so that an operation that makes an arm's result can pass
+    /// the flow's frame on (`design/cps-effects.md`, "Frame을 그대로 넘기는
+    /// 자리"). Pre-CPS validation placed an operation with a `become` where
+    /// only casts and the block's `return`, `tribute_control.yield`, or
+    /// `scf.yield` follow it.
     fn tail_join(
         &self,
         source: OpRef,
         rest: Rest<'_>,
         flow: &Flow,
     ) -> Result<Option<TailJoin>, TributeControlToCpsError> {
+        let join = || TailJoin {
+            structured: source,
+            ops: OpList::from(rest.ops),
+            start: rest.start,
+            outer: flow.tail_join.clone(),
+        };
         if !self.contains_tail_call(source) {
-            return Ok(None);
+            let exits = flow.convention == CallingConvention::Cps
+                && self
+                    .flow_exit(source, rest, flow.tail_join.as_deref())
+                    .is_some();
+            return Ok(exits.then(join));
         }
         let following = &rest.ops[rest.start..];
         let in_tail_position = self.ctx.op_results(source).len() == 1
             && following.split_last().is_some_and(|(&terminator, casts)| {
                 (tribute_control::Return::matches(self.ctx, terminator)
+                    || tribute_control::Yield::matches(self.ctx, terminator)
                     || scf::Yield::matches(self.ctx, terminator))
                     && casts
                         .iter()
@@ -235,12 +250,7 @@ impl Converter<'_> {
                 "a structured operation containing a tail call must be in tail position",
             ));
         }
-        Ok(Some(TailJoin {
-            structured: source,
-            ops: OpList::from(rest.ops),
-            start: rest.start,
-            outer: flow.tail_join.clone(),
-        }))
+        Ok(Some(join()))
     }
 
     /// Lower a region-selecting operation whose arms each end the callable:

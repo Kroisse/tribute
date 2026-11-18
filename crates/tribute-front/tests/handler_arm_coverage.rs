@@ -74,9 +74,9 @@ fn complete_handler_is_accepted(db: &salsa::DatabaseImpl) {
 fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
     handle comp() {
         do result { result }
-        op State::get() { run_state(fn() { resume init }, init) }
-        op State::set(v) { run_state(fn() { resume Nil }, v) }
-        op State::reset() { run_state(fn() { resume Nil }, init) }
+        op State::get() { become run_state(fn() { resume init }, init) }
+        op State::set(v) { become run_state(fn() { resume Nil }, v) }
+        op State::reset() { become run_state(fn() { resume Nil }, init) }
     }
 }
 "#

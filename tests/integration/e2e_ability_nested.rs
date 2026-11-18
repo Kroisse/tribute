@@ -41,15 +41,15 @@ fn use_both() ->{State(Nat), Reader(Nat)} Nat {
 fn run_reader(comp: fn() ->{e, Reader(r)} a, value: r) ->{e} a {
     handle comp() {
         do result { result }
-        op Reader::ask() { run_reader(fn() { resume value }, value) }
+        op Reader::ask() { become run_reader(fn() { resume value }, value) }
     }
 }
 
 fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
     handle comp() {
         do result { result }
-        op State::get() { run_state(fn() { resume init }, init) }
-        op State::set(v) { run_state(fn() { resume Nil }, v) }
+        op State::get() { become run_state(fn() { resume init }, init) }
+        op State::set(v) { become run_state(fn() { resume Nil }, v) }
     }
 }
 
@@ -81,8 +81,8 @@ ability State(s) {
 fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
     handle comp() {
         do result { result }
-        op State::get() { run_state(fn() { resume init }, init) }
-        op State::set(v) { run_state(fn() { resume Nil }, v) }
+        op State::get() { become run_state(fn() { resume init }, init) }
+        op State::set(v) { become run_state(fn() { resume Nil }, v) }
     }
 }
 
@@ -134,9 +134,9 @@ fn use_both() ->{State(Nat), Reader(Nat)} Nat {
 fn run_both(comp: fn() ->{State(Nat), Reader(Nat)} Nat) -> Nat {
     handle comp() {
         do result { result }
-        op State::get() { run_both(fn() { resume 0 }) }
-        op State::set(v) { run_both(fn() { resume Nil }) }
-        op Reader::ask() { run_both(fn() { resume 10 }) }
+        op State::get() { become run_both(fn() { resume 0 }) }
+        op State::set(v) { become run_both(fn() { resume Nil }) }
+        op Reader::ask() { become run_both(fn() { resume 10 }) }
     }
 }
 
@@ -167,8 +167,8 @@ ability State(s) {
 
 fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
     handle comp() {
-        op State::get() { run_state(fn() { resume init }, init) }
-        op State::set(v) { run_state(fn() { resume Nil }, v) }
+        op State::get() { become run_state(fn() { resume init }, init) }
+        op State::set(v) { become run_state(fn() { resume Nil }, v) }
     }
 }
 
@@ -211,7 +211,7 @@ ability State(s) {
 
 fn run_logging_state(comp: fn() ->{e, State(Nat), Logger} a, init: Nat) ->{e, Logger} a {
     handle comp() {
-        op State::get() { run_logging_state(fn() { resume init }, init) }
+        op State::get() { become run_logging_state(fn() { resume init }, init) }
         op State::set(v) {
             Logger::log(v)
             run_logging_state(fn() { resume Nil }, v)
@@ -267,13 +267,13 @@ ability B {
 
 fn run_a(comp: fn() ->{e, A} a) ->{e} a {
     handle comp() {
-        op A::do_a() { run_a(fn() { resume 10 }) }
+        op A::do_a() { become run_a(fn() { resume 10 }) }
     }
 }
 
 fn run_b(comp: fn() ->{e, B} a) ->{e} a {
     handle comp() {
-        op B::do_b() { run_b(fn() { resume 32 }) }
+        op B::do_b() { become run_b(fn() { resume 32 }) }
     }
 }
 
@@ -306,8 +306,8 @@ ability State(s) {
 
 fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
     handle comp() {
-        op State::get() { run_state(fn() { resume init }, init) }
-        op State::set(v) { run_state(fn() { resume Nil }, v) }
+        op State::get() { become run_state(fn() { resume init }, init) }
+        op State::set(v) { become run_state(fn() { resume Nil }, v) }
     }
 }
 
@@ -355,8 +355,8 @@ ability State(s) {
 fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
     handle comp() {
         do result { result }
-        op State::get() { run_state(fn() { resume init }, init) }
-        op State::set(v) { run_state(fn() { resume Nil }, v) }
+        op State::get() { become run_state(fn() { resume init }, init) }
+        op State::set(v) { become run_state(fn() { resume Nil }, v) }
     }
 }
 
@@ -398,8 +398,8 @@ ability State(s) {
 fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
     handle comp() {
         do result { result }
-        op State::get() { run_state(fn() { resume init }, init) }
-        op State::set(v) { run_state(fn() { resume Nil }, v) }
+        op State::get() { become run_state(fn() { resume init }, init) }
+        op State::set(v) { become run_state(fn() { resume Nil }, v) }
     }
 }
 
@@ -447,8 +447,8 @@ ability State(s) {
 fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
     handle comp() {
         do result { result }
-        op State::get() { run_state(fn() { resume init }, init) }
-        op State::set(v) { run_state(fn() { resume Nil }, v) }
+        op State::get() { become run_state(fn() { resume init }, init) }
+        op State::set(v) { become run_state(fn() { resume Nil }, v) }
     }
 }
 
@@ -491,23 +491,23 @@ ability State(s) {
 fn run_ask_state(comp: fn() ->{e, State(fn() ->{Ask} Nat)} Nat, init: fn() ->{Ask} Nat) ->{e} Nat {
     handle comp() {
         do result { result }
-        op State::get() { run_ask_state(fn() { resume init }, init) }
-        op State::set(v) { run_ask_state(fn() { resume Nil }, v) }
+        op State::get() { become run_ask_state(fn() { resume init }, init) }
+        op State::set(v) { become run_ask_state(fn() { resume Nil }, v) }
     }
 }
 
 fn run_tell_state(comp: fn() ->{e, State(fn() ->{Tell} Nat)} Nat, init: fn() ->{Tell} Nat) ->{e} Nat {
     handle comp() {
         do result { result }
-        op State::get() { run_tell_state(fn() { resume init }, init) }
-        op State::set(v) { run_tell_state(fn() { resume Nil }, v) }
+        op State::get() { become run_tell_state(fn() { resume init }, init) }
+        op State::set(v) { become run_tell_state(fn() { resume Nil }, v) }
     }
 }
 
 fn run_ask(comp: fn() ->{e, Ask} Nat) ->{e} Nat {
     handle comp() {
         do result { result }
-        op Ask::ask() { run_ask(fn() { resume 3 }) }
+        op Ask::ask() { become run_ask(fn() { resume 3 }) }
     }
 }
 
@@ -557,8 +557,8 @@ ability Scale {
 fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
     handle comp() {
         do result { result }
-        op State::get() { run_state(fn() { resume init }, init) }
-        op State::set(v) { run_state(fn() { resume Nil }, v) }
+        op State::get() { become run_state(fn() { resume init }, init) }
+        op State::set(v) { become run_state(fn() { resume Nil }, v) }
     }
 }
 

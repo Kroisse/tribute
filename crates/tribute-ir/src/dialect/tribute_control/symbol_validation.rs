@@ -318,7 +318,7 @@ fn validate_symbol_use(
                     "tail call argument types do not match the logical signature",
                 );
             }
-            let Ok((owner, owner_ty)) = tail_call_owner(ctx, op) else {
+            let Ok((_, owner_ty)) = tail_call_owner(ctx, op) else {
                 return;
             };
             if func_sig_parts(ctx, owner_ty)
@@ -331,17 +331,8 @@ fn validate_symbol_use(
                     "callee result type does not match enclosing callable result",
                 );
             }
-            if let (Some(callee_cc), Some(owner_cc)) = (
-                tribute_cps::declared_convention(ctx, target),
-                tribute_cps::convention_at(ctx, owner, op),
-            ) && callee_cc > owner_cc
-            {
-                push_op_error(
-                    ctx,
-                    op,
-                    errors,
-                    "callee convention must not be stronger than the enclosing callable",
-                );
+            if let Some(convention) = tribute_cps::declared_convention(ctx, target) {
+                check_transfer_convention(ctx, op, convention, ctx.op_has_regions(target), errors);
             }
         }
     }

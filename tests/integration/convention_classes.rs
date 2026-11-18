@@ -179,8 +179,8 @@ fn main() -> Nil {}
             .contains(&format!("(%0: {}, ", without_row(callback_ty))),
         "the fresh function reference must have apply's callback type, up to its row:\n{ir}"
     );
-    // The value enters `double` directly; an adapter fills the `Cps` slot
-    // that `apply` calls.
+    // The value enters `double` directly. No transfer hands a frame to a
+    // callable value, so an adapter fills the `Cps` slot that `apply` calls.
     assert_eq!(table_conventions(&ir, "pkg::double$8"), ["direct"]);
     assert!(
         named_function_header(&ir, "double").contains("convention(direct)"),
@@ -680,7 +680,7 @@ ability State(s) {
 fn run(f: fn() ->{e, State(Int)} Int) ->{e} Int {
     handle f() {
         do result { result }
-        op State::get() { run(fn() { resume +0 }) }
+        op State::get() { become run(fn() { resume +0 }) }
     }
 }
 
@@ -798,7 +798,7 @@ ability State(s) {
 fn with_state(f: fn() ->{e, State(s)} a, init: s) ->{e} a {
     handle f() {
         do result { result }
-        op State::get() { with_state(fn() { resume init }, init) }
+        op State::get() { become with_state(fn() { resume init }, init) }
     }
 }
 
@@ -989,4 +989,38 @@ fn main() -> Nil {}
             "{ir}"
         );
     }
+}
+
+/// `hand`'s indirect `become` is the only transfer that hands a frame to a
+/// callable value, and nothing calls `hand`: the production route's class
+/// specialization and its check read the module the same way.
+#[salsa_test]
+fn an_unreferenced_frame_transfer_agrees_with_the_check(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "unreferenced_frame_transfer.trb",
+        r#"
+fn id(n: Int) ->{} Int { n }
+fn hand(k: fn(Int) ->{} Int, n: Int) ->{} Int { become k(n) }
+fn apply(f: fn(Int) ->{} Int, n: Int) ->{} Int { f(n) }
+fn main() ->{std::io::Io} Nil {
+    let unused = hand
+    let a = apply(fn(m: Int) ->{} Int { become id(m) }, +3)
+    std::io::print_line(apply(id, a).to_string)
+}
+"#,
+    );
+    let (ctx, module) = tribute::pipeline::compile_specialized_frontend(db, source)
+        .expect("class specialization accepts frontend output")
+        .expect("the frontend lowers the source");
+    let ir = module.op().display(&ctx).to_string();
+    let disagreements = tribute_passes::check_convention_classes::check(&ctx, module);
+    assert!(
+        disagreements.is_empty(),
+        "{:?}\n{ir}",
+        disagreements
+            .iter()
+            .map(|disagreement| &disagreement.message)
+            .collect::<Vec<_>>()
+    );
 }

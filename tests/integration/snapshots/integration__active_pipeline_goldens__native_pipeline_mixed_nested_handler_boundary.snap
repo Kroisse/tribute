@@ -12,6 +12,13 @@ __tribute_main: () -> (core.nil)
 main: () -> (core.nil)
   func.call operands=0 results=1: 1
   func.return operands=1 results=0: 1
+pkg::handle_state: (adt.array<adt.struct<std::runtime::evidence::Marker>>, Frame, adt.struct<closure>) -> ()
+  func.call operands=0 results=1: 1
+  func.call operands=5 results=1: 1
+  func.tail_call_indirect operands=4 results=0: 1
+pkg::run_state_with_console: (adt.array<adt.struct<std::runtime::evidence::Marker>>, Frame) -> ()
+  func.call_indirect operands=4 results=0: 1
+  func.tail_call_indirect operands=3 results=0: 1
 pkg::step: (adt.array<adt.struct<std::runtime::evidence::Marker>>, Frame) -> ()
   func.call operands=2 results=1: 2
   func.call_indirect operands=5 results=1: 1

@@ -23,22 +23,22 @@ fn use_all() ->{State(Nat), Reader(Nat), Writer(Nat)} Nat {
 fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
     handle comp() {
         do result { result }
-        op State::get() { run_state(fn() { resume init }, init) }
-        op State::set(v) { run_state(fn() { resume Nil }, v) }
+        op State::get() { become run_state(fn() { resume init }, init) }
+        op State::set(v) { become run_state(fn() { resume Nil }, v) }
     }
 }
 
 fn run_reader(comp: fn() ->{e, Reader(r)} a, value: r) ->{e} a {
     handle comp() {
         do result { result }
-        op Reader::ask() { run_reader(fn() { resume value }, value) }
+        op Reader::ask() { become run_reader(fn() { resume value }, value) }
     }
 }
 
 fn run_writer(comp: fn() ->{e, Writer(w)} a) ->{e} a {
     handle comp() {
         do result { result }
-        op Writer::tell(v) { run_writer(fn() { resume Nil }) }
+        op Writer::tell(v) { become run_writer(fn() { resume Nil }) }
     }
 }
 

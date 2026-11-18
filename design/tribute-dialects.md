@@ -383,8 +383,12 @@ source-logical IR이며 hidden parameter는 아직 없다.
 Convention에 관한 규칙은 다음과 같다.
 
 - `tribute_control.tail_call`의 callee 인스턴스와
-  `tribute_cps.tail_call_indirect`의 convention은 감싼 callable(정의, 또는 그
-  이전을 담은 entry)보다 강하지 않다.
+  `tribute_cps.tail_call_indirect`의 convention은 그 이전이 놓인
+  [flow](cps-effects.md#cps-진입-본문)보다 강하지 않다. `Cps` flow에서는 본문이 있는
+  callee의 인스턴스와 간접 이전의 convention이 `Cps`다.
+- [Frame을 넘기는 body 결과 호출](cps-effects.md#frame을-그대로-넘기는-자리)인
+  `tribute_control.call`의 callee 인스턴스는 callee에 본문이 있으면 `Cps`이고,
+  `tribute_cps.call_indirect`의 convention은 `Cps`다.
 - 정의의 convention과 간접 이전의 convention은
   [CPS 전략](cps-effects.md#row와-호출-규약)이 그 row와 인스턴스의 class에서
   계산한 값이다.
@@ -440,6 +444,11 @@ class는 하한보다 약하지 않다.
 Class `c`의 본문은 위 읽기를 따르되, 자기 row의 tail이 상한이면 그 상한을
 `c`로 좁혀 상한으로 읽는다.
 
+위 규칙이 `Cps` 본문을 주지 않는 source 람다는 module에 값에 frame을 넘기는
+이전이 있고 자기 flow에 frame을 넘기는 operation이 있으면
+[`Cps` 진입 본문](cps-effects.md#cps-진입-본문)을 하나 더 가진다. 이 본문은 가장
+강한 본문과 같은 class 읽기를 쓰고 `Cps` flow로 실행된다.
+
 **값은 나누지 않는다.** 같은 class를 고르는 사용들이 양화한 binder에 서로 다른
 class를 넘겨도 람다는 값 하나다. 앞의 `wrap`이 그 예다. 상한으로 읽어도 결과는
 바뀌지 않는다.
@@ -459,7 +468,8 @@ above가 아닌 region으로서 lexical scope를 닫으며, 본문은 바깥 SSA
 
 **Adapter.** `EvidenceDirect` entry의 adapter는 evidence를 받고 쓰지 않으며,
 `Cps` entry의 adapter는 본문의 결과를 `Done<R>`로 넘긴다. Adapter는 본문을 한
-번 부르고 끝나며 CPS 제어를 만들지 않는다.
+번 부르고 끝나며 CPS 제어를 만들지 않는다. `Cps` entry의 adapter는 `Cps` 본문이
+없는 람다와 `Cps` 대상이 없는 `func_table`에만 있다.
 
 Adapter는 본문을 이름으로 부르지 않는다. Environment 입력으로 받은 closure
 자신의 convention table에서 본문 class의 entry를 `closure.entry`로 읽고, 같은
@@ -476,7 +486,11 @@ Trap entry는 실행되지 않는다. Class는 row의 tail에서 계산하고, �
 tail)는 `Cps`로만 읽는다.
 
 모든 간접 이전의 convention은 그 이전을 담은 인스턴스와 본문의 class 읽기로
-callee type을 읽은 class(상한이면 상한)와 같아야 하며, 다르면 컴파일 오류다.
+callee type을 읽은 class(상한이면 상한)와 같아야 하며, 다르면 컴파일 오류다. `Cps`
+flow의 `tribute_cps.tail_call_indirect`와 frame을 넘기는 body 결과 호출인
+`tribute_cps.call_indirect`만 예외로, callee type의 class와 관계없이 `Cps`다.
+Source callable 값의 `Cps` entry는 trap entry가 아니므로 이 이전은 언제나 본문이나
+adapter에 들어간다.
 
 **함수 참조.** 함수 참조의 convention entry 대상은 module 수준의 `func_table`
 정의 하나가 모아 가지며, `func_ref`는 그 table을 가리킨다. Table은 정의와
@@ -492,7 +506,11 @@ Class `c`의 대상은 정의의 row의 tail인 class 변수의 인자를 람다
 규칙으로 convention entry를 채운다. 대상이 class 없는 tail 때문에 그 값의 row가
 요구하는 것보다 강한 `Cps` 인스턴스이면, 더 약한 convention entry는
 [값 delimiter](cps-effects.md#값-delimiter)로 worker를 부르는
-[`func_ref` adapter](cps-effects.md#cps-변환의-호출-대상-형상)다.
+[`func_ref` adapter](cps-effects.md#cps-변환의-호출-대상-형상)다. 위 규칙이 `Cps`
+대상을 주지 않는 table은 module에 값에 frame을 넘기는 이전이 있으면 가장 강한
+대상의 [`Cps` 진입 인스턴스](cps-effects.md#cps-진입-본문)를 `Cps` 대상으로 둔다.
+그런 이전이 없는 module의 table과 본문이 없는 정의의 table은 `Cps` 대상을 두지 않고
+adapter로 채운다.
 
 **생성된 closure.** CPS legalization이 만드는 closure(continuation, handler
 arm, delimiter region)는 source callable 값이 아니다. 그 closure type의

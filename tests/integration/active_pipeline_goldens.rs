@@ -302,8 +302,8 @@ fn bump() ->{State(Int)} Int {
 fn handle_state(comp: fn() ->{e, State(Int)} Int) ->{e} Int {
     handle comp() {
         do result { result }
-        op State::get() { handle_state(fn() { resume +10 }) }
-        op State::set(value) { handle_state(fn() { resume Nil }) }
+        op State::get() { become handle_state(fn() { resume +10 }) }
+        op State::set(value) { become handle_state(fn() { resume Nil }) }
     }
 }
 
@@ -338,8 +338,8 @@ fn step() ->{Console, State(Int)} Int {
 fn handle_state(comp: fn() ->{e, State(Int)} Int) ->{e} Int {
     handle comp() {
         do result { result }
-        op State::get() { handle_state(fn() { resume +7 }) }
-        op State::set(value) { handle_state(fn() { resume Nil }) }
+        op State::get() { become handle_state(fn() { resume +7 }) }
+        op State::set(value) { become handle_state(fn() { resume Nil }) }
     }
 }
 

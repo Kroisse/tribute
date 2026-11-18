@@ -189,12 +189,49 @@ pub(crate) fn class_suffix(classes: &[Class]) -> String {
     format!("{CLASS_MARKER}{letters}")
 }
 
+/// The entry of a definition an instance runs: the convention its row and
+/// class arguments determine, or the `Cps` entry body of a definition whose
+/// row determines a weaker one (`design/cps-effects.md`, "`Cps` 진입 본문").
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum Entry {
+    Row,
+    Cps,
+}
+
+/// The suffix the name of a `Cps` entry instance adds after the name of its
+/// row's instance (`design/cps-effects.md`, "Class 특수화 pass").
+const CPS_ENTRY_MARKER: &str = "$7";
+
+/// The name of the instance of `base` with `classes` and `entry`. Only
+/// class specialization and its check make names; readers learn an
+/// instance's entry from `entry_of` and its convention from `convention`.
+pub(crate) fn instance_name(base: &str, classes: &[Class], entry: Entry) -> String {
+    let marker = match entry {
+        Entry::Row => "",
+        Entry::Cps => CPS_ENTRY_MARKER,
+    };
+    format!("{base}{}{marker}", class_suffix(classes))
+}
+
+/// The name of the instance that stands for `op`'s definition and class
+/// arguments: the `entry_of` of a `Cps` entry instance, or its own name.
+pub(crate) fn instance_key_name(ctx: &IrContext, op: OpRef) -> Option<&str> {
+    let attrs = ctx.op_attrs(op);
+    attrs
+        .get_str(tribute_cps::ENTRY_OF_ATTR)
+        .or_else(|| attrs.get_str("sym_name"))
+}
+
 /// A reference to a named definition and the rows it passes.
 pub(crate) struct Reference {
     pub(crate) op: OpRef,
     /// The instance its class arguments name, which a function reference's
     /// table is named after.
     pub(crate) callee: String,
+    /// The name of the instance that stands for the callee's definition
+    /// and class arguments, which a `Cps` entry instance names in
+    /// `entry_of`.
+    pub(crate) key: String,
     /// The instances it enters: its callee, or the targets of its table.
     pub(crate) targets: Vec<String>,
     pub(crate) rows: Vec<Row>,
@@ -206,6 +243,8 @@ pub(crate) struct Function {
     pub(crate) name: String,
     pub(crate) base: String,
     pub(crate) claimed: Option<Vec<Class>>,
+    /// The entry its `entry_of` declares.
+    pub(crate) entry: Entry,
     pub(crate) binders: Vec<RowBinder>,
     pub(crate) ty: TypeRef,
     /// Whether the root module names this function as its entry point.
@@ -232,8 +271,13 @@ impl Function {
             return None;
         }
         let name = ctx.op_attrs(op).get_str("sym_name")?.to_owned();
-        let (base, claimed) = split_name(&name);
+        let (base, claimed) = split_name(instance_key_name(ctx, op)?);
         let base = base.to_owned();
+        let entry = if ctx.op_attrs(op).contains_key(tribute_cps::ENTRY_OF_ATTR) {
+            Entry::Cps
+        } else {
+            Entry::Row
+        };
         let ty = ctx.op_attrs(op).get_type("type")?;
         let signature = FuncSig::from_type_ref(ctx, ty)?;
         let binders = tribute_control::row_binders(ctx, op).ok()?;
@@ -270,12 +314,14 @@ impl Function {
                     references.push(Reference {
                         op: inner,
                         targets: vec![callee.clone()],
+                        key: callee.clone(),
                         callee,
                         rows,
                     });
                 } else if let Some((callee, targets)) = table_callee(ctx, inner, tables) {
                     references.push(Reference {
                         op: inner,
+                        key: callee.clone(),
                         callee,
                         targets,
                         rows,
@@ -289,6 +335,7 @@ impl Function {
             name,
             base,
             claimed,
+            entry,
             binders,
             ty,
             root_entry,
@@ -458,6 +505,28 @@ pub(crate) fn body_value_types(ctx: &IrContext, body: RegionRef) -> Vec<TypeRef>
     types
 }
 
+/// Key each reference to a `Cps` entry instance among `functions` by the
+/// instance its `entry_of` names.
+pub(crate) fn key_references(functions: &mut [Function], ctx: &IrContext) {
+    let keys: HashMap<String, String> = functions
+        .iter()
+        .filter(|function| function.entry == Entry::Cps)
+        .filter_map(|function| {
+            Some((
+                function.name.clone(),
+                instance_key_name(ctx, function.op)?.to_owned(),
+            ))
+        })
+        .collect();
+    for function in functions {
+        for reference in &mut function.references {
+            if let Some(key) = keys.get(&reference.callee) {
+                reference.key = key.clone();
+            }
+        }
+    }
+}
+
 /// Select the class variables of every definition: a `param` binder that is
 /// the tail of a callable type in its signature or body, of a row it
 /// instantiates a let-bound lambda with, or of a row it passes for a class
@@ -485,7 +554,7 @@ pub(crate) fn settle_class_variables(functions: &mut [Function]) -> HashMap<Stri
         for function in functions.iter_mut() {
             let mut added = Vec::new();
             for reference in &function.references {
-                let (callee, _) = split_name(&reference.callee);
+                let (callee, _) = split_name(&reference.key);
                 let cps_tail = cps_tails.get(callee);
                 for &position in positions.get(callee).into_iter().flatten().chain(cps_tail) {
                     let tail = usize::try_from(position)
@@ -701,16 +770,23 @@ pub(crate) struct Locals {
 
 impl Locals {
     /// The class of local `binder` in the body of its `tribute_cps.lambda`
-    /// that holds `at`. Elsewhere, such as in a lambda whose bodies are not
-    /// yet decided, the binder reads as the merge of its classes in every
-    /// body.
+    /// that holds `at`. A body no instantiation selects is the lambda's
+    /// `Cps` entry body, which reads as its strongest body does. Elsewhere,
+    /// such as in a lambda whose bodies are not yet decided, the binder
+    /// reads as the merge of its classes in every body.
     pub(crate) fn get(&self, ctx: &IrContext, binder: u32, at: OpRef) -> Option<Class> {
         let body = self.owners.get(&binder).and_then(|&owner| {
             tribute_cps::body_conventions(ctx, owner)?;
             tribute_cps::convention_at(ctx, owner, at)
         });
         match body {
-            Some(body) => self.classes.get(&(binder, body)).copied(),
+            Some(body) => self.classes.get(&(binder, body)).copied().or_else(|| {
+                self.classes
+                    .iter()
+                    .filter(|((known, _), _)| *known == binder)
+                    .max_by_key(|((_, convention), _)| *convention)
+                    .map(|(_, &class)| class)
+            }),
             None => self
                 .classes
                 .iter()

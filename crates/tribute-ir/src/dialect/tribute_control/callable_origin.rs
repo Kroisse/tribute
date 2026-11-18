@@ -544,13 +544,21 @@ fn region_yield_value(ctx: &IrContext, region: RegionRef) -> Option<ValueRef> {
 
 /// The values that become a `handle`'s result: the completion region's
 /// yield and the yield of each general (`op`) arm. A `fn` arm yields to its
-/// `perform` instead.
+/// `perform` instead, and a completion or arm that ends with a source tail
+/// call leaves the callable without a value for the handle.
 fn handle_result_sources(ctx: &IrContext, handle: Handle) -> Option<Vec<ValueRef>> {
     let completion = ctx.op_region(handle.op_ref(), 1)?;
-    let mut sources = vec![region_yield_value(ctx, completion)?];
+    let mut regions = vec![completion];
     for (binding, arm) in handle.arm_bindings(ctx) {
         if binding?.kind == super::OperationKind::Op {
-            sources.push(region_yield_value(ctx, arm)?);
+            regions.push(arm);
+        }
+    }
+    let mut sources = Vec::new();
+    for region in regions {
+        let block = *ctx.region(region).blocks.iter().exactly_one().ok()?;
+        if !super::local_validation::ends_with_tail_call(ctx, block) {
+            sources.push(region_yield_value(ctx, region)?);
         }
     }
     Some(sources)

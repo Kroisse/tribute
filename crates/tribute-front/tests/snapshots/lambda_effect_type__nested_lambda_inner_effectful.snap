@@ -18,8 +18,7 @@ core.module @test {
               %6 = tribute_control.resume %5 : core.i32 -> core.i32
               tribute_control.return %6
           }
-          %7 = tribute_control.call @"pkg::run_with_state"(%4) attributes {row_args = [{tail = 0}]} : (!t0) -> core.i32
-          tribute_control.yield %7
+          tribute_control.tail_call @"pkg::run_with_state"(%4) attributes {row_args = [{tail = 0}]} : (!t0) -> ()
       }
       tribute_control.return %1
   }

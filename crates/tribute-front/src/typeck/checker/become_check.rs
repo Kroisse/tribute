@@ -1,20 +1,22 @@
 //! Placement and operand rules for `become`.
 //!
-//! A `become` call transfers the enclosing callable's frame, so it must be in
-//! that callable's tail position, outside any installed handler, and must call
-//! a function whose frame can take over. These rules are syntactic apart from
-//! the callee's declaration kind and are checked over the resolved body before
-//! inference. The result-type rule is a typing constraint (see `expr.rs`).
+//! A `become` transfers the enclosing callable's frame, so it must be in
+//! that callable's tail position and apply to a function call whose frame
+//! can take over, a `resume`, or a `handle`. A `handle` in tail position
+//! makes the results of its `do` and `op` arms tail positions; its body and
+//! `fn` arms are not. These rules are syntactic apart from the callee's
+//! declaration kind and are checked over the resolved body before inference.
+//! The result-type rule is a typing constraint (see `expr.rs`).
 
 use crate::ast::visit::{Visit, walk_expr};
-use crate::ast::{Expr, ExprKind, FuncDefId, NodeId, ResolvedRef};
+use crate::ast::{Expr, ExprKind, FuncDefId, HandlerKind, NodeId, ResolvedRef};
 
 use super::TypeChecker;
 
 impl<'db> TypeChecker<'db> {
     /// Report every `become` in a function body that is out of tail
-    /// position, inside a handler, or applied to something other than a
-    /// transferable function call.
+    /// position or applied to something other than a transferable function
+    /// call, a `resume`, or a `handle`.
     pub(crate) fn check_become_sites(&self, body: &Expr<ResolvedRef<'db>>) {
         let mut walker = BecomeSites {
             checker: self,
@@ -43,13 +45,13 @@ struct BecomeSites<'a, 'db> {
     /// Whether the expression about to be visited is in tail position of
     /// the innermost callable.
     tail: bool,
-    /// Handle expressions entered since the innermost callable.
+    /// `handle` bodies and `fn` arms entered since the innermost callable.
     handler_depth: usize,
 }
 
 impl<'db> BecomeSites<'_, 'db> {
-    fn check_operand(&self, become_id: NodeId, call: &Expr<ResolvedRef<'db>>) {
-        let message = match &*call.kind {
+    fn check_operand(&self, become_id: NodeId, operand: &Expr<ResolvedRef<'db>>) {
+        let message = match &*operand.kind {
             ExprKind::Call { callee, .. } => match &*callee.kind {
                 ExprKind::Var(ResolvedRef::Function { id }) => {
                     self.checker.check_become_callee(become_id, *id);
@@ -65,17 +67,26 @@ impl<'db> BecomeSites<'_, 'db> {
                 // the `become` arm of expression checking.
                 _ => None,
             },
-            ExprKind::Error => None,
+            ExprKind::Error | ExprKind::Resume { .. } | ExprKind::Handle { .. } => None,
             ExprKind::Cons { .. } | ExprKind::Record { .. } => {
                 Some("`become` cannot call a constructor")
             }
-            ExprKind::Resume { .. } => Some("`become` cannot be applied to `resume`"),
-            _ => Some("`become` requires a function call with an argument list"),
+            _ => Some(
+                "`become` requires a function call with an argument list, a `resume`, or a `handle`",
+            ),
         };
         if let Some(message) = message {
             self.checker
                 .report_type_error(become_id, message.to_owned());
         }
+    }
+
+    /// Visit `expr` as a region that runs with a handler installed or
+    /// returns to a `perform`, so nothing in it is a tail position.
+    fn visit_in_handler(&mut self, expr: &Expr<ResolvedRef<'db>>) {
+        self.handler_depth += 1;
+        self.visit_expr(expr);
+        self.handler_depth -= 1;
     }
 }
 
@@ -84,21 +95,18 @@ impl<'ast, 'db: 'ast> Visit<'ast, ResolvedRef<'db>> for BecomeSites<'_, 'db> {
         let tail = std::mem::replace(&mut self.tail, false);
         match &*expr.kind {
             ExprKind::Become { call } => {
-                if self.handler_depth > 0 {
-                    self.checker.report_type_error(
-                        expr.id,
-                        "`become` cannot be used inside a `handle` body or handler arm, \
-                         which run with the handler installed"
-                            .to_owned(),
-                    );
-                } else if !tail {
-                    self.checker.report_type_error(
-                        expr.id,
+                if !tail {
+                    let message = if self.handler_depth > 0 {
+                        "`become` cannot be used in a `handle` body, which runs with the \
+                         handler installed, or in an `fn` arm, which returns to its `perform`"
+                    } else {
                         "`become` must be in tail position of the enclosing function or lambda"
-                            .to_owned(),
-                    );
+                    };
+                    self.checker.report_type_error(expr.id, message.to_owned());
                 }
                 self.check_operand(expr.id, call);
+                // `become handle ..` keeps the handle in tail position.
+                self.tail = tail;
                 self.visit_expr(call);
             }
             ExprKind::Block { stmts, value } => {
@@ -125,10 +133,24 @@ impl<'ast, 'db: 'ast> Visit<'ast, ResolvedRef<'db>> for BecomeSites<'_, 'db> {
                 self.visit_expr(body);
                 self.handler_depth = handler_depth;
             }
-            ExprKind::Handle { .. } => {
-                self.handler_depth += 1;
-                walk_expr(self, expr);
-                self.handler_depth -= 1;
+            ExprKind::Handle { body, handlers } => {
+                self.visit_in_handler(body);
+                for arm in handlers {
+                    match &arm.kind {
+                        HandlerKind::Do { binding } => self.visit_pattern(binding),
+                        HandlerKind::Fn { params, .. } | HandlerKind::Op { params, .. } => {
+                            for param in params {
+                                self.visit_pattern(param);
+                            }
+                        }
+                    }
+                    if matches!(arm.kind, HandlerKind::Fn { .. }) {
+                        self.visit_in_handler(&arm.body);
+                    } else {
+                        self.tail = tail;
+                        self.visit_expr(&arm.body);
+                    }
+                }
             }
             _ => walk_expr(self, expr),
         }

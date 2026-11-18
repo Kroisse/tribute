@@ -62,8 +62,8 @@ ability State(s) {
 fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
     handle comp() {
         do result { result }
-        op State::get() { run_state(fn() { resume init }, init) }
-        op State::set(v) { run_state(fn() { resume Nil }, v) }
+        op State::get() { become run_state(fn() { resume init }, init) }
+        op State::set(v) { become run_state(fn() { resume Nil }, v) }
     }
 }
 "#;
@@ -130,8 +130,8 @@ fn counter(comp: fn() ->{e, State(Nat)} a) ->{e, State(Nat)} a {
 fn tail_only(comp: fn() ->{e, State(Nat)} a) ->{e} a {
     handle comp() {
         do result { result }
-        op State::get() { tail_only(fn() resume 0) }
-        op State::set(v) { tail_only(fn() resume Nil) }
+        op State::get() { become tail_only(fn() resume 0) }
+        op State::set(v) { become tail_only(fn() resume Nil) }
     }
 }
 "#

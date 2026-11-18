@@ -570,8 +570,8 @@ fn use_state() ->{State(Nat)} Nil {
 fn run_state(comp: fn() ->{State(Nat)} Nil) -> Nil {
     handle comp() {
         do result { result }
-        op State::get() { run_state(fn() { resume 0 }) }
-        op State::set(v) { run_state(fn() { resume Nil }) }
+        op State::get() { become run_state(fn() { resume 0 }) }
+        op State::set(v) { become run_state(fn() { resume Nil }) }
     }
 }
 
@@ -659,8 +659,8 @@ fn use_state() ->{State(Nat)} Nat {
 fn run_state(comp: fn() ->{State(Nat)} Nat) -> Nat {
     handle comp() {
         do result { result }
-        op State::get() { run_state(fn() { resume 42 }) }
-        op State::set(v) { run_state(fn() { resume Nil }) }
+        op State::get() { become run_state(fn() { resume 42 }) }
+        op State::set(v) { become run_state(fn() { resume Nil }) }
     }
 }
 
@@ -746,8 +746,8 @@ fn wrapper() ->{State(Int)} Int {
 fn run_state(comp: fn() ->{State(Int)} Int) -> Int {
     handle comp() {
         do result { result }
-        op State::get() { run_state(fn() { resume +42 }) }
-        op State::set(v) { run_state(fn() { resume Nil }) }
+        op State::get() { become run_state(fn() { resume +42 }) }
+        op State::set(v) { become run_state(fn() { resume Nil }) }
     }
 }
 
@@ -789,8 +789,8 @@ fn use_state_int() ->{State(Int)} Int {
 fn run_state(comp: fn() ->{State(Int)} Int) -> Int {
     handle comp() {
         do result { result }
-        op State::get() { run_state(fn() { resume +100 }) }
-        op State::set(v) { run_state(fn() { resume Nil }) }
+        op State::get() { become run_state(fn() { resume +100 }) }
+        op State::set(v) { become run_state(fn() { resume Nil }) }
     }
 }
 
@@ -860,8 +860,8 @@ fn use_state() ->{State(Nat)} Nat {
 fn run_state(comp: fn() ->{State(Nat)} Nat) -> Nat {
     handle comp() {
         do result { result }
-        op State::get() { run_state(fn() { resume 42 }) }
-        op State::set(v) { run_state(fn() { resume Nil }) }
+        op State::get() { become run_state(fn() { resume 42 }) }
+        op State::set(v) { become run_state(fn() { resume Nil }) }
     }
 }
 
@@ -937,8 +937,8 @@ fn apply(f: fn() ->{State(Nat)} Nat) ->{State(Nat)} Nat {
 fn run_state(comp: fn() ->{State(Nat)} Nat) -> Nat {
     handle comp() {
         do result { result }
-        op State::get() { run_state(fn() { resume 42 }) }
-        op State::set(v) { run_state(fn() { resume Nil }) }
+        op State::get() { become run_state(fn() { resume 42 }) }
+        op State::set(v) { become run_state(fn() { resume Nil }) }
     }
 }
 
@@ -1052,7 +1052,7 @@ fn use_multi() ->{Multi} Nat {
 fn run_multi(comp: fn() ->{Multi} Nat) -> Nat {
     handle comp() {
         do result { result }
-        op Multi::combine(x, y, z) { run_multi(fn() { resume x + y + z }) }
+        op Multi::combine(x, y, z) { become run_multi(fn() { resume x + y + z }) }
     }
 }
 

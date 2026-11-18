@@ -407,6 +407,7 @@ impl Converter<'_> {
             &[
                 "sym_name",
                 "type",
+                tribute_cps::ENTRY_OF_ATTR,
                 tribute_control::ROW_BINDERS_ATTR,
                 tribute_control::ROW_UNIONS_ATTR,
                 tribute_control::INFERRED_ROW_ATTR,
@@ -444,8 +445,7 @@ impl Converter<'_> {
                     "a non-CPS callable cannot call a CPS target",
                 ));
             }
-            let plan = evidence_plan_of(self.ctx, source);
-            let frame = self.push_suffix_frame(source, rest, block, mapping, flow, plan)?;
+            let frame = self.call_frame(source, rest, block, mapping, flow)?;
             let mut args = vec![self.current_evidence(source, flow)?, frame];
             args.extend(
                 self.ctx
@@ -467,8 +467,8 @@ impl Converter<'_> {
         Ok(ControlFlow::Continue(()))
     }
 
-    /// The ContinuationFrame a source `become` in a CPS callable passes on:
-    /// the callable's own.
+    /// The ContinuationFrame a source `become` in a `Cps` flow passes on:
+    /// the flow's own.
     fn tail_frame(&self, source: OpRef, flow: &Flow) -> Result<ValueRef, TributeControlToCpsError> {
         flow.exit_k.ok_or_else(|| {
             TributeControlToCpsError::post_op(
@@ -526,9 +526,10 @@ impl Converter<'_> {
                 self.ctx.push_op(block, tail.op_ref());
             }
             (CallingConvention::Cps, _) => {
-                // A value-returning callee cannot reach a CPS callable, so
-                // calling it adds one bounded activation before the caller's
-                // `Done` takes its result.
+                // Only a callee without a body has no `Cps` entry instance.
+                // It installs no handle and makes no tail call, so calling
+                // it adds one bounded activation before the flow's `Done`
+                // takes its result.
                 let call = self.lower_direct_call(source, &target, mapping, flow)?;
                 self.ctx.push_op(block, call.op_ref());
                 self.emit_exit(block, location, call.result(self.ctx), flow)?;
@@ -640,8 +641,7 @@ impl Converter<'_> {
                     "a non-CPS callable cannot make a CPS indirect call",
                 ));
             }
-            let plan = evidence_plan_of(self.ctx, source);
-            let frame = self.push_suffix_frame(source, rest, block, mapping, flow, plan)?;
+            let frame = self.call_frame(source, rest, block, mapping, flow)?;
             let mut args = vec![self.current_evidence(source, flow)?, frame];
             args.extend(
                 source_args

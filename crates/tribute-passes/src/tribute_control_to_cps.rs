@@ -115,14 +115,16 @@ struct Flow {
     answer_type: TypeRef,
     preserve_scf_yield: bool,
     /// Set in the arms of a structured operation in tail position that a
-    /// source `become` leaves.
+    /// source `become` leaves, or whose result is the result of a `Cps`
+    /// flow.
     tail_join: Option<Box<TailJoin>>,
 }
 
 /// The continuation of a structured operation in tail position. Only casts
 /// and the enclosing terminator follow such an operation, so each arm runs
 /// them itself instead of yielding to a join: a `become` in an arm then
-/// transfers the callable's own frame, and the operation ends its block.
+/// transfers the flow's own frame, an operation that makes an arm's result
+/// can pass that frame on, and the operation ends its block.
 #[derive(Clone)]
 struct TailJoin {
     structured: OpRef,

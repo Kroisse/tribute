@@ -1366,7 +1366,9 @@ fn multiple_arms_for_one_ability_emit_one_dispatcher() {
         %fallback = arith.constant 9 : core.i32
         tribute_control.yield %fallback
     }
-    tribute_control.return %handled
+    %one = arith.constant 1 : core.i32
+    %sum = arith.addi %handled, %one : core.i32
+    tribute_control.return %sum
   }
 }"#;
     let (mut ctx, module) = parse(input);
@@ -3303,4 +3305,140 @@ fn a_do_arm_that_changes_the_type_gives_the_arm_one_token_over_the_body_result()
     assert_eq!(inputs[1..], ["ability.frame<core.i32>", "core.i32"]);
     assert_eq!(transfers_into(&ctx, arm, token).len(), 1);
     lower_continuation_frames(&mut ctx, module).unwrap();
+}
+
+/// `run` installs a handle in tail position whose body's result is a call
+/// of the `Cps` callee `inner` and whose arm resumes in tail position. The
+/// call and the resume carry `PLAN`.
+const TAIL_SITES: &str = r#"core.module @test {
+  tribute_cps.func @inner(%x: core.i32) -> core.i32 row(@State) convention(cps) {
+    %v = tribute_control.perform op @State @get(%x) : (core.i32) -> core.i32
+    tribute_control.return %v
+  }
+  tribute_cps.func @run(%input: core.i32) -> core.i32 convention(cps) {
+    %handled = tribute_control.handle : core.i32 {
+      %called = tribute_control.call @inner(%input) PLAN : (core.i32) -> core.i32
+      tribute_control.yield %called
+    } do(%value: core.i32) {
+        tribute_control.yield %value
+    } op @State @get(%argument: core.i32) : core.i32 {
+        %resumed = tribute_control.resume %argument RESUME_PLAN : core.i32 -> core.i32
+        tribute_control.yield %resumed
+    }
+    tribute_control.return %handled
+  }
+}"#;
+
+/// [`TAIL_SITES`] with `plan` on its call and its resume.
+fn tail_sites_with(plan: Option<&str>) -> String {
+    let (call, resume) = match plan {
+        Some(plan) => (
+            format!(" attributes {{evidence_plan = {plan}}}"),
+            format!(" {{evidence_plan = {plan}}}"),
+        ),
+        None => (String::new(), String::new()),
+    };
+    TAIL_SITES
+        .replace(" RESUME_PLAN", &resume)
+        .replace(" PLAN", &call)
+}
+
+/// The converted `run`, its `ability.handle`, the entry block of the
+/// handle's body, and the `func.tail_call` of `inner` in it.
+fn tail_sites(ctx: &IrContext, module: Module) -> (OpRef, OpRef, BlockRef, OpRef) {
+    let run = module
+        .ops(ctx)
+        .iter()
+        .copied()
+        .find(|&op| {
+            func::Func::matches(ctx, op) && ctx.op_attrs(op).get_str("sym_name") == Some("run")
+        })
+        .expect("run is converted");
+    let mut handle = None;
+    let mut call = None;
+    let _ = trunk_ir::walk::walk_op::<()>(ctx, run, &mut |op| {
+        if ability::Handle::matches(ctx, op) {
+            handle = Some(op);
+        } else if func::TailCall::matches(ctx, op) {
+            call = Some(op);
+        }
+        std::ops::ControlFlow::Continue(trunk_ir::walk::WalkAction::Advance)
+    });
+    let handle = handle.expect("an ability.handle");
+    let body = ctx
+        .region(ability::Handle::from_op(ctx, handle).unwrap().body(ctx))
+        .blocks[0];
+    (run, handle, body, call.expect("the call of inner"))
+}
+
+/// The number of `ability.suffix_frame`s under `root`.
+fn suffix_frames(ctx: &IrContext, root: OpRef) -> usize {
+    let mut count = 0;
+    let _ = trunk_ir::walk::walk_op::<()>(ctx, root, &mut |op| {
+        if ability::SuffixFrame::matches(ctx, op) {
+            count += 1;
+        }
+        std::ops::ControlFlow::Continue(trunk_ir::walk::WalkAction::Advance)
+    });
+    count
+}
+
+/// A handle in tail position exits through the frame of its flow, a tail
+/// `resume` passes the arm's frame, and the call that makes the result of
+/// a handle body passes the body's frame (`design/cps-effects.md`, "Frame을
+/// 그대로 넘기는 자리").
+#[test]
+fn tail_handles_resumes_and_body_calls_pass_their_flows_frame() {
+    let (ctx, module) = convert_state_get(&tail_sites_with(None));
+    let (run, handle, body, call) = tail_sites(&ctx, module);
+    assert_eq!(suffix_frames(&ctx, run), 0, "{}", module.op().display(&ctx));
+    let run_entry = ctx.region(ctx.op_regions(run).next().unwrap()).blocks[0];
+    assert_eq!(ctx.op_operands(handle)[1], ctx.block_args(run_entry)[1]);
+    assert_eq!(ctx.op_operands(call)[1], ctx.block_args(body)[1]);
+    let (arm, token) = converted_resumptive_arm(&ctx, module);
+    let [resume] = transfers_into(&ctx, arm, token)[..] else {
+        panic!("one resume enters the token: {}", module.op().display(&ctx));
+    };
+    assert_eq!(
+        func::TailCallIndirect::from_op(&ctx, resume)
+            .unwrap()
+            .args(&ctx)[1],
+        ctx.block_args(lambda_entry(&ctx, arm))[1]
+    );
+}
+
+/// In a `Direct` callable, the call that makes the body result of a tail
+/// handle enters `inner`'s `Cps` entry instance with the body's frame
+/// (`design/cps-effects.md`, "Frame을 그대로 넘기는 자리").
+#[test]
+fn a_body_result_call_enters_a_cps_entry_instance_with_the_body_frame() {
+    let (ctx, module) = convert_state_get(
+        r#"core.module @test {
+  tribute_cps.func @"inner$7"(%x: core.i32) -> core.i32 convention(cps) attributes {entry_of = "inner"} {
+    tribute_control.return %x
+  }
+  tribute_cps.func @run(%input: core.i32) -> core.i32 convention(direct) {
+    %handled = tribute_control.handle : core.i32 {
+      %called = tribute_control.call @"inner$7"(%input) : (core.i32) -> core.i32
+      tribute_control.yield %called
+    } do(%value: core.i32) {
+        tribute_control.yield %value
+    }
+    tribute_control.return %handled
+  }
+}"#,
+    );
+    let (run, _, body, call) = tail_sites(&ctx, module);
+    assert_eq!(suffix_frames(&ctx, run), 0, "{}", module.op().display(&ctx));
+    assert_eq!(ctx.op_operands(call)[1], ctx.block_args(body)[1]);
+}
+
+/// A call or `resume` with an `evidence_plan` keeps its suffix frame, whose
+/// layer applies the selection again on the resumed path.
+#[test]
+fn a_call_or_resume_with_an_evidence_plan_keeps_its_suffix_frame() {
+    let (ctx, module) = convert_state_get(&tail_sites_with(Some("[{mask = @State}]")));
+    let (run, _, body, call) = tail_sites(&ctx, module);
+    assert_eq!(suffix_frames(&ctx, run), 2, "{}", module.op().display(&ctx));
+    assert_ne!(ctx.op_operands(call)[1], ctx.block_args(body)[1]);
 }

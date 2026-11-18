@@ -242,8 +242,10 @@ pub enum ExprKind<V> {
         local_id: Option<LocalId>,
     },
 
-    /// Proper tail call: `become f(args)`. The operand must be a call in tail
-    /// position; typechecking enforces both.
+    /// Proper tail call: `become f(args)`, or the assertion `become resume v`
+    /// or `become handle ..` that the operand is in tail position. The
+    /// operand must be one of those in tail position; typechecking enforces
+    /// both.
     Become { call: Expr<V> },
 
     // === Compound Expressions ===

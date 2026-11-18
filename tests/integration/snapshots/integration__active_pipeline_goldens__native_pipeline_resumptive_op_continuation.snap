@@ -15,3 +15,7 @@ main: () -> (core.nil)
 pkg::bump: (adt.array<adt.struct<std::runtime::evidence::Marker>>, Frame) -> ()
   func.call operands=2 results=1: 1
   func.tail_call_indirect operands=8 results=0: 1
+pkg::handle_state: (adt.array<adt.struct<std::runtime::evidence::Marker>>, Frame, adt.struct<closure>) -> ()
+  func.call operands=0 results=1: 1
+  func.call operands=5 results=1: 1
+  func.tail_call_indirect operands=4 results=0: 1

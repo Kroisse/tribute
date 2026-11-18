@@ -17,8 +17,8 @@ ability State(s) {
 fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
     handle comp() {
         do result { result }
-        op State::get() { run_state(fn() { resume init }, init) }
-        op State::set(v) { run_state(fn() { resume Nil }, v) }
+        op State::get() { become run_state(fn() { resume init }, init) }
+        op State::set(v) { become run_state(fn() { resume Nil }, v) }
     }
 }
 
@@ -229,15 +229,15 @@ ability Reader {
 fn with_reader(comp: fn() ->{e, Reader} a, value: Int) ->{e} a {
     handle comp() {
         do result { result }
-        op Reader::ask() { with_reader(fn() { resume value }, value) }
+        op Reader::ask() { become with_reader(fn() { resume value }, value) }
     }
 }
 
 fn with_state(comp: fn() ->{e, State(Int)} a) ->{e} a {
     handle comp() {
         do result { result }
-        op State::get() { with_state(fn() { resume +3 }) }
-        op State::set(v) { with_state(fn() { resume Nil }) }
+        op State::get() { become with_state(fn() { resume +3 }) }
+        op State::set(v) { become with_state(fn() { resume Nil }) }
     }
 }
 
@@ -269,7 +269,7 @@ ability Reader(r) {
 
 fn run_reader(comp: fn() ->{e, Reader(r)} a, value: r) ->{e} a {
     handle comp() {
-        op Reader::ask() { run_reader(fn() { resume value }, value) }
+        op Reader::ask() { become run_reader(fn() { resume value }, value) }
     }
 }
 
@@ -337,7 +337,7 @@ ability Reader {
 fn with_reader(comp: fn() ->{e, Reader} a, value: Int) ->{e} a {
     handle comp() {
         do result { result }
-        op Reader::ask() { with_reader(fn() { resume value }, value) }
+        op Reader::ask() { become with_reader(fn() { resume value }, value) }
     }
 }
 
@@ -384,7 +384,7 @@ ability Reader {
 fn with_ask(comp: fn() ->{e, State(Int), Reader} Int) ->{e, State(Int)} Int {
     handle comp() {
         do result { result }
-        op Reader::ask() { with_ask(fn() { resume State::get() + +1 }) }
+        op Reader::ask() { become with_ask(fn() { resume State::get() + +1 }) }
     }
 }
 
@@ -424,7 +424,7 @@ ability Reader {
 fn with_reader(comp: fn() ->{e, Reader} a, value: Int) ->{e} a {
     handle comp() {
         do result { result }
-        op Reader::ask() { with_reader(fn() { resume value }, value) }
+        op Reader::ask() { become with_reader(fn() { resume value }, value) }
     }
 }
 
@@ -434,7 +434,7 @@ fn with_tick(
     handle comp() {
         do result { result }
         op Tick::tick() {
-            with_tick(fn() {
+            become with_tick(fn() {
                 handle {
                     let s = State::get()
                     resume s + Reader::ask()
@@ -486,8 +486,8 @@ ability Cell(c) {
 fn run_cell(comp: fn() ->{e, Cell(c)} a, init: c) ->{e} a {
     handle comp() {
         do result { result }
-        op Cell::read() { run_cell(fn() { resume init }, init) }
-        op Cell::write(v) { run_cell(fn() { resume Nil }, v) }
+        op Cell::read() { become run_cell(fn() { resume init }, init) }
+        op Cell::write(v) { become run_cell(fn() { resume Nil }, v) }
     }
 }
 
@@ -497,7 +497,7 @@ fn with_tick(
     handle comp() {
         do result { result }
         op Tick::tick() {
-            with_tick(fn() {
+            become with_tick(fn() {
                 handle {
                     let c = Cell::read()
                     let s = State::get()
@@ -515,7 +515,7 @@ fn with_tick(
 fn main() ->{Io} Nil {
     show(run_cell(fn() {
         run_state(fn() {
-            with_tick(fn() {
+            become with_tick(fn() {
                 let t = Tick::tick()
                 t + Cell::read() + State::get()
             })
@@ -615,7 +615,7 @@ fn inc() ->{State(Int)} Nil {
 fn with_reader(comp: fn() ->{e, Reader} a) ->{e} a {
     handle comp() {
         do result { result }
-        op Reader::ask() { with_reader(fn() { resume +7 }) }
+        op Reader::ask() { become with_reader(fn() { resume +7 }) }
     }
 }
 

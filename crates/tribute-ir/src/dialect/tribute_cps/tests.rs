@@ -192,7 +192,7 @@ fn a_module_holds_one_form_of_its_callables() {
 }
 
 #[test]
-fn an_indirect_tail_call_is_not_stronger_than_its_callable() {
+fn an_indirect_tail_call_is_not_stronger_than_its_flow() {
     let errors = messages(
         r#"core.module @test {
   tribute_cps.func @f(%k: tribute_control.func_sig<() -> core.i32>) -> core.i32 convention(direct) {
@@ -203,7 +203,43 @@ fn an_indirect_tail_call_is_not_stronger_than_its_callable() {
     );
     assert_eq!(
         errors,
-        ["callee convention must not be stronger than the enclosing callable"]
+        ["callee convention must not be stronger than the flow that holds the transfer"]
+    );
+}
+
+/// A tail transfer in a `Cps` flow enters its callee as `Cps`: the arms of
+/// a handle in a `Direct` callable are one (`design/tribute-dialects.md`,
+/// "Convention과 class 특수화").
+#[test]
+fn a_tail_transfer_in_a_cps_flow_enters_its_callee_as_cps() {
+    let module = |convention: &str, callee: &str| {
+        format!(
+            r#"core.module @test {{
+  ability.decl @Ctl {{
+    ability.operation {{kind = "op", op_name = "ctl", param_types = [], result_type = core.i32}}
+  }}
+  tribute_cps.func @g(%x: core.i32) -> core.i32 convention({callee}) {{
+    tribute_control.return %x
+  }}
+  tribute_cps.func @f(%x: core.i32, %k: tribute_control.func_sig<(core.i32) -> core.i32>) -> core.i32 convention(direct) {{
+    %r = tribute_control.handle : core.i32 {{
+      %c = tribute_control.perform op @Ctl @ctl() : () -> core.i32
+      tribute_control.yield %c
+    }} do(%v: core.i32) {{
+        tribute_cps.tail_call_indirect %k(%v) attributes {{convention = "{convention}"}} : (core.i32) -> core.i32
+    }} op @Ctl @ctl() : core.i32 {{
+        tribute_control.tail_call @g(%x) : (core.i32) -> ()
+    }}
+    tribute_control.return %r
+  }}
+}}
+"#
+        )
+    };
+    assert_eq!(messages(&module("cps", "cps")), Vec::<String>::new());
+    assert_eq!(
+        messages(&module("direct", "direct")),
+        ["a tail transfer in a Cps flow must enter its callee as Cps"; 2]
     );
 }
 
@@ -326,7 +362,7 @@ fn every_body_takes_the_parameters_and_its_own_convention() {
     assert!(
         messages(&stronger)
             .iter()
-            .any(|message| message.contains("must not be stronger than the enclosing callable")),
+            .any(|message| message.contains("must not be stronger than the flow")),
         "{:?}",
         messages(&stronger)
     );
@@ -375,6 +411,169 @@ fn a_function_table_and_its_targets_are_in_the_module_of_its_references() {
         [
             "function table target @inner::id must be in the table's own module",
             "func_ref @inner::id$8 must name a table of its own module",
+        ]
+    );
+}
+
+/// Each function holds one call; `passes_body_frame_on` holds for the call
+/// that makes the body result of a handle in tail position, directly or
+/// through a structured arm, in a function, an `op` arm, or a lambda.
+const BODY_RESULT_CALLS: &str = r#"core.module @test {
+  !k = tribute_control.func_sig<(core.i32) -> core.i32>
+  ability.decl @Ctl {
+    ability.operation {kind = "op", op_name = "ctl", param_types = [], result_type = core.i32}
+  }
+  tribute_cps.func @g(%x: core.i32) -> core.i32 convention(direct) {
+    tribute_control.return %x
+  }
+  tribute_cps.func @named(%x: core.i32) -> core.i32 convention(direct) {
+    %r = tribute_control.handle : core.i32 {
+      %c = tribute_control.call @g(%x) : (core.i32) -> core.i32
+      tribute_control.yield %c
+    } do(%v: core.i32) {
+        tribute_control.yield %v
+    }
+    tribute_control.return %r
+  }
+  tribute_cps.func @value(%x: core.i32, %k: !k) -> core.i32 convention(direct) {
+    %r = tribute_control.handle : core.i32 {
+      %c = tribute_cps.call_indirect %k(%x) attributes {convention = "cps"} : (core.i32) -> core.i32
+      tribute_control.yield %c
+    } do(%v: core.i32) {
+        tribute_control.yield %v
+    }
+    tribute_control.return %r
+  }
+  tribute_cps.func @select(%x: core.i32, %b: core.i1) -> core.i32 convention(direct) {
+    %r = tribute_control.handle : core.i32 {
+      %s = scf.if %b -> (core.i32) {
+        %c = tribute_control.call @g(%x) : (core.i32) -> core.i32
+        scf.yield %c
+      } else {
+        scf.yield %x
+      }
+      tribute_control.yield %s
+    } do(%v: core.i32) {
+        tribute_control.yield %v
+    }
+    tribute_control.return %r
+  }
+  tribute_cps.func @in_arm(%x: core.i32) -> core.i32 convention(direct) {
+    %r = tribute_control.handle : core.i32 {
+      %p = tribute_control.perform op @Ctl @ctl() : () -> core.i32
+      tribute_control.yield %p
+    } do(%v: core.i32) {
+        tribute_control.yield %v
+    } op @Ctl @ctl() : core.i32 {
+        %i = tribute_control.handle : core.i32 {
+          %c = tribute_control.call @g(%x) : (core.i32) -> core.i32
+          tribute_control.yield %c
+        } do(%w: core.i32) {
+            tribute_control.yield %w
+        }
+        tribute_control.yield %i
+    }
+    tribute_control.return %r
+  }
+  tribute_cps.func @in_lambda(%x: core.i32) -> !k convention(direct) {
+    %l = tribute_cps.lambda(%y: core.i32) -> core.i32 entries {
+      direct {
+        %r = tribute_control.handle : core.i32 {
+          %c = tribute_control.call @g(%y) : (core.i32) -> core.i32
+          tribute_control.yield %c
+        } do(%v: core.i32) {
+            tribute_control.yield %v
+        }
+        tribute_control.return %r
+      }
+    }
+    tribute_control.return %l
+  }
+  tribute_cps.func @not_tail(%x: core.i32) -> core.i32 convention(direct) {
+    %r = tribute_control.handle : core.i32 {
+      %c = tribute_control.call @g(%x) : (core.i32) -> core.i32
+      tribute_control.yield %c
+    } do(%v: core.i32) {
+        tribute_control.yield %v
+    }
+    %s = arith.addi %r, %x : core.i32
+    tribute_control.return %s
+  }
+  tribute_cps.func @in_body(%x: core.i32) -> core.i32 convention(direct) {
+    %r = tribute_control.handle : core.i32 {
+      %i = tribute_control.handle : core.i32 {
+        %c = tribute_control.call @g(%x) : (core.i32) -> core.i32
+        tribute_control.yield %c
+      } do(%w: core.i32) {
+          tribute_control.yield %w
+      }
+      tribute_control.yield %i
+    } do(%v: core.i32) {
+        tribute_control.yield %v
+    }
+    tribute_control.return %r
+  }
+  tribute_cps.func @planned(%x: core.i32) -> core.i32 convention(direct) {
+    %r = tribute_control.handle : core.i32 {
+      %c = tribute_control.call @g(%x) attributes {evidence_plan = [{mask = @Ctl}]} : (core.i32) -> core.i32
+      tribute_control.yield %c
+    } do(%v: core.i32) {
+        tribute_control.yield %v
+    }
+    tribute_control.return %r
+  }
+  tribute_cps.func @other_result(%x: core.i32) -> core.i32 convention(direct) {
+    %r = tribute_control.handle : core.i32 {
+      %c = tribute_control.call @g(%x) : (core.i32) -> core.i32
+      tribute_control.yield %x
+    } do(%v: core.i32) {
+        tribute_control.yield %v
+    }
+    tribute_control.return %r
+  }
+  tribute_cps.func @no_handle(%x: core.i32) -> core.i32 convention(direct) {
+    %c = tribute_control.call @g(%x) : (core.i32) -> core.i32
+    tribute_control.return %c
+  }
+}
+"#;
+
+/// Only the calls at the body result of a tail handle hand its frame on:
+/// not one in a handle whose result is used, one in the body of another
+/// handle, one with an `evidence_plan`, one whose result the body does not
+/// yield, and a tail call outside any handle (`design/cps-effects.md`,
+/// "Frame을 그대로 넘기는 자리").
+#[test]
+fn only_a_call_at_the_body_result_of_a_tail_handle_passes_its_frame_on() {
+    let (ctx, module) = parse(BODY_RESULT_CALLS);
+    let passes: Vec<(&str, bool)> = module
+        .ops(&ctx)
+        .iter()
+        .filter_map(|&func| {
+            let name = ctx.op_attrs(func).get_str("sym_name")?;
+            let mut call = None;
+            let _ = trunk_ir::walk::walk_op::<()>(&ctx, func, &mut |op| {
+                if tribute_control::Call::matches(&ctx, op) || CallIndirect::matches(&ctx, op) {
+                    call = Some(op);
+                }
+                std::ops::ControlFlow::Continue(trunk_ir::walk::WalkAction::Advance)
+            });
+            Some((name, passes_body_frame_on(&ctx, call?)))
+        })
+        .collect();
+    assert_eq!(
+        passes,
+        [
+            ("named", true),
+            ("value", true),
+            ("select", true),
+            ("in_arm", true),
+            ("in_lambda", true),
+            ("not_tail", false),
+            ("in_body", false),
+            ("planned", false),
+            ("other_result", false),
+            ("no_handle", false),
         ]
     );
 }

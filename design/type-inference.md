@@ -427,7 +427,7 @@ fn f() ->{Ask} Nat {
 fn handled(comp: fn() ->{e} Nil) ->{} Nil {
     handle comp() {
         do v { v }
-        op Ping::ping() { handled(fn() resume Nil) }
+        op Ping::ping() { become handled(fn() resume Nil) }
     }
 }
 
@@ -435,7 +435,7 @@ fn handled(comp: fn() ->{e} Nil) ->{} Nil {
 fn handled(comp: fn() ->{e, Ping} Nil) ->{e} Nil {
     handle comp() {
         do v { v }
-        op Ping::ping() { handled(fn() resume Nil) }
+        op Ping::ping() { become handled(fn() resume Nil) }
     }
 }
 ```

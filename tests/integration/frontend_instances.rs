@@ -101,7 +101,7 @@ fn expects(action: fn() ->{Writer(Packet(Nat))} Nil) ->{Writer(Packet(Nat))} Nil
 fn run(comp: fn() ->{e, Writer(w)} Nil) ->{e} Nil {
     handle comp() {
         do value { value }
-        op Writer::tell(value) { run(fn() { resume Nil }) }
+        op Writer::tell(value) { become run(fn() { resume Nil }) }
     }
 }
 fn main() -> Nil {

@@ -180,8 +180,10 @@ impl Converter<'_> {
         let evidence = self.current_evidence(source, flow)?;
         let plan = evidence_plan_of(self.ctx, source);
         let value = mapping.get(&value_source).copied().unwrap_or(value_source);
-        let resume_frame =
-            self.push_suffix_frame(source, rest, block, mapping, flow, plan.clone())?;
+        let resume_frame = match self.tail_exit_frame(source, rest, flow) {
+            Some(frame) => frame,
+            None => self.push_suffix_frame(source, rest, block, mapping, flow, plan.clone())?,
+        };
         let transfer = emit_cps_tail_call_indirect(
             self.ctx,
             block,
@@ -302,21 +304,26 @@ impl Converter<'_> {
         let handle_result_source = self.ctx.op_result(source, 0);
         let handle_answer_source = self.ctx.op_result_types(source)[0];
         let handle_answer = self.convert_type(handle_answer_source);
-        let after_handle = self.build_suffix_continuation(
-            rest,
-            handle_result_source,
-            handle_answer_source,
-            mapping,
-            flow,
-            location,
-        )?;
-        let after_handle_op = match self.ctx.value_def(after_handle) {
-            trunk_ir::ValueDef::OpResult(op, _) => op,
-            _ => unreachable!("handle continuation is produced by closure.lambda"),
+        // A handle whose result is the flow's exits through the flow's frame.
+        let handle_frame = match self.tail_exit_frame(source, rest, flow) {
+            Some(frame) => frame,
+            None => {
+                let after_handle = self.build_suffix_continuation(
+                    rest,
+                    handle_result_source,
+                    handle_answer_source,
+                    mapping,
+                    flow,
+                    location,
+                )?;
+                let after_handle_op = match self.ctx.value_def(after_handle) {
+                    trunk_ir::ValueDef::OpResult(op, _) => op,
+                    _ => unreachable!("handle continuation is produced by closure.lambda"),
+                };
+                self.ctx.push_op(block, after_handle_op);
+                self.frame_for_suffix(block, location, handle_answer, flow, after_handle, None)?
+            }
         };
-        self.ctx.push_op(block, after_handle_op);
-        let handle_frame =
-            self.frame_for_suffix(block, location, handle_answer, flow, after_handle, None)?;
 
         let source_handle = tribute_control::Handle::from_op(self.ctx, source)
             .expect("lower_handle runs on a tribute_control.handle");
