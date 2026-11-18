@@ -316,10 +316,7 @@ fn declare_cps_entries(ctx: &mut IrContext, body: RegionRef) {
     let _ = trunk_ir::walk::walk_region::<()>(ctx, body, &mut |op| {
         if tribute_cps::body_conventions(ctx, op)
             .is_some_and(|bodies| !bodies.contains(&CallingConvention::Cps))
-            && ctx
-                .op_regions(op)
-                .last()
-                .is_some_and(|strongest| tribute_cps::own_flow_hands_on_frame(ctx, strongest))
+            && tribute_cps::strongest_body_hands_on_frame(ctx, op)
         {
             lambdas.push(op);
         }

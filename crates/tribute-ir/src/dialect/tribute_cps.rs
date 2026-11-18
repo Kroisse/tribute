@@ -535,6 +535,15 @@ pub fn own_flow_hands_on_frame(ctx: &IrContext, body: RegionRef) -> bool {
     .is_break()
 }
 
+/// Whether the own flow of the strongest body of `lambda` hands a frame on
+/// ([`own_flow_hands_on_frame`]), which is what gives a lambda without a
+/// `Cps` body its `cps_entry`.
+pub fn strongest_body_hands_on_frame(ctx: &IrContext, lambda: trunk_ir::refs::OpRef) -> bool {
+    ctx.op_regions(lambda)
+        .last()
+        .is_some_and(|strongest| own_flow_hands_on_frame(ctx, strongest))
+}
+
 /// Whether `lambda`, a `tribute_cps.lambda`, declares `cps_entry`: its `Cps`
 /// convention entry is its strongest body run as a `Cps` flow.
 pub fn has_cps_entry(ctx: &IrContext, lambda: trunk_ir::refs::OpRef) -> bool {

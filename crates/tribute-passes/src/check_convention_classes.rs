@@ -317,7 +317,7 @@ impl<'a> Instance<'a> {
                 || tribute_cps::passes_body_frame_on(self.ctx, reference.op);
             // Whether the callee has a `Cps` entry instance: it has a body
             // and its row determines a weaker convention.
-            let has_cps_entry = match self.module.definitions.get(callee) {
+            let has_cps_entry = || match self.module.definitions.get(callee) {
                 Some(definition) if self.ctx.op_has_regions(definition.op) => {
                     let params: HashMap<u32, Class> = positions
                         .into_iter()
@@ -332,7 +332,7 @@ impl<'a> Instance<'a> {
                 }
                 _ => false,
             };
-            let entry = if cps_flow && has_cps_entry {
+            let entry = if cps_flow && has_cps_entry() {
                 Entry::Cps
             } else {
                 Entry::Row
@@ -340,9 +340,9 @@ impl<'a> Instance<'a> {
             // A tail call in a body that also runs as its lambda's `Cps`
             // entry names the instance it enters there.
             let expected_cps = (!cps_flow
-                && has_cps_entry
                 && tribute_control::TailCall::matches(self.ctx, reference.op)
-                && tribute_cps::in_cps_entry_flow(self.ctx, reference.op))
+                && tribute_cps::in_cps_entry_flow(self.ctx, reference.op)
+                && has_cps_entry())
             .then(|| instance_name(callee, &classes, Entry::Cps));
             let actual_cps = self
                 .ctx
@@ -434,9 +434,7 @@ impl<'a> Instance<'a> {
             // lambda may declare it: removing unreferenced definitions after
             // class specialization may remove the only such transfer.
             let hands_on = !expected.contains(&CallingConvention::Cps)
-                && self.ctx.op_regions(lambda).last().is_some_and(|strongest| {
-                    tribute_cps::own_flow_hands_on_frame(self.ctx, strongest)
-                });
+                && tribute_cps::strongest_body_hands_on_frame(self.ctx, lambda);
             let declared = tribute_cps::has_cps_entry(self.ctx, lambda);
             if declared != hands_on && (declared || self.module.hands_frames) {
                 disagreements.push(Disagreement {

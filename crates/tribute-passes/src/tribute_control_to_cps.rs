@@ -105,7 +105,6 @@ struct Converter<'a> {
 
 /// The entry functions of a source lambda and what a closure of it captures,
 /// in the order its entry functions unpack them.
-#[derive(Clone)]
 struct LambdaEntries {
     entries: [SymbolPath; 3],
     /// The source values its bodies use from outside, in order of first use.
@@ -480,22 +479,20 @@ fn collect_callable_graph(ctx: &IrContext, module: Module, symbols: &SymbolTable
             func_tables.insert(op, FuncTable { op: table, entries });
             return ControlFlow::Continue(WalkAction::Advance);
         }
-        let attributes = &ctx.op(op).attributes;
-        if let Some(target) = attributes
-            .view(ctx)
-            .get_symbol_ref("callee")
-            .or_else(|| attributes.view(ctx).get_symbol_ref("value"))
-            .and_then(|reference| symbols.resolve(ctx, op, reference))
-            .filter(|target| funcs.contains_key(target))
-        {
+        let attributes = ctx.op_attrs(op);
+        let callable = |reference: Option<&SymbolPath>| {
+            reference
+                .and_then(|reference| symbols.resolve(ctx, op, reference))
+                .filter(|target| funcs.contains_key(target))
+        };
+        if let Some(target) = callable(
+            attributes
+                .get_symbol_ref("callee")
+                .or_else(|| attributes.get_symbol_ref("value")),
+        ) {
             targets.insert(op, target);
         }
-        if let Some(target) = attributes
-            .view(ctx)
-            .get_symbol_ref(tribute_cps::CPS_CALLEE_ATTR)
-            .and_then(|reference| symbols.resolve(ctx, op, reference))
-            .filter(|target| funcs.contains_key(target))
-        {
+        if let Some(target) = callable(attributes.get_symbol_ref(tribute_cps::CPS_CALLEE_ATTR)) {
             cps_targets.insert(op, target);
         }
         ControlFlow::Continue(WalkAction::Advance)

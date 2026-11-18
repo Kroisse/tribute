@@ -4,7 +4,7 @@
 use super::*;
 use tribute_ir::calling_convention::{ConventionBearing, DynConventionBearing};
 use trunk_ir::ops::VariadicResults;
-use trunk_ir::region_utils::values_defined_above;
+use trunk_ir::region_utils::{region_is_within, values_defined_above};
 
 impl Converter<'_> {
     /// Build a closure of the lambda `source`: a `closure.new` over the
@@ -16,26 +16,23 @@ impl Converter<'_> {
         source: OpRef,
         mapping: &HashMap<ValueRef, ValueRef>,
     ) -> Result<OpRef, TributeControlToCpsError> {
-        let lambda = match self.lambdas.get(&source) {
-            Some(lambda) => lambda.clone(),
-            None => {
-                let lambda = self.lambda_entries(source, mapping)?;
-                self.lambdas.insert(source, lambda.clone());
-                lambda
-            }
-        };
+        if !self.lambdas.contains_key(&source) {
+            let lambda = self.lambda_entries(source, mapping)?;
+            self.lambdas.insert(source, lambda);
+        }
+        let lambda = &self.lambdas[&source];
         let captures: Vec<_> = lambda
             .values
             .iter()
             .map(|value| mapping.get(value).copied().unwrap_or(*value))
             .chain(lambda.arms.iter().map(|arm| self.arm_tokens[arm]))
             .collect();
-        // The entry functions unpack the types the first closure captured.
-        if !captures
+        let unpacked_types = captures
             .iter()
             .map(|&capture| self.ctx.value_ty(capture))
-            .eq(lambda.capture_types.iter().copied())
-        {
+            .eq(lambda.capture_types.iter().copied());
+        let entries = lambda.entries.clone();
+        if !unpacked_types {
             return Err(self.malformed_source(
                 source,
                 "a lambda's captures have different types where its closures are built",
@@ -44,7 +41,7 @@ impl Converter<'_> {
         let logical_ty = self.ctx.op_result_types(source)[0];
         let closure_ty = self.convert_type(logical_ty);
         let closure_new = closure::New::operands(captures)
-            .entries(lambda.entries)
+            .entries(entries)
             .results(closure_ty)
             .build(self.ctx, self.ctx.op(source).location);
         self.copy_extra_attrs(
@@ -110,8 +107,8 @@ impl Converter<'_> {
         for (convention, body_source) in flows {
             let abi = CallableAbi::new(convention, source_param_types.clone(), result);
             let environment_index = convention.closure_environment_index();
-            let mut params = abi.lowered_params(evidence, frame);
-            params.insert(environment_index, physical_ty);
+            let params =
+                abi.interpose_environment(&abi.lowered_params(evidence, frame), physical_ty);
             let entry_source = self.ctx.region(body_source).blocks[0];
             let block = make_block(self.ctx, location, &params);
             let environment_name = self.ctx.string_attr("__env");
@@ -227,7 +224,7 @@ impl Converter<'_> {
                 if tribute_control::Resume::matches(self.ctx, op)
                     && let Some(resumption) = DynResumptionRegions::enclosing(self.ctx, op)
                     && !arms.contains(&resumption.arm)
-                    && !self.is_within(resumption.arm, bodies)
+                    && !region_is_within(self.ctx, resumption.arm, bodies)
                 {
                     arms.push(resumption.arm);
                 }
@@ -235,23 +232,6 @@ impl Converter<'_> {
             });
         }
         arms
-    }
-
-    /// Whether `region` is one of `regions` or nested in one of them.
-    fn is_within(&self, region: RegionRef, regions: &[RegionRef]) -> bool {
-        let mut current = Some(region);
-        while let Some(region) = current {
-            if regions.contains(&region) {
-                return true;
-            }
-            current = self
-                .ctx
-                .region(region)
-                .parent_op
-                .and_then(|op| self.ctx.op(op).parent_block)
-                .and_then(|block| self.ctx.block(block).parent_region);
-        }
-        false
     }
 
     /// The name of the source function `op` is written in.
@@ -657,27 +637,29 @@ impl Converter<'_> {
         let location = self.ctx.op(source).location;
         // In the `Cps` entry of its lambda, a tail call enters the instance
         // `cps_callee` names.
-        let cps_target = (flow.convention == CallingConvention::Cps)
-            .then(|| self.cps_targets.get(&source))
-            .flatten()
-            .and_then(|target| self.funcs.get(target))
-            .cloned();
-        if flow.convention == CallingConvention::Cps
-            && cps_target.is_none()
+        let enters_cps_callee = flow.convention == CallingConvention::Cps
             && self
                 .ctx
                 .op_attrs(source)
-                .contains_key(tribute_cps::CPS_CALLEE_ATTR)
-        {
-            return Err(self.malformed_source(
-                source,
-                "cps_callee does not name a source function of this module",
-            ));
-        }
-        let key = if cps_target.is_some() {
-            tribute_cps::CPS_CALLEE_ATTR
+                .contains_key(tribute_cps::CPS_CALLEE_ATTR);
+        let (key, target) = if enters_cps_callee {
+            let target = self
+                .cps_targets
+                .get(&source)
+                .and_then(|target| self.funcs.get(target))
+                .cloned()
+                .ok_or_else(|| {
+                    self.malformed_source(
+                        source,
+                        "cps_callee does not name a source function of this module",
+                    )
+                })?;
+            (tribute_cps::CPS_CALLEE_ATTR, target)
         } else {
-            "callee"
+            let target = self
+                .current_func(source)
+                .expect("pre-CPS validation resolved tail callee in this module");
+            ("callee", target)
         };
         let target_symbol = self
             .ctx
@@ -685,9 +667,6 @@ impl Converter<'_> {
             .get_symbol_ref(key)
             .expect("pre-CPS validation checked tail callee")
             .clone();
-        let target = cps_target
-            .or_else(|| self.current_func(source))
-            .expect("pre-CPS validation resolved tail callee in this module");
         let source_args = self
             .ctx
             .op_operands(source)
