@@ -456,8 +456,9 @@ class를 넘겨도 람다는 값 하나다. 앞의 `wrap`이 그 예다. 상한�
 **Capture.** 람다는 capture operand를 갖지 않는다. 람다는 isolated from
 above가 아닌 region으로서 lexical scope를 닫으며, 본문은 바깥 SSA 값을 직접
 참조한다. 모든 본문이 바깥에서 쓰는 값이 람다의 capture이고, closure 하나에 한
-번만 담긴다. 그 순서는 CPS legalization이 정한다
-([cps-effects.md](cps-effects.md#논리적-cps-적법화)).
+번만 담긴다. Capture와 그 순서는 source 람다만으로 정해지며 그 람다의 closure를
+만드는 자리에 기대지 않는다([cps-effects.md](cps-effects.md#논리적-cps-적법화)).
+그래서 한 람다의 closure는 어디에서 만들어지든 같은 entry 함수를 쓴다.
 
 **채우기.** Class `c`의 convention entry는 다음과 같다.
 
@@ -517,7 +518,7 @@ arm, delimiter region)는 source callable 값이 아니다. 그 closure type의
 callable은 자기 convention entry의 signature 자체이며, closure는 자기를 만든
 convention으로만 들어온다. 다른 convention entry는 모두 trap entry이고
 adapter를 두지 않는다. Adapter는 source 람다와 `func_ref`에만 있으며,
-legalization이 만들어 `closure.lambda`와 `closure.new`에 명시한다.
+legalization이 만들어 그 `closure.new`의 convention table에 넣는다.
 
 **Convention table.** Closure 값은 convention table 참조 하나와 capture로
 이루어진다([closure 저장 layout](#closure-저장-layout)). Convention table은

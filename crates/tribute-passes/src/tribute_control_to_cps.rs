@@ -1,8 +1,9 @@
 //! Atomic legalization of verified `tribute_control` callable/control IR.
 //!
 //! The pass deliberately stops at the physical `func`/`closure` and logical
-//! `ability` surface. It does not run closure extraction, evidence lowering,
-//! or target-specific conversion.
+//! `ability` surface. It makes the entry functions of source lambdas, once
+//! each, and leaves the closures it generates as `closure.lambda`. It does
+//! not run evidence lowering or target-specific conversion.
 
 use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
@@ -94,6 +95,22 @@ struct Converter<'a> {
     /// `resume` in the arm, wherever it is written, and a lambda that
     /// carries the resumption reach the arm through it.
     arm_tokens: HashMap<RegionRef, ValueRef>,
+    /// The entry functions made for each source lambda.
+    lambdas: HashMap<OpRef, LambdaEntries>,
+    /// The number of lambda entry functions named after each source function.
+    lambda_entries: HashMap<String, u32>,
+}
+
+/// The entry functions of a source lambda and what a closure of it captures,
+/// in the order its entry functions unpack them.
+#[derive(Clone)]
+struct LambdaEntries {
+    entries: [SymbolPath; 3],
+    /// The source values its bodies use from outside, in order of first use.
+    values: Vec<ValueRef>,
+    /// The arms whose resumption its bodies resume. Their tokens follow
+    /// `values`.
+    arms: Vec<RegionRef>,
 }
 
 /// The operations of a source block that follow the one being converted.
@@ -154,6 +171,8 @@ impl<'a> Converter<'a> {
             helper_index: 0,
             tables: None,
             arm_tokens: HashMap::default(),
+            lambdas: HashMap::default(),
+            lambda_entries: HashMap::default(),
         }
     }
 

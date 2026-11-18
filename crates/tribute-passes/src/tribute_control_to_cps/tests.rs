@@ -152,6 +152,19 @@ fn lambda_conventions(ctx: &IrContext, lambda: OpRef) -> Vec<CallingConvention> 
         .collect()
 }
 
+/// Every `closure.new` under `root`, in source order. A source lambda is
+/// one of these over its entry functions.
+fn closure_news(ctx: &IrContext, root: OpRef) -> Vec<OpRef> {
+    let mut news = Vec::new();
+    let _ = trunk_ir::walk::walk_op::<()>(ctx, root, &mut |op| {
+        if closure::New::matches(ctx, op) {
+            news.push(op);
+        }
+        std::ops::ControlFlow::Continue(trunk_ir::walk::WalkAction::Advance)
+    });
+    news
+}
+
 fn collect_lambdas(ctx: &IrContext, op: OpRef, lambdas: &mut Vec<OpRef>) {
     if closure::Lambda::matches(ctx, op) {
         lambdas.push(op);
@@ -225,7 +238,11 @@ fn textual_callable_graph_converts_and_reparses() {
     assert!(!printed.contains("tribute_control.func_ref "));
     assert!(!printed.contains("tribute_control.call_indirect "));
     assert!(printed.contains("func.func @decl"));
-    assert!(printed.contains("closure.lambda"));
+    assert!(
+        printed.contains("func.func @\"outer::__lambda_0\""),
+        "{printed}"
+    );
+    assert!(printed.contains("closure.new"), "{printed}");
     assert!(printed.contains("func.tail_call_indirect"));
     assert!(printed.contains("tribute.calling_convention = \"cps\""));
 
@@ -726,24 +743,25 @@ fn source_signature_metadata_roundtrips_before_conversion() {
         Some(CallingConvention::Direct)
     );
 
-    let mut lambdas = Vec::new();
-    collect_lambdas(&ctx, module.op(), &mut lambdas);
-    let lambda_metadata = lambdas.into_iter().find_map(|lambda| {
-        let closure_ty = ctx.op_result_types(lambda)[0];
-        let closure = closure::Closure::from_type_ref(&ctx, closure_ty)?;
-        let signature = func::FuncSig::from_type_ref(&ctx, closure.func_type(&ctx))?;
-        let Attribute::List(metadata) = ctx.type_attrs(signature.as_type_ref()).get("metadata")?
-        else {
-            return None;
-        };
-        let [Attribute::List(pair)] = metadata.as_slice() else {
-            return None;
-        };
-        let [Attribute::Type(nested), Attribute::SymbolRef(tag)] = pair.as_slice() else {
-            return None;
-        };
-        (tag == ["lambda"]).then_some(*nested)
-    });
+    let lambda_metadata = closure_news(&ctx, module.op())
+        .into_iter()
+        .find_map(|lambda| {
+            let closure_ty = ctx.op_result_types(lambda)[0];
+            let closure = closure::Closure::from_type_ref(&ctx, closure_ty)?;
+            let signature = func::FuncSig::from_type_ref(&ctx, closure.func_type(&ctx))?;
+            let Attribute::List(metadata) =
+                ctx.type_attrs(signature.as_type_ref()).get("metadata")?
+            else {
+                return None;
+            };
+            let [Attribute::List(pair)] = metadata.as_slice() else {
+                return None;
+            };
+            let [Attribute::Type(nested), Attribute::SymbolRef(tag)] = pair.as_slice() else {
+                return None;
+            };
+            (tag == ["lambda"]).then_some(*nested)
+        });
     assert!(
         lambda_metadata.is_some_and(|nested| closure::Closure::matches(&ctx, nested)),
         "lambda metadata must retain a converted nested source signature"
@@ -2876,36 +2894,52 @@ fn a_lambda_with_two_bodies_lifts_an_entry_per_body() {
 }"#,
     );
     tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default()).unwrap();
-    let mut lambdas = Vec::new();
-    collect_lambdas(&ctx, module.op(), &mut lambdas);
-    let source = lambdas
-        .iter()
-        .filter_map(|&op| closure::Lambda::from_op(&ctx, op).ok())
-        .find(|lambda| lambda.adapters(&ctx).is_some())
-        .expect("the source lambda has adapters");
-    let entries = source.entries(&ctx).expect("the lists describe the bodies");
-    assert_eq!(
-        entries
-            .iter()
-            .map(|entry| entry.convention)
-            .collect::<Vec<_>>(),
-        [CallingConvention::Direct, CallingConvention::Cps]
-    );
-    assert_eq!(
-        entries
-            .iter()
-            .map(|entry| entry.signature.inputs(&ctx).len())
-            .collect::<Vec<_>>(),
-        [1, 3],
-        "the Cps body takes the evidence and its frame"
-    );
-    let adapters: Vec<_> = source
-        .adapters(&ctx)
-        .unwrap()
-        .iter()
-        .map(|(keyword, _)| ctx.str(keyword).to_owned())
+    let printed = module.op().display(&ctx).to_string();
+    let source = closure_news(&ctx, module.op())
+        .into_iter()
+        .filter_map(|op| closure::New::from_op(&ctx, op).ok())
+        .find(|new| {
+            new.entries(&ctx)
+                .any(|entry| entry.to_string().contains("__tribute_entry_adapter_"))
+        })
+        .unwrap_or_else(|| panic!("the source lambda has adapters: {printed}"));
+    let symbols = trunk_ir::symbol_table::SymbolTable::collect(&ctx, module);
+    let functions: Vec<_> = source
+        .entries(&ctx)
+        .map(|entry| {
+            symbols
+                .resolve(&ctx, source.op_ref(), entry)
+                .and_then(|function| func::Func::from_op(&ctx, function).ok())
+                .expect("every entry is a function of the module")
+        })
         .collect();
-    assert_eq!(adapters, ["evidence_direct"]);
+    let [direct, adapter, cps] = functions[..] else {
+        panic!("one slot per convention: {printed}");
+    };
+    assert_eq!(
+        [direct, adapter, cps].map(|function| DynConventionBearing::of(&ctx, function.op_ref())),
+        [
+            Some(CallingConvention::Direct),
+            Some(CallingConvention::EvidenceDirect),
+            Some(CallingConvention::Cps)
+        ]
+    );
+    assert_eq!(direct.sym_name(&ctx), "outer::__lambda_0");
+    assert_eq!(cps.sym_name(&ctx), "outer::__lambda_1");
+    assert!(
+        adapter
+            .sym_name(&ctx)
+            .starts_with("__tribute_entry_adapter_")
+    );
+    // Each body takes the closure, then what its convention passes: the
+    // Cps body the evidence and its frame.
+    let inputs = |function: func::Func| {
+        func::FuncSig::from_type_ref(&ctx, function.r#type(&ctx))
+            .unwrap()
+            .inputs(&ctx)
+            .len()
+    };
+    assert_eq!([inputs(direct), inputs(cps)], [2, 4], "{printed}");
     assert_eq!(ctx.op_operands(source.op_ref()).len(), 1);
 
     crate::lower_closure_lambda::lower_closure_lambda(&mut ctx, module);
@@ -2964,17 +2998,56 @@ fn converted_resumptive_arm(ctx: &IrContext, module: Module) -> (OpRef, ValueRef
     (lambda, token)
 }
 
-/// The `closure.lambda`s strictly under `root` that capture exactly
-/// `capture`, outermost first.
+/// The `closure.new`s of source lambdas strictly under `root` that capture
+/// exactly `capture`, outermost first. A source lambda's body is a function
+/// of the module, so only the `closure.new` is under `root`.
 fn lambdas_capturing(ctx: &IrContext, root: OpRef, capture: ValueRef) -> Vec<OpRef> {
     let mut lambdas = Vec::new();
     let _ = trunk_ir::walk::walk_op::<()>(ctx, root, &mut |op| {
-        if op != root && closure::Lambda::matches(ctx, op) && ctx.op_operands(op) == [capture] {
+        if op != root
+            && closure::New::from_op(ctx, op).is_ok_and(|new| new.entries(ctx).any(is_lambda_entry))
+            && ctx.op_operands(op) == [capture]
+        {
             lambdas.push(op);
         }
         std::ops::ControlFlow::Continue(trunk_ir::walk::WalkAction::Advance)
     });
     lambdas
+}
+
+/// Whether `entry` names the entry function of a source lambda body.
+fn is_lambda_entry(entry: &SymbolPath) -> bool {
+    entry
+        .leaf()
+        .is_some_and(|leaf| leaf.to_string().contains("::__lambda_"))
+}
+
+/// The entry function of the one source lambda body of the `closure.new`
+/// `lambda`, and the value it unpacks as its only capture.
+fn lambda_body_and_capture(ctx: &IrContext, module: Module, lambda: OpRef) -> (OpRef, ValueRef) {
+    let symbols = trunk_ir::symbol_table::SymbolTable::collect(ctx, module);
+    let new = closure::New::from_op(ctx, lambda).unwrap();
+    let [entry] = new
+        .entries(ctx)
+        .filter(|entry| is_lambda_entry(entry))
+        .collect::<Vec<_>>()[..]
+    else {
+        panic!("one lambda body: {}", module.op().display(ctx));
+    };
+    let body = symbols
+        .resolve(ctx, lambda, entry)
+        .expect("the entry is a function of the module");
+    let unpack = ctx.block(lambda_entry(ctx, body)).ops[0];
+    let unpack = closure::Unpack::from_op(ctx, unpack).unwrap_or_else(|_| {
+        panic!(
+            "a body with a capture unpacks it: {}",
+            module.op().display(ctx)
+        )
+    });
+    let [capture] = unpack.results(ctx)[..] else {
+        panic!("one capture: {}", module.op().display(ctx));
+    };
+    (body, capture)
 }
 
 /// The `func.tail_call_indirect`s under `root` that enter `callee`.
@@ -3076,13 +3149,15 @@ fn a_lambda_carrying_the_resumption_captures_the_token() {
             module.op().display(&ctx)
         );
     };
-    let transfers = transfers_into(&ctx, lambda, token);
+    // The lambda's body unpacks the token from its closure and resumes it.
+    let (body, carried) = lambda_body_and_capture(&ctx, module, lambda);
+    let transfers = transfers_into(&ctx, body, carried);
     let [transfer] = transfers[..] else {
         panic!("one resume enters the token: {}", module.op().display(&ctx));
     };
     assert_eq!(
         transferred_evidence(&ctx, transfer),
-        ctx.block_args(lambda_entry(&ctx, lambda))[0]
+        ctx.block_args(lambda_entry(&ctx, body))[0]
     );
 }
 
@@ -3116,14 +3191,20 @@ fn nested_lambdas_carrying_the_resumption_each_capture_the_token() {
 }"#;
     let (ctx, module) = convert_state_get(input);
     let (arm, token) = converted_resumptive_arm(&ctx, module);
-    let lambdas = lambdas_capturing(&ctx, arm, token);
-    let [_outer, inner] = lambdas[..] else {
+    // The arm builds the outer lambda over the token, whose body unpacks it
+    // and builds the inner lambda over it in turn.
+    let [outer] = lambdas_capturing(&ctx, arm, token)[..] else {
+        panic!("the arm captures the token: {}", module.op().display(&ctx));
+    };
+    let (outer_body, outer_token) = lambda_body_and_capture(&ctx, module, outer);
+    let [inner] = lambdas_capturing(&ctx, outer_body, outer_token)[..] else {
         panic!(
-            "two lambdas capture the token: {}",
+            "the outer lambda's body captures the token: {}",
             module.op().display(&ctx)
         );
     };
-    assert_eq!(transfers_into(&ctx, inner, token).len(), 1);
+    let (inner_body, inner_token) = lambda_body_and_capture(&ctx, module, inner);
+    assert_eq!(transfers_into(&ctx, inner_body, inner_token).len(), 1);
 }
 
 #[test]
@@ -3244,21 +3325,19 @@ fn an_arm_body_resume_and_a_carried_resume_enter_the_same_token_with_their_own_e
             module.op().display(&ctx)
         );
     };
-    let carried = transfers_into(&ctx, lambda, token);
+    let (body, carried_token) = lambda_body_and_capture(&ctx, module, lambda);
+    let carried = transfers_into(&ctx, body, carried_token);
     let [carried] = carried[..] else {
         panic!("the lambda resumes once: {}", module.op().display(&ctx));
     };
     assert_eq!(
         transferred_evidence(&ctx, carried),
-        ctx.block_args(lambda_entry(&ctx, lambda))[0]
+        ctx.block_args(lambda_entry(&ctx, body))[0]
     );
+    // The lambda's body is no part of the arm, so the arm's own transfers
+    // are the arm body's.
     let all = transfers_into(&ctx, arm, token);
-    let [direct] = all
-        .iter()
-        .copied()
-        .filter(|&op| op != carried)
-        .collect::<Vec<_>>()[..]
-    else {
+    let [direct] = all[..] else {
         panic!("the arm body resumes once: {}", module.op().display(&ctx));
     };
     assert_ne!(

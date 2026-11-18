@@ -581,12 +581,14 @@ direct/indirect call, return의 대응 관계를 검증하고 physical symbol과
 계산한 뒤 함께 rewrite한다:
 
 - `tribute_cps.func`는 `func.func`와 physical `func.func_sig`를 만든다.
-- `tribute_cps.lambda`는 physical `closure.lambda`와 convention 없는
-  `closure.closure`를 만든다. `closure.lambda`는 `tribute_cps.lambda`의 본문마다
-  본문 하나를 가지며, 본문의 signature에는 그 convention의 `CallableAbi` hidden
-  parameter가 있지만 environment는 없다. 본문이 없는 더 강한 convention entry의
-  adapter는 legalization이 만들어 `closure.lambda`에 적는다. 기존 closure
-  lowering이 본문마다 environment를 interpose한다.
+- `tribute_cps.lambda`는 본문마다 env-bearing `func.func` entry 함수를 한 번
+  만들고, 람다의 자리에는 그 entry들을 담은 `closure.new`와 convention 없는
+  `closure.closure`를 만든다. Entry 함수의 signature에는 그 convention의
+  `CallableAbi` hidden parameter와 environment가 있고, 본문은 capture를
+  `closure.unpack`으로 읽는다. 본문이 없는 더 강한 convention entry의 adapter도
+  legalization이 만들어 같은 convention table에 넣는다. 한 source 람다의 closure를
+  만드는 자리가 여럿이어도 entry 함수는 하나씩이며, 자리마다 `closure.new`가 그
+  자리의 capture를 담는다.
 - `tribute_cps.func_table`은 entry마다 env-bearing `func.func`를 한 번 만들고,
   `tribute_cps.func_ref`는 그 entry들을 담은 capture 없는 `closure.new`가 된다.
   Table을 공유하는 참조들은 같은 entry 함수를 쓴다. 대상 인스턴스가 있는 entry는 그
@@ -733,10 +735,13 @@ operation을 왼쪽에서 오른쪽으로 소비한다:
 
   세 번째 formal은 읽지 않는다.
   Source operation result는 `Never`로 남는다.
-- `tribute_cps.lambda`는 본문을 하나씩 변환해 `closure.lambda`가 된다. 그
-  capture는 변환된 본문들이 convention 순서로 바깥에서 쓰는 값을 처음 쓰인
-  순서대로 중복 없이 담으며, 생성된 continuation의 환경도 같은 규칙을 따른다.
-  본문의 `resume`이 쓰는 arm의 첫 token도 이렇게 담긴다.
+- `tribute_cps.lambda`는 본문을 하나씩 entry 함수로 변환하고 `closure.new`가
+  된다. 그 capture는 source 람다가 정한다. 먼저 source 본문들이 convention
+  순서로 바깥에서 쓰는 값을 처음 쓰인 순서대로 중복 없이 담고, 그 뒤에 본문의
+  `resume`이 소비하는 바깥 arm의 token을 처음 쓰인 순서대로 담는다. Entry 함수는
+  바깥 flow의 변환 결과를 직접 참조하지 않고 이 capture만 읽으므로, 람다를 감싼
+  본문이 몇 번 변환되든 한 번만 만들어진다. 생성된 continuation의 환경은 변환된
+  본문이 바깥에서 쓰는 값을 처음 쓰인 순서대로 담는다.
 - `tribute_control.yield value`는 region의 `exit_k(value)`를 호출한다.
 
 일반 structured control은 기존 `scf.*` dialect에 남고
@@ -854,8 +859,8 @@ named pre-CPS boundary가 아니다.
 location에서 conversion failure가 된다. 이 경계에는 일관된 physical
 `func.*`/`closure.*`/`func.func_sig` graph, [추상 frame 표면](#abstract-continuation-frames),
 logical `ability.*` dispatch 표면만 남는다. `lower_continuation_frames`가
-추상 frame 표면을 모두 제거한 뒤 `lower_closure_lambda`가 이 shared graph의
-lambda를 추출하지만
+추상 frame 표면을 모두 제거한 뒤 `lower_closure_lambda`가 이 shared graph에 남은
+`closure.lambda`, 곧 legalization이 만든 closure의 본문을 추출하지만
 `closure.new`, `closure.entry`, `closure.unpack`과 `closure.closure` type은
 target ABI validation까지 유지한다. `lower_ability_call`,
 `resolve_evidence`, `lower_handle_dispatch`가 `ability.*`를 `effect.*`까지 낮춘 뒤,

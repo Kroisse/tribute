@@ -1,6 +1,8 @@
 //! Lower `closure.lambda` operations to `func.func` + `closure.new`.
 //!
-//! This pass performs closure conversion on high-level `closure.lambda` ops:
+//! This pass performs closure conversion on high-level `closure.lambda` ops,
+//! the closures CPS legalization generates. Legalization makes the entry
+//! functions of source lambdas itself:
 //!
 //! ```text
 //! // Before:
