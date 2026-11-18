@@ -3671,6 +3671,119 @@ fn a_cps_entry_tail_call_to_a_weaker_callee_without_a_cps_entry_fails() {
     );
 }
 
+/// A `cps_entry` that resolves to another definition's entry is no entry of
+/// the callee, so a tail call to it fails rather than entering `other$7`.
+#[test]
+fn a_cps_entry_tail_call_to_a_callee_naming_another_definitions_entry_fails() {
+    let (mut ctx, module) = parse(
+        r#"core.module @test {
+  tribute_cps.func @callee(%x: core.i32) -> core.i32 convention(direct) attributes {cps_entry = @"other$7"} {
+    tribute_control.return %x
+  }
+  tribute_cps.func @"other$7"(%x: core.i32) -> core.i32 convention(cps) attributes {entry_of = "other"} {
+    tribute_control.return %x
+  }
+  tribute_cps.func @outer(%first: core.i32) -> core.i32 convention(direct) {
+    %f = tribute_cps.lambda(%a: core.i32) -> core.i32 attributes {cps_entry = true} entries {
+      direct {
+        tribute_control.tail_call @callee(%a) : (core.i32) -> ()
+      }
+    }
+    tribute_control.return %first
+  }
+}"#,
+    );
+    let error = tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default()).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("a tail call in a Cps flow names a weaker callee without a cps_entry"),
+        "{error}"
+    );
+}
+
+/// A lambda's entry function never takes the name of a function the source
+/// module already defines.
+#[test]
+fn a_lambda_entry_name_skips_a_source_function_of_that_name() {
+    let (mut ctx, module) = parse(
+        r#"core.module @test {
+  tribute_cps.func @"outer::__lambda_0"(%x: core.i32) -> core.i32 convention(direct) {
+    tribute_control.return %x
+  }
+  tribute_cps.func @outer(%first: core.i32) -> core.i32 convention(direct) {
+    %f = tribute_cps.lambda(%a: core.i32) -> core.i32 entries {
+      direct {
+        tribute_control.return %a
+      }
+    }
+    tribute_control.return %first
+  }
+}"#,
+    );
+    tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default()).unwrap();
+    let printed = module.op().display(&ctx).to_string();
+    let names: Vec<String> = module
+        .ops(&ctx)
+        .iter()
+        .filter_map(|&op| func::Func::from_op(&ctx, op).ok())
+        .map(|function| function.sym_name(&ctx).to_owned())
+        .collect();
+    let unique: std::collections::BTreeSet<_> = names.iter().collect();
+    assert_eq!(unique.len(), names.len(), "{printed}");
+    assert!(
+        names.iter().any(|name| name == "outer::__lambda_1"),
+        "{printed}"
+    );
+    let outer = function_named(&ctx, module, "outer");
+    let entries = closure_entries(&ctx, outer.op_ref());
+    assert!(!entries.is_empty(), "{printed}");
+    for entry in entries.iter().flatten() {
+        assert_ne!(entry.to_string(), "outer::__lambda_0", "{printed}");
+    }
+}
+
+/// The same holds in a nested module, which shares the counters.
+#[test]
+fn a_nested_module_lambda_entry_name_skips_a_source_function_of_that_name() {
+    let (mut ctx, module) = parse(
+        r#"core.module @test {
+  core.module @inner {
+    tribute_cps.func @"f::__lambda_0"(%x: core.i32) -> core.i32 convention(direct) {
+      tribute_control.return %x
+    }
+    tribute_cps.func @f(%first: core.i32) -> core.i32 convention(direct) {
+      %f = tribute_cps.lambda(%a: core.i32) -> core.i32 entries {
+        direct {
+          tribute_control.return %a
+        }
+      }
+      tribute_control.return %first
+    }
+  }
+}"#,
+    );
+    tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default()).unwrap();
+    let printed = module.op().display(&ctx).to_string();
+    let inner = module
+        .ops(&ctx)
+        .iter()
+        .find_map(|&op| Module::new(&ctx, op))
+        .expect("inner module");
+    let names: Vec<String> = inner
+        .ops(&ctx)
+        .iter()
+        .filter_map(|&op| func::Func::from_op(&ctx, op).ok())
+        .map(|function| function.sym_name(&ctx).to_owned())
+        .collect();
+    let unique: std::collections::BTreeSet<_> = names.iter().collect();
+    assert_eq!(unique.len(), names.len(), "{printed}");
+    assert!(
+        names.iter().any(|name| name == "f::__lambda_1"),
+        "{printed}"
+    );
+}
+
 /// A `tribute_cps.tail_call_indirect` in the own flow of a `cps_entry`
 /// lambda's body, declared `direct`, is `direct` in the body's entry and
 /// enters its callee's `Cps` entry in the `Cps` entry.

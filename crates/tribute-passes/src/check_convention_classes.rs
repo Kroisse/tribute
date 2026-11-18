@@ -67,23 +67,12 @@ impl trunk_ir::pass::Pass for CheckConventionClasses {
     }
 }
 
-/// The `Cps` entry instance `instance`, a `tribute_cps.func`, declares.
-fn cps_entry_of(ctx: &IrContext, instance: OpRef) -> Option<String> {
-    ctx.op_attrs(instance)
-        .get_symbol_ref(tribute_cps::CPS_ENTRY_ATTR)
-        .map(|path| match path.as_simple() {
-            Some(name) => name.to_string(),
-            // An instance is a definition of its own module.
-            None => path.to_string(),
-        })
-}
-
 /// An instance declares `cps_entry` exactly when its `Cps` entry instance
-/// exists, and names that instance (`tribute_cps.func`).
+/// exists, and names that instance (`tribute_cps.func`) as a definition of
+/// its own module: by its name alone.
 fn check_cps_entries(
     ctx: &IrContext,
     functions: &[Function],
-    instances: &HashMap<&str, OpRef>,
     disagreements: &mut Vec<Disagreement>,
 ) {
     for function in functions {
@@ -95,18 +84,22 @@ fn check_cps_entries(
             })
             .filter(|_| function.entry == Entry::Row)
             .map(|entry| entry.name.clone());
-        let declared = cps_entry_of(ctx, function.op);
-        if declared != expected
-            || declared
-                .as_deref()
-                .is_some_and(|entry| !instances.contains_key(entry))
-        {
+        let declared = ctx
+            .op_attrs(function.op)
+            .get_symbol_ref(tribute_cps::CPS_ENTRY_ATTR);
+        let agrees = match (declared, &expected) {
+            (None, None) => true,
+            (Some(declared), Some(expected)) => *declared == [expected.as_str()],
+            _ => false,
+        };
+        if !agrees {
             disagreements.push(Disagreement {
                 op: function.op,
                 rule: "instance",
                 message: format!(
-                    "{} declares cps_entry {declared:?}, its Cps entry instance is {expected:?}",
-                    function.name
+                    "{} declares cps_entry {}, its Cps entry instance is {expected:?}",
+                    function.name,
+                    declared.map_or("none".to_owned(), ToString::to_string),
                 ),
             });
         }
@@ -135,7 +128,7 @@ pub fn check(ctx: &IrContext, module: Module) -> Vec<Disagreement> {
         .iter()
         .map(|function| (function.name.as_str(), function.op))
         .collect();
-    check_cps_entries(ctx, &functions, &instances, &mut disagreements);
+    check_cps_entries(ctx, &functions, &mut disagreements);
     let module = Definitions {
         positions: &positions,
         requirements: &requirements,
@@ -403,7 +396,12 @@ impl<'a> Instance<'a> {
                     .module
                     .instances
                     .get(expected.as_str())
-                    .is_some_and(|&instance| cps_entry_of(self.ctx, instance).is_none())
+                    .is_some_and(|&instance| {
+                        !self
+                            .ctx
+                            .op_attrs(instance)
+                            .contains_key(tribute_cps::CPS_ENTRY_ATTR)
+                    })
             {
                 disagreements.push(Disagreement {
                     op: reference.op,

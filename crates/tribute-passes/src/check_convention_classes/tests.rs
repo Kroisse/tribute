@@ -262,6 +262,23 @@ fn a_cps_entry_names_the_entry_instance() {
     }
 }
 
+/// A `cps_entry` is one path component equal to the instance's name, not a
+/// path or a name whose text spells the instance's.
+#[test]
+fn a_cps_entry_is_one_component_named_like_the_entry_instance() {
+    let input = transfer_with(&transfer_bodies(&["direct"], &[]), false, false);
+    let rules_for = |target: &str| {
+        rules(&with_id_attrs(
+            &input,
+            &format!(" attributes {{cps_entry = {target}}}"),
+        ))
+    };
+    assert_eq!(rules_for(r#"@"id$7""#), [""; 0]);
+    for target in [r#"@pkg::@"id$7""#, r#"@"pkg::id$7""#] {
+        assert_eq!(rules_for(target), ["instance"], "{target}");
+    }
+}
+
 /// A `cps_entry` where no entry instance exists is a disagreement.
 #[test]
 fn a_cps_entry_without_an_entry_instance_is_a_disagreement() {

@@ -165,11 +165,15 @@ impl<'a> Converter<'a> {
         module_block: BlockRef,
         graph: CallableGraph,
     ) -> Self {
-        let source_symbols = module
-            .ops(ctx)
-            .iter()
-            .filter_map(|&op| ctx.op_attrs(op).get_str("sym_name").map(str::to_owned))
-            .collect();
+        // Nested modules included: their lambdas' entry functions are named
+        // from the same counters.
+        let mut source_symbols = HashSet::default();
+        let _ = walk_op::<()>(ctx, module.op(), &mut |op| {
+            if let Some(name) = ctx.op_attrs(op).get_str("sym_name") {
+                source_symbols.insert(name.to_owned());
+            }
+            ControlFlow::Continue(WalkAction::Advance)
+        });
         Self {
             ctx,
             module,
