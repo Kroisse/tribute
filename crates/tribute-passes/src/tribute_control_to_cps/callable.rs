@@ -3,6 +3,7 @@
 
 use super::*;
 use tribute_ir::calling_convention::{ConventionBearing, DynConventionBearing};
+use trunk_ir::context::BlockArgData;
 use trunk_ir::ops::VariadicResults;
 use trunk_ir::region_utils::{region_is_within, values_defined_above};
 
@@ -106,45 +107,47 @@ impl Converter<'_> {
         let conventions: Vec<_> = flows.iter().map(|&(convention, _)| convention).collect();
         for (convention, body_source) in flows {
             let abi = CallableAbi::new(convention, source_param_types.clone(), result);
-            let environment_index = convention.closure_environment_index();
-            let params =
-                abi.interpose_environment(&abi.lowered_params(evidence, frame), physical_ty);
-            let entry_source = self.ctx.region(body_source).blocks[0];
-            let block = make_block(self.ctx, location, &params);
-            let environment_name = self.ctx.string_attr("__env");
-            self.ctx
-                .block_arg_attrs_mut(block, environment_index)
-                .insert("bind_name", environment_name);
-            let args = self.ctx.block_args(block).to_vec();
-            // An entry's formal after the environment sits one place later.
-            let formal = |index: usize| args[index + usize::from(index >= environment_index)];
-            let mut body_mapping = HashMap::default();
-            let mut outer_tokens = Vec::with_capacity(arms.len());
-            if !capture_types.is_empty() {
-                let unpack = closure::Unpack::operands(args[environment_index])
-                    .results(capture_types.clone())
-                    .build(self.ctx, location);
-                self.ctx.push_op(block, unpack.op_ref());
-                let unpacked = unpack.results(self.ctx).to_vec();
-                body_mapping.extend(values.iter().copied().zip(unpacked.iter().copied()));
-                for (&arm, &token) in arms.iter().zip(&unpacked[values.len()..]) {
-                    outer_tokens.push((arm, self.arm_tokens.insert(arm, token)));
-                }
-            }
-            let offset = abi.source_param_offset();
-            for (index, old) in self
-                .ctx
-                .block_args(entry_source)
-                .to_vec()
+            let formals = abi
+                .lowered_params(evidence, frame)
                 .into_iter()
-                .enumerate()
-            {
-                body_mapping.insert(old, formal(offset + index));
+                .map(|ty| BlockArgData {
+                    ty,
+                    attrs: AttributeMap::new(),
+                })
+                .collect();
+            let entry_source = self.ctx.region(body_source).blocks[0];
+            let ClosureEntryBlock {
+                block,
+                formals,
+                captures,
+            } = ClosureEntryBlock::new(
+                self.ctx,
+                location,
+                convention,
+                physical_ty,
+                formals,
+                &capture_types,
+            );
+            let mut body_mapping: HashMap<_, _> = values
+                .iter()
+                .copied()
+                .zip(captures.iter().copied())
+                .collect();
+            let mut outer_tokens = Vec::with_capacity(arms.len());
+            for (&arm, &token) in arms.iter().zip(captures.iter().skip(values.len())) {
+                outer_tokens.push((arm, self.arm_tokens.insert(arm, token)));
             }
-            let evidence_value = convention.needs_evidence().then(|| formal(0));
+            body_mapping.extend(
+                self.ctx
+                    .block_args(entry_source)
+                    .iter()
+                    .copied()
+                    .zip(formals[abi.source_param_offset()..].iter().copied()),
+            );
+            let evidence_value = convention.needs_evidence().then(|| formals[0]);
             let exit_k = convention
                 .needs_continuation_frame()
-                .then(|| formal(usize::from(convention.needs_evidence())));
+                .then(|| formals[usize::from(convention.needs_evidence())]);
             let flow = Flow {
                 convention,
                 evidence: evidence_value,
@@ -171,12 +174,9 @@ impl Converter<'_> {
             converted?;
             let region = single_block_region(self.ctx, location, block);
             let signature = self.lower_callable_signature(logical_ty, convention);
-            let entry_ty = func::FuncSig::from_type_ref(self.ctx, signature)
-                .expect("an entry signature is a func.func_sig")
-                .rebuild(self.ctx, |inputs, _| {
-                    inputs.insert(environment_index, (physical_ty, AttributeMap::new()));
-                })
-                .as_type_ref();
+            let signature = func::FuncSig::from_type_ref(self.ctx, signature)
+                .expect("an entry signature is a func.func_sig");
+            let entry_ty = closure_entry_type(self.ctx, signature, convention, physical_ty);
             let symbol = self.next_lambda_entry(&parent);
             let entry = func::Func::operands()
                 .sym_name(self.ctx.intern_symbol_text(&symbol))
@@ -554,6 +554,7 @@ impl Converter<'_> {
                 "sym_name",
                 "type",
                 tribute_cps::ENTRY_OF_ATTR,
+                tribute_cps::CPS_ENTRY_ATTR,
                 tribute_control::ROW_BINDERS_ATTR,
                 tribute_control::ROW_UNIONS_ATTR,
                 tribute_control::INFERRED_ROW_ATTR,
@@ -635,38 +636,21 @@ impl Converter<'_> {
         flow: &Flow,
     ) -> Result<(), TributeControlToCpsError> {
         let location = self.ctx.op(source).location;
-        // In the `Cps` entry of its lambda, a tail call enters the instance
-        // `cps_callee` names.
-        let enters_cps_callee = flow.convention == CallingConvention::Cps
-            && self
-                .ctx
-                .op_attrs(source)
-                .contains_key(tribute_cps::CPS_CALLEE_ATTR);
-        let (key, target) = if enters_cps_callee {
-            let target = self
-                .cps_targets
-                .get(&source)
-                .and_then(|target| self.funcs.get(target))
-                .cloned()
-                .ok_or_else(|| {
-                    self.malformed_source(
-                        source,
-                        "cps_callee does not name a source function of this module",
-                    )
-                })?;
-            (tribute_cps::CPS_CALLEE_ATTR, target)
-        } else {
-            let target = self
-                .current_func(source)
-                .expect("pre-CPS validation resolved tail callee in this module");
-            ("callee", target)
+        let callee = self.targets[&source];
+        let named = self
+            .current_func(source)
+            .expect("pre-CPS validation resolved tail callee in this module");
+        // In a `Cps` flow a weaker callee is entered at the `Cps` entry
+        // instance it declares. Only the `Cps` entry of a lambda names such
+        // a callee: elsewhere class specialization names the entry itself.
+        let cps_entry = (flow.convention == CallingConvention::Cps
+            && named.convention != CallingConvention::Cps)
+            .then(|| self.cps_entries.get(&callee).cloned())
+            .flatten();
+        let (target_symbol, target) = match cps_entry {
+            Some((entry, symbol)) => (symbol, self.funcs[&entry].clone()),
+            None => (self.written_callee(source), named),
         };
-        let target_symbol = self
-            .ctx
-            .op_attrs(source)
-            .get_symbol_ref(key)
-            .expect("pre-CPS validation checked tail callee")
-            .clone();
         let source_args = self
             .ctx
             .op_operands(source)
@@ -699,6 +683,12 @@ impl Converter<'_> {
                 // It installs no handle and makes no tail call, so calling
                 // it adds one bounded activation before the flow's `Done`
                 // takes its result.
+                if self.ctx.op_has_regions(callee) {
+                    return Err(self.malformed_source(
+                        source,
+                        "a tail call in a Cps flow names a weaker callee without a cps_entry",
+                    ));
+                }
                 let call = self.lower_direct_call(source, &target, mapping, flow)?;
                 self.ctx.push_op(block, call.op_ref());
                 self.emit_exit(block, location, call.result(self.ctx), flow)?;

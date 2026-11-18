@@ -112,7 +112,17 @@ fn transfer_with(outer: &str, hands_frames: bool, cps_entry: bool) -> String {
         .replace("OUTER", outer)
         .replace("HANDS", hand_on)
         .replace("ATTRS", attrs)
-        .replace(CPS_CALLEE, if cps_entry { CPS_CALLEE_ATTRS } else { "" })
+}
+
+/// The header of `id` in `TRANSFER`, which declares its `Cps` entry instance.
+const ID_HEADER: &str = r#"tribute_cps.func @id(%x: core.i32) -> core.i32 convention(direct) attributes {cps_entry = @"id$7"} {"#;
+
+/// `input` with `id`'s `cps_entry` replaced by `attrs`.
+fn with_id_attrs(input: &str, attrs: &str) -> String {
+    let header =
+        format!("tribute_cps.func @id(%x: core.i32) -> core.i32 convention(direct){attrs} {{");
+    assert!(input.contains(ID_HEADER));
+    input.replace(ID_HEADER, &header)
 }
 
 /// `main` calls a lambda whose bodies are `OUTER`. A body of a convention
@@ -120,7 +130,7 @@ fn transfer_with(outer: &str, hands_frames: bool, cps_entry: bool) -> String {
 /// the others return their parameter.
 const TRANSFER: &str = r#"core.module @m {
 HANDS
-  tribute_cps.func @id(%x: core.i32) -> core.i32 convention(direct) {
+  tribute_cps.func @id(%x: core.i32) -> core.i32 convention(direct) attributes {cps_entry = @"id$7"} {
     tribute_control.return %x
   }
   tribute_cps.func @"id$7"(%x: core.i32) -> core.i32 convention(cps) attributes {entry_of = "id"} {
@@ -135,16 +145,8 @@ OUTER
   }
 }"#;
 
-/// Where a `become` of `id` in the strongest body of a lambda that declares
-/// `cps_entry` names its `Cps` entry instance; `transfer_with` fills it.
-const CPS_CALLEE: &str = "@@CPS_CALLEE@@";
-
-/// The attributes of a `become` of `id` that a `Cps` entry enters as `id$7`.
-const CPS_CALLEE_ATTRS: &str = r#" attributes {cps_callee = @"id$7"}"#;
-
 /// Bodies of a lambda over `%y`, one per convention; a body of a convention
-/// in `transfers` ends with a `become` of `id`, with `CPS_CALLEE` after its
-/// callee.
+/// in `transfers` ends with a `become` of `id`.
 fn transfer_bodies(conventions: &[&str], transfers: &[&str]) -> String {
     conventions
         .iter()
@@ -154,9 +156,7 @@ fn transfer_bodies(conventions: &[&str], transfers: &[&str]) -> String {
                 (true, "cps") => {
                     r#"tribute_control.tail_call @"id$7"(%y) : (core.i32) -> ()"#.to_owned()
                 }
-                (true, _) => {
-                    format!("tribute_control.tail_call @id(%y){CPS_CALLEE} : (core.i32) -> ()")
-                }
+                (true, _) => "tribute_control.tail_call @id(%y) : (core.i32) -> ()".to_owned(),
             };
             format!("      {convention} {{\n        {exit}\n      }}")
         })
@@ -210,7 +210,6 @@ fn a_nested_frame_transfer_gives_only_the_nested_lambda_a_cps_entry() {
     let input = |outer_entry: bool, inner_entry: bool| {
         let inner = transfer_bodies(&["direct"], &["direct"])
             .replace("%y", "%z")
-            .replace(CPS_CALLEE, if inner_entry { CPS_CALLEE_ATTRS } else { "" })
             .replace('\n', "\n    ");
         let attrs = if inner_entry {
             " attributes {cps_entry = true}"
@@ -227,37 +226,50 @@ fn a_nested_frame_transfer_gives_only_the_nested_lambda_a_cps_entry() {
     assert_eq!(rules(&input(false, false)), ["lambda"]);
 }
 
-/// A `become` of a function with a `Cps` entry instance, in a body that also
-/// runs as its lambda's `Cps` entry, names that instance as its `cps_callee`.
+/// A `become` of a function in a body that also runs as its lambda's `Cps`
+/// entry enters the callee's `cps_entry`, so the callee declares it.
 #[test]
-fn a_tail_call_in_a_cps_entry_body_names_its_cps_callee() {
-    let input = |attrs: &str| {
-        let body = format!(
-            "      direct {{\n        tribute_control.tail_call @id(%y){attrs} : (core.i32) -> ()\n      }}"
-        );
-        transfer_with(&body, true, true)
-    };
-    assert_eq!(
-        rules(&input(r#" attributes {cps_callee = @"id$7"}"#)),
-        [""; 0]
-    );
-    assert_eq!(rules(&input("")), ["reference"]);
-    assert_eq!(
-        rules(&input(r#" attributes {cps_callee = @"id$8"}"#)),
-        ["reference"]
-    );
-    assert_eq!(
-        rules(&input(r#" attributes {cps_callee = @id}"#)),
-        ["reference"]
-    );
+fn the_callee_of_a_tail_call_in_a_cps_entry_body_declares_a_cps_entry() {
+    let input = transfer_with(&transfer_bodies(&["direct"], &["direct"]), true, true);
+    assert_eq!(rules(&input), [""; 0]);
+    assert_eq!(rules(&with_id_attrs(&input, "")), ["instance", "reference"]);
 }
 
-/// A `cps_callee` where the body does not also run as a `Cps` entry is a
-/// disagreement.
+/// An instance whose `Cps` entry instance exists declares it, outside a
+/// `Cps` entry flow too.
 #[test]
-fn a_cps_callee_outside_a_cps_entry_body_is_a_disagreement() {
-    let body = "      direct {\n        tribute_control.tail_call @id(%y) attributes {cps_callee = @\"id$7\"} : (core.i32) -> ()\n      }";
-    assert_eq!(rules(&transfer_with(body, false, false)), ["reference"]);
+fn an_instance_declares_the_cps_entry_instance_that_exists() {
+    let input = transfer_with(&transfer_bodies(&["direct"], &[]), false, false);
+    assert_eq!(rules(&input), [""; 0]);
+    assert_eq!(rules(&with_id_attrs(&input, "")), ["instance"]);
+}
+
+/// A `cps_entry` names the instance whose `entry_of` is the declaring one.
+#[test]
+fn a_cps_entry_names_the_entry_instance() {
+    let input = transfer_with(&transfer_bodies(&["direct"], &[]), false, false);
+    for target in [r#"@"id$8""#, "@id", "@main"] {
+        assert_eq!(
+            rules(&with_id_attrs(
+                &input,
+                &format!(" attributes {{cps_entry = {target}}}")
+            )),
+            ["instance"],
+            "{target}"
+        );
+    }
+}
+
+/// A `cps_entry` where no entry instance exists is a disagreement.
+#[test]
+fn a_cps_entry_without_an_entry_instance_is_a_disagreement() {
+    let input = transfer_with(&transfer_bodies(&["direct"], &[]), false, false);
+    let entry = r#"  tribute_cps.func @"id$7"(%x: core.i32) -> core.i32 convention(cps) attributes {entry_of = "id"} {
+    tribute_control.return %x
+  }
+"#;
+    assert!(input.contains(entry));
+    assert_eq!(rules(&input.replace(entry, "")), ["instance"]);
 }
 
 /// An instance of an upper bound calls through the bound, and a lambda over
@@ -379,6 +391,11 @@ fn instantiations_that_select_one_class_may_pass_other_classes() {
     assert_eq!(rules(&input("{instances = [@Ask]}")), [""; 0]);
 }
 
+/// `pure`, which declares its `Cps` entry instance.
+const PURE_FUNC: &str = r#"tribute_cps.func @pure(%y: core.i32) -> core.i32 convention(direct) attributes {cps_entry = @"pure$7"} {
+    tribute_control.return %y
+  }"#;
+
 /// The `Cps` entry instance of `pure`, the `cps` target of its table.
 const PURE_ENTRY: &str = r#"tribute_cps.func @"pure$7"(%y: core.i32) -> core.i32 convention(cps) attributes {entry_of = "pure"} {
     tribute_control.return %y
@@ -393,9 +410,7 @@ fn a_func_ref_enters_its_table_no_stronger_than_the_row_of_its_value() {
   !closed = tribute_control.func_sig<(core.i32) -> core.i32>
 {CTL}
 {HAND_ON}
-  tribute_cps.func @pure(%y: core.i32) -> core.i32 convention(direct) {{
-    tribute_control.return %y
-  }}
+  {PURE_FUNC}
   {PURE_ENTRY}
   tribute_cps.func_table @"pure$8" = {{{entries}}}
   tribute_cps.func @f(%x: core.i32) -> core.i32 convention(direct) {{
@@ -425,9 +440,7 @@ fn a_table_needs_no_cps_entry_instance_where_no_value_takes_a_frame() {
         format!(
             r#"core.module @m {{
   !closed = tribute_control.func_sig<(core.i32) -> core.i32>
-  tribute_cps.func @pure(%y: core.i32) -> core.i32 convention(direct) {{
-    tribute_control.return %y
-  }}
+  {PURE_FUNC}
   {PURE_ENTRY}
   tribute_cps.func_table @"pure$8" = {{{entries}}}
   tribute_cps.func @f(%x: core.i32) -> core.i32 convention(direct) {{
@@ -515,10 +528,11 @@ fn a_definition_without_a_body_has_no_class_variables() {
 /// `step`'s row implies `Direct`. The `op` arm of its tail handle is a
 /// `Cps` flow, so its `become` names `callee`, which `entry` defines.
 fn arm_become(callee: &str, entry: &str) -> String {
+    let declared = split_entry_name(entry);
     format!(
         r#"core.module @m {{
 {CTL}
-  tribute_cps.func @step(%x: core.i32) -> core.i32 convention(direct) {{
+  tribute_cps.func @step(%x: core.i32) -> core.i32 convention(direct) attributes {{cps_entry = @"{declared}"}} {{
     %r = tribute_control.handle : core.i32 {{
       %c = tribute_control.perform op @Ctl @ctl() : () -> core.i32
       tribute_control.yield %c
@@ -532,6 +546,14 @@ fn arm_become(callee: &str, entry: &str) -> String {
   {entry}
 }}"#
     )
+}
+
+/// The name `step` declares as its `cps_entry` when `entry` defines the
+/// instance it names.
+fn split_entry_name(entry: &str) -> &str {
+    let start = entry.find("@\"").expect("an entry instance") + 2;
+    let len = entry[start..].find('"').expect("a closing quote");
+    &entry[start..start + len]
 }
 
 /// The `Cps` entry instance of `step`, declaring `convention` and
@@ -567,7 +589,7 @@ fn body_result_calls(callee: &str, convention: &str) -> String {
     format!(
         r#"core.module @m {{
   !k = tribute_control.func_sig<(core.i32) -> core.i32>
-  tribute_cps.func @step(%x: core.i32) -> core.i32 convention(direct) {{
+  tribute_cps.func @step(%x: core.i32) -> core.i32 convention(direct) attributes {{cps_entry = @"step$7"}} {{
     tribute_control.return %x
   }}
   {entry}

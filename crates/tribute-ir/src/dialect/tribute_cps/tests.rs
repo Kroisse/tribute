@@ -602,7 +602,7 @@ fn the_targets_of_a_function_table_share_one_source_signature() {
 const CPS_ENTRY: &str = r#"core.module @test {
   !t0 = tribute_control.func_sig<(core.i32) -> core.i32>
 
-  tribute_cps.func @f(%0: core.i32) -> core.i32 convention(direct) {
+  tribute_cps.func @f(%0: core.i32) -> core.i32 convention(direct) attributes {cps_entry = @"f$7"} {
       tribute_control.return %0
   }
   tribute_cps.func @"f$7"(%0: core.i32) -> core.i32 convention(cps) attributes {entry_of = "f"} {
@@ -611,7 +611,7 @@ const CPS_ENTRY: &str = r#"core.module @test {
   tribute_cps.func @outer(%0: core.i32) -> core.i32 convention(direct) {
       %1 = tribute_cps.lambda(%2: core.i32) -> core.i32 attributes {cps_entry = true} entries {
         direct {
-            tribute_control.tail_call @f(%2) attributes {cps_callee = @"f$7"} : (core.i32) -> ()
+            tribute_control.tail_call @f(%2) : (core.i32) -> ()
         }
       }
       tribute_control.return %0
@@ -619,10 +619,11 @@ const CPS_ENTRY: &str = r#"core.module @test {
 }
 "#;
 
-/// `cps_entry` and `cps_callee` survive printing and parsing, and read back
-/// through their accessors and helpers.
+/// `cps_entry` survives printing and parsing as a flag on a lambda and as a
+/// symbol reference on a function, and reads back through its accessors and
+/// helpers.
 #[test]
-fn cps_entry_and_cps_callee_round_trip() {
+fn cps_entry_round_trip() {
     let (ctx, module) = parse(CPS_ENTRY);
     assert_eq!(module.op().display(&ctx).to_string(), CPS_ENTRY);
 
@@ -636,9 +637,10 @@ fn cps_entry_and_cps_callee_round_trip() {
     let entry = ctx.region(body).blocks[0];
     let call = ctx.block(entry).ops[0];
     assert!(in_cps_entry_flow(&ctx, call));
+    let f = module.ops(&ctx)[0];
     assert_eq!(
-        ctx.op_attrs(call)
-            .get_symbol_ref(CPS_CALLEE_ATTR)
+        ctx.op_attrs(f)
+            .get_symbol_ref(CPS_ENTRY_ATTR)
             .and_then(|path| path.leaf())
             .map(ToString::to_string),
         Some("f$7".to_owned())

@@ -37,13 +37,11 @@ pub const ENTRY_OF_ATTR: &str = "entry_of";
 /// bodies, in body order.
 pub const CONVENTIONS_ATTR: &str = "conventions";
 
-/// The `tribute_cps.lambda` attribute that gives it a `Cps` entry made from
-/// its strongest body.
+/// The attribute that declares a callable's `Cps` entry: on a
+/// `tribute_cps.lambda`, a flag that makes it from its strongest body; on a
+/// `tribute_cps.func`, the `Cps` entry instance of its definition and class
+/// arguments.
 pub const CPS_ENTRY_ATTR: &str = "cps_entry";
-
-/// The attribute of a `tribute_control.tail_call` in a lambda body that also
-/// runs as the lambda's `Cps` entry: the instance the call enters there.
-pub const CPS_CALLEE_ATTR: &str = "cps_callee";
 
 #[trunk_ir::dialect]
 mod tribute_cps {
@@ -82,14 +80,23 @@ mod tribute_cps {
     ///   `convention` and the entry from `entry_of`, never from the name.
     ///   The signature, row, and body keep the meaning they have on
     ///   `tribute_control.func`; the body of a `Cps` entry instance runs as
-    ///   a `Cps` flow.
+    ///   a `Cps` flow. The other way, an instance whose `Cps` entry
+    ///   instance exists names it in `cps_entry`, a symbol reference. A
+    ///   `tribute_control.tail_call` whose flow is `Cps` only when its
+    ///   lambda body runs as the lambda's `Cps` entry
+    ///   ([`in_cps_entry_flow`]) names the weaker instance and enters its
+    ///   `cps_entry` there.
     /// - **Verification:** the schema checks the convention keyword.
     ///   The convention check of class specialization checks that the
     ///   convention is the one the row and class arguments determine, or
     ///   `Cps` with `entry_of` when that one is weaker. It rejects
     ///   `entry_of` on an instance whose row determines `Cps`, and a `Cps`
     ///   entry instance whose name is not the one class specialization gives
-    ///   that entry of the instance `entry_of` names. The carrier check of
+    ///   that entry of the instance `entry_of` names. It checks that
+    ///   `cps_entry` names the instance whose `entry_of` is this one, that
+    ///   an instance with such an entry instance declares it, and that the
+    ///   callee of a tail call in a lambda's `Cps` entry flow declares one
+    ///   when it has a body and a weaker convention. The carrier check of
     ///   `tribute_control.handle` reads `entry_of` to tell a transfer back
     ///   into the same definition and class arguments. Legalization does
     ///   not copy `entry_of` to the physical function.
@@ -113,6 +120,7 @@ mod tribute_cps {
         r#type: Attr<TypeOf<S>>,
         convention: Attr<CallingConvention>,
         entry_of: Option<Attr<String>>,
+        cps_entry: Option<Attr<SymbolRef>>,
         row_binders: Option<Attr<[RowBinder]>>,
         row_unions: Option<Attr<[RowUnion]>>,
         #[default(false)] inferred_row: Attr<bool>,
@@ -163,8 +171,9 @@ mod tribute_cps {
     ///   legalization converts it for both entries. The operations of that
     ///   body's own flow ([`in_cps_entry_flow`]) declare what they mean in
     ///   the body's own convention; in the `Cps` entry a
-    ///   `tribute_control.tail_call` enters its `cps_callee` when it has
-    ///   one, and a `tribute_cps.tail_call_indirect` enters its callee's
+    ///   `tribute_control.tail_call` enters the `cps_entry` of its callee
+    ///   when the callee declares one, and a
+    ///   `tribute_cps.tail_call_indirect` enters its callee's
     ///   `Cps` entry. The lambdas nested in the body are the same lambdas
     ///   in both entries. Calling the value with a convention that has a
     ///   body runs that body; legalization fills the other convention

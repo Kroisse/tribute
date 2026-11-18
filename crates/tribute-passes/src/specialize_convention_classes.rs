@@ -159,12 +159,31 @@ pub fn specialize(ctx: &mut IrContext, module: Module) -> Result<(), ClassSpecia
     for (_, template) in templates {
         ctx.remove_op(template);
     }
+    let mut entries = Vec::new();
+    let mut by_instance: HashMap<String, OpRef> = HashMap::default();
     for (op, convention, entry_of) in instances {
         let replacement = tribute_cps::replace_control_op(ctx, op, convention);
+        let name = ctx
+            .op_attrs(replacement)
+            .get_str("sym_name")
+            .expect("an instance has a name")
+            .to_owned();
         if let Some(entry_of) = entry_of {
-            let entry_of = ctx.string_attr(&entry_of);
+            let attr = ctx.string_attr(&entry_of);
             ctx.op_attrs_mut(replacement)
-                .insert(tribute_cps::ENTRY_OF_ATTR, entry_of);
+                .insert(tribute_cps::ENTRY_OF_ATTR, attr);
+            entries.push((entry_of, name.clone()));
+        }
+        by_instance.insert(name, replacement);
+    }
+    // An instance names its `Cps` entry instance, so a transfer that names
+    // the instance can enter that entry.
+    for (instance, entry) in entries {
+        if let Some(&op) = by_instance.get(&instance) {
+            ctx.op_attrs_mut(op).insert(
+                tribute_cps::CPS_ENTRY_ATTR,
+                Attribute::SymbolRef(SymbolPath::new([Symbol::new(&entry)])),
+            );
         }
     }
     add_func_tables(ctx, module, tables);
@@ -628,17 +647,13 @@ impl Instance<'_> {
                 );
             }
             // A tail call in a body that also runs as its lambda's `Cps`
-            // entry enters the callee's `Cps` entry there.
+            // entry enters the callee's `Cps` entry there, which the callee
+            // names in `cps_entry`.
             if entry == Entry::Row
                 && tribute_control::TailCall::matches(ctx, op)
                 && tribute_cps::in_cps_entry_flow(ctx, op)
                 && self.entry_for_cps(ctx, definition, positions, &classes) == Entry::Cps
             {
-                let name = instance_name(&callee, &classes, Entry::Cps);
-                ctx.op_attrs_mut(op).insert(
-                    tribute_cps::CPS_CALLEE_ATTR,
-                    Attribute::SymbolRef(SymbolPath::new([Symbol::new(&name)])),
-                );
                 return vec![
                     (callee.clone(), classes.clone(), Entry::Row),
                     (callee, classes, Entry::Cps),

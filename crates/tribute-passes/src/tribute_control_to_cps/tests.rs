@@ -3548,14 +3548,14 @@ fn closure_entries(ctx: &IrContext, root: OpRef) -> Vec<Vec<SymbolPath>> {
 
 /// A lambda that declares `cps_entry` is converted twice: its entry
 /// functions are its body's and its body run as a `Cps` flow, whose `become`
-/// enters `cps_callee`. The lambda nested in it has one set of entry
+/// enters the `cps_entry` of `@callee`. The lambda nested in it has one set of entry
 /// functions, which both of them build their closures over
 /// (`design/cps-effects.md`, "`Cps` 진입 본문").
 #[test]
 fn a_cps_entry_lambda_converts_its_body_twice_and_its_nested_lambda_once() {
     let (mut ctx, module) = parse(
         r#"core.module @test {
-  tribute_cps.func @callee(%x: core.i32) -> core.i32 convention(direct) {
+  tribute_cps.func @callee(%x: core.i32) -> core.i32 convention(direct) attributes {cps_entry = @"callee$7"} {
     tribute_control.return %x
   }
   tribute_cps.func @"callee$7"(%x: core.i32) -> core.i32 convention(cps) attributes {entry_of = "callee"} {
@@ -3569,7 +3569,7 @@ fn a_cps_entry_lambda_converts_its_body_twice_and_its_nested_lambda_once() {
             tribute_control.return %first
           }
         }
-        tribute_control.tail_call @callee(%a) attributes {cps_callee = @"callee$7"} : (core.i32) -> ()
+        tribute_control.tail_call @callee(%a) : (core.i32) -> ()
       }
     }
     tribute_control.return %first
@@ -3640,6 +3640,35 @@ fn a_cps_entry_lambda_converts_its_body_twice_and_its_nested_lambda_once() {
     assert_eq!(first.len(), 1, "{printed}");
     assert_eq!(first, second, "{printed}");
     assert_eq!(first[0][0], ["outer::__lambda_0"], "{printed}");
+}
+
+/// A `tribute_control.tail_call` in the own flow of a `cps_entry` lambda's
+/// body that names a weaker callee with a body and no `cps_entry` has no
+/// `Cps` instance to enter, so legalization fails.
+#[test]
+fn a_cps_entry_tail_call_to_a_weaker_callee_without_a_cps_entry_fails() {
+    let (mut ctx, module) = parse(
+        r#"core.module @test {
+  tribute_cps.func @callee(%x: core.i32) -> core.i32 convention(direct) {
+    tribute_control.return %x
+  }
+  tribute_cps.func @outer(%first: core.i32) -> core.i32 convention(direct) {
+    %f = tribute_cps.lambda(%a: core.i32) -> core.i32 attributes {cps_entry = true} entries {
+      direct {
+        tribute_control.tail_call @callee(%a) : (core.i32) -> ()
+      }
+    }
+    tribute_control.return %first
+  }
+}"#,
+    );
+    let error = tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default()).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("a tail call in a Cps flow names a weaker callee without a cps_entry"),
+        "{error}"
+    );
 }
 
 /// A `tribute_cps.tail_call_indirect` in the own flow of a `cps_entry`

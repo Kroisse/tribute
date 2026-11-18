@@ -360,7 +360,8 @@ Convention은 `tribute_cps` dialect의 operation만 가진다. Frontend는
 convention에 따라 뜻이 달라지는 operation 다섯을 같은 이름의 `tribute_cps`
 operation으로 바꾼다.
 
-- `tribute_cps.func`는 자기 convention을 가진다. 인스턴스마다 하나다.
+- `tribute_cps.func`는 자기 convention을 가진다. 인스턴스마다 하나다. 자기의 `Cps`
+  진입 인스턴스가 있으면 `cps_entry`로 가리킨다.
 - `tribute_cps.lambda`는 class마다의 본문을 가지고, 가장 강한 본문이 `Cps` 진입도
   채울 때 `cps_entry`를 선언한다.
 - `tribute_cps.call_indirect`와 `tribute_cps.tail_call_indirect`는 callee를
@@ -373,8 +374,7 @@ operation으로 바꾼다.
 
 나머지 `tribute_control` operation(`call`, `tail_call`, `return`, `instantiate`,
 `perform`, `handle`, `resume`, `yield`)은 그대로 남아 `tribute_cps`
-callable의 본문 안에서 쓰인다. 다만 `cps_entry`를 선언한 람다의 자기 flow에 있는
-`tail_call`은 class 특수화가 `cps_callee`를 더할 수 있다.
+callable의 본문 안에서 쓰인다.
 
 이 변환은 full conversion이다. Class 특수화 뒤에는 위 다섯 operation의
 `tribute_control` 형태가 남지 않으며, legalization의 입력 검증은 남은 것을

@@ -20,8 +20,8 @@ use trunk_ir::rewrite::Module;
 use trunk_ir::walk::{WalkAction, walk_region};
 
 use crate::convention_classes::{
-    Class, Entry, Function, Reader, func_tables, instance_name, instantiation, key_references,
-    requirements, settle_class_variables, split_name,
+    Class, Entry, Function, Reader, func_tables, instance_key_name, instance_name, instantiation,
+    key_references, requirements, settle_class_variables, split_name,
 };
 
 /// A place where the IR's rows imply another class than specialization chose.
@@ -67,8 +67,52 @@ impl trunk_ir::pass::Pass for CheckConventionClasses {
     }
 }
 
+/// The `Cps` entry instance `instance`, a `tribute_cps.func`, declares.
+fn cps_entry_of(ctx: &IrContext, instance: OpRef) -> Option<String> {
+    ctx.op_attrs(instance)
+        .get_symbol_ref(tribute_cps::CPS_ENTRY_ATTR)
+        .and_then(|path| path.leaf())
+        .map(ToString::to_string)
+}
+
+/// An instance declares `cps_entry` exactly when its `Cps` entry instance
+/// exists, and names that instance (`tribute_cps.func`).
+fn check_cps_entries(
+    ctx: &IrContext,
+    functions: &[Function],
+    instances: &HashMap<&str, OpRef>,
+    disagreements: &mut Vec<Disagreement>,
+) {
+    for function in functions {
+        let expected = functions
+            .iter()
+            .find(|entry| {
+                entry.entry == Entry::Cps
+                    && instance_key_name(ctx, entry.op) == Some(function.name.as_str())
+            })
+            .filter(|_| function.entry == Entry::Row)
+            .map(|entry| entry.name.clone());
+        let declared = cps_entry_of(ctx, function.op);
+        if declared != expected
+            || declared
+                .as_deref()
+                .is_some_and(|entry| !instances.contains_key(entry))
+        {
+            disagreements.push(Disagreement {
+                op: function.op,
+                rule: "instance",
+                message: format!(
+                    "{} declares cps_entry {declared:?}, its Cps entry instance is {expected:?}",
+                    function.name
+                ),
+            });
+        }
+    }
+}
+
 /// Every disagreement in `module`.
 pub fn check(ctx: &IrContext, module: Module) -> Vec<Disagreement> {
+    let mut disagreements = Vec::new();
     let requirements = requirements(ctx, module);
     let tables = func_tables(ctx, module);
     let mut functions: Vec<Function> = module
@@ -84,14 +128,19 @@ pub fn check(ctx: &IrContext, module: Module) -> Vec<Disagreement> {
             .entry(function.base.as_str())
             .or_insert(function);
     }
+    let instances: HashMap<&str, OpRef> = functions
+        .iter()
+        .map(|function| (function.name.as_str(), function.op))
+        .collect();
+    check_cps_entries(ctx, &functions, &instances, &mut disagreements);
     let module = Definitions {
         positions: &positions,
         requirements: &requirements,
         tables: &tables,
         definitions: &definitions,
+        instances: &instances,
         hands_frames: tribute_cps::hands_frames_to_values(ctx, module.op()),
     };
-    let mut disagreements = Vec::new();
     for function in &functions {
         Instance::new(ctx, function, module, &mut disagreements).check(&mut disagreements);
     }
@@ -158,6 +207,8 @@ struct Definitions<'a> {
     tables: &'a HashMap<String, OpRef>,
     /// An instance of each definition, by its base name.
     definitions: &'a HashMap<&'a str, &'a Function>,
+    /// Every instance, by its name.
+    instances: &'a HashMap<&'a str, OpRef>,
     /// Whether the module hands frames to callable values.
     hands_frames: bool,
 }
@@ -337,30 +388,29 @@ impl<'a> Instance<'a> {
             } else {
                 Entry::Row
             };
+            let expected = instance_name(callee, &classes, entry);
             // A tail call in a body that also runs as its lambda's `Cps`
-            // entry names the instance it enters there.
-            let expected_cps = (!cps_flow
+            // entry enters its callee's `cps_entry` there, so the callee
+            // declares one.
+            if !cps_flow
                 && tribute_control::TailCall::matches(self.ctx, reference.op)
                 && tribute_cps::in_cps_entry_flow(self.ctx, reference.op)
-                && has_cps_entry())
-            .then(|| instance_name(callee, &classes, Entry::Cps));
-            let actual_cps = self
-                .ctx
-                .op_attrs(reference.op)
-                .get_symbol_ref(tribute_cps::CPS_CALLEE_ATTR)
-                .and_then(|path| path.leaf())
-                .map(ToString::to_string);
-            if expected_cps != actual_cps {
+                && has_cps_entry()
+                && self
+                    .module
+                    .instances
+                    .get(expected.as_str())
+                    .is_some_and(|&instance| cps_entry_of(self.ctx, instance).is_none())
+            {
                 disagreements.push(Disagreement {
                     op: reference.op,
                     rule: "reference",
                     message: format!(
-                        "{} enters {actual_cps:?} from a Cps entry, its rows select {expected_cps:?}",
+                        "{} enters {expected} from a Cps entry, which declares no cps_entry",
                         self.function.name
                     ),
                 });
             }
-            let expected = instance_name(callee, &classes, entry);
             if expected != reference.callee {
                 disagreements.push(Disagreement {
                     op: reference.op,
