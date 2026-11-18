@@ -373,7 +373,8 @@ operation으로 바꾼다.
 
 나머지 `tribute_control` operation(`call`, `tail_call`, `return`, `instantiate`,
 `perform`, `handle`, `resume`, `yield`)은 그대로 남아 `tribute_cps`
-callable의 본문 안에서 쓰인다.
+callable의 본문 안에서 쓰인다. 다만 `cps_entry`를 선언한 람다의 자기 flow에 있는
+`tail_call`은 class 특수화가 `cps_callee`를 더할 수 있다.
 
 이 변환은 full conversion이다. Class 특수화 뒤에는 위 다섯 operation의
 `tribute_control` 형태가 남지 않으며, legalization의 입력 검증은 남은 것을

@@ -53,6 +53,7 @@ impl Converter<'_> {
             &[
                 tribute_control::QUANTIFIED_ROWS_ATTR,
                 tribute_cps::CONVENTIONS_ATTR,
+                tribute_cps::CPS_ENTRY_ATTR,
             ],
         );
         Ok(closure_new.op_ref())
@@ -661,6 +662,18 @@ impl Converter<'_> {
             .flatten()
             .and_then(|target| self.funcs.get(target))
             .cloned();
+        if flow.convention == CallingConvention::Cps
+            && cps_target.is_none()
+            && self
+                .ctx
+                .op_attrs(source)
+                .contains_key(tribute_cps::CPS_CALLEE_ATTR)
+        {
+            return Err(self.malformed_source(
+                source,
+                "cps_callee does not name a source function of this module",
+            ));
+        }
         let key = if cps_target.is_some() {
             tribute_cps::CPS_CALLEE_ATTR
         } else {
