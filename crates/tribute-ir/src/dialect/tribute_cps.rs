@@ -37,6 +37,14 @@ pub const ENTRY_OF_ATTR: &str = "entry_of";
 /// bodies, in body order.
 pub const CONVENTIONS_ATTR: &str = "conventions";
 
+/// The `tribute_cps.lambda` attribute that gives it a `Cps` entry made from
+/// its strongest body.
+pub const CPS_ENTRY_ATTR: &str = "cps_entry";
+
+/// The attribute of a `tribute_control.tail_call` in a lambda body that also
+/// runs as the lambda's `Cps` entry: the instance the call enters there.
+pub const CPS_CALLEE_ATTR: &str = "cps_callee";
+
 #[trunk_ir::dialect]
 mod tribute_cps {
     /// A named source function instance with its convention.
@@ -129,7 +137,8 @@ mod tribute_cps {
     ///
     /// - **Shape:** `tribute_control.lambda` with a required
     ///   `conventions` list and one body region per element, in the same
-    ///   order. Each body takes the source parameters.
+    ///   order, and an optional `cps_entry` flag. Each body takes the source
+    ///   parameters.
     /// - **Format:** that of `tribute_control.lambda` up to the optional
     ///   ` attributes {..}`, then `entries { .. }` in place of the one body:
     ///   each body under its convention's keyword, in convention order and
@@ -145,16 +154,27 @@ mod tribute_cps {
     ///   class pass, as an upper bound when they pass different ones, and
     ///   its own row's tail, when that tail reads as an upper bound, as an
     ///   upper bound narrowed to that convention. A lambda whose classes
-    ///   give it no `Cps` body has one more, its `Cps` entry body
-    ///   (`design/cps-effects.md`, "`Cps` 진입 본문"), when its module hands
-    ///   frames to callable values ([`hands_frames_to_values`]) and its own
-    ///   flow hands a frame on ([`own_flow_hands_on_frame`]). That body reads
-    ///   its binders as its strongest other body does and runs as a `Cps`
-    ///   flow. Calling the value with a
-    ///   convention that has a body runs that body; legalization fills the
-    ///   other convention entries.
+    ///   give it no `Cps` body declares `cps_entry`
+    ///   (`design/cps-effects.md`, "`Cps` 진입 본문") when its module hands
+    ///   frames to callable values ([`hands_frames_to_values`]) and the own
+    ///   flow of its strongest body hands a frame on
+    ///   ([`own_flow_hands_on_frame`]). Its `Cps` convention entry is then
+    ///   that body run as a `Cps` flow: the body is written once and
+    ///   legalization converts it for both entries. The operations of that
+    ///   body's own flow ([`in_cps_entry_flow`]) declare what they mean in
+    ///   the body's own convention; in the `Cps` entry a
+    ///   `tribute_control.tail_call` enters its `cps_callee` when it has
+    ///   one, and a `tribute_cps.tail_call_indirect` enters its callee's
+    ///   `Cps` entry. The lambdas nested in the body are the same lambdas
+    ///   in both entries. Calling the value with a convention that has a
+    ///   body runs that body; legalization fills the other convention
+    ///   entries.
     /// - **Verification:** the verifier checks that the conventions are
-    ///   strictly increasing and that there is a body for each one.
+    ///   strictly increasing, that there is a body for each one, and that a
+    ///   lambda with a `cps` body does not declare `cps_entry`. The
+    ///   convention check of class specialization checks that `cps_entry`
+    ///   is declared where the rule above gives it; a module that hands no
+    ///   frame to a callable value may still declare it.
     ///   Otherwise as `tribute_control.lambda`, for each body.
     /// - **Ownership and value flow:** as `tribute_control.lambda`. Every
     ///   body closes over the same lexical scope, and the lambda's captures
@@ -173,6 +193,7 @@ mod tribute_cps {
     )]
     fn lambda(
         conventions: Attr<[CallingConvention]>,
+        #[default(false)] cps_entry: Attr<bool>,
         quantified_rows: Option<Attr<[u32]>>,
     ) -> Value<impl FuncSig> {
         #[regions(bodies)]
@@ -310,6 +331,10 @@ mod tribute_cps {
     ///   therefore hands frames to callable values
     ///   ([`hands_frames_to_values`]). Elsewhere it is
     ///   the class class specialization reads from the callee type's row.
+    ///   A transfer in a body that also runs as its lambda's `Cps` entry
+    ///   ([`in_cps_entry_flow`]) declares the convention of that body's own
+    ///   flow, and enters the callee's `Cps` entry when the body runs as the
+    ///   `Cps` entry, by the same rule.
     /// - **Verification:** the schema checks the convention keyword, and the
     ///   local verifier that `convention` is `Cps` in a `Cps` flow and not
     ///   stronger than the flow's convention elsewhere.
@@ -347,6 +372,11 @@ pub fn declared_convention(
 #[derive(Clone, Copy, Debug, PartialEq, Eq, derive_more::Display, derive_more::Error)]
 #[display("`conventions` must be strictly increasing, with one body for each")]
 pub struct MalformedBodies;
+
+/// Why a `tribute_cps.lambda` may not declare `cps_entry`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, derive_more::Display, derive_more::Error)]
+#[display("`cps_entry` belongs only on a lambda without a `cps` body")]
+pub struct EntryWithCpsBody;
 
 /// The conventions of a lambda's bodies, when it is a `tribute_cps.lambda`
 /// whose list is well formed, in body order.
@@ -505,11 +535,47 @@ pub fn own_flow_hands_on_frame(ctx: &IrContext, body: RegionRef) -> bool {
     .is_break()
 }
 
+/// Whether `lambda`, a `tribute_cps.lambda`, declares `cps_entry`: its `Cps`
+/// convention entry is its strongest body run as a `Cps` flow.
+pub fn has_cps_entry(ctx: &IrContext, lambda: trunk_ir::refs::OpRef) -> bool {
+    Lambda::from_op(ctx, lambda).is_ok_and(|lambda| lambda.cps_entry(ctx))
+}
+
+/// Whether `op` is in the own flow of the body a lambda's `cps_entry` runs
+/// as a `Cps` flow too: the strongest body of a `tribute_cps.lambda` that
+/// declares it, outside every handle and nested lambda in that body. Such an
+/// operation runs in two flows, the body's and the `Cps` entry's.
+pub fn in_cps_entry_flow(ctx: &IrContext, op: trunk_ir::refs::OpRef) -> bool {
+    let mut current = op;
+    loop {
+        let Some(region) = ctx
+            .op(current)
+            .parent_block
+            .and_then(|block| ctx.block(block).parent_region)
+        else {
+            return false;
+        };
+        let Some(parent) = ctx.region(region).parent_op else {
+            return false;
+        };
+        if Lambda::matches(ctx, parent) {
+            return has_cps_entry(ctx, parent) && ctx.op_regions(parent).last() == Some(region);
+        }
+        if tribute_control::Handle::matches(ctx, parent)
+            || SourceFunc::is_set(ctx, parent)
+            || SourceLambda::is_set(ctx, parent)
+        {
+            return false;
+        }
+        current = parent;
+    }
+}
+
 /// Whether `op` holds a transfer that can hand a received frame to a
 /// callable value's `Cps` entry (`design/cps-effects.md`, "`Cps` 진입
 /// 본문"): a source tail transfer of a callable value, or a source indirect
 /// call that hands a handle body's frame on ([`passes_body_frame_on`]).
-/// Only then do lambdas get `Cps` entry bodies and function tables `Cps`
+/// Only then do lambdas declare `cps_entry` and function tables get `Cps`
 /// entry instances. It reads no convention or flow, so it answers the same
 /// before and after class specialization, and both that pass and its check
 /// read it.
@@ -622,6 +688,9 @@ impl trunk_ir::ops::Verify for Func {
 impl trunk_ir::ops::Verify for Lambda {
     fn verify(&self, ctx: &IrContext) -> Result<(), trunk_ir::ops::VerificationError> {
         match body_conventions(ctx, self.op_ref()) {
+            Some(bodies) if self.cps_entry(ctx) && bodies.contains(&CallingConvention::Cps) => {
+                Err(EntryWithCpsBody.into())
+            }
             Some(_) => Ok(()),
             None => Err(MalformedBodies.into()),
         }

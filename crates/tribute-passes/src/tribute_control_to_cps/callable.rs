@@ -30,6 +30,17 @@ impl Converter<'_> {
             .map(|value| mapping.get(value).copied().unwrap_or(*value))
             .chain(lambda.arms.iter().map(|arm| self.arm_tokens[arm]))
             .collect();
+        // The entry functions unpack the types the first closure captured.
+        if !captures
+            .iter()
+            .map(|&capture| self.ctx.value_ty(capture))
+            .eq(lambda.capture_types.iter().copied())
+        {
+            return Err(self.malformed_source(
+                source,
+                "a lambda's captures have different types where its closures are built",
+            ));
+        }
         let logical_ty = self.ctx.op_result_types(source)[0];
         let closure_ty = self.convert_type(logical_ty);
         let closure_new = closure::New::operands(captures)
@@ -86,7 +97,16 @@ impl Converter<'_> {
             .collect();
         let parent = self.enclosing_func_name(source);
         let mut bodies = Vec::with_capacity(sources.len());
-        for (&convention, body_source) in conventions.iter().zip(sources) {
+        // A lambda that declares `cps_entry` has one more entry, its
+        // strongest body converted as a `Cps` flow.
+        let mut flows: Vec<_> = conventions.iter().copied().zip(sources).collect();
+        if tribute_cps::has_cps_entry(self.ctx, source)
+            && let Some(&(_, strongest)) = flows.last()
+        {
+            flows.push((CallingConvention::Cps, strongest));
+        }
+        let conventions: Vec<_> = flows.iter().map(|&(convention, _)| convention).collect();
+        for (convention, body_source) in flows {
             let abi = CallableAbi::new(convention, source_param_types.clone(), result);
             let environment_index = convention.closure_environment_index();
             let mut params = abi.lowered_params(evidence, frame);
@@ -193,6 +213,7 @@ impl Converter<'_> {
             entries,
             values,
             arms,
+            capture_types,
         })
     }
 
@@ -633,14 +654,26 @@ impl Converter<'_> {
         flow: &Flow,
     ) -> Result<(), TributeControlToCpsError> {
         let location = self.ctx.op(source).location;
+        // In the `Cps` entry of its lambda, a tail call enters the instance
+        // `cps_callee` names.
+        let cps_target = (flow.convention == CallingConvention::Cps)
+            .then(|| self.cps_targets.get(&source))
+            .flatten()
+            .and_then(|target| self.funcs.get(target))
+            .cloned();
+        let key = if cps_target.is_some() {
+            tribute_cps::CPS_CALLEE_ATTR
+        } else {
+            "callee"
+        };
         let target_symbol = self
             .ctx
             .op_attrs(source)
-            .get_symbol_ref("callee")
+            .get_symbol_ref(key)
             .expect("pre-CPS validation checked tail callee")
             .clone();
-        let target = self
-            .current_func(source)
+        let target = cps_target
+            .or_else(|| self.current_func(source))
             .expect("pre-CPS validation resolved tail callee in this module");
         let source_args = self
             .ctx
@@ -706,8 +739,15 @@ impl Converter<'_> {
         let location = self.ctx.op(source).location;
         let source_callee = self.ctx.op_operands(source)[0];
         let logical_type = self.ctx.value_ty(source_callee);
-        let convention = tribute_cps::declared_convention(self.ctx, source)
-            .expect("pre-CPS validation checked indirect tail callee convention");
+        // In a `Cps` flow the transfer enters the callee's `Cps` entry. The
+        // declared convention is that of the body the transfer is written
+        // in, which also runs as its lambda's `Cps` entry.
+        let convention = if flow.convention == CallingConvention::Cps {
+            CallingConvention::Cps
+        } else {
+            tribute_cps::declared_convention(self.ctx, source)
+                .expect("pre-CPS validation checked indirect tail callee convention")
+        };
         let callee = mapping
             .get(&source_callee)
             .copied()

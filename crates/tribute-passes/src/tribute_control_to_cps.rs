@@ -81,6 +81,8 @@ struct Converter<'a> {
     /// The callable each source operation's callee names, resolved before
     /// conversion moves anything.
     targets: HashMap<OpRef, OpRef>,
+    /// The callable each tail call's `cps_callee` names.
+    cps_targets: HashMap<OpRef, OpRef>,
     /// The table each `func_ref` names, resolved the same way.
     func_tables: HashMap<OpRef, FuncTable>,
     /// The convention entries built for each table and closure type.
@@ -111,6 +113,8 @@ struct LambdaEntries {
     /// The arms whose resumption its bodies resume. Their tokens follow
     /// `values`.
     arms: Vec<RegionRef>,
+    /// The types of those captures, which the entry functions unpack.
+    capture_types: Vec<TypeRef>,
 }
 
 /// The operations of a source block that follow the one being converted.
@@ -165,6 +169,7 @@ impl<'a> Converter<'a> {
             module_block,
             funcs: graph.funcs,
             targets: graph.targets,
+            cps_targets: graph.cps_targets,
             func_tables: graph.func_tables,
             table_entries: HashMap::default(),
             converted_types: HashMap::default(),
@@ -413,6 +418,7 @@ fn is_source_logical(ctx: &IrContext, op: OpRef) -> bool {
 struct CallableGraph {
     funcs: HashMap<OpRef, CallableInfo>,
     targets: HashMap<OpRef, OpRef>,
+    cps_targets: HashMap<OpRef, OpRef>,
     func_tables: HashMap<OpRef, FuncTable>,
 }
 
@@ -454,6 +460,7 @@ fn collect_callable_graph(ctx: &IrContext, module: Module, symbols: &SymbolTable
         .collect();
     let mut targets = HashMap::default();
     let mut func_tables = HashMap::default();
+    let mut cps_targets = HashMap::default();
     let _ = walk_op::<()>(ctx, module.op(), &mut |op| {
         if let Ok(reference) = tribute_cps::FuncRef::from_op(ctx, op)
             && let Some(table) = symbols
@@ -483,11 +490,20 @@ fn collect_callable_graph(ctx: &IrContext, module: Module, symbols: &SymbolTable
         {
             targets.insert(op, target);
         }
+        if let Some(target) = attributes
+            .view(ctx)
+            .get_symbol_ref(tribute_cps::CPS_CALLEE_ATTR)
+            .and_then(|reference| symbols.resolve(ctx, op, reference))
+            .filter(|target| funcs.contains_key(target))
+        {
+            cps_targets.insert(op, target);
+        }
         ControlFlow::Continue(WalkAction::Advance)
     });
     CallableGraph {
         funcs,
         targets,
+        cps_targets,
         func_tables,
     }
 }

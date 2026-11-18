@@ -361,10 +361,13 @@ convention에 따라 뜻이 달라지는 operation 다섯을 같은 이름의 `t
 operation으로 바꾼다.
 
 - `tribute_cps.func`는 자기 convention을 가진다. 인스턴스마다 하나다.
-- `tribute_cps.lambda`는 class마다의 본문과,
-  [convention entry](#convention-entry)마다 그 entry를 채우는 본문을 가진다.
+- `tribute_cps.lambda`는 class마다의 본문을 가지고, 가장 강한 본문이 `Cps` 진입도
+  채울 때 `cps_entry`를 선언한다.
 - `tribute_cps.call_indirect`와 `tribute_cps.tail_call_indirect`는 callee를
-  부르는 convention을 가진다.
+  부르는 convention을 가진다. `cps_entry`를 선언한 람다의 가장 강한 본문은 두
+  flow로 실행되므로, 그 자기 flow의 `tail_call_indirect`가 선언한 convention은
+  본문의 convention에서 읽은 것이고 `Cps` 진입에서는 `Cps`다
+  ([`Cps` 진입 본문](cps-effects.md#cps-진입-본문)).
 - `tribute_cps.func_ref`는 `tribute_cps.func_table` 하나를 가리키고, 그 table이
   convention entry마다 그 entry로 들어갈 대상 인스턴스를 가진다.
 
@@ -445,9 +448,10 @@ Class `c`의 본문은 위 읽기를 따르되, 자기 row의 tail이 상한이�
 `c`로 좁혀 상한으로 읽는다.
 
 위 규칙이 `Cps` 본문을 주지 않는 source 람다는 module에 값에 frame을 넘기는
-이전이 있고 자기 flow에 frame을 넘기는 operation이 있으면
-[`Cps` 진입 본문](cps-effects.md#cps-진입-본문)을 하나 더 가진다. 이 본문은 가장
-강한 본문과 같은 class 읽기를 쓰고 `Cps` flow로 실행된다.
+이전이 있고 가장 강한 본문의 자기 flow에 frame을 넘기는 operation이 있으면
+`cps_entry`를 선언해 [`Cps` 진입 본문](cps-effects.md#cps-진입-본문)을 가진다.
+이것은 따로 쓰인 본문이 아니라 가장 강한 본문을 `Cps` flow로 실행한 것이며, class
+읽기는 그 본문과 같다.
 
 **값은 나누지 않는다.** 같은 class를 고르는 사용들이 양화한 binder에 서로 다른
 class를 넘겨도 람다는 값 하나다. 앞의 `wrap`이 그 예다. 상한으로 읽어도 결과는

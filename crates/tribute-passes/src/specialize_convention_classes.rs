@@ -308,6 +308,29 @@ fn rename_binders(ctx: &mut IrContext, ops: &[OpRef], old: &[u32], new: &[u32]) 
     }
 }
 
+/// Declare `cps_entry` on every lambda in `body` that has no `Cps` body and
+/// whose strongest body's own flow hands a frame on (`design/cps-effects.md`,
+/// "`Cps` 진입 본문").
+fn declare_cps_entries(ctx: &mut IrContext, body: RegionRef) {
+    let mut lambdas = Vec::new();
+    let _ = trunk_ir::walk::walk_region::<()>(ctx, body, &mut |op| {
+        if tribute_cps::body_conventions(ctx, op)
+            .is_some_and(|bodies| !bodies.contains(&CallingConvention::Cps))
+            && ctx
+                .op_regions(op)
+                .last()
+                .is_some_and(|strongest| tribute_cps::own_flow_hands_on_frame(ctx, strongest))
+        {
+            lambdas.push(op);
+        }
+        std::ops::ControlFlow::Continue(trunk_ir::walk::WalkAction::Advance)
+    });
+    for lambda in lambdas {
+        ctx.op_attrs_mut(lambda)
+            .insert(tribute_cps::CPS_ENTRY_ATTR, Attribute::Bool(true));
+    }
+}
+
 /// A lambda whose bodies are not yet the ones the body rule selects: the
 /// conventions of those bodies, and the binders that selection reads.
 struct Pending {
@@ -343,6 +366,9 @@ impl Instance<'_> {
     ) -> Vec<(String, Vec<Class>, Entry)> {
         if let Some(body) = ctx.op_region(op, 0) {
             self.give_bodies(ctx, body);
+            if self.hands_frames {
+                declare_cps_entries(ctx, body);
+            }
         }
         let mut ops = Vec::new();
         if let Some(body) = ctx.op_region(op, 0) {
@@ -448,17 +474,6 @@ impl Instance<'_> {
                 let row = signature.row(ctx);
                 lambda.conventions = self.reader.conventions(ctx, &row, lambda.op);
                 lambda.reads.extend(row.tail);
-            }
-            // In a module that hands frames to callable values, a lambda
-            // whose own flow hands a frame on has a `Cps` entry body when
-            // its classes select no `Cps` body (`design/cps-effects.md`,
-            // "`Cps` 진입 본문").
-            if self.hands_frames
-                && ctx
-                    .op_region(lambda.op, 0)
-                    .is_some_and(|body| tribute_cps::own_flow_hands_on_frame(ctx, body))
-            {
-                lambda.conventions.push(CallingConvention::Cps);
             }
             lambda.conventions.sort_unstable();
             lambda.conventions.dedup();
@@ -614,6 +629,23 @@ impl Instance<'_> {
                     key,
                     Attribute::SymbolRef(SymbolPath::new([Symbol::new(&name)])),
                 );
+            }
+            // A tail call in a body that also runs as its lambda's `Cps`
+            // entry enters the callee's `Cps` entry there.
+            if entry == Entry::Row
+                && tribute_control::TailCall::matches(ctx, op)
+                && tribute_cps::in_cps_entry_flow(ctx, op)
+                && self.entry_for_cps(ctx, definition, positions, &classes) == Entry::Cps
+            {
+                let name = instance_name(&callee, &classes, Entry::Cps);
+                ctx.op_attrs_mut(op).insert(
+                    tribute_cps::CPS_CALLEE_ATTR,
+                    Attribute::SymbolRef(SymbolPath::new([Symbol::new(&name)])),
+                );
+                return vec![
+                    (callee.clone(), classes.clone(), Entry::Row),
+                    (callee, classes, Entry::Cps),
+                ];
             }
             return vec![(callee, classes, entry)];
         }

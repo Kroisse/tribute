@@ -36,8 +36,8 @@ fn main() ->{Io} Nil {
 }
 
 /// A curried lambda nested 16 deep compiles in time: a lambda whose own
-/// flow hands no frame on has no `Cps` entry body, which would copy every
-/// lambda nested in it (`design/cps-effects.md`, "`Cps` 진입 본문").
+/// flow hands no frame on declares no `cps_entry`, so none is converted
+/// twice (`design/cps-effects.md`, "`Cps` 진입 본문").
 #[test]
 fn deeply_curried_lambda_prints_its_sum() {
     const DEPTH: usize = 16;
@@ -61,9 +61,8 @@ fn main() ->{{Io}} Nil {{
 }
 
 /// Lambdas nested 16 deep that each end with a `become` compile in time:
-/// no transfer hands a frame to a callable value, so none has a `Cps` entry
-/// body, which would copy every lambda nested in it
-/// (`design/cps-effects.md`, "`Cps` 진입 본문").
+/// no transfer hands a frame to a callable value, so none declares a
+/// `cps_entry` (`design/cps-effects.md`, "`Cps` 진입 본문").
 #[test]
 fn deeply_nested_becoming_lambdas_print_their_sum() {
     const DEPTH: usize = 16;
@@ -98,6 +97,52 @@ use std::io::{{Io, print_line}}
 "#
         ),
         format!("{DEPTH}\n").as_bytes(),
+    );
+}
+
+/// Lambdas nested 12 deep that each end with a `become`, in a module that
+/// also hands a frame to a callable value, so every one declares `cps_entry`:
+/// the nested lambdas are written once, not once for each entry of every
+/// lambda around them, so the program compiles in time and prints its sum on
+/// both targets (`design/cps-effects.md`, "`Cps` 진입 본문").
+#[test]
+fn deeply_nested_cps_entry_lambdas_print_their_sum() {
+    const DEPTH: usize = 12;
+    let ty = |depth: usize| format!("{}Int", "fn(Int) ->{} ".repeat(depth));
+    let keeps = (0..DEPTH)
+        .map(|depth| {
+            let ty = ty(depth);
+            format!("fn keep{depth}(x: Int, f: {ty}) ->{{}} {ty} {{ f }}\n")
+        })
+        .collect::<String>();
+    let lambda = (1..=DEPTH).rev().fold(
+        (1..=DEPTH).map(|i| format!("a{i}")).join(" + "),
+        |body, i| {
+            let depth = DEPTH - i;
+            format!(
+                "fn(a{i}: Int) ->{{}} {} {{ become keep{depth}(+0, {body}) }}",
+                ty(depth)
+            )
+        },
+    );
+    let applications = (1..=DEPTH)
+        .map(|i| format!("    let g{i} = g{}(+1)\n", i - 1))
+        .collect::<String>();
+    let source = format!(
+        r#"
+use std::io::{{Io, print_line}}
+{keeps}fn tailv(k: fn(Int) ->{{}} Int, n: Int) ->{{}} Int {{ become k(n) }}
+fn main() ->{{Io}} Nil {{
+    let g0 = {lambda}
+{applications}    print_line(g{DEPTH}.to_string)
+    print_line(tailv(fn(x) {{ x }}, +1).to_string)
+}}
+"#
+    );
+    common::assert_output_on_both_targets(
+        "deeply_nested_cps_entry.trb",
+        &source,
+        &format!("{DEPTH}\n1"),
     );
 }
 

@@ -837,6 +837,49 @@ fn main() ->{std::io::Io} Nil {
     assert_released_on_both_targets("become_do_arm.trb", &do_arm, loops);
 }
 
+/// A lambda whose own flow runs a resumption-carrying lambda in a handler
+/// arm is converted twice, once for each of its entries: `l(+1)` runs it
+/// directly, and `via_arm` enters its `Cps` entry through a `become` in an
+/// `op` arm. Both print their answers, and nothing leaks.
+#[test]
+fn test_cps_entry_lambda_with_a_resumption_in_an_arm_releases_under_asan() {
+    let code = r#"
+use std::io::{Io, print_line}
+
+ability Ask {
+    op ask() -> Int
+}
+
+fn via_arm(k: fn(Int) ->{} Int, n: Int) ->{} Int {
+    handle Ask::ask() {
+        do x { x }
+        op Ask::ask() { become k(n) }
+    }
+}
+
+fn main() ->{Io} Nil {
+    let l = fn(n: Int) ->{} Int {
+        let r = handle {
+            handle Ask::ask() + n {
+                do x { x }
+                op Ask::ask() {
+                    let k = fn(v: Int) { resume v }
+                    k(+10)
+                }
+            }
+        } {
+            do y { y + +100 }
+            op Ask::ask() { +0 }
+        }
+        r + +1
+    }
+    print_line(l(+1).to_string)
+    print_line(via_arm(l, +2).to_string)
+}
+"#;
+    assert_released_on_both_targets("cps_entry_arm_resumption.trb", code, "112\n113");
+}
+
 /// Like [`common::assert_output_on_both_targets_with_native_asan`], and the
 /// native run reports no leak: every allocation is released exactly once.
 fn assert_released_on_both_targets(source_name: &str, source_code: &str, expected_stdout: &str) {

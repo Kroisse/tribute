@@ -598,3 +598,100 @@ fn the_targets_of_a_function_table_share_one_source_signature() {
         ["function table targets must share one source signature"]
     );
 }
+
+const CPS_ENTRY: &str = r#"core.module @test {
+  !t0 = tribute_control.func_sig<(core.i32) -> core.i32>
+
+  tribute_cps.func @f(%0: core.i32) -> core.i32 convention(direct) {
+      tribute_control.return %0
+  }
+  tribute_cps.func @"f$7"(%0: core.i32) -> core.i32 convention(cps) attributes {entry_of = "f"} {
+      tribute_control.return %0
+  }
+  tribute_cps.func @outer(%0: core.i32) -> core.i32 convention(direct) {
+      %1 = tribute_cps.lambda(%2: core.i32) -> core.i32 attributes {cps_entry = true} entries {
+        direct {
+            tribute_control.tail_call @f(%2) attributes {cps_callee = @"f$7"} : (core.i32) -> ()
+        }
+      }
+      tribute_control.return %0
+  }
+}
+"#;
+
+/// `cps_entry` and `cps_callee` survive printing and parsing, and read back
+/// through their accessors and helpers.
+#[test]
+fn cps_entry_and_cps_callee_round_trip() {
+    let (ctx, module) = parse(CPS_ENTRY);
+    assert_eq!(module.op().display(&ctx).to_string(), CPS_ENTRY);
+
+    let outer = Func::from_op(&ctx, module.ops(&ctx)[2]).unwrap();
+    let block = ctx.region(outer.body(&ctx)).blocks[0];
+    let lambda = ctx.block(block).ops[0];
+    assert!(has_cps_entry(&ctx, lambda));
+    assert!(Lambda::from_op(&ctx, lambda).unwrap().cps_entry(&ctx));
+
+    let body = ctx.op_regions(lambda).last().unwrap();
+    let entry = ctx.region(body).blocks[0];
+    let call = ctx.block(entry).ops[0];
+    assert!(in_cps_entry_flow(&ctx, call));
+    assert_eq!(
+        ctx.op_attrs(call)
+            .get_symbol_ref(CPS_CALLEE_ATTR)
+            .and_then(|path| path.leaf())
+            .map(ToString::to_string),
+        Some("f$7".to_owned())
+    );
+    assert_eq!(messages(CPS_ENTRY), Vec::<String>::new());
+
+    // Without the declaration the lambda is an ordinary one.
+    let plain = CPS_ENTRY.replace(" attributes {cps_entry = true}", "");
+    let (ctx, module) = parse(&plain);
+    let outer = Func::from_op(&ctx, module.ops(&ctx)[2]).unwrap();
+    let block = ctx.region(outer.body(&ctx)).blocks[0];
+    let lambda = ctx.block(block).ops[0];
+    assert!(!has_cps_entry(&ctx, lambda));
+    assert_eq!(module.op().display(&ctx).to_string(), plain);
+}
+
+/// A lambda with a `cps` body already has a `Cps` entry, so it does not
+/// declare `cps_entry`.
+#[test]
+fn cps_entry_is_rejected_with_a_cps_body() {
+    let input = r#"core.module @test {
+  tribute_cps.func @outer(%0: core.i32) -> core.i32 convention(direct) {
+      %1 = tribute_cps.lambda(%2: core.i32) -> core.i32 attributes {cps_entry = true} entries {
+        direct {
+            tribute_control.return %2
+        }
+        cps {
+            tribute_control.return %2
+        }
+      }
+      tribute_control.return %0
+  }
+}
+"#;
+    let lambda_errors = |input: &str| {
+        let (ctx, module) = parse(input);
+        let outer = Func::from_op(&ctx, module.ops(&ctx)[0]).unwrap();
+        let block = ctx.region(outer.body(&ctx)).blocks[0];
+        let lambda = ctx.block(block).ops[0];
+        OpDef::of(&ctx, lambda)
+            .unwrap()
+            .verify(&ctx, lambda)
+            .into_iter()
+            .map(|error| error.to_string())
+            .collect::<Vec<_>>()
+    };
+    let errors = lambda_errors(input);
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("`cps_entry` belongs only")),
+        "{errors:?}"
+    );
+    let accepted = input.replace(" attributes {cps_entry = true}", "");
+    assert_eq!(lambda_errors(&accepted), Vec::<String>::new());
+}

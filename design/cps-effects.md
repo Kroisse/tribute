@@ -300,6 +300,8 @@ row와 [row binder](tribute-dialects.md#row-binder), 참조의 `row_args`, 지�
      그 class로 다시 읽은 람다 본문의 복사이며, 그 안에서 row를 양화하는 람다는
      정의의 binder 목록 끝에 새 `local` binder를 받는다.
   2. 본문이 없는 convention entry는 더 약한 본문을 부르는 adapter나 trap entry로 채운다.
+     [`Cps` 진입 본문](#cps-진입-본문)의 조건에 맞는 람다는 본문을 더 두지 않고
+     `cps_entry`를 선언한다.
   3. 람다 op, 결과 값, `instantiate`는 하나로 남으므로 사용처를 다시
      연결하지 않는다. 같은 class를 고르는 사용들이 양화한 binder에 서로 다른 class를
      넘겨도 값을 나누지 않으며, 그 본문은 binder를 상한으로 읽는다. 복사한 본문은
@@ -427,18 +429,31 @@ region에 속하므로 `Cps` flow다. `fn` arm은 어느 callable 안에서든 o
   한다. 진입 인스턴스의 본문도 `Cps` flow이므로 이 요구는 그 본문의 `become`과 body
   결과 호출을 따라 이어진다.
 - **람다:** 더 약한 본문만 가지는 람다는 module에 아래의 값에 frame을 넘기는
-  이전이 있고 자기 flow에 frame을 넘기는 operation이 있을 때 `Cps` 진입 본문을
-  하나 더 가지며, 그것이 람다의 `Cps`
+  이전이 있고 가장 강한 본문의 자기 flow에 frame을 넘기는 operation이 있을 때
+  `Cps` 진입 본문을 가지며, 그것이 람다의 `Cps`
   [convention entry](tribute-dialects.md#convention-entry)다. Frame을 넘기는
   operation은 source tail transfer(`tail_call`, `tail_call_indirect`), `handle`,
-  `resume`이다. 그 밖의 람다의 `Cps` entry는 가장 강한 본문을 부른 뒤
+  `resume`이다. 람다의 `Cps` 진입 본문은 따로 쓰인 본문이 아니다.
+  `tribute_cps.lambda`가 `cps_entry`로 선언하면 legalization이 가장 강한 본문을
+  그 본문의 convention으로 한 번, `Cps` flow로 한 번 변환한다. 두 변환은 자기
+  flow에서만 다르다.
+  - 자기 flow의 `tribute_control.tail_call`은 `callee`가 더 약한 인스턴스이고 본문이
+    있으면 `cps_callee`로 그 `Cps` 진입 인스턴스를 함께 가리키며, `Cps` 진입에서는
+    그쪽으로 들어간다. Class 특수화는 두 인스턴스를 모두 만든다.
+  - 자기 flow의 `tribute_cps.tail_call_indirect`는 본문의 convention에서 읽은
+    convention을 선언하고, `Cps` 진입에서는 `Cps` flow의 규칙대로 callee의 `Cps`
+    entry로 들어간다.
+  - `handle`과 `resume`은 어느 변환에서든 자기가 놓인 flow의 규칙을 따른다.
+  - 본문 안의 람다는 두 변환에서 같은 람다다. Entry 함수는 한 번만 만들어지고
+    ([논리적 CPS 적법화](#논리적-cps-적법화)), 각 변환은 자기 capture로 closure만
+    만든다. 그래서 람다가 겹쳐도 entry 함수의 수는 람다 수에 비례한다.
+
+  그 밖의 람다의 `Cps` entry는 가장 강한 본문을 부른 뒤
   결과를 `Done<R>`로 넘기는 adapter다. 그 본문을 지나 이어지는 반복은 본문의 일반
   호출을 거친다. 일반 호출은 어느 본문에서든 proper tail transfer가 아니며, `Cps`
   진입 본문 안의 `Cps` 호출도 suffix frame을 남기므로
   ([frame을 그대로 넘기는 자리](#frame을-그대로-넘기는-자리)) adapter는 반복의 공간
-  보장을 바꾸지 않는다. `Cps` 진입 본문은 안쪽 람다를 포함한 본문 전체를 복제하므로,
-  이 조건은 frame을 넘기지 않는 람다와 frame을 넘겨받지 않는 람다가 본문 수를 늘리지
-  않게 한다.
+  보장을 바꾸지 않는다.
 - **함수 참조:** module에 값에 frame을 넘기는 이전이 있으면 `func_ref`의 `Cps`
   convention entry는 `Cps` 진입 본문이다. 그때 `func_table`의 `Cps` 대상은 가장 강한
   대상의 `Cps` 진입 인스턴스다. 그런 이전이 없으면 `Cps` 대상을 두지 않으며, `Cps`
@@ -459,8 +474,9 @@ Callable 값의 `Cps` entry에 flow의 frame을 그대로 넘기는 자리는 �
 센다. 그래서 판정은 class 특수화 앞의 IR과 그 뒤의 IR을 같은 방식으로 읽고, 특수화와
 그 검사가 같은 판정(`tribute_cps::hands_frames_to_values`)을 쓴다. 특수화 뒤의
 참조되지 않는 정의 제거가 그런 이전을 담은 정의를 지울 수 있으므로, 검사는 이전이 남은
-module에서 `Cps` 진입 본문과 진입 인스턴스가 있는지만 확인하고, 이전이 없는 module의
-그것들은 거부하지 않는다.
+module에서 `cps_entry` 선언과 진입 인스턴스가 있는지만 확인하고, 이전이 없는 module의
+그것들은 거부하지 않는다. `cps_entry`를 선언한 람다의 자기 flow에 있는 `tail_call`은
+어느 module에서든 `cps_callee`가 규칙과 일치해야 한다.
 
 Frame을 넘기는 body 결과 호출을 뺀 일반 호출은 flow와 관계없이 row가 정한
 convention의 인스턴스를 부르며 `Cps` 진입을 요구하지 않는다. `tribute_cps.func`의

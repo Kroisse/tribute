@@ -315,8 +315,10 @@ impl<'a> Instance<'a> {
             let cps_flow = (tribute_control::TailCall::matches(self.ctx, reference.op)
                 && self.flow(reference.op) == Some(CallingConvention::Cps))
                 || tribute_cps::passes_body_frame_on(self.ctx, reference.op);
-            let entry = match self.module.definitions.get(callee) {
-                Some(definition) if cps_flow && self.ctx.op_has_regions(definition.op) => {
+            // Whether the callee has a `Cps` entry instance: it has a body
+            // and its row determines a weaker convention.
+            let has_cps_entry = match self.module.definitions.get(callee) {
+                Some(definition) if self.ctx.op_has_regions(definition.op) => {
                     let params: HashMap<u32, Class> = positions
                         .into_iter()
                         .flatten()
@@ -326,15 +328,38 @@ impl<'a> Instance<'a> {
                     let row = definition
                         .own_row(self.ctx, definition.op, |tail| params.contains_key(&tail));
                     let reader = definition.reader(self.module.requirements, params);
-                    if reader.class(self.ctx, &row, definition.op).bound() == CallingConvention::Cps
-                    {
-                        Entry::Row
-                    } else {
-                        Entry::Cps
-                    }
+                    reader.class(self.ctx, &row, definition.op).bound() != CallingConvention::Cps
                 }
-                _ => Entry::Row,
+                _ => false,
             };
+            let entry = if cps_flow && has_cps_entry {
+                Entry::Cps
+            } else {
+                Entry::Row
+            };
+            // A tail call in a body that also runs as its lambda's `Cps`
+            // entry names the instance it enters there.
+            let expected_cps = (!cps_flow
+                && has_cps_entry
+                && tribute_control::TailCall::matches(self.ctx, reference.op)
+                && tribute_cps::in_cps_entry_flow(self.ctx, reference.op))
+            .then(|| instance_name(callee, &classes, Entry::Cps));
+            let actual_cps = self
+                .ctx
+                .op_attrs(reference.op)
+                .get_symbol_ref(tribute_cps::CPS_CALLEE_ATTR)
+                .and_then(|path| path.leaf())
+                .map(ToString::to_string);
+            if expected_cps != actual_cps {
+                disagreements.push(Disagreement {
+                    op: reference.op,
+                    rule: "reference",
+                    message: format!(
+                        "{} enters {actual_cps:?} from a Cps entry, its rows select {expected_cps:?}",
+                        self.function.name
+                    ),
+                });
+            }
             let expected = instance_name(callee, &classes, entry);
             if expected != reference.callee {
                 disagreements.push(Disagreement {
@@ -351,9 +376,9 @@ impl<'a> Instance<'a> {
 
     /// A lambda has a body for exactly the conventions the rows of the
     /// callables its instantiations make may require, or, without
-    /// instantiations, its own row, and a `Cps` entry body when its module
+    /// instantiations, its own row, and declares `cps_entry` when its module
     /// hands frames to callable values and its own flow hands a frame on,
-    /// which it may have elsewhere too;
+    /// which it may declare elsewhere too;
     /// function references enter their table
     /// no stronger than their row, and indirect transfers have the class of
     /// their callee's row, or its bound.
@@ -391,36 +416,34 @@ impl<'a> Instance<'a> {
                     .map(|signature| self.conventions(&signature.row(self.ctx), lambda))
                     .unwrap_or_default(),
             };
-            // In a module that hands frames to callable values, a lambda
-            // whose own flow hands a frame on has a `Cps` body, its `Cps`
-            // entry body when its uses select none. Elsewhere it may have
-            // one: removing unreferenced definitions after class
-            // specialization may remove the only such transfer.
-            let hands_on = self
-                .ctx
-                .op_region(lambda, 0)
-                .is_some_and(|body| tribute_cps::own_flow_hands_on_frame(self.ctx, body));
-            let with_entry: Vec<_> = selected
-                .iter()
-                .copied()
-                .chain(hands_on.then_some(CallingConvention::Cps))
-                .sorted()
-                .dedup()
-                .collect();
-            let without_entry: Vec<_> = selected.into_iter().sorted().dedup().collect();
-            let expected = if self.module.hands_frames {
-                with_entry.clone()
-            } else {
-                without_entry
-            };
+            let expected: Vec<_> = selected.into_iter().sorted().dedup().collect();
             let actual = tribute_cps::body_conventions(self.ctx, lambda);
-            let optional_entry = !self.module.hands_frames && actual.as_ref() == Some(&with_entry);
-            if actual.as_ref() != Some(&expected) && !optional_entry {
+            if actual.as_ref() != Some(&expected) {
                 disagreements.push(Disagreement {
                     op: lambda,
                     rule: "lambda",
                     message: format!(
                         "a lambda in {} has bodies {actual:?}, its uses select {expected:?}",
+                        self.function.name
+                    ),
+                });
+            }
+            // In a module that hands frames to callable values, a lambda
+            // without a `Cps` body declares `cps_entry` exactly when the own
+            // flow of its strongest body hands a frame on. Elsewhere such a
+            // lambda may declare it: removing unreferenced definitions after
+            // class specialization may remove the only such transfer.
+            let hands_on = !expected.contains(&CallingConvention::Cps)
+                && self.ctx.op_regions(lambda).last().is_some_and(|strongest| {
+                    tribute_cps::own_flow_hands_on_frame(self.ctx, strongest)
+                });
+            let declared = tribute_cps::has_cps_entry(self.ctx, lambda);
+            if declared != hands_on && (declared || self.module.hands_frames) {
+                disagreements.push(Disagreement {
+                    op: lambda,
+                    rule: "lambda",
+                    message: format!(
+                        "a lambda in {} declares cps_entry = {declared}, its own flow gives {hands_on}",
                         self.function.name
                     ),
                 });

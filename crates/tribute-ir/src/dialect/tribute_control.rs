@@ -534,7 +534,12 @@ mod tribute_control {
     /// - **Shape:** the source arguments in declaration order,
     ///   `callee: Symbol`, and optional `row_args` (`design/tribute-dialects.md`,
     ///   "Row 인자와 치환"). A terminator with no result or region, registered
-    ///   as a `CallableExit`. It has no `evidence_plan`.
+    ///   as a `CallableExit`. It has no `evidence_plan`. Class specialization
+    ///   adds `cps_callee: Symbol` to a call in a lambda body that also runs
+    ///   as the lambda's `Cps` entry (`tribute_cps::in_cps_entry_flow`) when
+    ///   `callee` is a weaker instance with a body: the `Cps` entry instance
+    ///   of the same definition and class arguments, which the call enters
+    ///   when the body runs as the `Cps` entry. The frontend never writes it.
     /// - **Placement:** it may end the body of a `tribute_control.func` or
     ///   `lambda`, and in place of `scf.yield` it may end an arm of a
     ///   one-result operation that selects one region
@@ -583,7 +588,13 @@ mod tribute_control {
     #[flags(Terminator)]
     #[implements(CallLike, CallableExit, LocalValidation)]
     #[asm_format(callee "(" args ")" attr_dict ":" functional_type(args))]
-    fn tail_call(callee: Attr<SymbolRef>, row_args: Option<Attr<[Row]>>, args: Variadic<_>) {}
+    fn tail_call(
+        callee: Attr<SymbolRef>,
+        cps_callee: Option<Attr<SymbolRef>>,
+        row_args: Option<Attr<[Row]>>,
+        args: Variadic<_>,
+    ) {
+    }
 
     /// A proper tail call of a callable value, from source `become`.
     ///

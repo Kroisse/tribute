@@ -78,9 +78,10 @@ fn an_instance_has_its_classes_in_its_transfers_and_convention() {
     );
 }
 
-/// A lambda whose own flow hands no frame on has no `Cps` entry body.
+/// A lambda whose own flow hands no frame on has no `Cps` body its classes
+/// do not select.
 #[test]
-fn a_lambda_without_a_frame_transfer_has_no_cps_entry_body() {
+fn a_lambda_without_a_frame_transfer_has_no_extra_cps_body() {
     assert_eq!(
         rules(&calls("direct", "direct", &["direct", "cps"], "app$9D")),
         ["lambda"]
@@ -96,8 +97,22 @@ const HAND_ON: &str = r#"  tribute_cps.func @hand_on(%x: core.i32, %k: tribute_c
 /// `TRANSFER` with `outer` as the lambda's bodies, with `HAND_ON` when
 /// `hands_frames`.
 fn transfer(outer: &str, hands_frames: bool) -> String {
+    transfer_with(outer, hands_frames, false)
+}
+
+/// `transfer`, whose lambda declares `cps_entry` when `cps_entry`.
+fn transfer_with(outer: &str, hands_frames: bool, cps_entry: bool) -> String {
     let hand_on = if hands_frames { HAND_ON } else { "" };
-    TRANSFER.replace("OUTER", outer).replace("HANDS", hand_on)
+    let attrs = if cps_entry {
+        " attributes {cps_entry = true}"
+    } else {
+        ""
+    };
+    TRANSFER
+        .replace("OUTER", outer)
+        .replace("HANDS", hand_on)
+        .replace("ATTRS", attrs)
+        .replace(CPS_CALLEE, if cps_entry { CPS_CALLEE_ATTRS } else { "" })
 }
 
 /// `main` calls a lambda whose bodies are `OUTER`. A body of a convention
@@ -112,7 +127,7 @@ HANDS
     tribute_control.return %x
   }
   tribute_cps.func @main(%x: core.i32) -> core.i32 convention(direct) {
-    %f = tribute_cps.lambda(%y: core.i32) -> core.i32 entries {
+    %f = tribute_cps.lambda(%y: core.i32) -> core.i32 ATTRS entries {
 OUTER
     }
     %r = tribute_cps.call_indirect %f(%x) attributes {convention = "direct"} : (core.i32) -> core.i32
@@ -120,8 +135,16 @@ OUTER
   }
 }"#;
 
+/// Where a `become` of `id` in the strongest body of a lambda that declares
+/// `cps_entry` names its `Cps` entry instance; `transfer_with` fills it.
+const CPS_CALLEE: &str = "@@CPS_CALLEE@@";
+
+/// The attributes of a `become` of `id` that a `Cps` entry enters as `id$7`.
+const CPS_CALLEE_ATTRS: &str = r#" attributes {cps_callee = @"id$7"}"#;
+
 /// Bodies of a lambda over `%y`, one per convention; a body of a convention
-/// in `transfers` ends with a `become` of `id`.
+/// in `transfers` ends with a `become` of `id`, with `CPS_CALLEE` after its
+/// callee.
 fn transfer_bodies(conventions: &[&str], transfers: &[&str]) -> String {
     conventions
         .iter()
@@ -131,50 +154,110 @@ fn transfer_bodies(conventions: &[&str], transfers: &[&str]) -> String {
                 (true, "cps") => {
                     r#"tribute_control.tail_call @"id$7"(%y) : (core.i32) -> ()"#.to_owned()
                 }
-                (true, _) => "tribute_control.tail_call @id(%y) : (core.i32) -> ()".to_owned(),
+                (true, _) => {
+                    format!("tribute_control.tail_call @id(%y){CPS_CALLEE} : (core.i32) -> ()")
+                }
             };
             format!("      {convention} {{\n        {exit}\n      }}")
         })
         .join("\n")
 }
 
-/// A lambda whose own flow has a `become` has a `Cps` entry body in a
-/// module that hands frames to values. Another module needs none, and may
-/// keep one when removing unreferenced definitions removed the transfer.
+/// A lambda whose own flow has a `become` declares `cps_entry` in a module
+/// that hands frames to values, and keeps its one body. Another module needs
+/// no declaration, and may keep one when removing unreferenced definitions
+/// removed the transfer.
 #[test]
-fn a_lambda_with_a_frame_transfer_has_a_cps_entry_body() {
-    let input =
-        |bodies: &[&str], hands_frames| transfer(&transfer_bodies(bodies, bodies), hands_frames);
-    assert_eq!(rules(&input(&["direct"], true)), ["lambda"]);
-    assert_eq!(rules(&input(&["direct", "cps"], true)), [""; 0]);
-    assert_eq!(rules(&input(&["direct"], false)), [""; 0]);
-    assert_eq!(rules(&input(&["direct", "cps"], false)), [""; 0]);
+fn a_lambda_with_a_frame_transfer_declares_a_cps_entry() {
+    let input = |hands_frames, cps_entry| {
+        transfer_with(
+            &transfer_bodies(&["direct"], &["direct"]),
+            hands_frames,
+            cps_entry,
+        )
+    };
+    assert_eq!(rules(&input(true, false)), ["lambda"]);
+    assert_eq!(rules(&input(true, true)), [""; 0]);
+    assert_eq!(rules(&input(false, false)), [""; 0]);
+    assert_eq!(rules(&input(false, true)), [""; 0]);
+}
+
+/// A lambda whose own flow hands no frame on declares no `cps_entry`, in any
+/// module.
+#[test]
+fn a_lambda_without_a_frame_transfer_declares_no_cps_entry() {
+    for hands_frames in [true, false] {
+        let input = transfer_with(&transfer_bodies(&["direct"], &[]), hands_frames, true);
+        assert_eq!(rules(&input), ["lambda"], "hands_frames = {hands_frames}");
+    }
+}
+
+/// A copied `Cps` body is not a `Cps` entry: the lambda's bodies are those
+/// its classes select.
+#[test]
+fn a_copied_cps_body_is_a_disagreement() {
+    let input = transfer(
+        &transfer_bodies(&["direct", "cps"], &["direct", "cps"]),
+        true,
+    );
+    assert!(rules(&input).contains(&"lambda"), "{:?}", rules(&input));
 }
 
 /// A nested lambda's `become` belongs to its own flow, not to the lambda
 /// that holds it.
 #[test]
-fn a_nested_frame_transfer_gives_only_the_nested_lambda_a_cps_entry_body() {
-    let input = |outer: &[&str], inner: &[&str]| {
-        let inner = transfer_bodies(inner, inner)
+fn a_nested_frame_transfer_gives_only_the_nested_lambda_a_cps_entry() {
+    let input = |outer_entry: bool, inner_entry: bool| {
+        let inner = transfer_bodies(&["direct"], &["direct"])
             .replace("%y", "%z")
+            .replace(CPS_CALLEE, if inner_entry { CPS_CALLEE_ATTRS } else { "" })
             .replace('\n', "\n    ");
-        let outer = outer
-            .iter()
-            .map(|convention| {
-                format!(
-                    "      {convention} {{\n        %g = tribute_cps.lambda(%z: core.i32) -> core.i32 entries {{\n    {inner}\n        }}\n        tribute_control.return %y\n      }}"
-                )
-            })
-            .join("\n");
-        transfer(&outer, true)
+        let attrs = if inner_entry {
+            " attributes {cps_entry = true}"
+        } else {
+            ""
+        };
+        let outer = format!(
+            "      direct {{\n        %g = tribute_cps.lambda(%z: core.i32) -> core.i32{attrs} entries {{\n    {inner}\n        }}\n        tribute_control.return %y\n      }}"
+        );
+        transfer_with(&outer, true, outer_entry)
     };
-    assert_eq!(rules(&input(&["direct"], &["direct", "cps"])), [""; 0]);
+    assert_eq!(rules(&input(false, true)), [""; 0]);
+    assert_eq!(rules(&input(true, true)), ["lambda"]);
+    assert_eq!(rules(&input(false, false)), ["lambda"]);
+}
+
+/// A `become` of a function with a `Cps` entry instance, in a body that also
+/// runs as its lambda's `Cps` entry, names that instance as its `cps_callee`.
+#[test]
+fn a_tail_call_in_a_cps_entry_body_names_its_cps_callee() {
+    let input = |attrs: &str| {
+        let body = format!(
+            "      direct {{\n        tribute_control.tail_call @id(%y){attrs} : (core.i32) -> ()\n      }}"
+        );
+        transfer_with(&body, true, true)
+    };
     assert_eq!(
-        rules(&input(&["direct", "cps"], &["direct", "cps"])),
-        ["lambda"]
+        rules(&input(r#" attributes {cps_callee = @"id$7"}"#)),
+        [""; 0]
     );
-    assert_eq!(rules(&input(&["direct"], &["direct"])), ["lambda"]);
+    assert_eq!(rules(&input("")), ["reference"]);
+    assert_eq!(
+        rules(&input(r#" attributes {cps_callee = @"id$8"}"#)),
+        ["reference"]
+    );
+    assert_eq!(
+        rules(&input(r#" attributes {cps_callee = @id}"#)),
+        ["reference"]
+    );
+}
+
+/// A `cps_callee` where the body does not also run as a `Cps` entry is a
+/// disagreement.
+#[test]
+fn a_cps_callee_outside_a_cps_entry_body_is_a_disagreement() {
+    let body = "      direct {\n        tribute_control.tail_call @id(%y) attributes {cps_callee = @\"id$7\"} : (core.i32) -> ()\n      }";
+    assert_eq!(rules(&transfer_with(body, false, false)), ["reference"]);
 }
 
 /// An instance of an upper bound calls through the bound, and a lambda over
