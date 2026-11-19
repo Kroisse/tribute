@@ -823,3 +823,78 @@ fn main() ->{Io} Nil {
 "#;
     assert_program("multi_tail_function_value_split.trb", code, "110");
 }
+
+/// A value whose type keeps a multi-tail function's own row is entered
+/// through the function's entry once: the call through the value selects
+/// nothing again, so the callee's explicit `State` is stacked once over
+/// the first tail and hidden from the second.
+#[test]
+fn test_call_through_a_multi_tail_value_selects_once() {
+    let code = r#"
+fn stateful(f: fn() ->{e1} Nil, g: fn() ->{e2} Nil) ->{e1, e2, State(Int)} Nil {
+    f()
+    g()
+    State::set(State::get() + +100)
+}
+
+fn count_calls(k: fn() ->{t} Nil) ->{t} Int {
+    run_state(fn() {
+        let h = { stateful }
+        h(fn() { State::set(State::get() + +1) }, k)
+        State::get()
+    }, +0)
+}
+
+fn main() ->{Io} Nil {
+    let outer = run_state(fn() {
+        let calls = count_calls(fn() { State::set(State::get() + +10) })
+        calls * +1000 + State::get()
+    }, +0)
+    show(outer)
+}
+"#;
+    // The inner state takes the first callback and `stateful` (101); the
+    // second callback adds 10 to the outer state.
+    assert_program("multi_tail_value_selects_once.trb", code, "101010");
+}
+
+/// A name that several `use`s give different functions, used as a value,
+/// is entered through the selected function's entry.
+#[test]
+fn test_selected_multi_tail_function_value_keeps_its_callers_handlers() {
+    let code = r#"
+mod installing {
+    pub fn both(f: fn() ->{e1} Nil, g: fn() ->{e2} Nil) ->{e1, e2} Int {
+        handle {
+            f()
+            g()
+            super::State::get()
+        } {
+            do r { r }
+            op super::State::get() { +1000 }
+            op super::State::set(v) { +2000 }
+        }
+    }
+}
+
+mod plain {
+    pub fn both(n: Int) -> Int { n }
+}
+
+use installing::both
+use plain::both
+
+fn apply(h: fn(fn() ->{State(Int)} Nil, fn() ->{State(Int)} Nil) ->{State(Int)} Int) ->{State(Int)} Int {
+    h(fn() { State::set(State::get() + +1) }, fn() { State::set(State::get() + +10) })
+}
+
+fn main() ->{Io} Nil {
+    let total = run_state(fn() {
+        let x = apply(both)
+        x + State::get()
+    }, +0)
+    show(total)
+}
+"#;
+    assert_program("selected_multi_tail_function_value.trb", code, "1011");
+}

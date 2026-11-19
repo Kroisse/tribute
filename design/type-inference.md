@@ -533,7 +533,8 @@ fn count_calls(h: fn() ->{t} Nil) ->{t} Nat {
 ```
 
 - **이런 callable을 값으로 쓰는 참조:** 값의 타입은 합집합을 row 하나로 적을 뿐
-  tail을 나누지 않으므로, 그 값을 부르는 호출은 tail을 붙이지 않는다. 대신 참조마다
+  tail을 나누지 않는다. 그 값을 부르는 호출은 값의 타입이 아직 합집합의 row를
+  가리키더라도 tail을 붙이지 않고, 합쳐진 row 하나를 callee row로 보고 고른다. 대신 참조마다
   값의 진입점이 tail을 붙인다. 진입점은 값의 row를 caller row로, 참조가 인스턴스화한
   각 tail의 row를 callee row로 보고 위 규칙으로 tail마다 evidence를 고른다. 이
   선택은 값이 불린 evidence에서 출발하며, 진입점이 callee가 끝날 때까지 기억한다.

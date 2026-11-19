@@ -209,7 +209,8 @@ impl<'a, 'db> IrBuilder<'a, 'db> {
 
     /// `value` again as a reference to the same function under the callable
     /// type `target_ty`, if `value` is a function reference and `target_ty`
-    /// has its parameters and result under a row that includes its own.
+    /// has its parameters and result under a row that includes its own. The
+    /// entry of a multi-tail function value is rebuilt the same way.
     ///
     /// This is the only callable adaptation accepted at the source-logical
     /// boundary: a generic `unrealized_conversion_cast` cannot change a
@@ -237,6 +238,15 @@ impl<'a, 'db> IrBuilder<'a, 'db> {
             return None;
         }
         let Some(named) = named else {
+            // An entry's selection reads evidence of the value's own row. A
+            // wider closed row adds handlers no tail of a closed row can
+            // reach, but instances added above an open row would stand
+            // between that row's tail and its handlers, so such a use is
+            // not adapted.
+            let (source_row, target_row) = (source.row(self.ir), target.row(self.ir));
+            if source_row.tail.is_some() && target_row.instances != source_row.instances {
+                return None;
+            }
             let entry = entry.expect("a value that is no function reference is an entry");
             return Some(logical::function_entry(self, location, entry, target_ty));
         };

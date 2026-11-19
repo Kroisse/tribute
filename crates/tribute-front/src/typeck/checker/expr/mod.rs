@@ -151,7 +151,7 @@ impl<'db> TypeChecker<'db> {
             } => {
                 ctx.note_call_syntax(expr.id, *syntax);
                 let callee_ty = self.infer_expr_type_with_ctx(ctx, callee);
-                ctx.evidence.record_callee(callee.id);
+                self.record_call_callee(ctx, expr.id, callee);
                 // Conversion re-visits the callee. Keep this one ability-op
                 // inference instance connected to that visit through dedicated
                 // semantic state, never through the concrete node-type table.
@@ -695,7 +695,7 @@ impl<'db> TypeChecker<'db> {
             } => {
                 ctx.note_call_syntax(expr.id, *syntax);
                 let callee_ty = self.infer_expr_type_with_ctx(ctx, callee);
-                ctx.evidence.record_callee(callee.id);
+                self.record_call_callee(ctx, expr.id, callee);
                 if matches!(&*callee.kind, ExprKind::Var(ResolvedRef::AbilityOp { .. })) {
                     ctx.record_ability_op_callee_type(callee.id, callee_ty);
                 }

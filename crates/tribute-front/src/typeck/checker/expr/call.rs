@@ -278,6 +278,26 @@ impl<'db> TypeChecker<'db> {
         ty
     }
 
+    /// Record the callee of the call `call` for evidence selection: a named
+    /// function or an alias of one is a reference the call itself selects
+    /// for, and any other callee is a value.
+    pub(super) fn record_call_callee(
+        &self,
+        ctx: &mut FunctionInferenceContext<'_, 'db>,
+        call: NodeId,
+        callee: &Expr<ResolvedRef<'db>>,
+    ) {
+        ctx.evidence.record_callee(callee.id);
+        let named = match &*callee.kind {
+            ExprKind::Var(ResolvedRef::Function { .. } | ResolvedRef::AbilityOp { .. }) => true,
+            ExprKind::Var(ResolvedRef::Local { id, .. }) => ctx.is_function_alias(*id),
+            _ => false,
+        };
+        if !named {
+            ctx.evidence.record_value_call(call);
+        }
+    }
+
     /// Infer a call whose callee names several functions, written
     /// `receiver.method(args)` or `method(receiver, args)`.
     ///

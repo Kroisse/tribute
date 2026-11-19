@@ -97,6 +97,9 @@ pub(crate) struct EvidenceTracker<'db> {
     becomes: Vec<(NodeId, NodeId)>,
     /// Function references that are the callee of a call.
     callees: HashSet<NodeId>,
+    /// Calls whose callee is a value rather than a named function or an
+    /// alias of one.
+    value_calls: HashSet<NodeId>,
     /// The unions of every instantiated scheme, with their unsolved rows.
     unions: Vec<RowUnion<'db>>,
     /// The unions the checked function's own signature declares.
@@ -205,6 +208,13 @@ impl<'db> EvidenceTracker<'db> {
         }
     }
 
+    /// Record that the call `call` calls a value rather than a named
+    /// function or an alias of one. Such a call attaches no tails: a value of
+    /// a multi-tail function is entered through its entry, which does.
+    pub(crate) fn record_value_call(&mut self, call: NodeId) {
+        self.value_calls.insert(call);
+    }
+
     /// Record that `operand`, a call or a `resume`, is the operand of the
     /// `become` expression `site`.
     pub(crate) fn record_become(&mut self, site: NodeId, operand: NodeId) {
@@ -263,9 +273,22 @@ impl<'db> EvidenceTracker<'db> {
                         explicit,
                         tail,
                     };
+                    let sources = self.callee_tails(db, *callee);
+                    if sources.is_some() && self.value_calls.contains(node) {
+                        // The value is entered through its entry, which
+                        // selects the tails: the call passes the evidence
+                        // of the value's merged row.
+                        let value = resolve(*callee);
+                        let positions = unique(value.instances(db).iter().cloned());
+                        let plan = caller.select(&positions, value.rest(db));
+                        if !plan.is_empty() {
+                            plans.insert(*node, plan);
+                        }
+                        continue;
+                    }
                     let (positions, callee_tail) = callee_positions(db, *callee, &resolve);
                     let mut plan = caller.select(&positions, callee_tail);
-                    if let Some(sources) = self.callee_tails(db, *callee) {
+                    if let Some(sources) = sources {
                         let plans = caller.select_tails(db, sources, &resolve);
                         // Each callee tail takes the caller's own tail of the
                         // same index, which the evidence already holds.
