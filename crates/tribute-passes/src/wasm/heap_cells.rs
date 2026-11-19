@@ -1,18 +1,17 @@
 //! Lower `heap.cell` to a GC struct with one mutable field.
 //!
-//! A cell's object holds its value as its only field, so each cell type
-//! becomes the literal `adt.struct` of that one field, and `heap.cell_new`,
+//! A cell's object holds its value as its only field, so `heap.cell_new`,
 //! `heap.cell_get`, and `heap.cell_set` become `adt.struct_new`,
-//! `adt.struct_get`, and `adt.struct_set` of field 0. Wasm emission declares
-//! every GC struct field mutable. The target has no refcounts, so the
-//! replaced value needs no release.
+//! `adt.struct_get`, and `adt.struct_set` of field 0 of the literal
+//! `adt.struct` of that one field. The cell type becomes that struct in
+//! `convert_builtin_layouts`, the module-wide type replacement that runs
+//! right after this rewrite in the same pass. Wasm emission
+//! declares every GC struct field mutable. The target has no refcounts, so
+//! the replaced value needs no release.
 
 use tribute_ir::dialect::{adt, heap};
-use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::core;
-use trunk_ir::ops::{DialectOp, DialectType};
-use trunk_ir::pass::{Pass, PassRunResult};
+use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::TypeRef;
 use trunk_ir::rewrite::{Module, erase_op};
 use trunk_ir::types::AttributeMap;
@@ -22,14 +21,18 @@ use std::ops::ControlFlow;
 
 /// The literal struct that stores a value of type `contents` as its only
 /// field.
-fn cell_layout(ctx: &mut IrContext, contents: TypeRef) -> TypeRef {
+pub(crate) fn cell_layout(ctx: &mut IrContext, contents: TypeRef) -> TypeRef {
     adt::Struct::literal(ctx, [contents], AttributeMap::new()).as_type_ref()
 }
 
-fn lower(ctx: &mut IrContext, module: Module) {
+/// Rewrite every `heap.cell` operation in `module` as an access of field 0
+/// of its cell's one-field literal struct.
+pub(crate) fn lower(ctx: &mut IrContext, module: Module) {
     let mut ops = Vec::new();
     let _ = walk_op::<()>(ctx, module.op(), &mut |op| {
-        ops.push(op);
+        if ctx.op(op).name.dialect(ctx) == heap::DIALECT_NAME {
+            ops.push(op);
+        }
         ControlFlow::Continue(WalkAction::Advance)
     });
     for op in ops {
@@ -72,31 +75,5 @@ fn lower(ctx: &mut IrContext, module: Module) {
             ctx.replace_all_uses(old, new);
         }
         erase_op(ctx, op);
-    }
-    crate::closure_lower::substitute_module_types(ctx, module, "cell", |ctx, ty| {
-        let contents = heap::Cell::from_type_ref(ctx, ty)?.contents(ctx);
-        Some(cell_layout(ctx, contents))
-    });
-}
-
-/// Lower every `heap.cell` type and operation to its one-field literal
-/// struct, before `adt` lowering.
-pub struct LowerHeapCells;
-
-impl Pass for LowerHeapCells {
-    type Target = core::Module;
-
-    fn name(&self) -> &'static str {
-        "lower-heap-cells"
-    }
-
-    fn run(
-        &mut self,
-        ctx: &mut IrContext,
-        target: core::Module,
-        _analyses: &mut AnalysisCache,
-    ) -> PassRunResult {
-        lower(ctx, target.into());
-        Ok(())
     }
 }
