@@ -28,7 +28,7 @@ mod local_callables;
 mod nominal;
 mod values;
 
-pub(super) use callable::emit_named_call;
+pub(super) use callable::{emit_named_call, function_entry};
 
 fn op(
     ir: &mut IrContext,

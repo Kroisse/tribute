@@ -20,6 +20,17 @@ use super::row_binders::RowBinders;
 use crate::SortedMap;
 use crate::ast::{CtorId, LocalId, NodeId, RowVar, SpanMaps, TypeScheme};
 
+/// A named function used as a value through an entry lambda, which calls it
+/// with the tails the reference selects (`design/type-inference.md`, 여러
+/// tail의 합집합인 row).
+#[derive(Clone)]
+pub(crate) struct FunctionEntry {
+    pub name: SymbolPath,
+    /// The rows the reference passes, in the current definition's binders.
+    pub rows: Vec<Row>,
+    pub plan: Vec<tribute_ir::dialect::tribute_control::EvidenceStep>,
+}
+
 /// A source-visible callable synthesized by the logical frontend, such as a
 /// struct-field accessor. These signatures are semantic lowering metadata,
 /// not reconstructed by inspecting emitted operations.
@@ -61,6 +72,8 @@ pub struct IrLoweringCtx<'db> {
     /// names a definition by its joined path as one component, so the path
     /// cannot be read back from the operation.
     function_ref_paths: HashMap<OpRef, SymbolPath>,
+    /// The function each entry lambda of a function value calls.
+    function_entries: HashMap<OpRef, FunctionEntry>,
     /// Extern declarations synthesized for referenced prelude functions.
     logical_emitted_externs: HashSet<SymbolPath>,
     /// Module path as a vector of segments (e.g., ["std", "Option"]).
@@ -111,6 +124,7 @@ impl<'db> IrLoweringCtx<'db> {
             logical_generated_signatures: HashMap::default(),
             logical_source_functions: HashSet::default(),
             function_ref_paths: HashMap::default(),
+            function_entries: HashMap::default(),
             logical_emitted_externs: HashSet::default(),
             module_path: SymbolPath::root(),
             module_block: None,
@@ -348,6 +362,16 @@ impl<'db> IrLoweringCtx<'db> {
     /// The function the `func_ref` operation `op` names.
     pub(crate) fn function_ref_path(&self, op: OpRef) -> Option<&SymbolPath> {
         self.function_ref_paths.get(&op)
+    }
+
+    /// Record that the lambda `op` is the entry of a function value.
+    pub(crate) fn record_function_entry(&mut self, op: OpRef, entry: FunctionEntry) {
+        self.function_entries.insert(op, entry);
+    }
+
+    /// The function value whose entry is the lambda `op`.
+    pub(crate) fn function_entry(&self, op: OpRef) -> Option<&FunctionEntry> {
+        self.function_entries.get(&op)
     }
 
     pub(crate) fn is_logical_source_function(&self, name: &[Symbol]) -> bool {

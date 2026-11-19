@@ -532,9 +532,20 @@ fn count_calls(h: fn() ->{t} Nil) ->{t} Nat {
 // h의 State는 run_state가 설치한 handler를 지나 count_calls 호출자의 handler로 간다.
 ```
 
-Tail의 evidence를 받지 않은 evidence에서는 모든 tail이 그 evidence 자신이다. 합집합의
-tail들이 한 row로 같아지는 타입으로 callable을 값으로 넘기면 호출자는 tail을 따로
-붙이지 않는다.
+- **이런 callable을 값으로 쓰는 참조:** 값의 타입은 합집합을 row 하나로 적을 뿐
+  tail을 나누지 않으므로, 그 값을 부르는 호출은 tail을 붙이지 않는다. 대신 참조마다
+  값의 진입점이 tail을 붙인다. 진입점은 값의 row를 caller row로, 참조가 인스턴스화한
+  각 tail의 row를 callee row로 보고 위 규칙으로 tail마다 evidence를 고른다. 이
+  선택은 값이 불린 evidence에서 출발하며, 진입점이 callee가 끝날 때까지 기억한다.
+
+```rust
+fn apply(h: fn(fn() ->{State(Int), r} Nil, fn() ->{r} Nil) ->{State(Int), r} Int)
+    ->{State(Int), r} Int { .. }
+// apply(both)의 진입점: e1 := {State(Int) | r}는 그대로, e2 := {r}는 State(Int)을 가린다.
+```
+
+그래서 이런 callable은 어떻게 불리든 자기 tail마다 evidence를 받고 실행된다. 본문이
+handler를 설치한 뒤에 고르는 tail도 진입할 때 받은 evidence다.
 
 Handle body는 처리하는 label을 새 handler에 묶고 나머지 label은 바깥 그대로
 본다. 바깥 row가 처리하는 label을 명시하면 handle body는 그 바깥 handler를 보지

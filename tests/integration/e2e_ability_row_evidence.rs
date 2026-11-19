@@ -727,3 +727,99 @@ fn main() ->{Io} Nil {
 "#;
     assert_program("selected_tail_explicit_handler.trb", code, "110");
 }
+
+const BOTH_INSTALLING_STATE: &str = r#"
+fn both2(f: fn() ->{e1} Nil, g: fn() ->{e2} Nil) ->{e1, e2} Int {
+    handle {
+        f()
+        g()
+        State::get()
+    } {
+        do r { r }
+        op State::get() { +1000 }
+        op State::set(v) { +2000 }
+    }
+}
+
+fn apply(h: fn(fn() ->{State(Int)} Nil, fn() ->{State(Int)} Nil) ->{State(Int)} Int) ->{State(Int)} Int {
+    h(fn() { State::set(State::get() + +1) }, fn() { State::set(State::get() + +10) })
+}
+"#;
+
+/// A multi-tail function used as a value at a type that makes its tails one
+/// row gives each tail the evidence the value was called with, not the
+/// evidence under the handler the function installs before it calls them.
+#[test]
+fn test_multi_tail_function_value_keeps_its_callers_handlers() {
+    let code = format!(
+        "{BOTH_INSTALLING_STATE}{}",
+        r#"
+fn main() ->{Io} Nil {
+    let total = run_state(fn() {
+        let x = apply(both2)
+        x + State::get()
+    }, +0)
+    show(total)
+}
+"#
+    );
+    // Both callbacks update the caller's state (11); `both2`'s handler
+    // answers only its own `State::get()` (1000).
+    assert_program("multi_tail_function_value.trb", &code, "1011");
+}
+
+/// The same through a named-function alias of the function.
+#[test]
+fn test_multi_tail_function_alias_value_keeps_its_callers_handlers() {
+    let code = format!(
+        "{BOTH_INSTALLING_STATE}{}",
+        r#"
+fn main() ->{Io} Nil {
+    let total = run_state(fn() {
+        let h = both2
+        let x = apply(h)
+        x + State::get()
+    }, +0)
+    show(total)
+}
+"#
+    );
+    assert_program("multi_tail_function_alias_value.trb", &code, "1011");
+}
+
+/// A multi-tail function used as a value at a type that keeps its tails
+/// apart selects each tail from the value's row: the tail that does not name
+/// the instance the value's row names does not see that handler.
+#[test]
+fn test_multi_tail_function_value_selects_each_tail() {
+    let code = r#"
+fn both(f: fn() ->{e1} Nil, g: fn() ->{e2} Nil) ->{e1, e2} Int {
+    f()
+    g()
+    +0
+}
+
+fn apply(
+    h: fn(fn() ->{State(Int), r} Nil, fn() ->{r} Nil) ->{State(Int), r} Int,
+    k: fn() ->{r} Nil
+) ->{State(Int), r} Int {
+    h(fn() { State::set(State::get() + +1) }, k)
+}
+
+fn count_calls(k: fn() ->{t} Nil) ->{t} Int {
+    run_state(fn() {
+        apply(both, k)
+        State::get()
+    }, +0)
+}
+
+fn main() ->{Io} Nil {
+    let outer = run_state(fn() {
+        let calls = count_calls(fn() { State::set(State::get() + +10) })
+        calls * +100 + State::get()
+    }, +0)
+    show(outer)
+}
+"#;
+    assert_program("multi_tail_function_value_split.trb", code, "110");
+}

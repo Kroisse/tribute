@@ -142,9 +142,17 @@ impl<'db> TypeChecker<'db> {
                     .or_else(|| ctx.lookup_local_by_name(name))
                     .unwrap_or_else(|| ctx.fresh_type_var())
             }
-            ResolvedRef::Function { id } => node
-                .and_then(|node| ctx.instantiate_function_reference(node, *id))
-                .unwrap_or_else(|| ctx.fresh_type_var()),
+            ResolvedRef::Function { id } => {
+                let Some((node, ty)) = node
+                    .and_then(|node| Some((node, ctx.instantiate_function_reference(node, *id)?)))
+                else {
+                    return ctx.fresh_type_var();
+                };
+                if let TypeKind::Func { effect, .. } = ty.kind(self.db()) {
+                    ctx.evidence.record_reference(node, *effect);
+                }
+                ty
+            }
             ResolvedRef::Constructor { id, .. } => match node {
                 Some(node) => self.instantiate_value_constructor_with_ctx(ctx, node, resolved),
                 None => ctx
@@ -258,8 +266,16 @@ impl<'db> TypeChecker<'db> {
         let ResolvedRef::Local { id, name } = resolved else {
             unreachable!("local-reference inference requires a local reference");
         };
-        ctx.lookup_local_reference(node, *id, name)
-            .unwrap_or_else(|| ctx.fresh_type_var())
+        let ty = ctx
+            .lookup_local_reference(node, *id, name)
+            .unwrap_or_else(|| ctx.fresh_type_var());
+        // A named-function alias instantiates its function at each use.
+        if ctx.is_function_alias(*id)
+            && let TypeKind::Func { effect, .. } = ty.kind(self.db())
+        {
+            ctx.evidence.record_reference(node, *effect);
+        }
+        ty
     }
 
     /// Infer a call whose callee names several functions, written

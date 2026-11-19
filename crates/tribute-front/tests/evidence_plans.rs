@@ -392,3 +392,51 @@ fn caller() ->{State(Int)} Int {
         "{plans:#?}"
     );
 }
+
+/// A multi-tail function used as a value selects its tails for the value's
+/// entry, with the value's row as the caller's: a call through the value
+/// attaches none.
+#[salsa_test]
+fn a_multi_tail_function_value_selects_its_tails_from_its_own_row(db: &salsa::DatabaseImpl) {
+    let source = format!(
+        "{STATE}{}",
+        r#"
+fn both(f: fn() ->{e1} Nil, g: fn() ->{e2} Nil) ->{e1, e2} Int {
+    f()
+    g()
+    +0
+}
+
+fn merged(h: fn(fn() ->{State(Int)} Nil, fn() ->{State(Int)} Nil) ->{State(Int)} Int) ->{State(Int)} Int {
+    h(fn() { State::set(State::get()) }, fn() { State::set(State::get()) })
+}
+
+fn split(
+    h: fn(fn() ->{State(Int), r} Nil, fn() ->{r} Nil) ->{State(Int), r} Int,
+    k: fn() ->{r} Nil
+) ->{State(Int), r} Int {
+    h(fn() { State::set(State::get()) }, k)
+}
+
+fn caller(k: fn() ->{t} Nil) ->{State(Int), t} Int {
+    merged(both)
+    both(fn() { State::set(State::get()) }, k)
+    split(both, k)
+}
+"#
+    );
+    let plans = plans(db, &source);
+    let references: Vec<_> = plans
+        .iter()
+        .filter(|plan| plan.starts_with("both:"))
+        .collect();
+    assert_eq!(
+        references,
+        ["both: tails [] []", "both: tails [] [mask State]"],
+        "{plans:#?}"
+    );
+    assert!(
+        !plans.iter().any(|plan| plan.starts_with("h(")),
+        "{plans:#?}"
+    );
+}

@@ -223,7 +223,11 @@ impl<'a, 'db> IrBuilder<'a, 'db> {
         let trunk_ir::refs::ValueDef::OpResult(producer, _) = self.ir.value_def(value) else {
             return None;
         };
-        let named = tribute_control::FuncRef::from_op(self.ir, producer).ok()?;
+        let entry = self.ctx.function_entry(producer).cloned();
+        let named = match entry {
+            Some(_) => None,
+            None => Some(tribute_control::FuncRef::from_op(self.ir, producer).ok()?),
+        };
         let source = tribute_control::FuncSig::from_type_ref(self.ir, self.ir.value_ty(value))?;
         let target = tribute_control::FuncSig::from_type_ref(self.ir, target_ty)?;
         if target.result(self.ir) != source.result(self.ir)
@@ -232,6 +236,10 @@ impl<'a, 'db> IrBuilder<'a, 'db> {
         {
             return None;
         }
+        let Some(named) = named else {
+            let entry = entry.expect("a value that is no function reference is an entry");
+            return Some(logical::function_entry(self, location, entry, target_ty));
+        };
         let function = named.value(self.ir).clone();
         let row_args = self
             .ir

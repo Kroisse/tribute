@@ -39,10 +39,15 @@
 //! tail slots are the caller's own. A union one of whose sources is its own
 //! result declares no separate tails.
 //!
+//! A call through a value attaches no tails, since the value's type writes
+//! the union as one row. A reference that makes such a callable a value
+//! instead selects the tails for the value's entry, with the value's own row
+//! as the caller's.
+//!
 //! Checking records each call against the evidence scope it runs in and
 //! computes the selections only after solving, when every row is known.
 
-use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
 use crate::ast::{AbilityInstance, AbilityRow, LocalId, NodeId, RowUnion, RowVar};
 
@@ -73,6 +78,8 @@ enum EvidenceSite<'db> {
     Resume { scope: usize, body: usize },
     /// The installation of the handle whose body is `body`.
     Handle { body: usize },
+    /// A named function used as a value, whose instantiated row is `row`.
+    Reference { row: AbilityRow<'db> },
 }
 
 /// The evidence scope that code currently runs in, saved across a nested scope.
@@ -88,6 +95,8 @@ pub(crate) struct EvidenceTracker<'db> {
     sites: HashMap<NodeId, EvidenceSite<'db>>,
     /// Each `become` with the call it applies.
     becomes: Vec<(NodeId, NodeId)>,
+    /// Function references that are the callee of a call.
+    callees: HashSet<NodeId>,
     /// The unions of every instantiated scheme, with their unsolved rows.
     unions: Vec<RowUnion<'db>>,
     /// The unions the checked function's own signature declares.
@@ -176,6 +185,26 @@ impl<'db> EvidenceTracker<'db> {
         }
     }
 
+    /// Record a reference to a named function whose instantiated row is
+    /// `row`. A reference that is a call's callee is marked with
+    /// [`Self::record_callee`] and selects nothing of its own.
+    pub(crate) fn record_reference(&mut self, reference: NodeId, row: AbilityRow<'db>) {
+        if !self.callees.contains(&reference) {
+            self.sites
+                .entry(reference)
+                .or_insert(EvidenceSite::Reference { row });
+        }
+    }
+
+    /// Record that `node` is the callee of a call, which selects the
+    /// evidence itself.
+    pub(crate) fn record_callee(&mut self, node: NodeId) {
+        self.callees.insert(node);
+        if matches!(self.sites.get(&node), Some(EvidenceSite::Reference { .. })) {
+            self.sites.remove(&node);
+        }
+    }
+
     /// Record that `operand`, a call or a `resume`, is the operand of the
     /// `become` expression `site`.
     pub(crate) fn record_become(&mut self, site: NodeId, operand: NodeId) {
@@ -237,13 +266,7 @@ impl<'db> EvidenceTracker<'db> {
                     let (positions, callee_tail) = callee_positions(db, *callee, &resolve);
                     let mut plan = caller.select(&positions, callee_tail);
                     if let Some(sources) = self.callee_tails(db, *callee) {
-                        let plans: Vec<_> = sources
-                            .map(|source| {
-                                let source = resolve(source);
-                                let positions = unique(source.instances(db).iter().cloned());
-                                caller.select(&positions, source.rest(db))
-                            })
-                            .collect();
+                        let plans = caller.select_tails(db, sources, &resolve);
                         // Each callee tail takes the caller's own tail of the
                         // same index, which the evidence already holds.
                         let own_tails = plans.iter().enumerate().all(|(index, plan)| {
@@ -260,6 +283,25 @@ impl<'db> EvidenceTracker<'db> {
                     let (body, body_tail) = self.explicit(db, *body, &resolve, &mut explicit);
                     // The handle body takes each of its instances once.
                     call_plan(&caller, &body, opens_into(body_tail, tail))
+                }
+                EvidenceSite::Reference { row } => {
+                    // The value's entry calls the function with the value's
+                    // own evidence, so the value's row is the caller's.
+                    let Some(sources) = self.callee_tails(db, *row) else {
+                        continue;
+                    };
+                    let value = resolve(*row);
+                    let caller = ScopeEvidence {
+                        explicit: selectable(db, value),
+                        tail: value.rest(db),
+                        tails: Vec::new(),
+                    };
+                    let (positions, callee_tail) = callee_positions(db, *row, &resolve);
+                    let mut plan = caller.select(&positions, callee_tail);
+                    plan.push(EvidenceStep::Tails(
+                        caller.select_tails(db, sources, &resolve),
+                    ));
+                    plan
                 }
                 EvidenceSite::Handle { body } => {
                     let EvidenceScope::HandleBody { parent, handled } = &self.scopes[*body] else {
@@ -338,13 +380,7 @@ impl<'db> EvidenceTracker<'db> {
         let found = match &self.scopes[scope] {
             EvidenceScope::Callable(Some(row)) => {
                 let row = resolve(*row);
-                // The ambient `Io` has no handler marker to select.
-                let selectable = row
-                    .instances(db)
-                    .iter()
-                    .filter(|instance| !instance.ability_id.is_builtin_io(db))
-                    .cloned();
-                (unique(selectable), row.rest(db))
+                (selectable(db, row), row.rest(db))
             }
             EvidenceScope::Callable(None) => (Vec::new(), None),
             EvidenceScope::HandleBody { parent, handled } => {
@@ -380,6 +416,20 @@ fn callee_positions<'db>(
     (positions, tail)
 }
 
+/// The explicit instances of `row` that have a handler marker to select:
+/// all but the ambient `Io`.
+fn selectable<'db>(
+    db: &'db dyn salsa::Database,
+    row: AbilityRow<'db>,
+) -> Vec<AbilityInstance<'db>> {
+    unique(
+        row.instances(db)
+            .iter()
+            .filter(|instance| !instance.ability_id.is_builtin_io(db))
+            .cloned(),
+    )
+}
+
 /// The sources of a union that its declaration leaves open: one row tail
 /// each. Callers and the callee number the tails by this order.
 fn open_sources<'db>(
@@ -394,6 +444,23 @@ fn open_sources<'db>(
 }
 
 impl<'db> ScopeEvidence<'db> {
+    /// Select the evidence of each tail row in `sources` from this scope's
+    /// evidence, independently.
+    fn select_tails(
+        &self,
+        db: &'db dyn salsa::Database,
+        sources: impl Iterator<Item = AbilityRow<'db>>,
+        resolve: &impl Fn(AbilityRow<'db>) -> AbilityRow<'db>,
+    ) -> Vec<Vec<EvidenceStep<'db>>> {
+        sources
+            .map(|source| {
+                let source = resolve(source);
+                let positions = unique(source.instances(db).iter().cloned());
+                self.select(&positions, source.rest(db))
+            })
+            .collect()
+    }
+
     /// Select the evidence of a row with the explicit `positions` and the
     /// row tail `target` from this scope's evidence.
     fn select(
