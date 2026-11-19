@@ -12,11 +12,14 @@
 //! - one: the evidence is passed unchanged;
 //! - more: `dup` for each extra position.
 //!
-//! A handle body sees the enclosing evidence with a new handler for each
-//! handled instance. When the enclosing row names a handled instance
-//! explicitly, that handler is first masked: the body row names the instance
-//! once, so nothing in the body can reach the hidden handler, and leaving it
-//! would stand between the new handler and the row tail's handlers.
+//! A handle body's evidence is shaped by the body's own row: a new handler
+//! for each handled instance, and the enclosing handler of each instance the
+//! body row names and does not handle. An instance the enclosing row names
+//! explicitly is first masked when the body handles it or its row does not
+//! name it: nothing in the body takes that handler as an explicit position,
+//! and leaving it would stand between the new handler or the row tail's
+//! handlers and the body. A `resume` then selects exactly the body row's
+//! instances, which the row of its own scope names as well.
 //!
 //! Positions are counted from the callee's declared explicit instances and
 //! the explicit instances its row tail is instantiated with. Applying the
@@ -48,16 +51,24 @@ use crate::ast::{AbilityInstance, AbilityRow, LocalId, NodeId, RowUnion, RowVar}
 
 use super::EvidenceStep;
 
+/// The rows of a handle body: the instances it handles, and the row of the
+/// body itself, which includes them.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct HandleBodyRows<'db> {
+    pub(crate) handled: AbilityRow<'db>,
+    pub(crate) body: AbilityRow<'db>,
+}
+
 /// The evidence a piece of code runs with.
 #[derive(Clone, Debug)]
 enum EvidenceScope<'db> {
     /// A function or lambda body, with its signature row once it is known.
     Callable(Option<AbilityRow<'db>>),
     /// A handle body: the enclosing scope's evidence with a new handler for
-    /// each handled instance.
+    /// each handled instance, shaped by the body's row.
     HandleBody {
         parent: usize,
-        handled: Option<AbilityRow<'db>>,
+        rows: Option<HandleBodyRows<'db>>,
     },
 }
 
@@ -127,18 +138,17 @@ impl<'db> EvidenceTracker<'db> {
         }
     }
 
-    /// Enter a handle body. Its handled instances may be supplied later with
-    /// [`Self::set_handled`] when they are known only after the body.
+    /// Enter a handle body. Its rows may be supplied later with
+    /// [`Self::set_body_rows`] when they are known only after the body.
     pub(crate) fn enter_handle_body(
         &mut self,
         handle: NodeId,
-        handled: Option<AbilityRow<'db>>,
+        rows: Option<HandleBodyRows<'db>>,
     ) -> Option<(usize, SavedEvidenceScope)> {
         let parent = self.current?;
         let saved = self.current;
         let scope = self.scopes.len();
-        self.scopes
-            .push(EvidenceScope::HandleBody { parent, handled });
+        self.scopes.push(EvidenceScope::HandleBody { parent, rows });
         self.current = Some(scope);
         self.sites
             .entry(handle)
@@ -146,9 +156,9 @@ impl<'db> EvidenceTracker<'db> {
         Some((scope, saved))
     }
 
-    pub(crate) fn set_handled(&mut self, scope: usize, row: AbilityRow<'db>) {
-        if let Some(EvidenceScope::HandleBody { handled, .. }) = self.scopes.get_mut(scope) {
-            *handled = Some(row);
+    pub(crate) fn set_body_rows(&mut self, scope: usize, body_rows: HandleBodyRows<'db>) {
+        if let Some(EvidenceScope::HandleBody { rows, .. }) = self.scopes.get_mut(scope) {
+            *rows = Some(body_rows);
         }
     }
 
@@ -262,15 +272,21 @@ impl<'db> EvidenceTracker<'db> {
                     call_plan(&caller, &body, opens_into(body_tail, tail))
                 }
                 EvidenceSite::Handle { body } => {
-                    let EvidenceScope::HandleBody { parent, handled } = &self.scopes[*body] else {
+                    let EvidenceScope::HandleBody { parent, rows } = &self.scopes[*body] else {
                         unreachable!("a handle site names a handle body scope");
                     };
                     let (parent, _) = self.explicit(db, *parent, &resolve, &mut explicit);
-                    handled
-                        .map(|row| resolve(row).instances(db).to_vec())
-                        .unwrap_or_default()
+                    let Some(rows) = rows else {
+                        continue;
+                    };
+                    let handled = resolve(rows.handled);
+                    let named = resolve(rows.body);
+                    parent
                         .into_iter()
-                        .filter(|instance| parent.contains(instance))
+                        .filter(|instance| {
+                            handled.instances(db).contains(instance)
+                                || !named.instances(db).contains(instance)
+                        })
                         .map(EvidenceStep::Mask)
                         .collect()
                 }
@@ -347,12 +363,19 @@ impl<'db> EvidenceTracker<'db> {
                 (unique(selectable), row.rest(db))
             }
             EvidenceScope::Callable(None) => (Vec::new(), None),
-            EvidenceScope::HandleBody { parent, handled } => {
+            EvidenceScope::HandleBody { parent, rows } => {
                 let (parent, tail) = self.explicit(db, *parent, resolve, memo);
-                let handled = handled
-                    .map(|row| resolve(row).instances(db).to_vec())
-                    .unwrap_or_default();
-                (unique(handled.into_iter().chain(parent)), tail)
+                match rows {
+                    Some(rows) => {
+                        let handled = resolve(rows.handled).instances(db).to_vec();
+                        let named = resolve(rows.body);
+                        let kept = parent
+                            .into_iter()
+                            .filter(|instance| named.instances(db).contains(instance));
+                        (unique(handled.into_iter().chain(kept)), tail)
+                    }
+                    None => (parent, tail),
+                }
             }
         };
         memo.insert(scope, found.clone());
