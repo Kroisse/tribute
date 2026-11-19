@@ -91,8 +91,9 @@ compiler가 값마다 표현을 고른다. 표현 선택은 값 의미론인 [`a
 - **강제 위치에서는 언제나 box에 담는다.** Unboxed로 고른 타입도 이 위치를 지날 때는
   필드 값으로 object를 할당하고, 거기서 나올 때는 필드를 읽는다. 단, box에서 꺼낸
   값을 바꾸지 않고 같은 layout의 box에 다시 담으면 새로 할당하지 않고 원래 box를
-  retain해 쓴다(box forwarding). Box가 가리키는 object는 만든 뒤 바뀌지 않으므로 원래
-  box를 공유해도 관찰되지 않는다. 표현 선택은 값이 box에서 나온 출처를 알고 있는 동안
+  retain해 쓴다(box forwarding). Retain으로 공유된 object는 유일하지 않으므로 이후의
+  `heap.struct_update`와 `heap.array_set`은 복사 경로를 타고, 공유된 box가 담은 값은
+  바뀌지 않는다. 표현 선택은 값이 box에서 나온 출처를 알고 있는 동안
   이 규칙을 적용한다.
   - 배열의 원소.
   - `tribute_rt.anyref`로 지워지는 자리. Effect payload, 제네릭으로 지운 값, Cps
