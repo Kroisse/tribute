@@ -284,7 +284,9 @@ row와 [row binder](tribute-dialects.md#row-binder), 참조의 `row_args`, 지�
   그 뒤에 `$7`을 더 붙인 것이다. 참조는 자기 class 인자와 진입의 인스턴스를
   가리키도록 바꾼다. 이름은 인스턴스를 구별할 뿐이다. 인스턴스의 convention은
   `tribute_cps.func`가 선언한 값으로만 읽고, `Cps` 진입 인스턴스는 같은 정의와 class
-  인자의 row 진입 인스턴스 이름을 `entry_of` 속성으로 선언한다.
+  인자의 row 진입 인스턴스 이름을 `entry_of` 속성으로 선언한다. 반대로 `Cps` 진입
+  인스턴스가 있는 row 진입 인스턴스는 그것을 `cps_entry` 속성의 symbol 참조로
+  선언한다.
 
   ```text
   map$Int$Bool + [Direct]          → map$Int$Bool$9D
@@ -300,6 +302,8 @@ row와 [row binder](tribute-dialects.md#row-binder), 참조의 `row_args`, 지�
      그 class로 다시 읽은 람다 본문의 복사이며, 그 안에서 row를 양화하는 람다는
      정의의 binder 목록 끝에 새 `local` binder를 받는다.
   2. 본문이 없는 convention entry는 더 약한 본문을 부르는 adapter나 trap entry로 채운다.
+     [`Cps` 진입 본문](#cps-진입-본문)의 조건에 맞는 람다는 본문을 더 두지 않고
+     `cps_entry`를 선언한다.
   3. 람다 op, 결과 값, `instantiate`는 하나로 남으므로 사용처를 다시
      연결하지 않는다. 같은 class를 고르는 사용들이 양화한 binder에 서로 다른 class를
      넘겨도 값을 나누지 않으며, 그 본문은 binder를 상한으로 읽는다. 복사한 본문은
@@ -427,18 +431,32 @@ region에 속하므로 `Cps` flow다. `fn` arm은 어느 callable 안에서든 o
   한다. 진입 인스턴스의 본문도 `Cps` flow이므로 이 요구는 그 본문의 `become`과 body
   결과 호출을 따라 이어진다.
 - **람다:** 더 약한 본문만 가지는 람다는 module에 아래의 값에 frame을 넘기는
-  이전이 있고 자기 flow에 frame을 넘기는 operation이 있을 때 `Cps` 진입 본문을
-  하나 더 가지며, 그것이 람다의 `Cps`
+  이전이 있고 가장 강한 본문의 자기 flow에 frame을 넘기는 operation이 있을 때
+  `Cps` 진입 본문을 가지며, 그것이 람다의 `Cps`
   [convention entry](tribute-dialects.md#convention-entry)다. Frame을 넘기는
   operation은 source tail transfer(`tail_call`, `tail_call_indirect`), `handle`,
-  `resume`이다. 그 밖의 람다의 `Cps` entry는 가장 강한 본문을 부른 뒤
+  `resume`이다. 람다의 `Cps` 진입 본문은 따로 쓰인 본문이 아니다.
+  `tribute_cps.lambda`가 `cps_entry`로 선언하면 legalization이 가장 강한 본문을
+  그 본문의 convention으로 한 번, `Cps` flow로 한 번 변환한다. 두 변환은 자기
+  flow에서만 다르다.
+  - 자기 flow의 `tribute_control.tail_call`은 본문의 convention에서 고른 인스턴스를
+    가리킨다. 그 인스턴스가 더 약하고 본문이 있으면 `Cps` 진입에서는 그 인스턴스가
+    `cps_entry`로 선언한 `Cps` 진입 인스턴스로 들어간다. Class 특수화는 두
+    인스턴스를 모두 만든다.
+  - 자기 flow의 `tribute_cps.tail_call_indirect`는 본문의 convention에서 읽은
+    convention을 선언하고, `Cps` 진입에서는 `Cps` flow의 규칙대로 callee의 `Cps`
+    entry로 들어간다.
+  - `handle`과 `resume`은 어느 변환에서든 자기가 놓인 flow의 규칙을 따른다.
+  - 본문 안의 람다는 두 변환에서 같은 람다다. Entry 함수는 한 번만 만들어지고
+    ([논리적 CPS 적법화](#논리적-cps-적법화)), 각 변환은 자기 capture로 closure만
+    만든다. 그래서 람다가 겹쳐도 entry 함수의 수는 람다 수에 비례한다.
+
+  그 밖의 람다의 `Cps` entry는 가장 강한 본문을 부른 뒤
   결과를 `Done<R>`로 넘기는 adapter다. 그 본문을 지나 이어지는 반복은 본문의 일반
   호출을 거친다. 일반 호출은 어느 본문에서든 proper tail transfer가 아니며, `Cps`
   진입 본문 안의 `Cps` 호출도 suffix frame을 남기므로
   ([frame을 그대로 넘기는 자리](#frame을-그대로-넘기는-자리)) adapter는 반복의 공간
-  보장을 바꾸지 않는다. `Cps` 진입 본문은 안쪽 람다를 포함한 본문 전체를 복제하므로,
-  이 조건은 frame을 넘기지 않는 람다와 frame을 넘겨받지 않는 람다가 본문 수를 늘리지
-  않게 한다.
+  보장을 바꾸지 않는다.
 - **함수 참조:** module에 값에 frame을 넘기는 이전이 있으면 `func_ref`의 `Cps`
   convention entry는 `Cps` 진입 본문이다. 그때 `func_table`의 `Cps` 대상은 가장 강한
   대상의 `Cps` 진입 인스턴스다. 그런 이전이 없으면 `Cps` 대상을 두지 않으며, `Cps`
@@ -459,8 +477,11 @@ Callable 값의 `Cps` entry에 flow의 frame을 그대로 넘기는 자리는 �
 센다. 그래서 판정은 class 특수화 앞의 IR과 그 뒤의 IR을 같은 방식으로 읽고, 특수화와
 그 검사가 같은 판정(`tribute_cps::hands_frames_to_values`)을 쓴다. 특수화 뒤의
 참조되지 않는 정의 제거가 그런 이전을 담은 정의를 지울 수 있으므로, 검사는 이전이 남은
-module에서 `Cps` 진입 본문과 진입 인스턴스가 있는지만 확인하고, 이전이 없는 module의
-그것들은 거부하지 않는다.
+module에서 `cps_entry` 선언과 진입 인스턴스가 있는지만 확인하고, 이전이 없는 module의
+그것들은 거부하지 않는다. 선택 사항이 되는 것은 조건에 맞는 람다의 선언뿐이다. 가장
+강한 본문의 자기 flow가 frame을 넘기지 않는 람다의 `cps_entry`는 어느 module에서든
+거부한다. `cps_entry`를 선언한 람다의 자기 flow에 있는 `tail_call`의
+callee는 어느 module에서든, 더 약하고 본문이 있으면 `cps_entry`를 선언해야 한다.
 
 Frame을 넘기는 body 결과 호출을 뺀 일반 호출은 flow와 관계없이 row가 정한
 convention의 인스턴스를 부르며 `Cps` 진입을 요구하지 않는다. `tribute_cps.func`의
@@ -581,12 +602,14 @@ direct/indirect call, return의 대응 관계를 검증하고 physical symbol과
 계산한 뒤 함께 rewrite한다:
 
 - `tribute_cps.func`는 `func.func`와 physical `func.func_sig`를 만든다.
-- `tribute_cps.lambda`는 physical `closure.lambda`와 convention 없는
-  `closure.closure`를 만든다. `closure.lambda`는 `tribute_cps.lambda`의 본문마다
-  본문 하나를 가지며, 본문의 signature에는 그 convention의 `CallableAbi` hidden
-  parameter가 있지만 environment는 없다. 본문이 없는 더 강한 convention entry의
-  adapter는 legalization이 만들어 `closure.lambda`에 적는다. 기존 closure
-  lowering이 본문마다 environment를 interpose한다.
+- `tribute_cps.lambda`는 본문마다 env-bearing `func.func` entry 함수를 한 번
+  만들고, 람다의 자리에는 그 entry들을 담은 `closure.new`와 convention 없는
+  `closure.closure`를 만든다. Entry 함수의 signature에는 그 convention의
+  `CallableAbi` hidden parameter와 environment가 있고, 본문은 capture를
+  `closure.unpack`으로 읽는다. 본문이 없는 더 강한 convention entry의 adapter도
+  legalization이 만들어 같은 convention table에 넣는다. 한 source 람다의 closure를
+  만드는 자리가 여럿이어도 entry 함수는 하나씩이며, 자리마다 `closure.new`가 그
+  자리의 capture를 담는다.
 - `tribute_cps.func_table`은 entry마다 env-bearing `func.func`를 한 번 만들고,
   `tribute_cps.func_ref`는 그 entry들을 담은 capture 없는 `closure.new`가 된다.
   Table을 공유하는 참조들은 같은 entry 함수를 쓴다. 대상 인스턴스가 있는 entry는 그
@@ -733,10 +756,13 @@ operation을 왼쪽에서 오른쪽으로 소비한다:
 
   세 번째 formal은 읽지 않는다.
   Source operation result는 `Never`로 남는다.
-- `tribute_cps.lambda`는 본문을 하나씩 변환해 `closure.lambda`가 된다. 그
-  capture는 변환된 본문들이 convention 순서로 바깥에서 쓰는 값을 처음 쓰인
-  순서대로 중복 없이 담으며, 생성된 continuation의 환경도 같은 규칙을 따른다.
-  본문의 `resume`이 쓰는 arm의 첫 token도 이렇게 담긴다.
+- `tribute_cps.lambda`는 본문을 하나씩 entry 함수로 변환하고 `closure.new`가
+  된다. 그 capture는 source 람다가 정한다. 먼저 source 본문들이 convention
+  순서로 바깥에서 쓰는 값을 처음 쓰인 순서대로 중복 없이 담고, 그 뒤에 본문의
+  `resume`이 소비하는 바깥 arm의 token을 처음 쓰인 순서대로 담는다. Entry 함수는
+  바깥 flow의 변환 결과를 직접 참조하지 않고 이 capture만 읽으므로, 람다를 감싼
+  본문이 몇 번 변환되든 한 번만 만들어진다. 생성된 continuation의 환경은 변환된
+  본문이 바깥에서 쓰는 값을 처음 쓰인 순서대로 담는다.
 - `tribute_control.yield value`는 region의 `exit_k(value)`를 호출한다.
 
 일반 structured control은 기존 `scf.*` dialect에 남고
@@ -854,8 +880,9 @@ named pre-CPS boundary가 아니다.
 location에서 conversion failure가 된다. 이 경계에는 일관된 physical
 `func.*`/`closure.*`/`func.func_sig` graph, [추상 frame 표면](#abstract-continuation-frames),
 logical `ability.*` dispatch 표면만 남는다. `lower_continuation_frames`가
-추상 frame 표면을 모두 제거한 뒤 `lower_closure_lambda`가 이 shared graph의
-lambda를 추출하지만
+추상 frame 표면을 모두 제거한 뒤 `lower_closure_lambda`가 이 shared graph에 남은
+모든 `closure.lambda`, 곧 legalization과 `lower_continuation_frames`가 만든 closure의
+본문을 추출하지만
 `closure.new`, `closure.entry`, `closure.unpack`과 `closure.closure` type은
 target ABI validation까지 유지한다. `lower_ability_call`,
 `resolve_evidence`, `lower_handle_dispatch`가 `ability.*`를 `effect.*`까지 낮춘 뒤,

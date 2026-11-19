@@ -360,11 +360,15 @@ Convention은 `tribute_cps` dialect의 operation만 가진다. Frontend는
 convention에 따라 뜻이 달라지는 operation 다섯을 같은 이름의 `tribute_cps`
 operation으로 바꾼다.
 
-- `tribute_cps.func`는 자기 convention을 가진다. 인스턴스마다 하나다.
-- `tribute_cps.lambda`는 class마다의 본문과,
-  [convention entry](#convention-entry)마다 그 entry를 채우는 본문을 가진다.
+- `tribute_cps.func`는 자기 convention을 가진다. 인스턴스마다 하나다. 자기의 `Cps`
+  진입 인스턴스가 있으면 `cps_entry`로 가리킨다.
+- `tribute_cps.lambda`는 class마다의 본문을 가지고, 가장 강한 본문이 `Cps` 진입도
+  채울 때 `cps_entry`를 선언한다.
 - `tribute_cps.call_indirect`와 `tribute_cps.tail_call_indirect`는 callee를
-  부르는 convention을 가진다.
+  부르는 convention을 가진다. `cps_entry`를 선언한 람다의 가장 강한 본문은 두
+  flow로 실행되므로, 그 자기 flow의 `tail_call_indirect`가 선언한 convention은
+  본문의 convention에서 읽은 것이고 `Cps` 진입에서는 `Cps`다
+  ([`Cps` 진입 본문](cps-effects.md#cps-진입-본문)).
 - `tribute_cps.func_ref`는 `tribute_cps.func_table` 하나를 가리키고, 그 table이
   convention entry마다 그 entry로 들어갈 대상 인스턴스를 가진다.
 
@@ -385,7 +389,10 @@ Convention에 관한 규칙은 다음과 같다.
 - `tribute_control.tail_call`의 callee 인스턴스와
   `tribute_cps.tail_call_indirect`의 convention은 그 이전이 놓인
   [flow](cps-effects.md#cps-진입-본문)보다 강하지 않다. `Cps` flow에서는 본문이 있는
-  callee의 인스턴스와 간접 이전의 convention이 `Cps`다.
+  callee의 인스턴스와 간접 이전의 convention이 `Cps`다. `cps_entry`를 선언한
+  람다의 가장 강한 본문에 쓰인 이전은 그 본문의 convention이 정한 flow로 이 규칙을
+  따른다. `Cps` 진입에서의 callee와 convention은 IR에 쓰이지 않고 legalization이
+  [고른다](cps-effects.md#cps-진입-본문).
 - [Frame을 넘기는 body 결과 호출](cps-effects.md#frame을-그대로-넘기는-자리)인
   `tribute_control.call`의 callee 인스턴스는 callee에 본문이 있으면 `Cps`이고,
   `tribute_cps.call_indirect`의 convention은 `Cps`다.
@@ -445,9 +452,10 @@ Class `c`의 본문은 위 읽기를 따르되, 자기 row의 tail이 상한이�
 `c`로 좁혀 상한으로 읽는다.
 
 위 규칙이 `Cps` 본문을 주지 않는 source 람다는 module에 값에 frame을 넘기는
-이전이 있고 자기 flow에 frame을 넘기는 operation이 있으면
-[`Cps` 진입 본문](cps-effects.md#cps-진입-본문)을 하나 더 가진다. 이 본문은 가장
-강한 본문과 같은 class 읽기를 쓰고 `Cps` flow로 실행된다.
+이전이 있고 가장 강한 본문의 자기 flow에 frame을 넘기는 operation이 있으면
+`cps_entry`를 선언해 [`Cps` 진입 본문](cps-effects.md#cps-진입-본문)을 가진다.
+이것은 따로 쓰인 본문이 아니라 가장 강한 본문을 `Cps` flow로 실행한 것이며, class
+읽기는 그 본문과 같다.
 
 **값은 나누지 않는다.** 같은 class를 고르는 사용들이 양화한 binder에 서로 다른
 class를 넘겨도 람다는 값 하나다. 앞의 `wrap`이 그 예다. 상한으로 읽어도 결과는
@@ -456,8 +464,9 @@ class를 넘겨도 람다는 값 하나다. 앞의 `wrap`이 그 예다. 상한�
 **Capture.** 람다는 capture operand를 갖지 않는다. 람다는 isolated from
 above가 아닌 region으로서 lexical scope를 닫으며, 본문은 바깥 SSA 값을 직접
 참조한다. 모든 본문이 바깥에서 쓰는 값이 람다의 capture이고, closure 하나에 한
-번만 담긴다. 그 순서는 CPS legalization이 정한다
-([cps-effects.md](cps-effects.md#논리적-cps-적법화)).
+번만 담긴다. Capture와 그 순서는 source 람다만으로 정해지며 그 람다의 closure를
+만드는 자리에 기대지 않는다([cps-effects.md](cps-effects.md#논리적-cps-적법화)).
+그래서 한 람다의 closure는 어디에서 만들어지든 같은 entry 함수를 쓴다.
 
 **채우기.** Class `c`의 convention entry는 다음과 같다.
 
@@ -517,7 +526,7 @@ arm, delimiter region)는 source callable 값이 아니다. 그 closure type의
 callable은 자기 convention entry의 signature 자체이며, closure는 자기를 만든
 convention으로만 들어온다. 다른 convention entry는 모두 trap entry이고
 adapter를 두지 않는다. Adapter는 source 람다와 `func_ref`에만 있으며,
-legalization이 만들어 `closure.lambda`와 `closure.new`에 명시한다.
+legalization이 만들어 그 `closure.new`의 convention table에 넣는다.
 
 **Convention table.** Closure 값은 convention table 참조 하나와 capture로
 이루어진다([closure 저장 layout](#closure-저장-layout)). Convention table은

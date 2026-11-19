@@ -1,8 +1,9 @@
 //! Atomic legalization of verified `tribute_control` callable/control IR.
 //!
 //! The pass deliberately stops at the physical `func`/`closure` and logical
-//! `ability` surface. It does not run closure extraction, evidence lowering,
-//! or target-specific conversion.
+//! `ability` surface. It makes the entry functions of source lambdas, once
+//! each, and leaves the closures it generates as `closure.lambda`. It does
+//! not run evidence lowering or target-specific conversion.
 
 use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
@@ -80,6 +81,9 @@ struct Converter<'a> {
     /// The callable each source operation's callee names, resolved before
     /// conversion moves anything.
     targets: HashMap<OpRef, OpRef>,
+    /// The `Cps` entry instance each source function declares in
+    /// `cps_entry`, and its name in the function's module.
+    cps_entries: HashMap<OpRef, (OpRef, Symbol)>,
     /// The table each `func_ref` names, resolved the same way.
     func_tables: HashMap<OpRef, FuncTable>,
     /// The convention entries built for each table and closure type.
@@ -94,6 +98,25 @@ struct Converter<'a> {
     /// `resume` in the arm, wherever it is written, and a lambda that
     /// carries the resumption reach the arm through it.
     arm_tokens: HashMap<RegionRef, ValueRef>,
+    /// The entry functions made for each source lambda.
+    lambdas: HashMap<OpRef, LambdaEntries>,
+    /// The number of lambda entry functions named after each source function.
+    lambda_entries: HashMap<String, u32>,
+    /// The names the source module's definitions have.
+    source_symbols: HashSet<String>,
+}
+
+/// The entry functions of a source lambda and what a closure of it captures,
+/// in the order its entry functions unpack them.
+struct LambdaEntries {
+    entries: [SymbolPath; 3],
+    /// The source values its bodies use from outside, in order of first use.
+    values: Vec<ValueRef>,
+    /// The arms whose resumption its bodies resume. Their tokens follow
+    /// `values`.
+    arms: Vec<RegionRef>,
+    /// The types of those captures, which the entry functions unpack.
+    capture_types: Vec<TypeRef>,
 }
 
 /// The operations of a source block that follow the one being converted.
@@ -142,18 +165,31 @@ impl<'a> Converter<'a> {
         module_block: BlockRef,
         graph: CallableGraph,
     ) -> Self {
+        // Nested modules included: their lambdas' entry functions are named
+        // from the same counters.
+        let mut source_symbols = HashSet::default();
+        let _ = walk_op::<()>(ctx, module.op(), &mut |op| {
+            if let Some(name) = ctx.op_attrs(op).get_str("sym_name") {
+                source_symbols.insert(name.to_owned());
+            }
+            ControlFlow::Continue(WalkAction::Advance)
+        });
         Self {
             ctx,
             module,
             module_block,
             funcs: graph.funcs,
             targets: graph.targets,
+            cps_entries: graph.cps_entries,
             func_tables: graph.func_tables,
             table_entries: HashMap::default(),
             converted_types: HashMap::default(),
             helper_index: 0,
             tables: None,
             arm_tokens: HashMap::default(),
+            lambdas: HashMap::default(),
+            lambda_entries: HashMap::default(),
+            source_symbols,
         }
     }
 
@@ -394,6 +430,7 @@ fn is_source_logical(ctx: &IrContext, op: OpRef) -> bool {
 struct CallableGraph {
     funcs: HashMap<OpRef, CallableInfo>,
     targets: HashMap<OpRef, OpRef>,
+    cps_entries: HashMap<OpRef, (OpRef, Symbol)>,
     func_tables: HashMap<OpRef, FuncTable>,
 }
 
@@ -435,6 +472,7 @@ fn collect_callable_graph(ctx: &IrContext, module: Module, symbols: &SymbolTable
         .collect();
     let mut targets = HashMap::default();
     let mut func_tables = HashMap::default();
+    let mut cps_entries = HashMap::default();
     let _ = walk_op::<()>(ctx, module.op(), &mut |op| {
         if let Ok(reference) = tribute_cps::FuncRef::from_op(ctx, op)
             && let Some(table) = symbols
@@ -454,21 +492,36 @@ fn collect_callable_graph(ctx: &IrContext, module: Module, symbols: &SymbolTable
             func_tables.insert(op, FuncTable { op: table, entries });
             return ControlFlow::Continue(WalkAction::Advance);
         }
-        let attributes = &ctx.op(op).attributes;
-        if let Some(target) = attributes
-            .view(ctx)
-            .get_symbol_ref("callee")
-            .or_else(|| attributes.view(ctx).get_symbol_ref("value"))
-            .and_then(|reference| symbols.resolve(ctx, op, reference))
-            .filter(|target| funcs.contains_key(target))
-        {
+        let attributes = ctx.op_attrs(op);
+        let callable = |reference: Option<&SymbolPath>| {
+            reference
+                .and_then(|reference| symbols.resolve(ctx, op, reference))
+                .filter(|target| funcs.contains_key(target))
+        };
+        if let Some(target) = callable(
+            attributes
+                .get_symbol_ref("callee")
+                .or_else(|| attributes.get_symbol_ref("value")),
+        ) {
             targets.insert(op, target);
+        }
+        // Only the `Cps` entry instance of `op` is entered in its place.
+        if funcs.contains_key(&op)
+            && let Some(reference) = attributes.get_symbol_ref(tribute_cps::CPS_ENTRY_ATTR)
+            && let Some(name) = reference.as_simple()
+            && let Some(entry) = callable(Some(reference))
+            && funcs[&entry].convention == CallingConvention::Cps
+            && ctx.op_attrs(entry).get_str(tribute_cps::ENTRY_OF_ATTR)
+                == attributes.get_str("sym_name")
+        {
+            cps_entries.insert(op, (entry, name.clone()));
         }
         ControlFlow::Continue(WalkAction::Advance)
     });
     CallableGraph {
         funcs,
         targets,
+        cps_entries,
         func_tables,
     }
 }

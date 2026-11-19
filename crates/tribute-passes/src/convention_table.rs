@@ -555,14 +555,16 @@ mod tests {
             &mut Default::default(),
         )
         .unwrap();
-        // The lambdas name their adapters, and the text round trips.
+        // The closures' tables name the lambda entry and its adapters, and
+        // the text round trips.
         let printed = module.op().display(&ctx).to_string();
         assert!(
             printed.contains(
-                "} evidence_direct @__tribute_entry_adapter_0 cps @__tribute_entry_adapter_1\n"
+                "closure.new [@\"direct::__lambda_0\", @__tribute_entry_adapter_0, @__tribute_entry_adapter_1] %"
             ),
             "{printed}"
         );
+        assert!(!printed.contains("closure.lambda"), "{printed}");
         let mut ctx = IrContext::new();
         let module = trunk_ir::parser::parse_test_module(&mut ctx, &printed);
         // The printer orders generated aliases by use and the reparsed ones,

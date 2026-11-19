@@ -14,6 +14,86 @@ use trunk_ir::types::{Attribute, AttributeMap, Location};
 
 use crate::tribute_control_to_cps::TributeControlToCpsError;
 
+/// The entry block of a closure's entry function.
+pub(crate) struct ClosureEntryBlock {
+    pub(crate) block: BlockRef,
+    /// The entry's formals without the environment, in their own order.
+    pub(crate) formals: Vec<ValueRef>,
+    /// The captures the entry reads from its environment.
+    pub(crate) captures: Vec<ValueRef>,
+}
+
+impl ClosureEntryBlock {
+    /// Make the entry block of a `convention` entry function of a closure
+    /// of type `closure_ty`: `formals` with the environment, the closure
+    /// itself marked `bind_name = "__env"`, interposed at the convention's
+    /// environment index, and a `closure.unpack` of `capture_types` when
+    /// there are captures (`design/cps-effects.md`, "CPS 변환의 호출 대상
+    /// 형상").
+    pub(crate) fn new(
+        ctx: &mut IrContext,
+        location: Location,
+        convention: CallingConvention,
+        closure_ty: TypeRef,
+        formals: Vec<BlockArgData>,
+        capture_types: &[TypeRef],
+    ) -> Self {
+        let environment_index = convention.closure_environment_index();
+        let mut environment_attrs = AttributeMap::new();
+        let name = ctx.string_attr("__env");
+        environment_attrs.view_mut(ctx).insert("bind_name", name);
+        let mut args = formals;
+        args.insert(
+            environment_index,
+            BlockArgData {
+                ty: closure_ty,
+                attrs: environment_attrs,
+            },
+        );
+        let block = ctx.create_block(BlockData {
+            location,
+            args,
+            ops: Default::default(),
+            parent_region: None,
+        });
+        let mut formals = ctx.block_args(block).to_vec();
+        let environment = formals.remove(environment_index);
+        let captures = if capture_types.is_empty() {
+            Vec::new()
+        } else {
+            let unpack = closure::Unpack::operands(environment)
+                .results(capture_types.to_vec())
+                .build(ctx, location);
+            ctx.push_op(block, unpack.op_ref());
+            unpack.results(ctx).to_vec()
+        };
+        Self {
+            block,
+            formals,
+            captures,
+        }
+    }
+}
+
+/// The type of a `convention` entry function of a closure of type
+/// `closure_ty` whose entry signature without the environment is
+/// `signature`.
+pub(crate) fn closure_entry_type(
+    ctx: &mut IrContext,
+    signature: func::FuncSig,
+    convention: CallingConvention,
+    closure_ty: TypeRef,
+) -> TypeRef {
+    signature
+        .rebuild(ctx, |inputs, _| {
+            inputs.insert(
+                convention.closure_environment_index(),
+                (closure_ty, AttributeMap::new()),
+            );
+        })
+        .as_type_ref()
+}
+
 /// Put a selection on the operation that passes the evidence it selects.
 pub(crate) fn set_evidence_plan(ctx: &mut IrContext, target: OpRef, plan: Option<Attribute>) {
     if let Some(plan) = plan {
