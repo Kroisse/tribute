@@ -199,6 +199,9 @@ impl Pass for ConvertBuiltinLayouts {
         target: core::Module,
         _analyses: &mut AnalysisCache,
     ) -> PassRunResult {
+        // The cell accesses take the type the replacement gives each cell,
+        // so the IR is consistent again only after both.
+        super::heap_cells::lower(ctx, target.into());
         super::type_converter::convert_builtin_layouts(ctx, target.into());
         Ok(())
     }

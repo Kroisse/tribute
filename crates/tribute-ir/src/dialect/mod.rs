@@ -4,6 +4,7 @@ pub mod ability;
 pub mod adt;
 pub mod closure;
 pub mod effect;
+pub mod heap;
 pub mod list;
 pub mod tribute_control;
 pub mod tribute_cps;

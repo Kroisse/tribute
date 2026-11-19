@@ -6,9 +6,9 @@
 
 use rustc_hash::FxHashMap as HashMap;
 
-use tribute_ir::dialect::adt;
-use tribute_ir::dialect::adt::layout::{compute_struct_layout, get_struct_fields};
+use tribute_ir::dialect::adt::layout::{compute_struct_layout, get_struct_fields, natural_layout};
 use tribute_ir::dialect::tribute_rt::{self, RC_HEADER_SIZE};
+use tribute_ir::dialect::{adt, heap};
 use trunk_ir::context::IrContext;
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::rewrite::{Module, TypeConverter};
@@ -35,12 +35,10 @@ enum ScheduledAction {
         value: ValueRef,
         alloc_size: u64,
     },
-    ReleaseReplacedField {
+    /// Release the value of `cell` that a `heap.cell_set` replaces.
+    ReleaseReplacedContents {
         placement: Placement,
-        object: ValueRef,
-        layout: TypeRef,
-        field: u32,
-        field_ty: TypeRef,
+        cell: ValueRef,
         alloc_size: u64,
     },
     /// Release the element of `array` at `index` that an `adt.array_set`
@@ -158,20 +156,17 @@ fn build_schedule(
                     });
                 }
                 ActionKind::ReleaseReplacedField => {
-                    let (object, layout, field, field_ty) = validate_replaced_field(
+                    let contents = validate_replaced_contents(
                         ctx,
                         action.anchor,
                         action.value,
                         action.destination,
                         plan,
                     )?;
-                    schedule.push(ScheduledAction::ReleaseReplacedField {
+                    schedule.push(ScheduledAction::ReleaseReplacedContents {
                         placement,
-                        object,
-                        layout,
-                        field,
-                        field_ty,
-                        alloc_size: allocation_size_for_type(ctx, plan, field_ty, type_converter)?,
+                        cell: action.value,
+                        alloc_size: allocation_size_for_type(ctx, plan, contents, type_converter)?,
                     });
                 }
                 ActionKind::ReleaseMoving => {
@@ -245,6 +240,11 @@ fn allocation_size_for_type(
         return Ok(0);
     }
     let layout = plan.allocation_layout_for_type(ctx, ty)?;
+    // A cell's object holds its value as its only field.
+    if let Some(cell) = heap::Cell::from_type_ref(ctx, layout) {
+        let contents = type_converter.convert_type_or_identity(ctx, cell.contents(ctx));
+        return Ok(u64::from(natural_layout(ctx, [contents]).total_size) + RC_HEADER_SIZE);
+    }
     // Each variant of an enum has its own allocation size, so an enum value's
     // size is also resolved by its header RTTI. So is a closure's: a value of
     // the closure base may be any capture layout, and the native layouts are
@@ -359,38 +359,36 @@ fn placement_for(
     }
 }
 
-fn validate_replaced_field(
+/// The type of the managed value a `heap.cell_set` replaces in `cell`.
+fn validate_replaced_contents(
     ctx: &IrContext,
     anchor: ActionAnchor,
-    object: ValueRef,
+    cell: ValueRef,
     destination: u32,
     plan: &NativeOwnershipPlan,
-) -> Result<(ValueRef, TypeRef, u32, TypeRef), RcMaterializationError> {
+) -> Result<TypeRef, RcMaterializationError> {
     let ActionAnchor::Before(op) = anchor else {
         return Err(OwnershipPlanError::new(
-            "replaced-field release must be anchored before its struct_set",
+            "replaced-value release must be anchored before its cell_set",
         ));
     };
-    let set = adt::StructSet::from_op(ctx, op).map_err(|_| {
-        OwnershipPlanError::new("replaced-field release anchor is not an adt.struct_set")
+    let set = heap::CellSet::from_op(ctx, op).map_err(|_| {
+        OwnershipPlanError::new("replaced-value release anchor is not a heap.cell_set")
     })?;
-    let field = set.field(ctx);
-    if set.r#ref(ctx) != object || field != destination {
+    if set.cell(ctx) != cell || destination != 0 {
         return Err(OwnershipPlanError::new(
-            "replaced-field release does not match its planned object or field",
+            "replaced-value release does not match its planned cell",
         ));
     }
-    let fields = get_struct_fields(ctx, set.r#type(ctx))
-        .ok_or_else(|| OwnershipPlanError::new("replaced-field layout is stale"))?;
-    let field_ty = fields
-        .get(field as usize)
-        .ok_or_else(|| OwnershipPlanError::new("replaced-field index is stale"))?;
-    if !plan.is_managed_type(ctx, *field_ty) {
+    let contents = heap::Cell::from_type_ref(ctx, ctx.value_ty(cell))
+        .ok_or_else(|| OwnershipPlanError::new("replaced-value cell type is stale"))?
+        .contents(ctx);
+    if !plan.is_managed_type(ctx, contents) {
         return Err(OwnershipPlanError::new(
-            "replaced-field release targets an unmanaged field",
+            "replaced-value release targets an unmanaged value",
         ));
     }
-    Ok((object, set.r#type(ctx), field, *field_ty))
+    Ok(contents)
 }
 
 fn validate_replaced_element(
@@ -437,20 +435,13 @@ fn build_operations(ctx: &mut IrContext, action: ScheduledAction) -> (Placement,
                 .build(ctx, location_for(ctx, placement));
             (placement, vec![release.op_ref()])
         }
-        ScheduledAction::ReleaseReplacedField {
+        ScheduledAction::ReleaseReplacedContents {
             placement,
-            object,
-            layout,
-            field,
-            field_ty,
+            cell,
             alloc_size,
         } => {
             let location = location_for(ctx, placement);
-            let get = adt::StructGet::operands(object)
-                .r#type(layout)
-                .field(field)
-                .results(field_ty)
-                .build(ctx, location);
+            let get = heap::CellGet::operands(cell).build(ctx, location);
             let release = tribute_rt::Release::operands(get.result(ctx))
                 .alloc_size(alloc_size)
                 .build(ctx, location);

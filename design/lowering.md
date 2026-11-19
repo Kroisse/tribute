@@ -215,7 +215,7 @@ After the [boundary](#pipeline-order) exit, Wasm dialect lowering runs:
 ```text
 validate_lowerable_structured_control
 unboxed value scalarization
-convert_builtin_layouts
+convert_builtin_layouts (heap.cell included)
 io_to_wasm
 arith_to_wasm
 scf_to_wasm
@@ -253,8 +253,9 @@ scf_to_wasm
 func_to_wasm
 ```
 
-`heap` is a Tribute dialect, so its Wasm lowering (`adt_to_wasm`) belongs to
-`tribute-passes`, not to this pass group.
+`heap` is a Tribute dialect, so its Wasm lowering belongs to `tribute-passes`,
+not to this pass group. `convert_builtin_layouts` turns each `heap.cell` into
+the one-field struct that holds its value, and `adt_to_wasm` lowers the rest.
 
 Expected boundary: backend-ready Wasm IR contains `wasm.*` plus explicitly
 allowed infrastructure operations.

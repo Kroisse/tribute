@@ -37,7 +37,10 @@ use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
 use std::ops::ControlFlow;
 
-use tribute_ir::dialect::adt::layout::{compute_struct_layout, compute_variant_layout};
+use tribute_ir::dialect::adt::layout::{
+    compute_struct_layout, compute_variant_layout, natural_layout,
+};
+use tribute_ir::dialect::heap;
 use tribute_ir::dialect::tribute_rtti::FieldKind;
 use trunk_ir::SymbolPath;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
@@ -600,6 +603,12 @@ fn descriptor_release(
     use tribute_ir::dialect::tribute_rt::RC_HEADER_SIZE;
 
     let (offsets, total_size) = match tag {
+        // A cell's object holds its value as its only field.
+        None if let Some(cell) = heap::Cell::from_type_ref(ctx, ty) => {
+            let contents = type_converter.convert_type_or_identity(ctx, cell.contents(ctx));
+            let layout = natural_layout(ctx, [contents]);
+            (layout.field_offsets, layout.total_size)
+        }
         None => {
             let layout = compute_struct_layout(ctx, ty, type_converter)
                 .expect("struct type declared as an RTTI layout must have a valid layout");

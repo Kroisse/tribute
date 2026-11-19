@@ -295,8 +295,8 @@ pub fn allocation_descriptor(
 }
 
 /// The runtime type descriptor a native allocation operation creates: an
-/// [`allocation_descriptor`], or the array type an array construction
-/// allocates.
+/// [`allocation_descriptor`], the array type an array construction
+/// allocates, or the cell type a `heap.cell_new` allocates.
 pub fn native_allocation_descriptor(
     ctx: &IrContext,
     op: trunk_ir::OpRef,
@@ -307,6 +307,8 @@ pub fn native_allocation_descriptor(
         of.r#type(ctx)
     } else if let Ok(splice) = adt::ArraySplice::from_op(ctx, op) {
         splice.r#type(ctx)
+    } else if let Ok(new) = crate::dialect::heap::CellNew::from_op(ctx, op) {
+        ctx.value_ty(new.result(ctx))
     } else {
         return allocation_descriptor(ctx, op);
     };

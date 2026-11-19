@@ -556,45 +556,24 @@ impl ActionPlanner<'_> {
             }
             return Ok(());
         }
-        if let Ok(set) = adt::StructSet::from_op(self.ir, op) {
-            let fields = get_struct_fields(self.ir, set.r#type(self.ir))
-                .ok_or_else(|| OwnershipPlanError::new("struct_set has invalid layout"))?;
-            let index = set.field(self.ir) as usize;
-            let field_ty = fields
-                .get(index)
-                .ok_or_else(|| OwnershipPlanError::new("struct_set field is stale"))?;
-            if !types_compatible(
-                self.ir,
-                self.ir.value_ty(set.r#ref(self.ir)),
-                set.r#type(self.ir),
-                self.managed_layouts,
-            ) {
-                return Err(OwnershipPlanError::new(
-                    "struct_set typed contract is malformed",
-                ));
-            }
-            if is_typed_managed_reference(self.ir, *field_ty, self.managed_layouts) {
-                if !types_compatible(
-                    self.ir,
-                    self.ir.value_ty(set.value(self.ir)),
-                    *field_ty,
-                    self.managed_layouts,
-                ) {
-                    return Err(OwnershipPlanError::new(
-                        "struct_set value type is malformed",
-                    ));
-                }
+        if let Ok(new) = heap::CellNew::from_op(self.ir, op) {
+            let contents = cell_contents(self.ir, self.ir.value_ty(new.result(self.ir)))?;
+            return self.plan_owning_operands(op, 0, [contents]);
+        }
+        if let Ok(set) = heap::CellSet::from_op(self.ir, op) {
+            let contents = cell_contents(self.ir, self.ir.value_ty(set.cell(self.ir)))?;
+            if is_typed_managed_reference(self.ir, contents, self.managed_layouts) {
                 self.actions.push(OwnershipAction {
                     kind: ActionKind::StoreAcquire,
                     value: set.value(self.ir),
                     anchor: ActionAnchor::Before(op),
-                    destination: index as u32,
+                    destination: 0,
                 });
                 self.actions.push(OwnershipAction {
                     kind: ActionKind::ReleaseReplacedField,
-                    value: set.r#ref(self.ir),
+                    value: set.cell(self.ir),
                     anchor: ActionAnchor::Before(op),
-                    destination: index as u32,
+                    destination: 0,
                 });
             }
             return Ok(());
@@ -982,6 +961,13 @@ fn array_element(ctx: &IrContext, array_ty: TypeRef) -> Result<TypeRef, Ownershi
     tribute_ir::dialect::adt::Array::from_type_ref(ctx, array_ty)
         .map(|array| array.element(ctx))
         .ok_or_else(|| OwnershipPlanError::new("array operation has a non-array type"))
+}
+
+/// The type of the value the cell type `cell_ty` holds.
+fn cell_contents(ctx: &IrContext, cell_ty: TypeRef) -> Result<TypeRef, OwnershipPlanError> {
+    heap::Cell::from_type_ref(ctx, cell_ty)
+        .map(|cell| cell.contents(ctx))
+        .ok_or_else(|| OwnershipPlanError::new("cell operation has a non-cell type"))
 }
 
 fn validate_allocation_result(

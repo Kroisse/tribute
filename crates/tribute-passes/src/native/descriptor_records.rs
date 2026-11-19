@@ -94,6 +94,15 @@ impl DescriptorRecord {
                 fields: positional(fields),
             };
         }
+        // A cell's record is a compiler-built struct of its one value.
+        if tribute_ir::dialect::heap::Cell::matches(ctx, ty) {
+            return Self {
+                kind: RecordKind::Struct,
+                name: "Cell".to_owned(),
+                owner: None,
+                fields: positional(fields),
+            };
+        }
         match tag {
             None => {
                 let layout = adt::Struct::from_type_ref(ctx, ty)
