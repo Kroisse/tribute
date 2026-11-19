@@ -254,4 +254,90 @@ mod tests {
         let adapted = adapt_operation_arguments(&mut builder, location, vec![value], &declaration);
         assert_eq!(builder.ir.value_ty(adapted[0]), parameter);
     }
+
+    /// A multi-tail function value whose open row a use widens is entered
+    /// through an entry that masks each added instance, other than the
+    /// ambient `Io`, in its own selection and in each tail's.
+    #[salsa_test]
+    fn widening_an_entry_masks_the_added_instances(db: &dyn salsa::Database) {
+        use crate::ast_to_ir::context::{FunctionEntry, LogicalGeneratedSignature};
+        use tribute_ir::dialect::tribute_control::{EvidenceStep, Row, RowBinder};
+
+        let mut ir = IrContext::new();
+        let path = ir.intern_path("widen.trb");
+        let mut ctx = IrLoweringCtx::new(
+            db,
+            path,
+            crate::ast::SpanMaps::default(),
+            HashMap::default(),
+            SortedMap::default(),
+        );
+        let location = Location::new(path, Span::new(0, 0));
+        let nil = ctx.nil_type(&mut ir);
+        let name = SymbolPath::new(["both"]);
+        ctx.register_logical_generated_signature(
+            &name,
+            LogicalGeneratedSignature {
+                param_types: vec![],
+                return_type: nil,
+                row: Row::new([], Some(0)),
+                binders: vec![RowBinder::Param],
+            },
+        );
+        let state = SymbolPath::new(["State"]);
+        let io = ctx.ability_symbol(&crate::ast::AbilityId::builtin_io(db).qualified(db), &[]);
+        let own = Row::new([], Some(0));
+        let value_ty = tribute_control::FuncSig::params([], nil)
+            .row(own.clone())
+            .intern(&mut ir)
+            .as_type_ref();
+        let wider_ty = tribute_control::FuncSig::params([], nil)
+            .row(Row::new([state.clone(), io], Some(0)))
+            .intern(&mut ir)
+            .as_type_ref();
+        let block = ir.create_block(BlockData {
+            location,
+            args: vec![],
+            ops: Default::default(),
+            parent_region: None,
+        });
+        let mut scope = ctx.scope();
+        let mut builder = IrBuilder::new(&mut scope, &mut ir, block);
+        let entry = FunctionEntry {
+            name: name.clone(),
+            rows: vec![own],
+            plan: vec![EvidenceStep::Tails(vec![vec![], vec![]])],
+        };
+        let value = callable::function_entry(&mut builder, location, entry, value_ty);
+        let widened = builder.cast_if_needed(location, value, wider_ty);
+        assert_eq!(builder.ir.value_ty(widened), wider_ty);
+
+        let trunk_ir::refs::ValueDef::OpResult(lambda, _) = builder.ir.value_def(widened) else {
+            panic!("a widened entry is a lambda");
+        };
+        let body = builder
+            .ir
+            .op_region(lambda, 0)
+            .expect("a lambda has a body");
+        let entry_block = builder.ir.region(body).blocks[0];
+        let call = builder.ir.block(entry_block).ops[0];
+        let expected = EvidenceStep::plan_attribute(
+            builder.ir,
+            [
+                EvidenceStep::Mask(state.clone()),
+                EvidenceStep::Tails(vec![
+                    vec![EvidenceStep::Mask(state.clone())],
+                    vec![EvidenceStep::Mask(state)],
+                ]),
+            ],
+        );
+        assert_eq!(
+            builder
+                .ir
+                .op_attrs(call)
+                .get(tribute_control::EVIDENCE_PLAN_ATTR)
+                .cloned(),
+            expected
+        );
+    }
 }
