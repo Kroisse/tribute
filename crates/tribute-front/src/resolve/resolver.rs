@@ -135,8 +135,10 @@ struct FunctionResolver<'r, 'e, 'db> {
     local_scopes: Vec<HashMap<Symbol, LocalId>>,
     /// Generator for the function's LocalIds.
     local_id_gen: LocalIdGen,
-    /// Stack of LocalIds for `resume` in `op` handler arms.
-    resume_local_id_stack: Vec<LocalId>,
+    /// The `op` and `fn` handler arms enclosing the current expression: an
+    /// `op` arm's `resume` local, or `None` for an `fn` arm, which has no
+    /// resumption and hides any enclosing `op` arm from `resume`.
+    resume_local_id_stack: Vec<Option<LocalId>>,
     /// Ability operations injected from ability annotations (effect-directed resolution).
     /// Maps unqualified operation name → Binding.
     effect_ops: HashMap<Symbol, Binding<'db>>,
@@ -2392,7 +2394,7 @@ impl<'r, 'e, 'db> FunctionResolver<'r, 'e, 'db> {
 
             ExprKind::Resume { arg, .. } => {
                 let arg = self.resolve_expr(arg);
-                let local_id = self.resume_local_id_stack.last().copied();
+                let local_id = self.resume_local_id_stack.last().copied().flatten();
                 ExprKind::Resume { arg, local_id }
             }
 
@@ -2489,6 +2491,7 @@ impl<'r, 'e, 'db> FunctionResolver<'r, 'e, 'db> {
                     .iter()
                     .map(|p| self.resolve_pattern_with_bindings(p))
                     .collect();
+                self.resume_local_id_stack.push(None);
                 HandlerKind::Fn {
                     ability: resolved_ability,
                     op: op.clone(),
@@ -2509,7 +2512,7 @@ impl<'r, 'e, 'db> FunctionResolver<'r, 'e, 'db> {
                 // Allocate a synthetic LocalId for `resume` so that lambda
                 // capture analysis can track the continuation value.
                 let resume_id = self.local_id_gen.fresh();
-                self.resume_local_id_stack.push(resume_id);
+                self.resume_local_id_stack.push(Some(resume_id));
                 HandlerKind::Op {
                     ability: resolved_ability,
                     op: op.clone(),
@@ -2519,9 +2522,9 @@ impl<'r, 'e, 'db> FunctionResolver<'r, 'e, 'db> {
             }
         };
 
-        let is_op = matches!(kind, HandlerKind::Op { .. });
+        let encloses_resume = matches!(kind, HandlerKind::Op { .. } | HandlerKind::Fn { .. });
         let body = self.resolve_expr(&handler.body);
-        if is_op {
+        if encloses_resume {
             self.resume_local_id_stack.pop();
         }
         self.pop_scope();

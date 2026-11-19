@@ -41,7 +41,17 @@ impl<'db> TypeChecker<'db> {
     ) -> Type<'db> {
         let arg_ty = self.infer_expr_type_with_ctx(ctx, arg);
         let Some(local_id) = local_id else {
-            return ctx.fresh_type_var();
+            if ctx.mark_handler_error(resume, "resume without resumption") {
+                NodeDiagnostic::new(
+                    "`resume` is only valid under a resumptive `op` handler arm; \
+                     an `fn` arm has no resumption",
+                    resume,
+                    DiagnosticSeverity::Error,
+                    CompilationPhase::TypeChecking,
+                )
+                .accumulate(self.db());
+            }
+            return ctx.error_type();
         };
         if let Some((ability, op)) = ctx.non_resumptive_resume_op(local_id) {
             if ctx.mark_handler_error(resume, "resume in Never operation") {

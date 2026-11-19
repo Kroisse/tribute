@@ -519,6 +519,13 @@ Continuation은 자신을 캡처한 handler 스코프 내에서만 resume될 수
 이 경우 continuation의 affine 사용(최대 1회 호출)은 런타임에서 보장한다
 ([논리적 CPS 적법화](cps-effects.md#논리적-cps-적법화)).
 
+`resume`은 자신을 감싼 `op` arm과 `fn` arm 가운데 가장 가까운 것에 묶인다.
+람다, 중첩된 `handle`의 body, `do` arm은 이 탐색에서 투명하다. `fn` arm은
+resumption이 없으므로, `fn` arm 안의 `resume`은 그 바깥에 `op` arm이 있어도 그
+arm을 재개하지 않고 컴파일 에러다. 결과가 `Never`인 `op` arm 안의 `resume`도
+컴파일 에러다. 감싼 `op` arm이 없는 `resume`, 곧 일반 함수 본문의 `resume`도
+마찬가지다. 이 에러는 모두 typechecking이 `resume`의 위치에 보고한다.
+
 #### `resume`이 재개하는 계산
 
 `resume value`는 operation을 수행한 지점부터 handle의 body가 끝날 때까지의 계산을
