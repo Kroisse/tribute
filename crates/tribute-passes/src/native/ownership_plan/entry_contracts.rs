@@ -216,20 +216,20 @@ fn value_is_borrowed(
             return false;
         }
         let index = use_.operand_index as usize;
-        if (adt::StructGet::matches(ctx, op)
-            || adt::VariantGet::matches(ctx, op)
-            || adt::VariantIs::matches(ctx, op)
-            || adt::VariantTag::matches(ctx, op)
-            || adt::RefIsNull::matches(ctx, op))
-            && index == 0
-        {
-            return true;
-        }
-        if (adt::RefCast::matches(ctx, op) || core::UnrealizedConversionCast::matches(ctx, op))
-            && index == 0
-            && ctx.op_results(op).len() == 1
-        {
-            return value_is_borrowed(ctx, body, ctx.op_result(op, 0), module, summaries, visiting);
+        match DynOperandOwnership::role(ctx, op, index) {
+            Some(OperandRole::Borrow | OperandRole::Project { .. }) => return true,
+            Some(OperandRole::Forward) => {
+                return value_is_borrowed(
+                    ctx,
+                    body,
+                    ctx.op_result(op, 0),
+                    module,
+                    summaries,
+                    visiting,
+                );
+            }
+            Some(OperandRole::Initialize { .. } | OperandRole::Assign { .. }) => return false,
+            None => {}
         }
         if let Ok(call) = func::Call::from_op(ctx, op) {
             return module

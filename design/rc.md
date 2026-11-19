@@ -391,6 +391,29 @@ projection의 use를 owner의 use로도 반영한다. `elide_proven_field_borrow
 참여하지 않는다. 선행 facts 분석 실패는 그대로 전파되고 실패한 liveness
 결과는 캐시되지 않는다.
 
+Operation이 operand의 unit을 어떻게 다루는지는 그 operation이
+`OperandOwnership` 인터페이스로 operand마다 선언한다. Swift SIL의
+`OperandOwnership`을 본뜬 역할은 다음과 같다.
+
+- `Borrow`: operation이 실행되는 동안만 읽는다. Operand는 자신의 unit을 지킨다.
+  Operand에서 managed 값을 복사해 담는 operation은 그 unit을 스스로 획득한다.
+- `Project`: 결과가 operand가 가리키는 object의 field이며, operand에서 파생된
+  borrow다.
+- `Forward`: 결과가 다른 type의 operand 자신이며 같은 unit을 나눈다.
+- `Initialize`: operand의 unit이 결과의 새 object의 field로 옮겨 간다.
+- `Assign`: operand의 unit이 다른 operand가 가리키는 기존 object의 field로 옮겨
+  가고, 바뀌기 전 값의 unit은 replaced-field release로 release한다. 그 값을 읽는
+  operation도 인터페이스가 만든다.
+
+Parameter-entry 계약, projection-owner 사실, action planner와 RC
+materialization은 operand 역할을 이 인터페이스로만 읽으며 operation 이름으로
+판정하지 않는다. 매개변수의 모든 사용이 `Borrow`나 `Project`이거나, `Forward`
+결과의 모든 사용이 다시 그러하거나, 증명된 borrowed 매개변수로의 argument이면
+그 매개변수는 borrow로만 쓰인다. 인터페이스가 없는 operation의 operand에는
+planner가 적용할 역할이 없다. Call, return, branch와 `tribute_rt.into_raw`는
+각자의 계약을 따른다. 각 operation의 역할은 그 operation 선언의 doc comment가
+정한다.
+
 **Algorithm:**
 
 1. Exact semantic type과 callable contract로 managed value, field와 parameter

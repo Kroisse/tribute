@@ -304,11 +304,11 @@ fn projection_owner(
     Ok(alias_root(ctx, get.r#ref(ctx)))
 }
 
-/// The value an exact alias cast chain starts from.
+/// The value a chain of forwarding casts ([`OperandRole::Forward`]) starts
+/// from.
 fn alias_root(ctx: &IrContext, mut value: ValueRef) -> ValueRef {
     while let trunk_ir::ValueDef::OpResult(op, _) = ctx.value_def(value)
-        && (adt::RefCast::matches(ctx, op)
-            || trunk_ir::dialect::core::UnrealizedConversionCast::matches(ctx, op))
+        && DynOperandOwnership::role(ctx, op, 0) == Some(OperandRole::Forward)
     {
         value = ctx.op_operands(op)[0];
     }
