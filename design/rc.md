@@ -144,8 +144,8 @@ Array: [len: i64] [element: E...]
   정렬된다.
 - 할당 크기는 RC header, `len`, 원소를 더한 `16 + len × stride`다. 해제도 같은
   크기를 쓴다.
-- Managed 참조 원소는 owned 참조다. `heap.null`이 만든 null도 원소가 될 수
-  있으며 retain과 release는 null에 대해 아무것도 하지 않는다.
+- Managed 참조 원소는 owned 참조다. 원소가 nullable box이면 `heap.null`이 만든
+  null도 원소가 될 수 있으며 retain과 release는 null에 대해 아무것도 하지 않는다.
 - 배열 operation의 ownership 규칙은
   [typed ownership plan](#1-typed-ownership-and-rtti-plan), 해제는
   [type-specific release](#type-specific-release)가 정한다.
@@ -250,10 +250,11 @@ release가 마지막일 수 있기 때문이다. Materialization은 owner의 exa
 Type erasure 전 RC planning은 `heap.box`, `heap.cell`, `tribute_rt.anyref`,
 `tribute_rt.intref`를 타입에 따라 managed로 취급한다.
 [Nominal 값 타입](tribute-dialects.md#nominal-값-타입)은 값이며, ownership 계획에
-닿기 전에 [표현 선택](abi-boundary.md#표현-선택)이 SSA 값으로 쪼개거나 box에 담았다.
+닿기 전에 [표현 선택](abi-boundary.md#표현-선택)이 box에 담거나 unboxed 값으로 남겼다.
+Managed leaf를 가진 unboxed `adt` 값도 managed다.
 `core.ptr`는 항상 unmanaged이며 cast, symbol, ABI spelling,
 operand position 또는 pointer provenance로 managed 성질을 얻을 수 없다.
-`heap.null`은 `heap.box`의 null 값이고, 생성된 retain과
+`heap.null`은 nullable `heap.box`의 null 값이고, 생성된 retain과
 release는 이 값에 대해 no-op이어야 한다. Callable과 managed-reference validation은
 ownership plan 또는 IR mutation이 이 분류를 사용하기 전에 완료된다.
 
@@ -442,8 +443,9 @@ release하고 새 값을 쓰며, 나머지 필드의 unit은 그대로 결과로
 1보다 크면 같은 크기의 새 object를 할당해 바뀌지 않는 managed 필드와 원소를 retain해
 복사하고, 새 값을 쓴 뒤 source의 unit을 release한다. Source가 유일할 수 있는 것은
 last-use move가 source의 unit을 옮길 때뿐이다. 기준 동작은 source를 위해 새 unit을
-획득하므로 refcount가 1보다 크고 언제나 복사한다. Ownership 계획이 유일성을 정적으로
-증명하면 lowering은 refcount 검사를 생략하고 제자리에서 고친다.
+획득하므로 refcount가 1보다 크고 언제나 복사한다. 유일성은 언제나 실행 때 refcount로
+판정하며, plan이 정적 증명으로 이 검사를 생략하지 않는다. [정적 객체](#정적-객체)는
+refcount가 `2^31` 이상이므로 언제나 복사 경로를 탄다.
 
 `heap.cell_set`은 대상 cell을 operation 동안 빌리고, 새 값은 위의 저장 자리로 unit을
 받으며, 바뀌기 전 값의 unit은 replaced-field release로 release한다.
@@ -498,11 +500,11 @@ block을 만들므로 이런 edge를 만들지 않는다.
 그 box로 가리켜지며, [byte 배열](#bytes)의 box도 여기에 든다. `heap.cell`도 type
 자체로 managed다. Cell object는 담은 managed 값의 unit 하나를 가지며, `Done` closure가
 capture한 completion cell처럼 cell을 다른 object에 담으면 그 필드가 cell의 unit 하나를
-가진다. `tribute_rt.anyref`/`intref`도 각자의 typed contract로 분류한다. `adt` 타입을
-가진 값은 ownership 계획에 닿지 않는다.
-Unboxed 값은 표현 선택이 leaf로 쪼갰으므로, 그 managed leaf는 다른 managed 값과 같은
-ownership unit이다. 한 unboxed 값을 두 번 쓰면 managed leaf마다 unit을 하나씩 더
-획득한다.
+가진다. `tribute_rt.anyref`/`intref`도 각자의 typed contract로 분류한다.
+Unboxed `adt` 값은 managed leaf가 하나 이하이므로, managed leaf가 있으면 그 leaf의
+unit 하나를 가진 managed 값이다. 한 unboxed 값을 두 번 쓰면 unit을 하나 더 획득하며,
+그 retain은 managed leaf에 대한 것이다. `adt.struct_get`이 unboxed 값에서 managed
+leaf를 꺼내면 그 결과는 값에서 파생된 borrow다.
 Unmanaged linear array인 `core.array`는 RC 객체가 아니다.
 Function/code address, borrowed buffer, `core.ptr`는 unmanaged다. 변환 결과가
 pointer라는 사실은 이 분류에 참여하지 않는다.
@@ -612,8 +614,8 @@ into control flow and atomic operations by RC lowering.
 - **Temporary field borrows:** Typed planning은 `heap.struct_get` 또는
   `heap.variant_get`이 읽은 exact declared managed field와 `heap.array_get`이 읽은
   managed 원소를 그 projection의 owner에서 파생된 temporary borrow로 분류할 수
-  있다. Inline으로 놓인 값의 managed leaf도 바깥 object의 declared managed field이며,
-  그 projection의 field 경로는 바깥 object에서 inline 필드를 거쳐 leaf에 이른다.
+  있다. Managed leaf를 가진 inline 필드도 바깥 object의 declared managed field이며,
+  그 필드를 읽은 unboxed 값은 같은 규칙으로 borrow가 된다.
   Owner는 projection operand의 typed alias root이다. 변환된 `clif.load`
   result type, address provenance, `core.ptr` operand는 ownership evidence가
   아니다.
@@ -913,8 +915,9 @@ managed 참조는 항상 그 저장보다 먼저 만들어진 object를 가리�
   않는다. 그래서 새로 쓰는 값이 그 object에 닿을 수 없다. Borrowed 매개변수나 파생
   borrow는 unit이 없으므로 source가 될 때 갱신은 새 unit을 획득하고 복사한다.
   복사하는 경우는 새로 만드는 object이므로 만들 때 채우는 field와 같다.
-- **Managed 값을 덮어쓰는 곳은 [`heap.cell`](tribute-dialects.md#heapcell)뿐이며,
-  managed 값을 담는 compiler cell은 completion cell 하나다.**
+- **유일한 object의 제자리 갱신 밖에서 managed 값을 덮어쓰는 곳은
+  [`heap.cell`](tribute-dialects.md#heapcell)뿐이며, managed 값을 담는 compiler cell은
+  completion cell 하나다.**
   [값 delimiter](cps-effects.md#값-delimiter)의 completion cell은 region의 답을 한 번
   쓴다. 답에서 그 cell이나 cell을 가진 `Done`으로 가는 경로가 없다는 근거는 둘이다.
   - Resume token은 lambda capture로만 옮길 수 있고, token을 담은 closure를 struct나
@@ -1026,7 +1029,9 @@ Managed 판정을 받은 타입은 managed 참조나 동적 값이고, `Int`·`N
 Inline 값 필드가 가리키는 descriptor는 그 struct가 object로 할당되지 않더라도 index와
 레코드를 가진다. Ownership 계획은 할당 layout을 모을 때 inline 값 필드의 layout도 함께
 모으며, 그런 descriptor의 번호도 할당 descriptor와 같은 순서 규칙으로, 처음 나타나는
-순서대로 예약 범위 다음에서 정한다. 해제는 [inline 값 필드의 규칙](runtime-types.md#descriptor-내용)을
+순서대로 예약 범위 다음에서 정한다. 이 index는 24비트에 들어야 하므로, inline 값
+필드가 가리키는 descriptor의 RTTI index가 `2^24` 이상이면 compiler가 프로그램을
+거부한다. 해제는 [inline 값 필드의 규칙](runtime-types.md#descriptor-내용)을
 따른다.
 
 Variant의 필드 이름은 선언 순서의 위치 번호(`"0"`, `"1"`, …)다. 예약 index의 값은

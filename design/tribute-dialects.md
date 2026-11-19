@@ -1187,9 +1187,12 @@ Object는 두 종류다. `heap.box`가 가리키는 object는 만든 뒤 내용�
 - Object의 [descriptor](runtime-types.md)는 `L`로 정한다. Enum layout의 box는 그
   enum의 어느 variant object든 가리키며, 어느 variant인지는 object의 descriptor가
   정한다.
-- 모든 `heap.box<L>`은 null 값을 가진다. `heap.null`이 만들며, retain과 release는
-  null에 대해 아무 일도 하지 않는다. 소스 값은 null이 아니다. Null은 compiler가 만든
-  표현(native `List`의 빈 node 등)만 쓴다.
+- `heap.box<L>`은 null이 아니다. `nullable` 타입 속성을 가진 box만 null 값을 가지며,
+  `core.ref`의 `nullable`과 같다. 소스 값은 null이 아니므로 null은 compiler가 만든
+  표현(native `List`의 빈 node)만 쓴다. `heap.null`은 nullable box의 null을 만들고
+  `heap.is_null`은 nullable box를 판별한다. Retain과 release는 null에 대해 아무 일도
+  하지 않는다. Non-null box는 `heap.cast`로 같은 layout의 nullable box가 되며, 반대
+  방향은 `heap.is_null`로 null이 아님을 판별한 뒤의 `heap.cast`다.
 - `L`의 필드 타입은 표현 선택 전에는 `adt` 값 타입이고, 표현 선택 뒤에는 그 필드의
   저장 표현이다. Box에 담는 값의 필드는 `heap.box`, inline으로 놓는 값의 필드는 그
   layout, scalar는 scalar다. 필드 타입을 바꾸는 이 변환은
@@ -1200,11 +1203,10 @@ Object는 두 종류다. `heap.box`가 가리키는 object는 만든 뒤 내용�
 - `heap.cell<T>`는 `T` 값 하나를 담은 가변 object에 대한 managed 참조다. ML의 `ref`와
   같다. `T`는 표현 선택 뒤의 저장 표현이며, managed 값이면 cell이 그 unit 하나를 가진다.
   Cell의 값 자리는 다른 object의 필드와 같다. Unboxed 타입의 값은 cell 안에 inline으로
-  놓이고, leaf마다 가변 필드 하나가 된다.
+  놓인다.
 - `heap.cell_new`가 초기값으로 cell을 만들고, `heap.cell_get`이 현재 값을 읽고,
   `heap.cell_set`이 값을 바꾼다. 같은 cell을 가리키는 모든 참조가 바뀐 값을 본다.
-  값이 inline이면 세 operation은 그 leaf들을 받거나 내며, `heap.cell_set`은 모든 leaf를
-  한 번에 바꾼다.
+  세 operation은 값 하나를 주고받으며, inline 값이면 그 값은 unboxed `adt` 값이다.
 - Cell의 descriptor는 값 하나를 필드로 가진 compiler 소유 값의 descriptor다.
 - 소스 언어에는 cell이 없다. Compiler가 쓰는 cell은
   [값 delimiter](cps-effects.md#값-delimiter)의 completion cell과 one-shot resumption의
@@ -1221,19 +1223,24 @@ Object는 두 종류다. `heap.box`가 가리키는 object는 만든 뒤 내용�
 - 읽기: `heap.struct_get`, `heap.variant_is`, `heap.variant_tag`, `heap.variant_get`,
   `heap.array_get`, `heap.array_len`. Box를 빌려 object를 읽는다. Variant 판별과 선언
   위치는 object의 [descriptor](runtime-types.md#variant-판별)로 구한다. Inline으로
-  놓인 필드를 읽으면 그 값의 leaf들이 나온다.
+  놓인 필드를 읽으면 unboxed `adt` 값 하나가 나온다.
+
+  `heap` operation은 필드마다 값 하나를 주고받으며, 필드는 index 하나로 가리킨다.
+  Operand와 결과의 수는 표현 선택 앞뒤로 같다.
 - 갱신: `heap.struct_update`, `heap.array_set`. 같은 이름의 `adt` 갱신처럼 필드나 원소
   하나를 바꾼 새 값을 내며, source box를 소비하고 결과 box를 낸다. 소비한 box가 object의
   유일한 참조이면 lowering은 그 object를 제자리에서 고쳐 결과로 쓰고, 아니면 새 object를
-  만든다([유일성 판정](rc.md#1-typed-ownership-and-rtti-plan)). 어느 쪽이든 다른
+  만든다([refcount 판정](rc.md#1-typed-ownership-and-rtti-plan)). 어느 쪽이든 다른
   참조가 보는 object는 바뀌지 않으므로, 제자리 갱신은 의미가 아니라 할당을 아끼는
-  구현이다.
+  구현이다. Refcount가 없는 target(Wasm)은 언제나 새 object를 만들므로, std를 포함한
+  소스 코드는 필드 갱신이나 `array_set`이 제자리에서 상수 시간에 끝난다고 기대하지
+  않는다.
 - Cell: `heap.cell_new`, `heap.cell_get`, `heap.cell_set`.
 - Literal: `heap.array_const`. `adt.array_const`가 만드는 배열 값을 담은 object의
   box를 낸다.
-- 참조: `heap.null`, `heap.is_null`, `heap.cast`. `heap.cast`는 nominal identity가
-  같다고 확립된 box 사이와, closure capture layout의 box와 closure base의 box 사이에
-  쓴다. `heap.box`와 `tribute_rt.anyref` 사이의 이동은 `heap.cast`가 아니라 명시적인
+- 참조: `heap.null`, `heap.is_null`, `heap.cast`. `heap.cast`는 같은 layout의
+  non-null box와 nullable box 사이, 그리고 closure capture layout의 box와 closure
+  base의 box 사이에만 쓴다. `heap.box`와 `tribute_rt.anyref` 사이의 이동은 `heap.cast`가 아니라 명시적인
   `core.unrealized_conversion_cast`이며, [`adt`](#adt)의 erasure cast 규칙을 따른다.
 
 ### 위치
@@ -1242,16 +1249,30 @@ Object는 두 종류다. `heap.box`가 가리키는 object는 만든 뒤 내용�
   선택보다 앞에서 `heap`을 직접 만드는 곳은 참조 의미론이 필요한 compiler 소유 저장뿐이다.
   Compiler가 쓰는 [cell](#heapcell)과 [closure 저장](#closure-저장-layout)이 그렇다. 이
   구간에서 `adt`와 `heap`은 함께 쓰인다.
-- Representation/ABI 경계 출구 뒤에는 `adt` 타입을 가진 값과 `adt`의 값 operation이
-  없다. `adt` layout은 `heap.box`의 매개변수, inline 값을 담는 `heap.cell`의
-  매개변수, `heap` operation의 layout 속성, [nominal 선언](#nominal-선언) 안에만
-  남는다. Object 접근은 모두 `heap` operation이며
-  target lowering이 이를 내린다.
+- Representation/ABI 경계 출구 뒤에 남는 `adt` 값은 unboxed struct 값뿐이다
+  ([값의 표현](abi-boundary.md#출구에서-확정되는-물리-계약)). 그 밖의 `adt` layout은
+  `heap.box`의 매개변수, `heap` operation의 layout 속성, [nominal 선언](#nominal-선언)
+  안에 남는다. Object 접근은 모두 `heap` operation이며 target lowering이 이를 내린다.
 - `Bytes`와 `String` literal(`adt.bytes_const`, `adt.string_const`)은 표현 선택보다
   앞에서 `adt` 값으로 펼친다([string.md](string.md#constant-lowering)). 배열 상수
   `adt.array_const`는 표현 선택이 `heap.array_const`로
   바꾸고 target의 상수 lowering이 이를 내린다. 그 결과는 다른 할당처럼 unit 하나를
   가진 object다.
+
+### Target lowering의 unboxed 값
+
+표현 선택 뒤에도 unboxed 타입의 값은 `adt` struct 값이며, ownership 계획은 그 값을
+unit 하나 이하를 가진 값 하나로 본다. Target lowering의 scalarization이 이 값을 leaf로
+쪼갠다. Native에서는 ownership 계획과 RC materialization 뒤에, Wasm에서는 signature
+변환 앞에 둔다([pipeline](lowering.md#native-lowering)).
+
+- SSA에서는 필드마다 값 하나로 쪼갠다. 매개변수, 결과, block 인자, structured
+  control의 결과가 모두 그렇다. 결과를 쪼갠 callable은 결과를 여러 개 가진다.
+  `core.nil` 필드는 값이 하나뿐이므로 leaf를 만들지 않는다.
+- `adt.struct_get`은 해당 leaf를 고르고, `adt.struct_new`와 `adt.struct_update`는
+  leaf를 다시 묶거나 바꿔 끼운다. 어느 것도 code를 남기지 않는다.
+- Object 안에 inline으로 놓인 필드를 읽고 쓰는 `heap` operation은 그 값의 layout을
+  보고 leaf마다 target의 필드 접근이 된다. `heap` operation의 계약은 바뀌지 않는다.
 
 ## `list`
 

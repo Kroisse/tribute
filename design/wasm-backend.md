@@ -652,7 +652,12 @@ descriptor](runtime-types.md#wasm-배치) index를 두어 runtime identity를 �
   `heap.array_set`은 언제나 새 GC object를 만든다. `heap.cell<T>`는 `T`의 leaf마다
   mutable 필드 하나를 가진 GC struct다. `heap.cell_get`은 leaf마다 `struct.get`,
   `heap.cell_set`은 leaf마다 `struct.set`이며, 그 사이에 다른 코드가 cell을 읽지 않으므로
-  여러 필드에 나눠 써도 한 번의 쓰기로 보인다.
+  여러 필드에 나눠 써도 한 번의 쓰기로 보인다. 다른 object의 inline 필드를 읽고
+  쓰는 `heap` operation도 leaf마다 `struct.get`이 되고, unboxed `adt` 값은
+  [leaf로 쪼갠다](tribute-dialects.md#target-lowering의-unboxed-값).
+- `heap.box`의 null 허용은 GC 참조의 null 허용이 된다. Non-null box의 concrete 참조는
+  `(ref $t)`, `nullable` box의 것만 `(ref null $t)`이다. 필드나 signature에서
+  추상 참조(`wasm.structref` 등)로 지우는 자리는 그 추상 참조의 규칙을 따른다.
 - Variant 판별은 descriptor 필드를 비교한다. Enum 참조를 `Described`로 cast해
   descriptor를 읽고 그 variant의 descriptor 번호와 비교한다. Variant마다 별개의 GC
   타입 index를 두고 `ref.test`로 구별하지 않는다. 프로그램이 할당하지 않는 variant는

@@ -388,9 +388,14 @@ struct 할당과 함께 낮춘다. [할당 크기](rc.md#array)로 `__tribute_al
 - `heap.cell<T>`는 `T`의 leaf마다 필드 하나를 가진 RC object다. `heap.cell_get`과
   `heap.cell_set`은 그 필드들의 `clif.load`/`clif.store`이며, `heap.cell_set`은 이전
   값의 managed leaf에 replaced-field release를 적용한다.
+- Inline 필드를 읽고 쓰는 `heap` operation은 inline 값의 leaf마다 `mem.struct`
+  offset의 `clif.load`/`clif.store`가 되고, unboxed `adt` 값은
+  [leaf로 쪼갠다](tribute-dialects.md#target-lowering의-unboxed-값).
 
 `heap.array_new`와 `heap.array_splice`가 원소를 채우거나 복사하는 반복은 배열
-descriptor마다 한 번 만드는 helper `clif.func`가 맡는다. `heap.array_splice`의
+descriptor마다 한 번 만드는 helper `clif.func`가 맡는다. `heap.struct_update`와
+`heap.array_set`의 복사 경로도 layout마다 한 번 만드는 helper `clif.func`가 맡으며,
+갱신 자리에는 refcount 검사, 제자리 경로, helper 호출만 남는다. `heap.array_splice`의
 `elements`는 helper가 남겨 둔 자리에 호출한 쪽이 쓴다.
 
 범위 검사는 모든 `heap.array_get`, `heap.array_set`, `heap.array_splice` 앞에 둔다.
