@@ -3,15 +3,70 @@
 
 use super::*;
 use tribute_ir::calling_convention::{ConventionBearing, DynConventionBearing};
+use trunk_ir::context::BlockArgData;
 use trunk_ir::ops::VariadicResults;
-use trunk_ir::region_utils::values_defined_above;
+use trunk_ir::region_utils::{region_is_within, values_defined_above};
 
 impl Converter<'_> {
+    /// Build a closure of the lambda `source`: a `closure.new` over the
+    /// lambda's entry functions, which are made once however many flows
+    /// build the closure, holding the captures as `mapping` and the enclosing
+    /// arms give them here.
     pub(super) fn lower_lambda(
         &mut self,
         source: OpRef,
-        mapping: &mut HashMap<ValueRef, ValueRef>,
+        mapping: &HashMap<ValueRef, ValueRef>,
     ) -> Result<OpRef, TributeControlToCpsError> {
+        if !self.lambdas.contains_key(&source) {
+            let lambda = self.lambda_entries(source, mapping)?;
+            self.lambdas.insert(source, lambda);
+        }
+        let lambda = &self.lambdas[&source];
+        let captures: Vec<_> = lambda
+            .values
+            .iter()
+            .map(|value| mapping.get(value).copied().unwrap_or(*value))
+            .chain(lambda.arms.iter().map(|arm| self.arm_tokens[arm]))
+            .collect();
+        let unpacked_types = captures
+            .iter()
+            .map(|&capture| self.ctx.value_ty(capture))
+            .eq(lambda.capture_types.iter().copied());
+        let entries = lambda.entries.clone();
+        if !unpacked_types {
+            return Err(self.malformed_source(
+                source,
+                "a lambda's captures have different types where its closures are built",
+            ));
+        }
+        let logical_ty = self.ctx.op_result_types(source)[0];
+        let closure_ty = self.convert_type(logical_ty);
+        let closure_new = closure::New::operands(captures)
+            .entries(entries)
+            .results(closure_ty)
+            .build(self.ctx, self.ctx.op(source).location);
+        self.copy_extra_attrs(
+            source,
+            closure_new.op_ref(),
+            &[
+                tribute_control::QUANTIFIED_ROWS_ATTR,
+                tribute_cps::CONVENTIONS_ATTR,
+                tribute_cps::CPS_ENTRY_ATTR,
+            ],
+        );
+        Ok(closure_new.op_ref())
+    }
+
+    /// Make the entry functions of the lambda `source`, one for each body.
+    ///
+    /// A body is converted as a function of its own: it reads the values it
+    /// uses from outside, and the token of an arm it resumes, from the
+    /// closure it is entered with. `mapping` gives those values' types.
+    fn lambda_entries(
+        &mut self,
+        source: OpRef,
+        mapping: &HashMap<ValueRef, ValueRef>,
+    ) -> Result<LambdaEntries, TributeControlToCpsError> {
         let location = self.ctx.op(source).location;
         let logical_ty = self.ctx.op_result_types(source)[0];
         let callable = tribute_control::FuncSig::from_type_ref(self.ctx, logical_ty).unwrap();
@@ -27,30 +82,72 @@ impl Converter<'_> {
             .collect();
         let evidence = self.evidence_type();
         let frame = self.frame_type(result);
+        let physical_ty = self.convert_type(logical_ty);
         let sources: Vec<_> = self.ctx.op_regions(source).collect();
+        // The captures are fixed by the source alone, so every closure of
+        // this lambda has the environment its entry functions unpack.
+        let values = values_defined_above(self.ctx, &sources);
+        let arms = self.carried_arms(&sources);
+        let capture_types: Vec<_> = values
+            .iter()
+            .map(|value| mapping.get(value).copied().unwrap_or(*value))
+            .chain(arms.iter().map(|arm| self.arm_tokens[arm]))
+            .map(|value| self.ctx.value_ty(value))
+            .collect();
+        let parent = self.enclosing_func_name(source);
         let mut bodies = Vec::with_capacity(sources.len());
-        for (&convention, body_source) in conventions.iter().zip(sources) {
+        // A lambda that declares `cps_entry` has one more entry, its
+        // strongest body converted as a `Cps` flow.
+        let mut flows: Vec<_> = conventions.iter().copied().zip(sources).collect();
+        if tribute_cps::has_cps_entry(self.ctx, source)
+            && let Some(&(_, strongest)) = flows.last()
+        {
+            flows.push((CallingConvention::Cps, strongest));
+        }
+        let conventions: Vec<_> = flows.iter().map(|&(convention, _)| convention).collect();
+        for (convention, body_source) in flows {
             let abi = CallableAbi::new(convention, source_param_types.clone(), result);
-            let params = abi.lowered_params(evidence, frame);
-            let entry_source = self.ctx.region(body_source).blocks[0];
-            let block = make_block(self.ctx, location, &params);
-            let mut body_mapping = mapping.clone();
-            let offset = abi.source_param_offset();
-            for (old, new) in self
-                .ctx
-                .block_args(entry_source)
-                .to_vec()
+            let formals = abi
+                .lowered_params(evidence, frame)
                 .into_iter()
-                .zip(self.ctx.block_args(block)[offset..].iter().copied())
-            {
-                body_mapping.insert(old, new);
+                .map(|ty| BlockArgData {
+                    ty,
+                    attrs: AttributeMap::new(),
+                })
+                .collect();
+            let entry_source = self.ctx.region(body_source).blocks[0];
+            let ClosureEntryBlock {
+                block,
+                formals,
+                captures,
+            } = ClosureEntryBlock::new(
+                self.ctx,
+                location,
+                convention,
+                physical_ty,
+                formals,
+                &capture_types,
+            );
+            let mut body_mapping: HashMap<_, _> = values
+                .iter()
+                .copied()
+                .zip(captures.iter().copied())
+                .collect();
+            let mut outer_tokens = Vec::with_capacity(arms.len());
+            for (&arm, &token) in arms.iter().zip(captures.iter().skip(values.len())) {
+                outer_tokens.push((arm, self.arm_tokens.insert(arm, token)));
             }
-            let evidence_value = convention
-                .needs_evidence()
-                .then(|| self.ctx.block_args(block)[0]);
+            body_mapping.extend(
+                self.ctx
+                    .block_args(entry_source)
+                    .iter()
+                    .copied()
+                    .zip(formals[abi.source_param_offset()..].iter().copied()),
+            );
+            let evidence_value = convention.needs_evidence().then(|| formals[0]);
             let exit_k = convention
                 .needs_continuation_frame()
-                .then(|| self.ctx.block_args(block)[usize::from(convention.needs_evidence())]);
+                .then(|| formals[usize::from(convention.needs_evidence())]);
             let flow = Flow {
                 convention,
                 evidence: evidence_value,
@@ -61,23 +158,35 @@ impl Converter<'_> {
                 preserve_scf_yield: false,
                 tail_join: None,
             };
-            self.convert_sequence(
+            let converted = self.convert_sequence(
                 self.ctx.block(entry_source).ops.clone(),
                 0,
                 block,
                 &mut body_mapping,
                 &flow,
-            )?;
-            bodies.push(single_block_region(self.ctx, location, block));
+            );
+            for (arm, token) in outer_tokens {
+                match token {
+                    Some(token) => self.arm_tokens.insert(arm, token),
+                    None => self.arm_tokens.remove(&arm),
+                };
+            }
+            converted?;
+            let region = single_block_region(self.ctx, location, block);
+            let signature = self.lower_callable_signature(logical_ty, convention);
+            let signature = func::FuncSig::from_type_ref(self.ctx, signature)
+                .expect("an entry signature is a func.func_sig");
+            let entry_ty = closure_entry_type(self.ctx, signature, convention, physical_ty);
+            let symbol = self.next_lambda_entry(&parent);
+            let entry = func::Func::operands()
+                .sym_name(self.ctx.intern_symbol_text(&symbol))
+                .r#type(entry_ty)
+                .regions(region)
+                .build(self.ctx, location);
+            entry.set_calling_convention(self.ctx, convention);
+            self.ctx.push_op(self.module_block, entry.op_ref());
+            bodies.push((convention, SymbolPath::new([symbol])));
         }
-        // The bodies' uses of enclosing values, including the arm token a
-        // `resume` in them transfers into, are the captures.
-        let captures = values_defined_above(self.ctx, &bodies);
-        let physical_ty = self.convert_type(logical_ty);
-        let signatures: Vec<_> = conventions
-            .iter()
-            .map(|&convention| self.lower_callable_signature(logical_ty, convention))
-            .collect();
         self.ensure_tables();
         let tables = self.tables.as_mut().expect("the tables were just made");
         let adapters = tables.adapters(
@@ -87,33 +196,75 @@ impl Converter<'_> {
             physical_ty,
             &conventions,
         );
-        let adapters = (!adapters.is_empty()).then(|| {
-            adapters
-                .into_iter()
-                .map(|(convention, adapter)| {
-                    (
-                        convention.keyword().into(),
-                        trunk_ir::SymbolPath::new([adapter]),
-                    )
-                })
-                .collect::<Vec<_>>()
-        });
-        let lambda = closure::Lambda::operands(captures)
-            .signatures(signatures)
-            .conventions(conventions)
-            .adapters(adapters)
-            .results(physical_ty)
-            .regions(bodies)
-            .build(self.ctx, location);
-        self.copy_extra_attrs(
-            source,
-            lambda.op_ref(),
-            &[
-                tribute_control::QUANTIFIED_ROWS_ATTR,
-                tribute_cps::CONVENTIONS_ATTR,
-            ],
+        let entries = tables.table(
+            self.ctx,
+            self.module_block,
+            location,
+            physical_ty,
+            bodies.into_iter().chain(
+                adapters
+                    .into_iter()
+                    .map(|(convention, adapter)| (convention, SymbolPath::new([adapter]))),
+            ),
         );
-        Ok(lambda.op_ref())
+        Ok(LambdaEntries {
+            entries,
+            values,
+            arms,
+            capture_types,
+        })
+    }
+
+    /// The arms outside `bodies` whose resumption a `resume` in `bodies`
+    /// consumes, in order of first use.
+    fn carried_arms(&self, bodies: &[RegionRef]) -> Vec<RegionRef> {
+        let mut arms = Vec::new();
+        for &body in bodies {
+            let _ = trunk_ir::walk::walk_region::<()>(self.ctx, body, &mut |op| {
+                if tribute_control::Resume::matches(self.ctx, op)
+                    && let Some(resumption) = DynResumptionRegions::enclosing(self.ctx, op)
+                    && !arms.contains(&resumption.arm)
+                    && !region_is_within(self.ctx, resumption.arm, bodies)
+                {
+                    arms.push(resumption.arm);
+                }
+                ControlFlow::Continue(WalkAction::Advance)
+            });
+        }
+        arms
+    }
+
+    /// The name of the source function `op` is written in.
+    fn enclosing_func_name(&self, op: OpRef) -> String {
+        let mut current = op;
+        loop {
+            if let Ok(function) = tribute_cps::Func::from_op(self.ctx, current) {
+                return function.sym_name(self.ctx).to_owned();
+            }
+            let owner = self
+                .ctx
+                .op(current)
+                .parent_block
+                .and_then(|block| self.ctx.block(block).parent_region)
+                .and_then(|region| self.ctx.region(region).parent_op);
+            match owner {
+                Some(owner) => current = owner,
+                None => return "<anon>".to_owned(),
+            }
+        }
+    }
+
+    /// The name of the next lambda entry function written in `parent`, which
+    /// no definition of the source module has.
+    fn next_lambda_entry(&mut self, parent: &str) -> Symbol {
+        let index = self.lambda_entries.entry(parent.to_owned()).or_insert(0);
+        loop {
+            let name = format!("{parent}::__lambda_{index}");
+            *index += 1;
+            if !self.source_symbols.contains(&name) {
+                return Symbol::new(&name);
+            }
+        }
     }
 
     pub(super) fn lower_direct_call(
@@ -408,6 +559,7 @@ impl Converter<'_> {
                 "sym_name",
                 "type",
                 tribute_cps::ENTRY_OF_ATTR,
+                tribute_cps::CPS_ENTRY_ATTR,
                 tribute_control::ROW_BINDERS_ATTR,
                 tribute_control::ROW_UNIONS_ATTR,
                 tribute_control::INFERRED_ROW_ATTR,
@@ -489,15 +641,24 @@ impl Converter<'_> {
         flow: &Flow,
     ) -> Result<(), TributeControlToCpsError> {
         let location = self.ctx.op(source).location;
-        let target_symbol = self
-            .ctx
-            .op_attrs(source)
-            .get_symbol_ref("callee")
-            .expect("pre-CPS validation checked tail callee")
-            .clone();
-        let target = self
+        let callee = self.targets[&source];
+        let named = self
             .current_func(source)
             .expect("pre-CPS validation resolved tail callee in this module");
+        // In a `Cps` flow a weaker callee is entered at the `Cps` entry
+        // instance it declares. Only the `Cps` entry of a lambda names such
+        // a callee: elsewhere class specialization names the entry itself.
+        let cps_entry = (flow.convention == CallingConvention::Cps
+            && named.convention != CallingConvention::Cps)
+            .then(|| self.cps_entries.get(&callee).cloned())
+            .flatten();
+        // The entry is a definition of the callee's module, so the transfer
+        // reaches it as it reaches the callee.
+        let written = self.written_callee(source);
+        let (target_symbol, target) = match cps_entry {
+            Some((entry, name)) => (written.sibling(name), self.funcs[&entry].clone()),
+            None => (written, named),
+        };
         let source_args = self
             .ctx
             .op_operands(source)
@@ -530,6 +691,12 @@ impl Converter<'_> {
                 // It installs no handle and makes no tail call, so calling
                 // it adds one bounded activation before the flow's `Done`
                 // takes its result.
+                if self.ctx.op_has_regions(callee) {
+                    return Err(self.malformed_source(
+                        source,
+                        "a tail call in a Cps flow names a weaker callee without a cps_entry",
+                    ));
+                }
                 let call = self.lower_direct_call(source, &target, mapping, flow)?;
                 self.ctx.push_op(block, call.op_ref());
                 self.emit_exit(block, location, call.result(self.ctx), flow)?;
@@ -562,8 +729,15 @@ impl Converter<'_> {
         let location = self.ctx.op(source).location;
         let source_callee = self.ctx.op_operands(source)[0];
         let logical_type = self.ctx.value_ty(source_callee);
-        let convention = tribute_cps::declared_convention(self.ctx, source)
-            .expect("pre-CPS validation checked indirect tail callee convention");
+        // In a `Cps` flow the transfer enters the callee's `Cps` entry. The
+        // declared convention is that of the body the transfer is written
+        // in, which also runs as its lambda's `Cps` entry.
+        let convention = if flow.convention == CallingConvention::Cps {
+            CallingConvention::Cps
+        } else {
+            tribute_cps::declared_convention(self.ctx, source)
+                .expect("pre-CPS validation checked indirect tail callee convention")
+        };
         let callee = mapping
             .get(&source_callee)
             .copied()

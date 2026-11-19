@@ -152,6 +152,19 @@ fn lambda_conventions(ctx: &IrContext, lambda: OpRef) -> Vec<CallingConvention> 
         .collect()
 }
 
+/// Every `closure.new` under `root`, in source order. A source lambda is
+/// one of these over its entry functions.
+fn closure_news(ctx: &IrContext, root: OpRef) -> Vec<OpRef> {
+    let mut news = Vec::new();
+    let _ = trunk_ir::walk::walk_op::<()>(ctx, root, &mut |op| {
+        if closure::New::matches(ctx, op) {
+            news.push(op);
+        }
+        std::ops::ControlFlow::Continue(trunk_ir::walk::WalkAction::Advance)
+    });
+    news
+}
+
 fn collect_lambdas(ctx: &IrContext, op: OpRef, lambdas: &mut Vec<OpRef>) {
     if closure::Lambda::matches(ctx, op) {
         lambdas.push(op);
@@ -225,7 +238,11 @@ fn textual_callable_graph_converts_and_reparses() {
     assert!(!printed.contains("tribute_control.func_ref "));
     assert!(!printed.contains("tribute_control.call_indirect "));
     assert!(printed.contains("func.func @decl"));
-    assert!(printed.contains("closure.lambda"));
+    assert!(
+        printed.contains("func.func @\"outer::__lambda_0\""),
+        "{printed}"
+    );
+    assert!(printed.contains("closure.new"), "{printed}");
     assert!(printed.contains("func.tail_call_indirect"));
     assert!(printed.contains("tribute.calling_convention = \"cps\""));
 
@@ -726,24 +743,25 @@ fn source_signature_metadata_roundtrips_before_conversion() {
         Some(CallingConvention::Direct)
     );
 
-    let mut lambdas = Vec::new();
-    collect_lambdas(&ctx, module.op(), &mut lambdas);
-    let lambda_metadata = lambdas.into_iter().find_map(|lambda| {
-        let closure_ty = ctx.op_result_types(lambda)[0];
-        let closure = closure::Closure::from_type_ref(&ctx, closure_ty)?;
-        let signature = func::FuncSig::from_type_ref(&ctx, closure.func_type(&ctx))?;
-        let Attribute::List(metadata) = ctx.type_attrs(signature.as_type_ref()).get("metadata")?
-        else {
-            return None;
-        };
-        let [Attribute::List(pair)] = metadata.as_slice() else {
-            return None;
-        };
-        let [Attribute::Type(nested), Attribute::SymbolRef(tag)] = pair.as_slice() else {
-            return None;
-        };
-        (tag == ["lambda"]).then_some(*nested)
-    });
+    let lambda_metadata = closure_news(&ctx, module.op())
+        .into_iter()
+        .find_map(|lambda| {
+            let closure_ty = ctx.op_result_types(lambda)[0];
+            let closure = closure::Closure::from_type_ref(&ctx, closure_ty)?;
+            let signature = func::FuncSig::from_type_ref(&ctx, closure.func_type(&ctx))?;
+            let Attribute::List(metadata) =
+                ctx.type_attrs(signature.as_type_ref()).get("metadata")?
+            else {
+                return None;
+            };
+            let [Attribute::List(pair)] = metadata.as_slice() else {
+                return None;
+            };
+            let [Attribute::Type(nested), Attribute::SymbolRef(tag)] = pair.as_slice() else {
+                return None;
+            };
+            (tag == ["lambda"]).then_some(*nested)
+        });
     assert!(
         lambda_metadata.is_some_and(|nested| closure::Closure::matches(&ctx, nested)),
         "lambda metadata must retain a converted nested source signature"
@@ -2876,36 +2894,52 @@ fn a_lambda_with_two_bodies_lifts_an_entry_per_body() {
 }"#,
     );
     tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default()).unwrap();
-    let mut lambdas = Vec::new();
-    collect_lambdas(&ctx, module.op(), &mut lambdas);
-    let source = lambdas
-        .iter()
-        .filter_map(|&op| closure::Lambda::from_op(&ctx, op).ok())
-        .find(|lambda| lambda.adapters(&ctx).is_some())
-        .expect("the source lambda has adapters");
-    let entries = source.entries(&ctx).expect("the lists describe the bodies");
-    assert_eq!(
-        entries
-            .iter()
-            .map(|entry| entry.convention)
-            .collect::<Vec<_>>(),
-        [CallingConvention::Direct, CallingConvention::Cps]
-    );
-    assert_eq!(
-        entries
-            .iter()
-            .map(|entry| entry.signature.inputs(&ctx).len())
-            .collect::<Vec<_>>(),
-        [1, 3],
-        "the Cps body takes the evidence and its frame"
-    );
-    let adapters: Vec<_> = source
-        .adapters(&ctx)
-        .unwrap()
-        .iter()
-        .map(|(keyword, _)| ctx.str(keyword).to_owned())
+    let printed = module.op().display(&ctx).to_string();
+    let source = closure_news(&ctx, module.op())
+        .into_iter()
+        .filter_map(|op| closure::New::from_op(&ctx, op).ok())
+        .find(|new| {
+            new.entries(&ctx)
+                .any(|entry| entry.to_string().contains("__tribute_entry_adapter_"))
+        })
+        .unwrap_or_else(|| panic!("the source lambda has adapters: {printed}"));
+    let symbols = trunk_ir::symbol_table::SymbolTable::collect(&ctx, module);
+    let functions: Vec<_> = source
+        .entries(&ctx)
+        .map(|entry| {
+            symbols
+                .resolve(&ctx, source.op_ref(), entry)
+                .and_then(|function| func::Func::from_op(&ctx, function).ok())
+                .expect("every entry is a function of the module")
+        })
         .collect();
-    assert_eq!(adapters, ["evidence_direct"]);
+    let [direct, adapter, cps] = functions[..] else {
+        panic!("one slot per convention: {printed}");
+    };
+    assert_eq!(
+        [direct, adapter, cps].map(|function| DynConventionBearing::of(&ctx, function.op_ref())),
+        [
+            Some(CallingConvention::Direct),
+            Some(CallingConvention::EvidenceDirect),
+            Some(CallingConvention::Cps)
+        ]
+    );
+    assert_eq!(direct.sym_name(&ctx), "outer::__lambda_0");
+    assert_eq!(cps.sym_name(&ctx), "outer::__lambda_1");
+    assert!(
+        adapter
+            .sym_name(&ctx)
+            .starts_with("__tribute_entry_adapter_")
+    );
+    // Each body takes the closure, then what its convention passes: the
+    // Cps body the evidence and its frame.
+    let inputs = |function: func::Func| {
+        func::FuncSig::from_type_ref(&ctx, function.r#type(&ctx))
+            .unwrap()
+            .inputs(&ctx)
+            .len()
+    };
+    assert_eq!([inputs(direct), inputs(cps)], [2, 4], "{printed}");
     assert_eq!(ctx.op_operands(source.op_ref()).len(), 1);
 
     crate::lower_closure_lambda::lower_closure_lambda(&mut ctx, module);
@@ -2964,17 +2998,56 @@ fn converted_resumptive_arm(ctx: &IrContext, module: Module) -> (OpRef, ValueRef
     (lambda, token)
 }
 
-/// The `closure.lambda`s strictly under `root` that capture exactly
-/// `capture`, outermost first.
+/// The `closure.new`s of source lambdas strictly under `root` that capture
+/// exactly `capture`, outermost first. A source lambda's body is a function
+/// of the module, so only the `closure.new` is under `root`.
 fn lambdas_capturing(ctx: &IrContext, root: OpRef, capture: ValueRef) -> Vec<OpRef> {
     let mut lambdas = Vec::new();
     let _ = trunk_ir::walk::walk_op::<()>(ctx, root, &mut |op| {
-        if op != root && closure::Lambda::matches(ctx, op) && ctx.op_operands(op) == [capture] {
+        if op != root
+            && closure::New::from_op(ctx, op).is_ok_and(|new| new.entries(ctx).any(is_lambda_entry))
+            && ctx.op_operands(op) == [capture]
+        {
             lambdas.push(op);
         }
         std::ops::ControlFlow::Continue(trunk_ir::walk::WalkAction::Advance)
     });
     lambdas
+}
+
+/// Whether `entry` names the entry function of a source lambda body.
+fn is_lambda_entry(entry: &SymbolPath) -> bool {
+    entry
+        .leaf()
+        .is_some_and(|leaf| leaf.to_string().contains("::__lambda_"))
+}
+
+/// The entry function of the one source lambda body of the `closure.new`
+/// `lambda`, and the value it unpacks as its only capture.
+fn lambda_body_and_capture(ctx: &IrContext, module: Module, lambda: OpRef) -> (OpRef, ValueRef) {
+    let symbols = trunk_ir::symbol_table::SymbolTable::collect(ctx, module);
+    let new = closure::New::from_op(ctx, lambda).unwrap();
+    let [entry] = new
+        .entries(ctx)
+        .filter(|entry| is_lambda_entry(entry))
+        .collect::<Vec<_>>()[..]
+    else {
+        panic!("one lambda body: {}", module.op().display(ctx));
+    };
+    let body = symbols
+        .resolve(ctx, lambda, entry)
+        .expect("the entry is a function of the module");
+    let unpack = ctx.block(lambda_entry(ctx, body)).ops[0];
+    let unpack = closure::Unpack::from_op(ctx, unpack).unwrap_or_else(|_| {
+        panic!(
+            "a body with a capture unpacks it: {}",
+            module.op().display(ctx)
+        )
+    });
+    let [capture] = unpack.results(ctx)[..] else {
+        panic!("one capture: {}", module.op().display(ctx));
+    };
+    (body, capture)
 }
 
 /// The `func.tail_call_indirect`s under `root` that enter `callee`.
@@ -3076,13 +3149,15 @@ fn a_lambda_carrying_the_resumption_captures_the_token() {
             module.op().display(&ctx)
         );
     };
-    let transfers = transfers_into(&ctx, lambda, token);
+    // The lambda's body unpacks the token from its closure and resumes it.
+    let (body, carried) = lambda_body_and_capture(&ctx, module, lambda);
+    let transfers = transfers_into(&ctx, body, carried);
     let [transfer] = transfers[..] else {
         panic!("one resume enters the token: {}", module.op().display(&ctx));
     };
     assert_eq!(
         transferred_evidence(&ctx, transfer),
-        ctx.block_args(lambda_entry(&ctx, lambda))[0]
+        ctx.block_args(lambda_entry(&ctx, body))[0]
     );
 }
 
@@ -3116,14 +3191,20 @@ fn nested_lambdas_carrying_the_resumption_each_capture_the_token() {
 }"#;
     let (ctx, module) = convert_state_get(input);
     let (arm, token) = converted_resumptive_arm(&ctx, module);
-    let lambdas = lambdas_capturing(&ctx, arm, token);
-    let [_outer, inner] = lambdas[..] else {
+    // The arm builds the outer lambda over the token, whose body unpacks it
+    // and builds the inner lambda over it in turn.
+    let [outer] = lambdas_capturing(&ctx, arm, token)[..] else {
+        panic!("the arm captures the token: {}", module.op().display(&ctx));
+    };
+    let (outer_body, outer_token) = lambda_body_and_capture(&ctx, module, outer);
+    let [inner] = lambdas_capturing(&ctx, outer_body, outer_token)[..] else {
         panic!(
-            "two lambdas capture the token: {}",
+            "the outer lambda's body captures the token: {}",
             module.op().display(&ctx)
         );
     };
-    assert_eq!(transfers_into(&ctx, inner, token).len(), 1);
+    let (inner_body, inner_token) = lambda_body_and_capture(&ctx, module, inner);
+    assert_eq!(transfers_into(&ctx, inner_body, inner_token).len(), 1);
 }
 
 #[test]
@@ -3244,21 +3325,19 @@ fn an_arm_body_resume_and_a_carried_resume_enter_the_same_token_with_their_own_e
             module.op().display(&ctx)
         );
     };
-    let carried = transfers_into(&ctx, lambda, token);
+    let (body, carried_token) = lambda_body_and_capture(&ctx, module, lambda);
+    let carried = transfers_into(&ctx, body, carried_token);
     let [carried] = carried[..] else {
         panic!("the lambda resumes once: {}", module.op().display(&ctx));
     };
     assert_eq!(
         transferred_evidence(&ctx, carried),
-        ctx.block_args(lambda_entry(&ctx, lambda))[0]
+        ctx.block_args(lambda_entry(&ctx, body))[0]
     );
+    // The lambda's body is no part of the arm, so the arm's own transfers
+    // are the arm body's.
     let all = transfers_into(&ctx, arm, token);
-    let [direct] = all
-        .iter()
-        .copied()
-        .filter(|&op| op != carried)
-        .collect::<Vec<_>>()[..]
-    else {
+    let [direct] = all[..] else {
         panic!("the arm body resumes once: {}", module.op().display(&ctx));
     };
     assert_ne!(
@@ -3441,4 +3520,373 @@ fn a_call_or_resume_with_an_evidence_plan_keeps_its_suffix_frame() {
     let (run, _, body, call) = tail_sites(&ctx, module);
     assert_eq!(suffix_frames(&ctx, run), 2, "{}", module.op().display(&ctx));
     assert_ne!(ctx.op_operands(call)[1], ctx.block_args(body)[1]);
+}
+
+/// The function `name` of `module`.
+fn function_named(ctx: &IrContext, module: Module, name: &str) -> func::Func {
+    module
+        .ops(ctx)
+        .iter()
+        .filter_map(|&op| func::Func::from_op(ctx, op).ok())
+        .find(|function| function.sym_name(ctx) == name)
+        .unwrap_or_else(|| panic!("no function {name}: {}", module.op().display(ctx)))
+}
+
+/// The entry functions of the `closure.new`s under `root`, one list each.
+fn closure_entries(ctx: &IrContext, root: OpRef) -> Vec<Vec<SymbolPath>> {
+    closure_news(ctx, root)
+        .into_iter()
+        .map(|op| {
+            closure::New::from_op(ctx, op)
+                .unwrap()
+                .entries(ctx)
+                .cloned()
+                .collect()
+        })
+        .collect()
+}
+
+/// A lambda that declares `cps_entry` is converted twice: its entry
+/// functions are its body's and its body run as a `Cps` flow, whose `become`
+/// enters the `cps_entry` of `@callee`. The lambda nested in it has one set of entry
+/// functions, which both of them build their closures over
+/// (`design/cps-effects.md`, "`Cps` 진입 본문").
+#[test]
+fn a_cps_entry_lambda_converts_its_body_twice_and_its_nested_lambda_once() {
+    let (mut ctx, module) = parse(
+        r#"core.module @test {
+  tribute_cps.func @callee(%x: core.i32) -> core.i32 convention(direct) attributes {cps_entry = @"callee$7"} {
+    tribute_control.return %x
+  }
+  tribute_cps.func @"callee$7"(%x: core.i32) -> core.i32 convention(cps) attributes {entry_of = "callee"} {
+    tribute_control.return %x
+  }
+  tribute_cps.func @outer(%first: core.i32) -> core.i32 convention(direct) {
+    %f = tribute_cps.lambda(%a: core.i32) -> core.i32 attributes {cps_entry = true} entries {
+      direct {
+        %g = tribute_cps.lambda(%b: core.i32) -> core.i32 entries {
+          direct {
+            tribute_control.return %first
+          }
+        }
+        tribute_control.tail_call @callee(%a) : (core.i32) -> ()
+      }
+    }
+    tribute_control.return %first
+  }
+}"#,
+    );
+    tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default()).unwrap();
+    let printed = module.op().display(&ctx).to_string();
+
+    // The outer lambda's closure has an entry for `direct` and one for
+    // `cps`, both real functions, and an adapter between them.
+    let outer = function_named(&ctx, module, "outer");
+    let tables = closure_entries(&ctx, outer.op_ref());
+    assert_eq!(tables.len(), 1, "{printed}");
+    let [direct, middle, cps] = &tables[0][..] else {
+        panic!("three entries: {printed}");
+    };
+    assert_eq!(direct, &["outer::__lambda_1"], "{printed}");
+    assert!(
+        middle.to_string().contains("__tribute_entry_adapter_"),
+        "{printed}"
+    );
+    assert_eq!(cps, &["outer::__lambda_2"], "{printed}");
+
+    // Each entry tail-calls its own instance, in its own convention.
+    let tail_of = |name: &str| {
+        let function = function_named(&ctx, module, name);
+        let mut tails = Vec::new();
+        let _ = trunk_ir::walk::walk_op::<()>(&ctx, function.op_ref(), &mut |op| {
+            if let Ok(tail) = func::TailCall::from_op(&ctx, op) {
+                tails.push((
+                    tail.callee(&ctx).clone(),
+                    DynConventionBearing::of(&ctx, op),
+                ));
+            }
+            std::ops::ControlFlow::Continue(trunk_ir::walk::WalkAction::Advance)
+        });
+        tails
+    };
+    assert_eq!(
+        tail_of("outer::__lambda_1"),
+        [(SymbolPath::new(["callee"]), Some(CallingConvention::Direct))],
+        "{printed}"
+    );
+    assert_eq!(
+        tail_of("outer::__lambda_2"),
+        [(SymbolPath::new(["callee$7"]), Some(CallingConvention::Cps))],
+        "{printed}"
+    );
+
+    // The nested lambda has one set of entry functions, and both entries of
+    // the outer lambda build their closure over it.
+    let nested_functions = module
+        .ops(&ctx)
+        .iter()
+        .filter_map(|&op| func::Func::from_op(&ctx, op).ok())
+        .filter(|function| function.sym_name(&ctx).starts_with("outer::__lambda_"))
+        .count();
+    assert_eq!(nested_functions, 3, "{printed}");
+    let first = closure_entries(
+        &ctx,
+        function_named(&ctx, module, "outer::__lambda_1").op_ref(),
+    );
+    let second = closure_entries(
+        &ctx,
+        function_named(&ctx, module, "outer::__lambda_2").op_ref(),
+    );
+    assert_eq!(first.len(), 1, "{printed}");
+    assert_eq!(first, second, "{printed}");
+    assert_eq!(first[0][0], ["outer::__lambda_0"], "{printed}");
+}
+
+/// A `Cps` entry's tail call to a callee in a nested module keeps the module
+/// prefix of the written path and replaces only its last component.
+#[test]
+fn a_cps_entry_tail_call_to_a_nested_module_callee_keeps_its_module_prefix() {
+    let (mut ctx, module) = parse(
+        r#"core.module @test {
+  core.module @inner {
+    tribute_cps.func @callee(%x: core.i32) -> core.i32 convention(direct) attributes {cps_entry = @"callee$7"} {
+      tribute_control.return %x
+    }
+    tribute_cps.func @"callee$7"(%x: core.i32) -> core.i32 convention(cps) attributes {entry_of = "callee"} {
+      tribute_control.return %x
+    }
+  }
+  tribute_cps.func @outer(%first: core.i32) -> core.i32 convention(direct) {
+    %f = tribute_cps.lambda(%a: core.i32) -> core.i32 attributes {cps_entry = true} entries {
+      direct {
+        tribute_control.tail_call @inner::@callee(%a) : (core.i32) -> ()
+      }
+    }
+    tribute_control.return %first
+  }
+}"#,
+    );
+    tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default()).unwrap();
+    let printed = module.op().display(&ctx).to_string();
+
+    let tail_of = |name: &str| {
+        let function = function_named(&ctx, module, name);
+        let mut tails = Vec::new();
+        let _ = trunk_ir::walk::walk_op::<()>(&ctx, function.op_ref(), &mut |op| {
+            if let Ok(tail) = func::TailCall::from_op(&ctx, op) {
+                tails.push((
+                    tail.callee(&ctx).clone(),
+                    DynConventionBearing::of(&ctx, op),
+                ));
+            }
+            std::ops::ControlFlow::Continue(trunk_ir::walk::WalkAction::Advance)
+        });
+        tails
+    };
+    assert_eq!(
+        tail_of("outer::__lambda_0"),
+        [(
+            SymbolPath::new(["inner", "callee"]),
+            Some(CallingConvention::Direct)
+        )],
+        "{printed}"
+    );
+    assert_eq!(
+        tail_of("outer::__lambda_1"),
+        [(
+            SymbolPath::new(["inner", "callee$7"]),
+            Some(CallingConvention::Cps)
+        )],
+        "{printed}"
+    );
+}
+
+/// A `tribute_control.tail_call` in the own flow of a `cps_entry` lambda's
+/// body that names a weaker callee with a body and no `cps_entry` has no
+/// `Cps` instance to enter, so legalization fails.
+#[test]
+fn a_cps_entry_tail_call_to_a_weaker_callee_without_a_cps_entry_fails() {
+    let (mut ctx, module) = parse(
+        r#"core.module @test {
+  tribute_cps.func @callee(%x: core.i32) -> core.i32 convention(direct) {
+    tribute_control.return %x
+  }
+  tribute_cps.func @outer(%first: core.i32) -> core.i32 convention(direct) {
+    %f = tribute_cps.lambda(%a: core.i32) -> core.i32 attributes {cps_entry = true} entries {
+      direct {
+        tribute_control.tail_call @callee(%a) : (core.i32) -> ()
+      }
+    }
+    tribute_control.return %first
+  }
+}"#,
+    );
+    let error = tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default()).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("a tail call in a Cps flow names a weaker callee without a cps_entry"),
+        "{error}"
+    );
+}
+
+/// A `cps_entry` that resolves to another definition's entry is no entry of
+/// the callee, so a tail call to it fails rather than entering `other$7`.
+#[test]
+fn a_cps_entry_tail_call_to_a_callee_naming_another_definitions_entry_fails() {
+    let (mut ctx, module) = parse(
+        r#"core.module @test {
+  tribute_cps.func @callee(%x: core.i32) -> core.i32 convention(direct) attributes {cps_entry = @"other$7"} {
+    tribute_control.return %x
+  }
+  tribute_cps.func @"other$7"(%x: core.i32) -> core.i32 convention(cps) attributes {entry_of = "other"} {
+    tribute_control.return %x
+  }
+  tribute_cps.func @outer(%first: core.i32) -> core.i32 convention(direct) {
+    %f = tribute_cps.lambda(%a: core.i32) -> core.i32 attributes {cps_entry = true} entries {
+      direct {
+        tribute_control.tail_call @callee(%a) : (core.i32) -> ()
+      }
+    }
+    tribute_control.return %first
+  }
+}"#,
+    );
+    let error = tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default()).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("a tail call in a Cps flow names a weaker callee without a cps_entry"),
+        "{error}"
+    );
+}
+
+/// A lambda's entry function never takes the name of a function the source
+/// module already defines.
+#[test]
+fn a_lambda_entry_name_skips_a_source_function_of_that_name() {
+    let (mut ctx, module) = parse(
+        r#"core.module @test {
+  tribute_cps.func @"outer::__lambda_0"(%x: core.i32) -> core.i32 convention(direct) {
+    tribute_control.return %x
+  }
+  tribute_cps.func @outer(%first: core.i32) -> core.i32 convention(direct) {
+    %f = tribute_cps.lambda(%a: core.i32) -> core.i32 entries {
+      direct {
+        tribute_control.return %a
+      }
+    }
+    tribute_control.return %first
+  }
+}"#,
+    );
+    tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default()).unwrap();
+    let printed = module.op().display(&ctx).to_string();
+    let names: Vec<String> = module
+        .ops(&ctx)
+        .iter()
+        .filter_map(|&op| func::Func::from_op(&ctx, op).ok())
+        .map(|function| function.sym_name(&ctx).to_owned())
+        .collect();
+    let unique: std::collections::BTreeSet<_> = names.iter().collect();
+    assert_eq!(unique.len(), names.len(), "{printed}");
+    assert!(
+        names.iter().any(|name| name == "outer::__lambda_1"),
+        "{printed}"
+    );
+    let outer = function_named(&ctx, module, "outer");
+    let entries = closure_entries(&ctx, outer.op_ref());
+    assert!(!entries.is_empty(), "{printed}");
+    for entry in entries.iter().flatten() {
+        assert_ne!(entry.to_string(), "outer::__lambda_0", "{printed}");
+    }
+}
+
+/// The same holds in a nested module, which shares the counters.
+#[test]
+fn a_nested_module_lambda_entry_name_skips_a_source_function_of_that_name() {
+    let (mut ctx, module) = parse(
+        r#"core.module @test {
+  core.module @inner {
+    tribute_cps.func @"f::__lambda_0"(%x: core.i32) -> core.i32 convention(direct) {
+      tribute_control.return %x
+    }
+    tribute_cps.func @f(%first: core.i32) -> core.i32 convention(direct) {
+      %f = tribute_cps.lambda(%a: core.i32) -> core.i32 entries {
+        direct {
+          tribute_control.return %a
+        }
+      }
+      tribute_control.return %first
+    }
+  }
+}"#,
+    );
+    tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default()).unwrap();
+    let printed = module.op().display(&ctx).to_string();
+    let inner = module
+        .ops(&ctx)
+        .iter()
+        .find_map(|&op| Module::new(&ctx, op))
+        .expect("inner module");
+    let names: Vec<String> = inner
+        .ops(&ctx)
+        .iter()
+        .filter_map(|&op| func::Func::from_op(&ctx, op).ok())
+        .map(|function| function.sym_name(&ctx).to_owned())
+        .collect();
+    let unique: std::collections::BTreeSet<_> = names.iter().collect();
+    assert_eq!(unique.len(), names.len(), "{printed}");
+    assert!(
+        names.iter().any(|name| name == "f::__lambda_1"),
+        "{printed}"
+    );
+}
+
+/// A `tribute_cps.tail_call_indirect` in the own flow of a `cps_entry`
+/// lambda's body, declared `direct`, is `direct` in the body's entry and
+/// enters its callee's `Cps` entry in the `Cps` entry.
+#[test]
+fn an_indirect_tail_call_in_a_cps_entry_lambda_is_cps_in_its_cps_entry() {
+    let (mut ctx, module) = parse(
+        r#"core.module @test {
+  !k = tribute_control.func_sig<(core.i32) -> core.i32>
+  tribute_cps.func @outer(%first: core.i32, %k: !k) -> core.i32 convention(direct) {
+    %f = tribute_cps.lambda(%a: core.i32) -> core.i32 attributes {cps_entry = true} entries {
+      direct {
+        tribute_cps.tail_call_indirect %k(%a) attributes {convention = "direct"} : (core.i32) -> core.i32
+      }
+    }
+    tribute_control.return %first
+  }
+}"#,
+    );
+    tribute_control_to_cps(&mut ctx, module, &[], &mut Default::default()).unwrap();
+    let printed = module.op().display(&ctx).to_string();
+    let outer = function_named(&ctx, module, "outer");
+    let tables = closure_entries(&ctx, outer.op_ref());
+    let [direct, _, cps] = &tables[0][..] else {
+        panic!("three entries: {printed}");
+    };
+    let convention_of = |name: &SymbolPath| {
+        let function = function_named(&ctx, module, &name.to_string());
+        let mut found = Vec::new();
+        let _ = trunk_ir::walk::walk_op::<()>(&ctx, function.op_ref(), &mut |op| {
+            if func::TailCallIndirect::matches(&ctx, op) {
+                found.push(DynConventionBearing::of(&ctx, op));
+            }
+            std::ops::ControlFlow::Continue(trunk_ir::walk::WalkAction::Advance)
+        });
+        found
+    };
+    assert_eq!(
+        convention_of(direct),
+        [Some(CallingConvention::Direct)],
+        "{printed}"
+    );
+    assert_eq!(
+        convention_of(cps),
+        [Some(CallingConvention::Cps)],
+        "{printed}"
+    );
 }

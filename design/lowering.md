@@ -172,8 +172,12 @@ EnterTarget         value integrity check, global DCE (runtime functions
                     physicalization (physical signatures, root entry bridge,
                     value delimiters), closure lowering, target evidence
                     lowering
-ExitBoundary        closure storage layout, value integrity check, global
-                    DCE, canonicalization, boundary exit verification
+ExitBoundary        closure storage layout, literal expansion (Bytes and
+                    String literals to adt values over adt.array_const),
+                    representation selection (boxed adt values to heap.box;
+                    unboxed values stay adt values and inline fields),
+                    value integrity check, global DCE, canonicalization,
+                    boundary exit verification
 ── target dialect lowering ──
 LowerTarget         Wasm or native lowering (next two sections)
 ```
@@ -210,6 +214,7 @@ After the [boundary](#pipeline-order) exit, Wasm dialect lowering runs:
 
 ```text
 validate_lowerable_structured_control
+unboxed value scalarization
 convert_builtin_layouts
 io_to_wasm
 arith_to_wasm
@@ -248,8 +253,8 @@ scf_to_wasm
 func_to_wasm
 ```
 
-`adt` is a Tribute dialect, so `adt_to_wasm` belongs to `tribute-passes`, not
-to this pass group.
+`heap` is a Tribute dialect, so its Wasm lowering (`adt_to_wasm`) belongs to
+`tribute-passes`, not to this pass group.
 
 Expected boundary: backend-ready Wasm IR contains `wasm.*` plus explicitly
 allowed infrastructure operations.
@@ -266,6 +271,7 @@ After the [boundary](#pipeline-order) exit, native lowering runs:
 native String/Bytes/I/O/List lowering
 scf_to_cf
 typed ownership/RTTI planning + explicit RC materialization
+unboxed value scalarization
 struct_to_mem
 func_to_clif
 cf_to_clif

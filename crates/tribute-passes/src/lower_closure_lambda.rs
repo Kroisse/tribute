@@ -1,6 +1,9 @@
 //! Lower `closure.lambda` operations to `func.func` + `closure.new`.
 //!
-//! This pass performs closure conversion on high-level `closure.lambda` ops:
+//! This pass performs closure conversion on every remaining
+//! `closure.lambda` op: the closures CPS legalization and continuation frame
+//! lowering generate. Legalization makes the entry functions of source
+//! lambdas itself:
 //!
 //! ```text
 //! // Before:
@@ -24,6 +27,7 @@
 
 use crate::collections::HashMap;
 use crate::convention_table::{ConventionTables, ExpandedFrames};
+use crate::cps_builders::{ClosureEntryBlock, closure_entry_type};
 
 use tribute_ir::calling_convention::{CallingConvention, ConventionBearing};
 use trunk_ir::Symbol;
@@ -35,6 +39,7 @@ use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::pass::{Pass, PassRunResult};
 use trunk_ir::refs::{BlockRef, OpRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{Module, erase_op};
+#[cfg(test)]
 use trunk_ir::types::AttributeMap;
 
 use tribute_ir::dialect::closure;
@@ -174,11 +179,11 @@ fn lower_single_lambda(
         {
             return false;
         }
-        lifts.push((entry, orig_param_types, environment_index));
+        lifts.push(entry);
     }
 
     let mut bodies = Vec::with_capacity(lifts.len());
-    for (entry, orig_param_types, environment_index) in lifts {
+    for entry in lifts {
         let lifted_name = namer.next_name(&parent_name);
         // === Build the lifted function ===
         let func_body_region = build_lifted_body(
@@ -188,18 +193,12 @@ fn lower_single_lambda(
             &LiftBodyParams {
                 captures: &captures,
                 capture_types: &capture_types,
-                orig_param_types: &orig_param_types,
-                environment_index,
+                convention: entry.convention,
                 closure_ty: result_ty,
             },
         );
 
-        let func_ty = entry
-            .signature
-            .rebuild(ctx, |inputs, _| {
-                inputs.insert(environment_index, (result_ty, AttributeMap::new()));
-            })
-            .as_type_ref();
+        let func_ty = closure_entry_type(ctx, entry.signature, entry.convention, result_ty);
 
         let func_op = func::Func::operands()
             .sym_name(ctx.intern_symbol_text(&lifted_name))
@@ -264,8 +263,8 @@ fn lower_single_lambda(
 struct LiftBodyParams<'a> {
     captures: &'a [ValueRef],
     capture_types: &'a [TypeRef],
-    orig_param_types: &'a [TypeRef],
-    environment_index: usize,
+    /// The convention of the entry the body becomes.
+    convention: CallingConvention,
     /// The exact closure type, which is the environment parameter's type.
     closure_ty: TypeRef,
 }
@@ -279,59 +278,38 @@ fn build_lifted_body(
     params: &LiftBodyParams<'_>,
 ) -> trunk_ir::refs::RegionRef {
     let captures = params.captures;
-    let capture_types = params.capture_types;
-    let orig_param_types = params.orig_param_types;
-    let environment_index = params.environment_index;
     let orig_blocks = ctx.region(orig_body).blocks.clone();
     let orig_entry = orig_blocks[0];
-    let orig_param_count = orig_param_types.len();
 
     let mut mapping = IrMapping::new();
 
     // --- Pass 1: Create new entry block with the physical closure ABI. ---
-    let mut new_entry_args: Vec<_> = orig_param_types
+    let formals = ctx
+        .block(orig_entry)
+        .args
         .iter()
-        .enumerate()
-        .map(|(index, &ty)| BlockArgData {
-            ty,
-            attrs: ctx.block(orig_entry).args[index].attrs.clone(),
+        .map(|arg| BlockArgData {
+            ty: arg.ty,
+            attrs: arg.attrs.clone(),
         })
         .collect();
-    let environment_attrs = make_bind_name_attrs(ctx, "__env");
-    new_entry_args.insert(
-        environment_index,
-        BlockArgData {
-            ty: params.closure_ty,
-            attrs: environment_attrs,
-        },
-    );
-    let new_entry = ctx.create_block(BlockData {
+    let entry = ClosureEntryBlock::new(
+        ctx,
         location,
-        args: new_entry_args,
-        ops: Default::default(),
-        parent_region: None,
-    });
+        params.convention,
+        params.closure_ty,
+        formals,
+        params.capture_types,
+    );
+    let new_entry = entry.block;
 
     mapping.map_block(orig_entry, new_entry);
-
-    // Map logical closure args around the inserted environment parameter.
-    for i in 0..orig_param_count {
-        let old_arg = ctx.block_arg(orig_entry, i as u32);
-        let new_index = i + usize::from(i >= environment_index);
-        let new_arg = ctx.block_arg(new_entry, new_index as u32);
-        mapping.map_value(old_arg, new_arg);
+    let old_formals = ctx.block_args(orig_entry).to_vec();
+    for (old, new) in old_formals.into_iter().zip(entry.formals) {
+        mapping.map_value(old, new);
     }
-
-    // Unpack the captures at the start of the new entry block.
-    let environment = ctx.block_arg(new_entry, environment_index as u32);
-    if !captures.is_empty() {
-        let unpack = closure::Unpack::operands(environment)
-            .results(capture_types.to_vec())
-            .build(ctx, location);
-        ctx.push_op(new_entry, unpack.op_ref());
-        for (&capture, &unpacked) in captures.iter().zip(unpack.results(ctx)) {
-            mapping.map_value(capture, unpacked);
-        }
+    for (&capture, unpacked) in captures.iter().zip(entry.captures) {
+        mapping.map_value(capture, unpacked);
     }
 
     // --- Pass 1b: Create remaining blocks (non-entry) ---
@@ -424,6 +402,7 @@ impl LambdaNamer {
 }
 
 /// Create a `bind_name` attribute map for a block argument.
+#[cfg(test)]
 fn make_bind_name_attrs(ctx: &mut IrContext, name: &str) -> AttributeMap {
     let mut attrs = AttributeMap::new();
     let bind_name = ctx.string_attr(name);
