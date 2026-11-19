@@ -1053,8 +1053,9 @@ Nominal layout의 값의 타입은 layout을 가리키는 nominal 값 타입이�
 위치(operation 결과와 피연산자, block 인자, 함수 signature, 다른 layout의 필드)는 이
 타입을 쓴다. Nominal 값 타입은 값이며 managed 참조가 아니다. 그 값이 object에
 담기는지는 [표현 선택](abi-boundary.md#표현-선택)이 정하고, object에 담긴 값의
-참조는 [`heap.box`](#heap) 타입이다. 표현 선택 뒤에는 nominal 값 타입을 가진 값이
-없다.
+참조는 [`heap.box`](#heap) 타입이다. 표현 선택 뒤에 nominal 값 타입을 가진 값은
+unboxed로 고른 struct 타입의 값뿐이며,
+[target lowering](#target-lowering의-unboxed-값)이 이를 leaf로 쪼갠다.
 
 ```text
 adt.struct<"Point">
