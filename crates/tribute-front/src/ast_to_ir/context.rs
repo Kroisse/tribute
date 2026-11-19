@@ -663,7 +663,7 @@ mod tests {
             ],
         };
         assert_eq!(
-            entry.widened(&[reader.clone()]).plan,
+            entry.widened(std::slice::from_ref(&reader)).plan,
             [
                 EvidenceStep::Mask(reader.clone()),
                 EvidenceStep::Dup(state.clone()),
