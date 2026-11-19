@@ -25,7 +25,7 @@ pub struct NativeOwnershipModuleFacts {
     managed_layouts: HashSet<TypeRef>,
     closure_layouts: Vec<TypeRef>,
     rtti_types: Vec<RttiTypePlan>,
-    written_layouts: HashSet<TypeRef>,
+    written_arrays: HashSet<TypeRef>,
 }
 
 impl NativeOwnershipModuleFacts {
@@ -59,18 +59,11 @@ impl NativeOwnershipModuleFacts {
         &self.rtti_types
     }
 
-    /// Whether any `adt.struct_set` or `adt.array_set` in the module writes
-    /// `layout`.
-    ///
-    /// A writer reaches its struct through casts and closure environments, so
-    /// the layout's nominal identity decides, not a particular value. An
-    /// array type has no nominal identity; its exact type decides.
-    fn is_written_layout(&self, ctx: &IrContext, layout: TypeRef) -> bool {
-        self.written_layouts.contains(&layout)
-            || self
-                .written_layouts
-                .iter()
-                .any(|&written| nominal_types_compatible(ctx, written, layout))
+    /// Whether any `adt.array_set` in the module writes arrays of type
+    /// `array`. An array type has no nominal identity; its exact type
+    /// decides.
+    fn is_written_array(&self, array: TypeRef) -> bool {
+        self.written_arrays.contains(&array)
     }
 }
 
@@ -122,10 +115,10 @@ impl NativeOwnershipFunctionFacts {
         &self.projection_owners
     }
 
-    /// The projections a temporary borrow may elide: those whose layout no
-    /// `adt.struct_set` or `adt.array_set` in the module writes. A write
-    /// releases the previous value, so a projection of a written layout keeps
-    /// its own unit.
+    /// The projections a temporary borrow may elide. A `heap.cell_get` result
+    /// is never one, and neither is an element of an array type some
+    /// `adt.array_set` in the module writes: a write releases the previous
+    /// value, so such a read keeps its own unit.
     pub fn borrowable_projection_owners(&self) -> &HashMap<ValueRef, ValueRef> {
         &self.borrowable_projection_owners
     }
@@ -187,12 +180,10 @@ fn compute_module_facts(
     let mut layouts = ManagedLayoutCollector::new();
     let mut closure_allocations = Vec::new();
     let mut descriptors = Vec::new();
-    let mut written_layouts = HashSet::default();
+    let mut written_arrays = HashSet::default();
     walk_module(ctx, module, |op| {
-        if let Ok(set) = adt::StructSet::from_op(ctx, op) {
-            written_layouts.insert(set.r#type(ctx));
-        } else if let Ok(set) = adt::ArraySet::from_op(ctx, op) {
-            written_layouts.insert(ctx.value_ty(set.r#ref(ctx)));
+        if let Ok(set) = adt::ArraySet::from_op(ctx, op) {
+            written_arrays.insert(ctx.value_ty(set.r#ref(ctx)));
         }
         if func::Func::matches(ctx, op) {
             function_ops.push(op);
@@ -232,7 +223,7 @@ fn compute_module_facts(
         managed_layouts,
         closure_layouts,
         rtti_types,
-        written_layouts,
+        written_arrays,
     })
 }
 
@@ -257,7 +248,7 @@ fn compute_function_facts(
     let projection_owners = collect_borrowed_loads(ctx, cfg.blocks(), managed_layouts, &aliases)?;
     let borrowable_projection_owners = projection_owners
         .iter()
-        .filter(|&(&projection, _)| !reads_written_layout(ctx, module, projection))
+        .filter(|&(&projection, _)| !keeps_own_unit(ctx, module, projection))
         .map(|(&projection, &owner)| (projection, owner))
         .collect();
     let block_flow = collect_block_flow(ctx, &cfg, &managed, &aliases);
@@ -450,6 +441,8 @@ fn collect_borrowed_loads(
                 Some(get.r#ref(ctx))
             } else if let Ok(get) = adt::ArrayGet::from_op(ctx, op) {
                 Some(get.r#ref(ctx))
+            } else if let Ok(get) = heap::CellGet::from_op(ctx, op) {
+                Some(get.cell(ctx))
             } else {
                 None
             };
@@ -464,9 +457,12 @@ fn collect_borrowed_loads(
     Ok(borrowed)
 }
 
-/// Whether `projection` is an `adt.struct_get` or `adt.array_get` result read
-/// from a layout the module writes. Enum layouts have no write operation.
-fn reads_written_layout(
+/// Whether `projection` must acquire its own unit: a `heap.cell_get` result,
+/// whose cell a later write may change through another reference
+/// (`design/rc.md` § "3. RC optimization pass"), or an `adt.array_get`
+/// result read from an array type the module writes. Struct and enum objects
+/// are never written.
+fn keeps_own_unit(
     ctx: &IrContext,
     module: &NativeOwnershipModuleFacts,
     projection: ValueRef,
@@ -474,14 +470,11 @@ fn reads_written_layout(
     let ValueDef::OpResult(op, _) = ctx.value_def(projection) else {
         return false;
     };
-    let layout = if let Ok(get) = adt::StructGet::from_op(ctx, op) {
-        get.r#type(ctx)
-    } else if let Ok(get) = adt::ArrayGet::from_op(ctx, op) {
-        ctx.value_ty(get.r#ref(ctx))
-    } else {
-        return false;
-    };
-    module.is_written_layout(ctx, layout)
+    if heap::CellGet::matches(ctx, op) {
+        return true;
+    }
+    adt::ArrayGet::from_op(ctx, op)
+        .is_ok_and(|get| module.is_written_array(ctx.value_ty(get.r#ref(ctx))))
 }
 
 fn validate_projection_contract(
@@ -497,6 +490,12 @@ fn validate_projection_contract(
             .ok_or_else(|| OwnershipPlanError::new("array_get reads a non-array value"))?
             .element(ctx);
         (array_ty, element)
+    } else if let Ok(get) = heap::CellGet::from_op(ctx, op) {
+        let cell_ty = ctx.value_ty(get.cell(ctx));
+        let contents = heap::Cell::from_type_ref(ctx, cell_ty)
+            .ok_or_else(|| OwnershipPlanError::new("cell_get reads a non-cell value"))?
+            .contents(ctx);
+        (cell_ty, contents)
     } else if let Ok(get) = adt::StructGet::from_op(ctx, op) {
         let fields = get_struct_fields(ctx, get.r#type(ctx))
             .ok_or_else(|| OwnershipPlanError::new("struct_get has invalid layout"))?;

@@ -18,7 +18,9 @@
 //!
 //! A variant object holds only its own fields, so a variant field access is
 //! a struct field access: each `adt.variant_get` becomes an `adt.struct_get`
-//! of the variant's `mem.struct`.
+//! of the variant's `mem.struct`. So is a cell access: a cell holds its value
+//! as the only field of its object, so `heap.cell_get` and `heap.cell_set`
+//! become an `adt.struct_get` and an `adt.struct_set` of field 0.
 //!
 //! A variant is told apart by its runtime type descriptor. The same
 //! declarations number the descriptors, so this pass replaces each
@@ -36,7 +38,7 @@ use std::ops::ControlFlow;
 
 use tribute_ir::dialect::adt;
 use tribute_ir::dialect::adt::layout::get_struct_fields;
-use tribute_ir::dialect::{tribute_rt, tribute_rtti};
+use tribute_ir::dialect::{heap, tribute_rt, tribute_rtti};
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{arith, core, mem};
 use trunk_ir::ops::{DialectOp, DialectType};
@@ -74,6 +76,7 @@ pub(crate) fn lower(
 
     let mut accesses: Vec<(OpRef, TypeRef)> = Vec::new();
     let mut variants: Vec<(TypeRef, u32)> = Vec::new();
+    let mut cells: Vec<TypeRef> = Vec::new();
     let _ = walk_op::<()>(ctx, module.op(), &mut |op| {
         let layout = if let Ok(get) = adt::StructGet::from_op(ctx, op) {
             Some(get.r#type(ctx))
@@ -87,6 +90,11 @@ pub(crate) fn lower(
         }
         if let Ok(get) = adt::VariantGet::from_op(ctx, op) {
             variants.push((get.r#type(ctx), get.variant(ctx)));
+        }
+        if let Ok(get) = heap::CellGet::from_op(ctx, op) {
+            cells.push(ctx.value_ty(get.cell(ctx)));
+        } else if let Ok(set) = heap::CellSet::from_op(ctx, op) {
+            cells.push(ctx.value_ty(set.cell(ctx)));
         }
         ControlFlow::Continue(WalkAction::Advance)
     });
@@ -136,6 +144,26 @@ pub(crate) fn lower(
         variant_layouts.insert((enum_ty, tag), structural);
     }
 
+    // A cell holds its value as the only field of its object.
+    let mut cell_layouts: HashMap<TypeRef, TypeRef> = HashMap::default();
+    for cell_ty in cells {
+        if cell_layouts.contains_key(&cell_ty) {
+            continue;
+        }
+        let Some(cell) = heap::Cell::from_type_ref(ctx, cell_ty) else {
+            continue;
+        };
+        let contents = cell.contents(ctx);
+        let structural = structural_layout(
+            ctx,
+            [contents],
+            released.get(&(cell_ty, None)).map(Vec::as_slice),
+            plan,
+            type_converter,
+        );
+        cell_layouts.insert(cell_ty, structural);
+    }
+
     let numbers = tribute_rtti::Layout::declared_indices(ctx, module);
     PatternApplicator::new(TypeConverter::new())
         .add_pattern(VariantIsPattern { numbers })
@@ -143,7 +171,68 @@ pub(crate) fn lower(
         .add_pattern(VariantGetPattern {
             layouts: variant_layouts,
         })
+        .add_pattern(CellGetPattern {
+            layouts: &cell_layouts,
+        })
+        .add_pattern(CellSetPattern {
+            layouts: &cell_layouts,
+        })
         .apply_partial(ctx, module);
+}
+
+/// `heap.cell_get` -> `adt.struct_get` of the only field of the cell's
+/// `mem.struct`.
+struct CellGetPattern<'a> {
+    layouts: &'a HashMap<TypeRef, TypeRef>,
+}
+
+impl OpRewritePattern for CellGetPattern<'_> {
+    type Op = heap::CellGet;
+
+    fn match_and_rewrite(
+        &self,
+        ctx: &mut IrContext,
+        cell_get: Self::Op,
+        rewriter: &mut PatternRewriter<'_>,
+    ) -> Option<()> {
+        let cell = cell_get.cell(ctx);
+        let &structural = self.layouts.get(&ctx.value_ty(cell))?;
+        let loc = ctx.op(cell_get.op_ref()).location;
+        let field_get = adt::StructGet::operands(cell)
+            .r#type(structural)
+            .field(0)
+            .results(ctx.value_ty(cell_get.result(ctx)))
+            .build(ctx, loc);
+        rewriter.replace_op(field_get.op_ref());
+        Some(())
+    }
+}
+
+/// `heap.cell_set` -> `adt.struct_set` of the only field of the cell's
+/// `mem.struct`.
+struct CellSetPattern<'a> {
+    layouts: &'a HashMap<TypeRef, TypeRef>,
+}
+
+impl OpRewritePattern for CellSetPattern<'_> {
+    type Op = heap::CellSet;
+
+    fn match_and_rewrite(
+        &self,
+        ctx: &mut IrContext,
+        cell_set: Self::Op,
+        rewriter: &mut PatternRewriter<'_>,
+    ) -> Option<()> {
+        let cell = cell_set.cell(ctx);
+        let &structural = self.layouts.get(&ctx.value_ty(cell))?;
+        let loc = ctx.op(cell_set.op_ref()).location;
+        let field_set = adt::StructSet::operands(cell, cell_set.value(ctx))
+            .r#type(structural)
+            .field(0)
+            .build(ctx, loc);
+        rewriter.replace_op(field_set.op_ref());
+        Some(())
+    }
 }
 
 /// `adt.variant_get` -> `adt.struct_get` of the variant's `mem.struct`.

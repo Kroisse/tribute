@@ -385,8 +385,8 @@ fn shared_pipeline_resumptive_op_continuation(db: &salsa::DatabaseImpl) {
         ir_text.contains("func.func @\"pkg::run_state\""),
         "{ir_text}"
     );
-    // The one-shot state is a literal layout holding its consumed flag.
-    assert!(ir_text.contains("adt.struct<(core.i1)>"), "{ir_text}");
+    // The one-shot state is a cell holding its consumed flag.
+    assert!(ir_text.contains("heap.cell<core.i1>"), "{ir_text}");
 }
 
 #[salsa_test]
@@ -429,7 +429,7 @@ fn native_pipeline_resumptive_op_continuation(db: &salsa::DatabaseImpl) {
     let ir_text = native_pipeline_ir(db, "resumptive_op_native.trb", RESUMPTIVE_OP_SOURCE);
     assert_native_delimiter_contract(ir_text);
     insta::assert_snapshot!(pipeline_contract_summary(ir_text, true));
-    assert!(ir_text.contains("adt.struct<(core.i1)>"), "{ir_text}");
+    assert!(ir_text.contains("heap.cell<core.i1>"), "{ir_text}");
 }
 
 #[salsa_test]

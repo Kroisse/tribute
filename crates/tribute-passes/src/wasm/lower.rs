@@ -51,7 +51,8 @@ pub fn wasm_emission_ready_target() -> ConversionTarget {
 /// an import, or linear memory, declares it in the IR.
 pub fn add_lowering_passes(pm: &mut PassManager) {
     pm.add_pass(CheckLowerableStructuredControl);
-    pm.add_pass(AdtReferencesToWasm)
+    pm.add_pass(super::heap_cells::LowerHeapCells)
+        .add_pass(AdtReferencesToWasm)
         .add_pass(ConvertBuiltinLayouts)
         .add_pass(IoToWasm)
         // Pattern-based lowering (trunk-ir-wasm-backend).

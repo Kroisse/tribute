@@ -2739,3 +2739,46 @@ fn main() ->{Io} Nil {
         "tick.tick.tick..\ntick.tick..",
     );
 }
+
+/// A function that is not `Cps` delimits the handle it runs. The delimiter's
+/// `Done` captures its completion cell and stores the `String` answer there,
+/// and the delimiter reads the answer back out. The sanitizer run reports a
+/// cell or an answer released too early, released twice, or leaked.
+#[test]
+fn test_value_delimiter_releases_its_completion_cell_and_answer() {
+    let source = r#"
+use std::io::{Io, print_line}
+
+ability Greet {
+    op name() -> String
+}
+
+struct Who { name: String }
+
+fn greeting() ->{Greet} String {
+    "hello, " <> Greet::name() <> "!"
+}
+
+fn named(comp: fn() ->{e, Greet} String, who: Who) ->{e} String {
+    handle comp() {
+        do result { result }
+        op Greet::name() { become named(fn() { resume who.name }, who) }
+    }
+}
+
+fn greet(who: Who) ->{} String {
+    named(greeting, who)
+}
+
+fn main() ->{Io} Nil {
+    let who = Who { name: "cell" }
+    print_line(greet(who))
+    print_line(greet(Who { name: "answer" }))
+}
+"#;
+    common::assert_output_on_both_targets_with_native_asan(
+        "value_delimiter_completion_cell.trb",
+        source,
+        "hello, cell!\nhello, answer!",
+    );
+}

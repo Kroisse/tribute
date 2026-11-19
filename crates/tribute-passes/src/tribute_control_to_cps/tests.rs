@@ -2,7 +2,7 @@ use super::*;
 use tribute_ir::calling_convention::{
     CALLING_CONVENTION_ATTR, DynConventionBearing, cps_closure_function_type,
 };
-use tribute_ir::dialect::{adt, effect};
+use tribute_ir::dialect::{adt, effect, heap};
 use trunk_ir::SymbolPath;
 use trunk_ir::ops::DialectType;
 use trunk_ir::parser::parse_test_module;
@@ -1325,23 +1325,20 @@ fn textual_resumptive_handle_emits_one_resultless_delimiter() {
         consumed_get: &mut Option<ValueRef>,
         consumed_set: &mut Option<ValueRef>,
     ) {
-        // The one-shot state is a literal layout holding its consumed flag.
-        let is_one_shot_type = |ty: TypeRef| {
-            adt::Struct::from_type_ref(ctx, ty).is_some_and(|layout| {
-                layout.name(ctx).is_none()
-                    && matches!(layout.fields(ctx), [flag] if trunk_ir::dialect::core::I1::matches(ctx, *flag))
-            })
+        // The one-shot state is a cell holding its consumed flag.
+        let is_one_shot_cell = |value: ValueRef| {
+            heap::Cell::from_type_ref(ctx, ctx.value_ty(value))
+                .is_some_and(|cell| trunk_ir::dialect::core::I1::matches(ctx, cell.contents(ctx)))
         };
-        if let Ok(get) = adt::StructGet::from_op(ctx, op)
-            && is_one_shot_type(get.r#type(ctx))
+        if let Ok(get) = heap::CellGet::from_op(ctx, op)
+            && is_one_shot_cell(get.cell(ctx))
         {
-            *consumed_get = Some(get.r#ref(ctx));
+            *consumed_get = Some(get.cell(ctx));
         }
-        if let Ok(set) = adt::StructSet::from_op(ctx, op)
-            && is_one_shot_type(set.r#type(ctx))
+        if let Ok(set) = heap::CellSet::from_op(ctx, op)
+            && is_one_shot_cell(set.cell(ctx))
         {
-            assert!(ctx.op_results(op).is_empty(), "struct_set mutates in place");
-            *consumed_set = Some(set.r#ref(ctx));
+            *consumed_set = Some(set.cell(ctx));
         }
         for region in ctx.op_regions(op) {
             for block in ctx.region(region).blocks.iter().copied() {
@@ -1361,7 +1358,7 @@ fn textual_resumptive_handle_emits_one_resultless_delimiter() {
     assert_eq!(printed.matches("ability.handle_dispatch").count(), 2);
     assert!(printed.contains(" [@State: %"), "{printed}");
     assert!(printed.contains("func.tail_call_indirect"));
-    assert!(printed.contains("adt.struct_set"));
+    assert!(printed.contains("heap.cell_set"));
     assert!(!printed.contains("tribute_control."));
     assert!(!printed.contains("handler_metadata"));
     assert!(!printed.contains("adt.ref_null"));

@@ -780,13 +780,13 @@ fn into_raw_rejects_non_closure_input_before_mutation() {
 }
 
 #[test]
-fn materialization_releases_the_exact_replaced_field_and_fails_before_mutation() {
+fn materialization_releases_the_replaced_cell_value_and_fails_before_mutation() {
     let (mut ctx, module, plan) = build(
         r#"core.module @test {
   !NodeRef = adt.struct<"Node">
   !Node = adt.struct<"Node",(!NodeRef)>
-  func.func @replace(%node: !Node, %old: !NodeRef, %new: !NodeRef) -> core.nil {
-    adt.struct_set %node, %new {field = 0, type = !Node}
+  func.func @replace(%cell: heap.cell<!NodeRef>, %old: !NodeRef, %new: !NodeRef) -> core.nil {
+    heap.cell_set %cell, %new
     func.return
   }
 }"#,
@@ -794,9 +794,9 @@ fn materialization_releases_the_exact_replaced_field_and_fails_before_mutation()
     materialize(&mut ctx, module, &plan).expect("typed RC materialization");
     let materialized = module.op().display(&ctx).to_string();
     let retain = materialized.rfind("tribute_rt.retain").unwrap();
-    let get = materialized.find("adt.struct_get").unwrap();
+    let get = materialized.find("heap.cell_get").unwrap();
     let release = materialized.find("tribute_rt.release %").unwrap();
-    let set = materialized.find("adt.struct_set").unwrap();
+    let set = materialized.find("heap.cell_set").unwrap();
     assert!(
         retain < get && get < release && release < set,
         "{materialized}"
@@ -807,8 +807,8 @@ fn materialization_releases_the_exact_replaced_field_and_fails_before_mutation()
         r#"core.module @test {
   !NodeRef = adt.struct<"Node">
   !Node = adt.struct<"Node",(!NodeRef)>
-  func.func @replace(%node: !Node, %new: !NodeRef) -> core.nil {
-    adt.struct_set %node, %new {field = 0, type = !Node}
+  func.func @replace(%cell: heap.cell<!NodeRef>, %new: !NodeRef) -> core.nil {
+    heap.cell_set %cell, %new
     func.return
   }
 }"#,
@@ -838,8 +838,8 @@ fn duplicate_owning_destinations_and_null_are_explicit() {
     %null = adt.ref_null : !NodeRef
     func.return %null
   }
-  func.func @replace(%node: !NodeRef, %value: !NodeRef) -> core.nil {
-    adt.struct_set %node, %value {field = 0, type = !Node}
+  func.func @replace(%cell: heap.cell<!NodeRef>, %value: !NodeRef) -> core.nil {
+    heap.cell_set %cell, %value
     func.return
   }
 }"#,
@@ -866,8 +866,6 @@ const LAST_USE_MOVES: &str = r#"core.module @test {
   !BoxRef = adt.struct<"Box">
   !Outer = adt.struct<"Outer",(!BoxRef)>
   !OuterRef = adt.struct<"Outer">
-  !NodeRef = adt.struct<"Node">
-  !Node = adt.struct<"Node",(!NodeRef)>
   func.func @sink(%value: !ChildRef {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"} {
     func.unreachable
   }
@@ -892,10 +890,6 @@ const LAST_USE_MOVES: &str = r#"core.module @test {
   }
   func.func @consumed_and_kept(%child: !ChildRef) -> core.nil {
     func.call @sink_and_keep(%child, %child) : (!ChildRef, !ChildRef) -> ()
-    func.return
-  }
-  func.func @self_store(%node: !NodeRef) -> core.nil {
-    adt.struct_set %node, %node {field = 0, type = !Node}
     func.return
   }
   func.func @live_across(%condition: core.i1, %child: !ChildRef) -> !BoxRef {
@@ -1037,18 +1031,6 @@ fn last_use_moves_need_every_use_at_the_operation_to_take_a_unit() {
         final_releases(consumed_and_kept, child),
         [ActionAnchor::After(call)]
     );
-
-    // A store into the value itself uses it as the target as well.
-    let node = entry_arg(&ctx, &plan, "self_store", 0);
-    let set = entry_op(&ctx, &plan, "self_store", 0);
-    let self_store = function("self_store");
-    assert!(has_action(
-        self_store,
-        ActionKind::StoreAcquire,
-        node,
-        ActionAnchor::Before(set)
-    ));
-    assert_eq!(count(self_store, ActionKind::StoreTransfer), 0);
 
     materialize(&mut ctx, module, &plan).expect("typed RC materialization");
 }
@@ -1276,21 +1258,15 @@ fn owners_released_after_the_same_operation_move_their_own_fields() {
 }
 
 #[test]
-fn a_replaceable_layout_keeps_its_projection_unit_instead_of_moving() {
+fn a_cell_read_keeps_its_own_unit_instead_of_moving() {
     let (ctx, _module, plan) = build(
         r#"core.module @test {
   !Env = adt.struct<"Env",(core.i32)>
   !EnvRef = adt.struct<"Env">
-  !Pair = adt.struct<"Pair",(!EnvRef, !EnvRef)>
-  !PairRef = adt.struct<"Pair">
   !Wrapper = adt.struct<"Wrapper",(!EnvRef)>
   !WrapperRef = adt.struct<"Wrapper">
-  func.func @replace(%pair: !PairRef, %env: !EnvRef) -> core.nil {
-    adt.struct_set %pair, %env {field = 0, type = !Pair}
-    func.return
-  }
-  func.func @store_one(%pair: !PairRef {tribute.ownership = "consumed"}) -> !WrapperRef {
-    %left = adt.struct_get %pair {field = 0, type = !Pair} : !EnvRef
+  func.func @store_one(%cell: heap.cell<!EnvRef> {tribute.ownership = "consumed"}) -> !WrapperRef {
+    %left = heap.cell_get %cell : !EnvRef
     %wrapper = adt.struct_new(%left) : (!EnvRef) -> !WrapperRef
     func.return %wrapper
   }
@@ -1381,8 +1357,8 @@ fn borrowed_load_return_acquires_a_transfer_unit() {
     assert_eq!(count(function, ActionKind::FinalRelease), 0);
 }
 
-/// The projection each `@read*` fixture function loads from its box.
-fn box_child_projection(
+/// The value each `@read*` fixture function first reads.
+fn first_read(
     ctx: &IrContext,
     plan: &NativeOwnershipPlan,
     name: &'static str,
@@ -1391,40 +1367,38 @@ fn box_child_projection(
     let body = ctx.op_region(function.operation(), 0).unwrap();
     let entry = ctx.region(body).blocks[0];
     let get = ctx.block(entry).ops[0];
-    assert!(adt::StructGet::matches(ctx, get));
     (get, ctx.op_result(get, 0))
 }
 
 #[test]
-fn projection_of_a_written_layout_keeps_its_own_unit() {
+fn a_cell_read_acquires_its_own_unit() {
     let (mut ctx, module, plan) = build(
         r#"core.module @test {
   !Child = adt.struct<"Child",(core.i32)>
   !ChildRef = adt.struct<"Child">
-  !Box = adt.struct<"Box",(!ChildRef)>
-  !BoxRef = adt.struct<"Box">
   !Pair = adt.struct<"Pair",(!ChildRef)>
   !PairRef = adt.struct<"Pair">
-  func.func @read_then_replace(%owner: !BoxRef, %new: !ChildRef) -> !ChildRef {
-    %old = adt.struct_get %owner {field = 0, type = !Box} : !ChildRef
-    adt.struct_set %owner, %new {field = 0, type = !Box}
+  func.func @read_then_replace(%cell: heap.cell<!ChildRef>, %new: !ChildRef) -> !ChildRef {
+    %old = heap.cell_get %cell : !ChildRef
+    heap.cell_set %cell, %new
     func.return %old
   }
-  func.func @read_only(%owner: !BoxRef) -> !ChildRef {
-    %child = adt.struct_get %owner {field = 0, type = !Box} : !ChildRef
+  func.func @read_only(%cell: heap.cell<!ChildRef>) -> !ChildRef {
+    %child = heap.cell_get %cell : !ChildRef
     func.return %child
   }
-  func.func @read_unwritten(%owner: !PairRef) -> !ChildRef {
+  func.func @read_struct(%owner: !PairRef) -> !ChildRef {
     %child = adt.struct_get %owner {field = 0, type = !Pair} : !ChildRef
     func.return %child
   }
 }"#,
     );
-    // A writer in the same function, or anywhere else in the module, releases
-    // the previous field value, so neither reader of `Box` may borrow it.
+    // A write through this or another reference to the cell, or in a called
+    // function, releases the value it replaces, so no cell read may borrow.
+    // The type decides; no writer need be in sight.
     for name in ["read_then_replace", "read_only"] {
         let function = plan.function(&SymbolPath::new([name])).unwrap();
-        let (get, child) = box_child_projection(&ctx, &plan, name);
+        let (get, child) = first_read(&ctx, &plan, name);
         assert_eq!(count(function, ActionKind::BorrowLoad), 0, "{name}");
         assert!(
             function.actions().iter().any(|action| {
@@ -1435,10 +1409,10 @@ fn projection_of_a_written_layout_keeps_its_own_unit() {
             "{name}"
         );
     }
-    let unwritten = plan.function(&SymbolPath::new(["read_unwritten"])).unwrap();
-    assert_eq!(count(unwritten, ActionKind::BorrowLoad), 1);
+    let read_struct = plan.function(&SymbolPath::new(["read_struct"])).unwrap();
+    assert_eq!(count(read_struct, ActionKind::BorrowLoad), 1);
 
-    let (get, old) = box_child_projection(&ctx, &plan, "read_then_replace");
+    let (get, old) = first_read(&ctx, &plan, "read_then_replace");
     materialize(&mut ctx, module, &plan).expect("typed RC materialization");
     let block = ctx.op(get).parent_block.unwrap();
     let ops = &ctx.block(block).ops;
