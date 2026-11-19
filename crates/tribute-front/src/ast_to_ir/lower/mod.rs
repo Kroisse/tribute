@@ -238,17 +238,32 @@ impl<'a, 'db> IrBuilder<'a, 'db> {
             return None;
         }
         let Some(named) = named else {
-            // An entry's selection reads evidence of the value's own row. A
-            // wider closed row adds handlers no tail of a closed row can
-            // reach, but instances added above an open row would stand
-            // between that row's tail and its handlers, so such a use is
-            // not adapted.
+            // An entry's selection reads evidence of the value's own row.
+            // Instances a wider row adds above an open row stand between
+            // that row's tail and its handlers, so the widened entry masks
+            // them; a closed row reaches none of them. The ambient `Io` has
+            // no handler to mask.
             let (source_row, target_row) = (source.row(self.ir), target.row(self.ir));
-            if source_row.tail.is_some() && target_row.instances != source_row.instances {
-                return None;
-            }
+            let added: Vec<_> = if source_row.tail.is_some() {
+                let io = self.ctx.ability_symbol(
+                    &crate::ast::AbilityId::builtin_io(self.ctx.db).qualified(self.ctx.db),
+                    &[],
+                );
+                target_row
+                    .instances
+                    .into_iter()
+                    .filter(|instance| *instance != io && !source_row.instances.contains(instance))
+                    .collect()
+            } else {
+                Vec::new()
+            };
             let entry = entry.expect("a value that is no function reference is an entry");
-            return Some(logical::function_entry(self, location, entry, target_ty));
+            return Some(logical::function_entry(
+                self,
+                location,
+                entry.widened(&added),
+                target_ty,
+            ));
         };
         let function = named.value(self.ir).clone();
         let row_args = self
