@@ -38,7 +38,14 @@ fn is_defined_in(ctx: &IrContext, value: ValueRef, regions: &[RegionRef]) -> boo
         ValueDef::OpResult(op, _) => ctx.op(op).parent_block,
         ValueDef::BlockArg(block, _) => Some(block),
     };
-    let mut region = block.and_then(|block| ctx.block(block).parent_region);
+    block
+        .and_then(|block| ctx.block(block).parent_region)
+        .is_some_and(|region| region_is_within(ctx, region, regions))
+}
+
+/// Whether `region` is one of `regions` or nested in one of them.
+pub fn region_is_within(ctx: &IrContext, region: RegionRef, regions: &[RegionRef]) -> bool {
+    let mut region = Some(region);
     while let Some(current) = region {
         if regions.contains(&current) {
             return true;

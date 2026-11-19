@@ -200,12 +200,12 @@ fn main() -> Nil { }
     TributeDatabaseImpl::default().attach(|db| {
         let (ctx, module) = compile_to_ir(db, code, "closure_calling_conventions.trb");
 
-        let direct = function_param_types(&ctx, &module, "direct_closure::__clam_0");
+        let direct = function_param_types(&ctx, &module, "direct_closure::__lambda_0");
         assert_eq!(direct.len(), 2);
         assert!(is_closure(&ctx, direct[0]), "{direct:?}");
         assert!(is_i32(&ctx, direct[1]), "{direct:?}");
 
-        let evidence = function_param_types(&ctx, &module, "evidence_direct_closure::__clam_0");
+        let evidence = function_param_types(&ctx, &module, "evidence_direct_closure::__lambda_0");
         assert_eq!(evidence.len(), 3);
         assert!(
             tribute_ir::dialect::ability::is_evidence_type(&ctx, module, evidence[0]),
@@ -214,7 +214,7 @@ fn main() -> Nil { }
         assert!(is_closure(&ctx, evidence[1]), "{evidence:?}");
         assert!(is_i32(&ctx, evidence[2]), "{evidence:?}");
 
-        let cps = function_param_types(&ctx, &module, "cps_closure::__clam_0");
+        let cps = function_param_types(&ctx, &module, "cps_closure::__lambda_0");
         assert_eq!(cps.len(), 3);
         assert!(
             tribute_ir::dialect::ability::is_evidence_type(&ctx, module, cps[0]),

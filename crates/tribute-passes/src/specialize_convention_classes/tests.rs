@@ -819,7 +819,7 @@ fn a_reference_of_an_upper_bound_enters_a_target_per_class_up_to_it() {
             "%1 = tribute_cps.lambda['a0]() -> !call0 entries {\n        direct {",
             "%2 = tribute_cps.func_ref @\"call$9e$8\" rows [{tail = 0}] : !call0",
             "tribute_cps.func @\"call$9D\"['a0](%0: core.i32, %1: !cb0) -> core.i32 row(| 'a0) convention(direct) {",
-            "tribute_cps.func @\"call$9e\"['a0](%0: core.i32, %1: !cb0) -> core.i32 row(| 'a0) convention(evidence_direct) {",
+            "tribute_cps.func @\"call$9e\"['a0](%0: core.i32, %1: !cb0) -> core.i32 row(| 'a0) convention(evidence_direct) attributes {cps_entry = @\"call$9e$7\"} {",
             "%2 = tribute_cps.call_indirect %1(%0) attributes {convention = \"cps\"} : (core.i32) -> core.i32 row(| 'a0)",
             "tribute_cps.func_table @\"call$9e$8\" = {cps = @\"call$9e$7\", direct = @\"call$9D\", evidence_direct = @\"call$9e\"}",
             // The strongest target's `Cps` entry instance reads its class
@@ -1041,7 +1041,7 @@ fn a_become_in_a_handler_arm_enters_a_cps_entry_instance() {
     assert_contains(
         &printed,
         &[
-            "tribute_cps.func @step(%0: core.i32) -> core.i32 convention(direct) {",
+            "tribute_cps.func @step(%0: core.i32) -> core.i32 convention(direct) attributes {cps_entry = @\"step$7\"} {",
             "tribute_control.tail_call @\"step$7\"(%0) : (core.i32) -> ()",
             "tribute_cps.func @\"step$7\"(%0: core.i32) -> core.i32 convention(cps) attributes {entry_of = \"step\"} {",
             "tribute_cps.func_table @\"step$8\" = {cps = @\"step$7\", direct = @step}",
@@ -1166,26 +1166,30 @@ const HAND_ON: &str = r#"  tribute_control.func @hand_on(%x: core.i32, %k: !t) -
   }"#;
 
 /// In a module that hands frames to values, only a lambda whose own flow
-/// hands a frame on gets a `Cps` entry body: the curried `%o` and `%n` keep
-/// one body, and `%t`, nested in `%n`, whose `become` is its own, gets a
-/// `cps` body that enters `id`'s `Cps` entry instance
-/// (`design/cps-effects.md`, "`Cps` 진입 본문").
+/// hands a frame on declares a `Cps` entry: the curried `%o` and `%n` declare
+/// none, and `%t`, nested in `%n`, whose `become` is its own, keeps its one
+/// body, declares `cps_entry`, and its `become` is plain: `id` declares its
+/// `Cps` entry instance in `cps_entry` (`design/cps-effects.md`, "`Cps` 진입 본문").
 #[test]
-fn only_a_lambda_that_hands_a_frame_on_has_a_cps_entry_body() {
+fn only_a_lambda_that_hands_a_frame_on_declares_a_cps_entry() {
     let printed = specialized(&CURRIED.replace("HANDS", HAND_ON));
     assert_contains(
         &printed,
         &[
-            "%1 = tribute_cps.lambda(%2: core.i32) -> !n entries {\n        direct {\n            %3 = tribute_cps.lambda(%4: core.i32) -> !t entries {\n              direct {\n                  %5 = tribute_cps.lambda(%6: core.i32) -> core.i32 entries {\n                    direct {\n                        tribute_control.tail_call @id(%6) : (core.i32) -> ()\n                    }\n                    cps {\n                        tribute_control.tail_call @\"id$7\"(%6) : (core.i32) -> ()\n                    }\n                  }\n                  tribute_control.return %5\n              }\n            }\n            tribute_control.return %3\n        }\n      }",
+            "%1 = tribute_cps.lambda(%2: core.i32) -> !n entries {\n        direct {\n            %3 = tribute_cps.lambda(%4: core.i32) -> !t entries {\n              direct {\n                  %5 = tribute_cps.lambda(%6: core.i32) -> core.i32 attributes {cps_entry = true} entries {\n                    direct {\n                        tribute_control.tail_call @id(%6) : (core.i32) -> ()\n                    }\n                  }\n                  tribute_control.return %5\n              }\n            }\n            tribute_control.return %3\n        }\n      }",
+            "tribute_cps.func @id(%0: core.i32) -> core.i32 convention(direct) attributes {cps_entry = @\"id$7\"} {",
             "tribute_cps.func @\"id$7\"(%0: core.i32) -> core.i32 convention(cps) attributes {entry_of = \"id\"} {",
         ],
     );
+    assert_eq!(printed.matches("cps_entry = true").count(), 1, "{printed}");
+    assert_eq!(printed.matches("cps_entry = @").count(), 1, "{printed}");
 }
 
-/// In a module that hands no frame to a value, no lambda gets a `Cps` entry
-/// body, so `%t` keeps one body and `id` no `Cps` entry instance.
+/// In a module that hands no frame to a value, no lambda declares a `Cps`
+/// entry, so `%t` keeps one body, `id` declares no `cps_entry`, and `id`
+/// has no `Cps` entry instance.
 #[test]
-fn no_lambda_has_a_cps_entry_body_where_no_value_takes_a_frame() {
+fn no_lambda_declares_a_cps_entry_where_no_value_takes_a_frame() {
     let printed = specialized(&CURRIED.replace("HANDS\n", ""));
     assert_contains(
         &printed,
@@ -1194,4 +1198,63 @@ fn no_lambda_has_a_cps_entry_body_where_no_value_takes_a_frame() {
         ],
     );
     assert!(!printed.contains("id$7"), "{printed}");
+    assert!(!printed.contains("cps_entry"), "{printed}");
+}
+
+/// Lambdas nested three deep whose own flows each end with a `become`, in a
+/// module that hands frames to values: each lambda keeps its one body and
+/// declares `cps_entry`, each `become` stays plain while `id` declares its
+/// `Cps` entry instance, and the
+/// innermost lambda appears once, however deep it is.
+#[test]
+fn nested_cps_entry_lambdas_are_not_copied() {
+    let printed = specialized(
+        r#"core.module @m {
+  !t = tribute_control.func_sig<(core.i32) -> core.i32>
+  tribute_control.func @hand_on(%x: core.i32, %k: !t) -> core.i32 {
+    tribute_control.tail_call_indirect %k(%x) : (core.i32) -> core.i32
+  }
+  tribute_control.func @id(%x: core.i32) -> core.i32 {
+    tribute_control.return %x
+  }
+  tribute_control.func @main(%x: core.i32) -> core.i32 {
+    %o = tribute_control.lambda(%a: core.i32) -> core.i32 {
+      %n = tribute_control.lambda(%b: core.i32) -> core.i32 {
+        %t = tribute_control.lambda(%c: core.i32) -> core.i32 {
+          tribute_control.tail_call @id(%c) : (core.i32) -> ()
+        }
+        tribute_control.tail_call @id(%b) : (core.i32) -> ()
+      }
+      tribute_control.tail_call @id(%a) : (core.i32) -> ()
+    }
+    %r = tribute_control.call_indirect %o(%x) : (core.i32) -> core.i32
+    tribute_control.return %r
+  }
+}"#,
+    );
+    assert_eq!(
+        printed.matches("tribute_cps.lambda").count(),
+        3,
+        "{printed}"
+    );
+    assert_eq!(
+        printed
+            .matches("attributes {cps_entry = true} entries {")
+            .count(),
+        3,
+        "{printed}"
+    );
+    assert_eq!(
+        printed.matches("tribute_control.tail_call @id(").count(),
+        3,
+        "{printed}"
+    );
+    assert!(!printed.contains("cps_callee"), "{printed}");
+    assert_eq!(
+        printed.matches("cps_entry = @\"id$7\"").count(),
+        1,
+        "{printed}"
+    );
+    assert_eq!(printed.matches("@\"id$7\"(").count(), 1, "{printed}");
+    assert_eq!(printed.matches("cps {").count(), 0, "{printed}");
 }

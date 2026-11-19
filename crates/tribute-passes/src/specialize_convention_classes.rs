@@ -159,12 +159,31 @@ pub fn specialize(ctx: &mut IrContext, module: Module) -> Result<(), ClassSpecia
     for (_, template) in templates {
         ctx.remove_op(template);
     }
+    let mut entries = Vec::new();
+    let mut by_instance: HashMap<String, OpRef> = HashMap::default();
     for (op, convention, entry_of) in instances {
         let replacement = tribute_cps::replace_control_op(ctx, op, convention);
+        let name = ctx
+            .op_attrs(replacement)
+            .get_str("sym_name")
+            .expect("an instance has a name")
+            .to_owned();
         if let Some(entry_of) = entry_of {
-            let entry_of = ctx.string_attr(&entry_of);
+            let attr = ctx.string_attr(&entry_of);
             ctx.op_attrs_mut(replacement)
-                .insert(tribute_cps::ENTRY_OF_ATTR, entry_of);
+                .insert(tribute_cps::ENTRY_OF_ATTR, attr);
+            entries.push((entry_of, name.clone()));
+        }
+        by_instance.insert(name, replacement);
+    }
+    // An instance names its `Cps` entry instance, so a transfer that names
+    // the instance can enter that entry.
+    for (instance, entry) in entries {
+        if let Some(&op) = by_instance.get(&instance) {
+            ctx.op_attrs_mut(op).insert(
+                tribute_cps::CPS_ENTRY_ATTR,
+                Attribute::SymbolRef(SymbolPath::new([Symbol::new(&entry)])),
+            );
         }
     }
     add_func_tables(ctx, module, tables);
@@ -308,6 +327,26 @@ fn rename_binders(ctx: &mut IrContext, ops: &[OpRef], old: &[u32], new: &[u32]) 
     }
 }
 
+/// Declare `cps_entry` on every lambda in `body` that has no `Cps` body and
+/// whose strongest body's own flow hands a frame on (`design/cps-effects.md`,
+/// "`Cps` 진입 본문").
+fn declare_cps_entries(ctx: &mut IrContext, body: RegionRef) {
+    let mut lambdas = Vec::new();
+    let _ = trunk_ir::walk::walk_region::<()>(ctx, body, &mut |op| {
+        if tribute_cps::body_conventions(ctx, op)
+            .is_some_and(|bodies| !bodies.contains(&CallingConvention::Cps))
+            && tribute_cps::strongest_body_hands_on_frame(ctx, op)
+        {
+            lambdas.push(op);
+        }
+        std::ops::ControlFlow::Continue(trunk_ir::walk::WalkAction::Advance)
+    });
+    for lambda in lambdas {
+        ctx.op_attrs_mut(lambda)
+            .insert(tribute_cps::CPS_ENTRY_ATTR, Attribute::Bool(true));
+    }
+}
+
 /// A lambda whose bodies are not yet the ones the body rule selects: the
 /// conventions of those bodies, and the binders that selection reads.
 struct Pending {
@@ -343,6 +382,9 @@ impl Instance<'_> {
     ) -> Vec<(String, Vec<Class>, Entry)> {
         if let Some(body) = ctx.op_region(op, 0) {
             self.give_bodies(ctx, body);
+            if self.hands_frames {
+                declare_cps_entries(ctx, body);
+            }
         }
         let mut ops = Vec::new();
         if let Some(body) = ctx.op_region(op, 0) {
@@ -448,17 +490,6 @@ impl Instance<'_> {
                 let row = signature.row(ctx);
                 lambda.conventions = self.reader.conventions(ctx, &row, lambda.op);
                 lambda.reads.extend(row.tail);
-            }
-            // In a module that hands frames to callable values, a lambda
-            // whose own flow hands a frame on has a `Cps` entry body when
-            // its classes select no `Cps` body (`design/cps-effects.md`,
-            // "`Cps` 진입 본문").
-            if self.hands_frames
-                && ctx
-                    .op_region(lambda.op, 0)
-                    .is_some_and(|body| tribute_cps::own_flow_hands_on_frame(ctx, body))
-            {
-                lambda.conventions.push(CallingConvention::Cps);
             }
             lambda.conventions.sort_unstable();
             lambda.conventions.dedup();
@@ -614,6 +645,19 @@ impl Instance<'_> {
                     key,
                     Attribute::SymbolRef(SymbolPath::new([Symbol::new(&name)])),
                 );
+            }
+            // A tail call in a body that also runs as its lambda's `Cps`
+            // entry enters the callee's `Cps` entry there, which the callee
+            // names in `cps_entry`.
+            if entry == Entry::Row
+                && tribute_control::TailCall::matches(ctx, op)
+                && tribute_cps::in_cps_entry_flow(ctx, op)
+                && self.entry_for_cps(ctx, definition, positions, &classes) == Entry::Cps
+            {
+                return vec![
+                    (callee.clone(), classes.clone(), Entry::Row),
+                    (callee, classes, Entry::Cps),
+                ];
             }
             return vec![(callee, classes, entry)];
         }

@@ -770,23 +770,16 @@ pub(crate) struct Locals {
 
 impl Locals {
     /// The class of local `binder` in the body of its `tribute_cps.lambda`
-    /// that holds `at`. A body no instantiation selects is the lambda's
-    /// `Cps` entry body, which reads as its strongest body does. Elsewhere,
-    /// such as in a lambda whose bodies are not yet decided, the binder
-    /// reads as the merge of its classes in every body.
+    /// that holds `at`. Elsewhere, such as in a lambda whose bodies are not
+    /// yet decided, the binder reads as the merge of its classes in every
+    /// body.
     pub(crate) fn get(&self, ctx: &IrContext, binder: u32, at: OpRef) -> Option<Class> {
         let body = self.owners.get(&binder).and_then(|&owner| {
             tribute_cps::body_conventions(ctx, owner)?;
             tribute_cps::convention_at(ctx, owner, at)
         });
         match body {
-            Some(body) => self.classes.get(&(binder, body)).copied().or_else(|| {
-                self.classes
-                    .iter()
-                    .filter(|((known, _), _)| *known == binder)
-                    .max_by_key(|((_, convention), _)| *convention)
-                    .map(|(_, &class)| class)
-            }),
+            Some(body) => self.classes.get(&(binder, body)).copied(),
             None => self
                 .classes
                 .iter()
