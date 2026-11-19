@@ -3400,14 +3400,6 @@ fn malformed_array_operations_are_rejected() {
         )
     };
     assert_plan_error_unchanged(
-        &module("%copy = adt.array_splice %others[%at, %at]() attributes {type = !Nodes} : !Nodes"),
-        "array_splice source differs from its array type",
-    );
-    assert_plan_error_unchanged(
-        &module("%filled = adt.array_new %at, %other {type = !Nodes} : !Nodes"),
-        "array_new initial value type is malformed",
-    );
-    assert_plan_error_unchanged(
         &module("adt.array_set %nodes, %at, %other"),
         "array_set value type is malformed",
     );

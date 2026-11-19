@@ -59,8 +59,8 @@ impl NativeOwnershipModuleFacts {
         &self.rtti_types
     }
 
-    /// Whether any `adt.struct_set` or `adt.array_set` in the module writes
-    /// `layout`.
+    /// Whether any operation in the module assigns a field of an object of
+    /// `layout` ([`OperandRole::Assign`]).
     ///
     /// A writer reaches its struct through casts and closure environments, so
     /// the layout's nominal identity decides, not a particular value. An
@@ -123,7 +123,7 @@ impl NativeOwnershipFunctionFacts {
     }
 
     /// The projections a temporary borrow may elide: those whose layout no
-    /// `adt.struct_set` or `adt.array_set` in the module writes. A write
+    /// operation in the module assigns. A write
     /// releases the previous value, so a projection of a written layout keeps
     /// its own unit.
     pub fn borrowable_projection_owners(&self) -> &HashMap<ValueRef, ValueRef> {
@@ -189,10 +189,12 @@ fn compute_module_facts(
     let mut descriptors = Vec::new();
     let mut written_layouts = HashSet::default();
     walk_module(ctx, module, |op| {
-        if let Ok(set) = adt::StructSet::from_op(ctx, op) {
-            written_layouts.insert(set.r#type(ctx));
-        } else if let Ok(set) = adt::ArraySet::from_op(ctx, op) {
-            written_layouts.insert(ctx.value_ty(set.r#ref(ctx)));
+        // An operation whose roles cannot be read fails when it is planned.
+        if let Ok(Some(roles)) = operand_roles(ctx, op) {
+            written_layouts.extend(roles.into_iter().filter_map(|role| match role {
+                OperandRole::Assign { object, .. } => Some(object),
+                _ => None,
+            }));
         }
         if func::Func::matches(ctx, op) {
             function_ops.push(op);
@@ -444,18 +446,11 @@ fn collect_borrowed_loads(
     let mut borrowed = HashMap::default();
     for &block in blocks {
         for &op in &ctx.block(block).ops {
-            let source = if let Ok(get) = adt::StructGet::from_op(ctx, op) {
-                Some(get.r#ref(ctx))
-            } else if let Ok(get) = adt::VariantGet::from_op(ctx, op) {
-                Some(get.r#ref(ctx))
-            } else if let Ok(get) = adt::ArrayGet::from_op(ctx, op) {
-                Some(get.r#ref(ctx))
-            } else {
-                None
+            let Some((source, object, field)) = projection(ctx, op)? else {
+                continue;
             };
-            let Some(source) = source else { continue };
             let result = ctx.op_results(op)[0];
-            validate_projection_contract(ctx, op, source, result, managed_layouts)?;
+            validate_projection_contract(ctx, source, object, field, result, managed_layouts)?;
             if is_managed_value(ctx, result, managed_layouts) {
                 borrowed.insert(result, root_value(aliases, source));
             }
@@ -464,8 +459,25 @@ fn collect_borrowed_loads(
     Ok(borrowed)
 }
 
-/// Whether `projection` is an `adt.struct_get` or `adt.array_get` result read
-/// from a layout the module writes. Enum layouts have no write operation.
+/// The operand `op` projects a field out of, with the layout of the object
+/// it reads and the field's type; `None` when `op` projects nothing.
+fn projection(
+    ctx: &IrContext,
+    op: OpRef,
+) -> Result<Option<(ValueRef, TypeRef, TypeRef)>, OwnershipPlanError> {
+    let Some(roles) = operand_roles(ctx, op)? else {
+        return Ok(None);
+    };
+    Ok(roles
+        .into_iter()
+        .zip(ctx.op_operands(op))
+        .find_map(|(role, &operand)| match role {
+            OperandRole::Project { object, field } => Some((operand, object, field)),
+            _ => None,
+        }))
+}
+
+/// Whether `projection` is read from a layout the module writes.
 fn reads_written_layout(
     ctx: &IrContext,
     module: &NativeOwnershipModuleFacts,
@@ -474,48 +486,21 @@ fn reads_written_layout(
     let ValueDef::OpResult(op, _) = ctx.value_def(projection) else {
         return false;
     };
-    let layout = if let Ok(get) = adt::StructGet::from_op(ctx, op) {
-        get.r#type(ctx)
-    } else if let Ok(get) = adt::ArrayGet::from_op(ctx, op) {
-        ctx.value_ty(get.r#ref(ctx))
-    } else {
-        return false;
-    };
-    module.is_written_layout(ctx, layout)
+    // Every projection was validated when its owner was recorded.
+    self::projection(ctx, op)
+        .ok()
+        .flatten()
+        .is_some_and(|(_, object, _)| module.is_written_layout(ctx, object))
 }
 
 fn validate_projection_contract(
     ctx: &IrContext,
-    op: OpRef,
     source: ValueRef,
+    layout: TypeRef,
+    field_ty: TypeRef,
     result: ValueRef,
     managed_layouts: &HashSet<TypeRef>,
 ) -> Result<(), OwnershipPlanError> {
-    let (layout, field_ty) = if let Ok(get) = adt::ArrayGet::from_op(ctx, op) {
-        let array_ty = ctx.value_ty(get.r#ref(ctx));
-        let element = tribute_ir::dialect::adt::Array::from_type_ref(ctx, array_ty)
-            .ok_or_else(|| OwnershipPlanError::new("array_get reads a non-array value"))?
-            .element(ctx);
-        (array_ty, element)
-    } else if let Ok(get) = adt::StructGet::from_op(ctx, op) {
-        let fields = get_struct_fields(ctx, get.r#type(ctx))
-            .ok_or_else(|| OwnershipPlanError::new("struct_get has invalid layout"))?;
-        let field_ty = fields
-            .get(get.field(ctx) as usize)
-            .ok_or_else(|| OwnershipPlanError::new("struct_get field is stale"))?;
-        (get.r#type(ctx), *field_ty)
-    } else {
-        let get = adt::VariantGet::from_op(ctx, op)
-            .map_err(|_| OwnershipPlanError::new("unsupported ADT projection"))?;
-        let fields = adt::Enum::from_type_ref(ctx, get.r#type(ctx))
-            .ok_or_else(|| OwnershipPlanError::new("variant_get has invalid layout"))?
-            .variant_fields(ctx, get.variant(ctx))
-            .ok_or_else(|| OwnershipPlanError::new("variant_get tag is stale"))?;
-        let field_ty = fields
-            .get(get.field(ctx) as usize)
-            .ok_or_else(|| OwnershipPlanError::new("variant_get field is stale"))?;
-        (get.r#type(ctx), *field_ty)
-    };
     let source_ty = ctx.value_ty(source);
     let source_data = ctx.get_type(source_ty);
     let raw_source = source_data.name.is(ctx, "core.ptr");
