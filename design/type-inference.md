@@ -836,6 +836,12 @@ label을 포함한다. 이 row는 `resume`을 담은 누적기, 곧 arm 본문, 
 arm 안에 중첩된 handle body 가운데 `resume`이 직접 놓인 곳의 누적기에 합쳐진다
 ([abilities.md](abilities.md#resume이-재개하는-계산)).
 
+`resume`이 놓인 op arm은 `resume`을 감싼 `op` arm과 `fn` arm 가운데 가장 가까운
+것이다. 그 arm이
+`fn` arm이거나, 결과가 `Never`인 `op` arm이거나, 감싼 arm이 없으면 이 규칙은
+적용되지 않고 `resume`은 typechecking 에러다
+([abilities.md](abilities.md#resume의-사용-규칙)).
+
 ### Subsumption
 
 Ability row 간의 subsumption:
