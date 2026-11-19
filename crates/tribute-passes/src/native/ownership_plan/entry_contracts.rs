@@ -220,7 +220,9 @@ fn value_is_borrowed(
             || adt::VariantGet::matches(ctx, op)
             || adt::VariantIs::matches(ctx, op)
             || adt::VariantTag::matches(ctx, op)
-            || adt::RefIsNull::matches(ctx, op))
+            || adt::RefIsNull::matches(ctx, op)
+            || heap::CellGet::matches(ctx, op)
+            || heap::CellSet::matches(ctx, op))
             && index == 0
         {
             return true;

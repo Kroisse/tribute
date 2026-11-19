@@ -3,9 +3,9 @@
 //! A cell's object holds its value as its only field, so each cell type
 //! becomes the literal `adt.struct` of that one field, and `heap.cell_new`,
 //! `heap.cell_get`, and `heap.cell_set` become `adt.struct_new`,
-//! `adt.struct_get`, and `adt.struct_set` of field 0. `adt` lowering then
-//! makes the field mutable because a `struct_set` writes it. The target has
-//! no refcounts, so the replaced value needs no release.
+//! `adt.struct_get`, and `adt.struct_set` of field 0. Wasm emission declares
+//! every GC struct field mutable. The target has no refcounts, so the
+//! replaced value needs no release.
 
 use tribute_ir::dialect::{adt, heap};
 use trunk_ir::analysis::AnalysisCache;
