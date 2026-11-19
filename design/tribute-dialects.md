@@ -1226,7 +1226,8 @@ Object는 두 종류다. `heap.box`가 가리키는 object는 만든 뒤 내용�
   놓인 필드를 읽으면 unboxed `adt` 값 하나가 나온다.
 
   `heap` operation은 필드마다 값 하나를 주고받으며, 필드는 index 하나로 가리킨다.
-  Operand와 결과의 수는 표현 선택 앞뒤로 같다.
+  Operand와 결과의 수는 표현 선택 앞뒤로 같다. 읽기와 갱신의 box operand는 null이
+  아닌 box다.
 - 갱신: `heap.struct_update`, `heap.array_set`. 같은 이름의 `adt` 갱신처럼 필드나 원소
   하나를 바꾼 새 값을 내며, source box를 소비하고 결과 box를 낸다. 소비한 box가 object의
   유일한 참조이면 lowering은 그 object를 제자리에서 고쳐 결과로 쓰고, 아니면 새 object를
@@ -1251,8 +1252,9 @@ Object는 두 종류다. `heap.box`가 가리키는 object는 만든 뒤 내용�
   구간에서 `adt`와 `heap`은 함께 쓰인다.
 - Representation/ABI 경계 출구 뒤에 남는 `adt` 값은 unboxed struct 값뿐이다
   ([값의 표현](abi-boundary.md#출구에서-확정되는-물리-계약)). 그 밖의 `adt` layout은
-  `heap.box`의 매개변수, `heap` operation의 layout 속성, [nominal 선언](#nominal-선언)
-  안에 남는다. Object 접근은 모두 `heap` operation이며 target lowering이 이를 내린다.
+  `heap.box`의 매개변수, inline 값을 담는 `heap.cell`의 매개변수, `heap` operation의
+  layout 속성, [nominal 선언](#nominal-선언) 안에 남는다. Object 접근은 모두 `heap`
+  operation이며 target lowering이 이를 내린다.
 - `Bytes`와 `String` literal(`adt.bytes_const`, `adt.string_const`)은 표현 선택보다
   앞에서 `adt` 값으로 펼친다([string.md](string.md#constant-lowering)). 배열 상수
   `adt.array_const`는 표현 선택이 `heap.array_const`로
@@ -1270,9 +1272,16 @@ unit 하나 이하를 가진 값 하나로 본다. Target lowering의 scalarizat
   control의 결과가 모두 그렇다. 결과를 쪼갠 callable은 결과를 여러 개 가진다.
   `core.nil` 필드는 값이 하나뿐이므로 leaf를 만들지 않는다.
 - `adt.struct_get`은 해당 leaf를 고르고, `adt.struct_new`와 `adt.struct_update`는
-  leaf를 다시 묶거나 바꿔 끼운다. 어느 것도 code를 남기지 않는다.
-- Object 안에 inline으로 놓인 필드를 읽고 쓰는 `heap` operation은 그 값의 layout을
-  보고 leaf마다 target의 필드 접근이 된다. `heap` operation의 계약은 바뀌지 않는다.
+  leaf를 다시 묶거나 바꿔 끼운다. 매개변수, 결과, block 인자 사이에서는 이들이
+  code를 남기지 않는다.
+- Signature를 쪼개는 일은 정의, 직접 호출, 간접 호출의 exact signature,
+  `func.constant`의 타입에 똑같이 적용된다. 쪼갠 매개변수의 leaf는 원래 매개변수의
+  [타입 매개변수 속성](ir.md#타입-매개변수-속성)(`tribute.ownership` 포함)을 받는다.
+- Inline 필드를 읽고 쓰는 `heap` operation은 `heap` lowering 전까지 unboxed 값 하나를
+  주고받는다. Scalarization은 그 결과를 곧바로 leaf마다 `adt.struct_get`으로 쪼개고,
+  그 값 operand를 leaf들의 `adt.struct_new`로 만든다. 그래서 scalarization 뒤에
+  남는 `adt` operation은 `heap` operation에 직접 붙은 이 쌍뿐이며, `heap` lowering이
+  둘을 합쳐 leaf마다 target의 필드 접근으로 바꾼다.
 
 ## `list`
 

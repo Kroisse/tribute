@@ -149,7 +149,10 @@ compiler가 값마다 표현을 고른다. 표현 선택은 값 의미론인 [`a
 - **값의 표현:** 출구의 값은 scalar, `heap.box`, `heap.cell`, `tribute_rt.anyref`·`intref`,
   unmanaged 포인터 같은 기계 값이거나 unboxed 타입의 `adt` struct 값이다. Boxed 타입의
   `adt` 값은 없다. Unboxed 값은 object의 필드로는 inline으로 놓이며, target lowering이
-  이를 leaf로 쪼갤 때 매개변수, 결과, block 인자에 나란히 놓인다.
+  이를 leaf로 쪼갤 때 매개변수, 결과, block 인자에 나란히 놓인다. 그
+  [scalarization](tribute-dialects.md#target-lowering의-unboxed-값)은 출구가 확정한
+  exact signature와 매개변수 ownership 계약을 모든 정의와 호출에 똑같이 leaf 단위로
+  옮길 뿐이며, 새 계약을 만들지 않는다.
 - **Closure/frame 저장:** Compiler가 소유하는 runtime layout은 명시적
   [runtime layout 식별자](ir.md#runtime-layout-식별자)로 구별한다. Struct 이름, field
   모양, `arrayref` 같은 erased heap 형상을 provenance로 쓰지 않는다.

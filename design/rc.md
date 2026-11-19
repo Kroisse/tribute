@@ -502,9 +502,20 @@ block을 만들므로 이런 edge를 만들지 않는다.
 capture한 completion cell처럼 cell을 다른 object에 담으면 그 필드가 cell의 unit 하나를
 가진다. `tribute_rt.anyref`/`intref`도 각자의 typed contract로 분류한다.
 Unboxed `adt` 값은 managed leaf가 하나 이하이므로, managed leaf가 있으면 그 leaf의
-unit 하나를 가진 managed 값이다. 한 unboxed 값을 두 번 쓰면 unit을 하나 더 획득하며,
-그 retain은 managed leaf에 대한 것이다. `adt.struct_get`이 unboxed 값에서 managed
-leaf를 꺼내면 그 결과는 값에서 파생된 borrow다.
+unit 하나를 가진 managed 값이다. 이 분류는 `ManagedRefType` 표지가 아니라 layout의
+필드 타입에서 정한다. 값과 그 managed leaf는 같은 unit을 나누므로:
+
+- `adt.struct_new`의 managed operand는 unit을 받는 자리다. 결과 값이 그 unit을
+  가진다.
+- `adt.struct_get`이 managed leaf를 꺼내면 그 결과는 값에서 파생된 borrow다.
+- `adt.struct_update`는 source 값을 소비한다. Managed leaf를 바꾸면 새 leaf operand는
+  unit을 받는 자리이고 이전 leaf의 unit은 release한다. 다른 leaf를 바꾸면 source의
+  unit이 결과로 넘어간다.
+
+이 operation들은 그 밖의 RC 동작을 만들지 않는다. 한 unboxed 값을 두 번 쓰면 unit을
+하나 더 획득한다. RC materialization이 unboxed 값에 둔 retain과 release는
+[scalarization](tribute-dialects.md#target-lowering의-unboxed-값)이 그 managed leaf에
+대한 것으로 바꾸고, managed leaf가 없는 값의 것은 처음부터 두지 않는다.
 Unmanaged linear array인 `core.array`는 RC 객체가 아니다.
 Function/code address, borrowed buffer, `core.ptr`는 unmanaged다. 변환 결과가
 pointer라는 사실은 이 분류에 참여하지 않는다.
