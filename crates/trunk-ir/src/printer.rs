@@ -1065,8 +1065,13 @@ fn generate_auto_aliases(
     // topological extraction deterministic for independent candidates.
     candidates.sort_by(|a, b| b.1.cmp(&a.1).then(b.2.cmp(&a.2)).then(a.3.cmp(&b.3)));
 
-    // Name assignment
-    let mut used_names: HashSet<String> = existing.values().cloned().collect();
+    // Name assignment. Several manual names may alias one type, so reserve
+    // every one of them, not only the name `existing` keeps for its type.
+    let mut used_names: HashSet<String> = existing
+        .values()
+        .cloned()
+        .chain(ctx.type_aliases().iter().map(|(name, _)| name.to_string()))
+        .collect();
     let mut next_num = 0usize;
     let mut result = Vec::new();
 

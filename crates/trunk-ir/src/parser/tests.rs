@@ -1188,6 +1188,31 @@ func.return %0
 }
 
 #[test]
+fn test_generated_alias_avoids_every_manual_name_of_a_shared_type() {
+    let input = r#"core.module @test {
+  !t0 = core.i32
+  !z = core.i32
+
+  func.func @foo(%0: core.tuple<core.i32, core.i32, core.i32, core.i32, core.i32, core.i32>, %1: core.tuple<core.i32, core.i32, core.i32, core.i32, core.i32, core.i32>) {
+func.return
+  }
+}"#;
+    let mut ctx = IrContext::new();
+    let module_op = parse_module(&mut ctx, input).unwrap();
+    let printed = module_op.display(&ctx).to_string();
+    assert_eq!(printed.matches("!t0 =").count(), 1, "{printed}");
+    assert!(printed.contains("!t1 ="), "{printed}");
+
+    let mut reparsed = IrContext::new();
+    parse_module(&mut reparsed, &printed).unwrap();
+    let i32_ty = make_i32_type(&mut reparsed);
+    assert_eq!(reparsed.type_alias_by_text("t0"), Some(i32_ty));
+    assert_eq!(reparsed.type_alias_by_text("z"), Some(i32_ty));
+    let tuple = core::Tuple::params([i32_ty; 6]).intern(&mut reparsed);
+    assert_eq!(reparsed.type_alias_by_text("t1"), Some(tuple.as_type_ref()));
+}
+
+#[test]
 fn test_type_alias_no_alias_backward_compat() {
     // Existing IR without aliases should still round-trip
     let input = r#"core.module @test {
