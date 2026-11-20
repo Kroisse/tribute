@@ -59,6 +59,8 @@ pub(crate) struct HandleBodyRows<'db> {
     pub(crate) body: AbilityRow<'db>,
 }
 
+const ROWS_SET: &str = "a handle body's rows are set before plans are computed";
+
 /// The evidence a piece of code runs with.
 #[derive(Clone, Debug)]
 enum EvidenceScope<'db> {
@@ -276,9 +278,7 @@ impl<'db> EvidenceTracker<'db> {
                         unreachable!("a handle site names a handle body scope");
                     };
                     let (parent, _) = self.explicit(db, *parent, &resolve, &mut explicit);
-                    let Some(rows) = rows else {
-                        continue;
-                    };
+                    let rows = rows.expect(ROWS_SET);
                     let handled = resolve(rows.handled);
                     let named = resolve(rows.body);
                     parent
@@ -365,17 +365,13 @@ impl<'db> EvidenceTracker<'db> {
             EvidenceScope::Callable(None) => (Vec::new(), None),
             EvidenceScope::HandleBody { parent, rows } => {
                 let (parent, tail) = self.explicit(db, *parent, resolve, memo);
-                match rows {
-                    Some(rows) => {
-                        let handled = resolve(rows.handled).instances(db).to_vec();
-                        let named = resolve(rows.body);
-                        let kept = parent
-                            .into_iter()
-                            .filter(|instance| named.instances(db).contains(instance));
-                        (unique(handled.into_iter().chain(kept)), tail)
-                    }
-                    None => (parent, tail),
-                }
+                let rows = rows.expect(ROWS_SET);
+                let handled = resolve(rows.handled).instances(db).to_vec();
+                let named = resolve(rows.body);
+                let kept = parent
+                    .into_iter()
+                    .filter(|instance| named.instances(db).contains(instance));
+                (unique(handled.into_iter().chain(kept)), tail)
             }
         };
         memo.insert(scope, found.clone());
