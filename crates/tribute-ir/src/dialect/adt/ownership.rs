@@ -12,16 +12,21 @@ use super::{
 };
 use crate::dialect::tribute_rtti::{OperandOwnership, OperandOwnershipError, OperandRole};
 
-type Roles = Result<Vec<OperandRole>, OperandOwnershipError>;
+type Result<T, E = OperandOwnershipError> = std::result::Result<T, E>;
 
 /// Every operand of `op` is borrowed.
-fn borrow_all(ctx: &IrContext, op: OpRef) -> Roles {
+fn borrow_all(ctx: &IrContext, op: OpRef) -> Result<Vec<OperandRole>> {
     Ok(vec![OperandRole::Borrow; ctx.op_operands(op).len()])
 }
 
 /// The operands of `op` from position `first` on initialize one field of
 /// `fields` each; the operands before them are borrowed.
-fn initialize_from(ctx: &IrContext, op: OpRef, first: usize, fields: &[TypeRef]) -> Roles {
+fn initialize_from(
+    ctx: &IrContext,
+    op: OpRef,
+    first: usize,
+    fields: &[TypeRef],
+) -> Result<Vec<OperandRole>> {
     if ctx.op_operands(op).len() != first + fields.len() {
         return Err(OperandOwnershipError::new(
             "aggregate constructor arity is malformed",
@@ -45,7 +50,7 @@ fn array_element(ctx: &IrContext, array: TypeRef) -> Result<TypeRef, OperandOwne
 }
 
 impl OperandOwnership for StructNew {
-    fn operand_roles(&self, ctx: &IrContext) -> Roles {
+    fn operand_roles(&self, ctx: &IrContext) -> Result<Vec<OperandRole>> {
         let fields = get_struct_fields(ctx, self.layout(ctx))
             .ok_or(OperandOwnershipError::new("struct_new has invalid layout"))?;
         initialize_from(ctx, self.op_ref(), 0, &fields)
@@ -53,7 +58,7 @@ impl OperandOwnership for StructNew {
 }
 
 impl OperandOwnership for VariantNew {
-    fn operand_roles(&self, ctx: &IrContext) -> Roles {
+    fn operand_roles(&self, ctx: &IrContext) -> Result<Vec<OperandRole>> {
         let fields = Enum::from_type_ref(ctx, self.layout(ctx))
             .ok_or(OperandOwnershipError::new("variant_new has invalid layout"))?
             .variant_fields(ctx, self.variant(ctx))
@@ -63,7 +68,7 @@ impl OperandOwnership for VariantNew {
 }
 
 impl OperandOwnership for ArrayOf {
-    fn operand_roles(&self, ctx: &IrContext) -> Roles {
+    fn operand_roles(&self, ctx: &IrContext) -> Result<Vec<OperandRole>> {
         let element = array_element(ctx, self.r#type(ctx))?;
         let count = ctx.op_operands(self.op_ref()).len();
         initialize_from(ctx, self.op_ref(), 0, &vec![element; count])
@@ -71,7 +76,7 @@ impl OperandOwnership for ArrayOf {
 }
 
 impl OperandOwnership for ArraySplice {
-    fn operand_roles(&self, ctx: &IrContext) -> Roles {
+    fn operand_roles(&self, ctx: &IrContext) -> Result<Vec<OperandRole>> {
         // `source`, `start`, and `end` come before the new elements.
         const FIRST_ELEMENT: usize = 3;
         let element = array_element(ctx, self.r#type(ctx))?;
@@ -84,13 +89,13 @@ impl OperandOwnership for ArraySplice {
 }
 
 impl OperandOwnership for ArrayNew {
-    fn operand_roles(&self, ctx: &IrContext) -> Roles {
+    fn operand_roles(&self, ctx: &IrContext) -> Result<Vec<OperandRole>> {
         borrow_all(ctx, self.op_ref())
     }
 }
 
 impl OperandOwnership for StructGet {
-    fn operand_roles(&self, ctx: &IrContext) -> Roles {
+    fn operand_roles(&self, ctx: &IrContext) -> Result<Vec<OperandRole>> {
         let object = self.r#type(ctx);
         let fields = get_struct_fields(ctx, object)
             .ok_or(OperandOwnershipError::new("struct_get has invalid layout"))?;
@@ -102,7 +107,7 @@ impl OperandOwnership for StructGet {
 }
 
 impl OperandOwnership for VariantGet {
-    fn operand_roles(&self, ctx: &IrContext) -> Roles {
+    fn operand_roles(&self, ctx: &IrContext) -> Result<Vec<OperandRole>> {
         let object = self.r#type(ctx);
         let fields = Enum::from_type_ref(ctx, object)
             .ok_or(OperandOwnershipError::new("variant_get has invalid layout"))?
@@ -116,7 +121,7 @@ impl OperandOwnership for VariantGet {
 }
 
 impl OperandOwnership for ArrayGet {
-    fn operand_roles(&self, ctx: &IrContext) -> Roles {
+    fn operand_roles(&self, ctx: &IrContext) -> Result<Vec<OperandRole>> {
         let object = ctx.value_ty(self.r#ref(ctx));
         let field = array_element(ctx, object)
             .map_err(|_| OperandOwnershipError::new("array_get reads a non-array value"))?;
@@ -128,7 +133,7 @@ impl OperandOwnership for ArrayGet {
 }
 
 impl OperandOwnership for StructSet {
-    fn operand_roles(&self, ctx: &IrContext) -> Roles {
+    fn operand_roles(&self, ctx: &IrContext) -> Result<Vec<OperandRole>> {
         let object = self.r#type(ctx);
         let fields = get_struct_fields(ctx, object)
             .ok_or(OperandOwnershipError::new("struct_set has invalid layout"))?;
@@ -160,7 +165,7 @@ impl OperandOwnership for StructSet {
 }
 
 impl OperandOwnership for ArraySet {
-    fn operand_roles(&self, ctx: &IrContext) -> Roles {
+    fn operand_roles(&self, ctx: &IrContext) -> Result<Vec<OperandRole>> {
         let object = ctx.value_ty(self.r#ref(ctx));
         let field = array_element(ctx, object)?;
         Ok(vec![
@@ -182,31 +187,31 @@ impl OperandOwnership for ArraySet {
 }
 
 impl OperandOwnership for VariantIs {
-    fn operand_roles(&self, ctx: &IrContext) -> Roles {
+    fn operand_roles(&self, ctx: &IrContext) -> Result<Vec<OperandRole>> {
         borrow_all(ctx, self.op_ref())
     }
 }
 
 impl OperandOwnership for VariantTag {
-    fn operand_roles(&self, ctx: &IrContext) -> Roles {
+    fn operand_roles(&self, ctx: &IrContext) -> Result<Vec<OperandRole>> {
         borrow_all(ctx, self.op_ref())
     }
 }
 
 impl OperandOwnership for ArrayLen {
-    fn operand_roles(&self, ctx: &IrContext) -> Roles {
+    fn operand_roles(&self, ctx: &IrContext) -> Result<Vec<OperandRole>> {
         borrow_all(ctx, self.op_ref())
     }
 }
 
 impl OperandOwnership for RefIsNull {
-    fn operand_roles(&self, ctx: &IrContext) -> Roles {
+    fn operand_roles(&self, ctx: &IrContext) -> Result<Vec<OperandRole>> {
         borrow_all(ctx, self.op_ref())
     }
 }
 
 impl OperandOwnership for RefCast {
-    fn operand_roles(&self, _ctx: &IrContext) -> Roles {
+    fn operand_roles(&self, _ctx: &IrContext) -> Result<Vec<OperandRole>> {
         Ok(vec![OperandRole::Forward])
     }
 }
