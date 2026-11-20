@@ -593,12 +593,7 @@ impl ActionPlanner<'_> {
         roles: &[OperandRole],
     ) -> Result<(), OwnershipPlanError> {
         let operands = self.ir.op_operands(op);
-        if roles.len() != operands.len() {
-            return Err(OwnershipPlanError::new(format!(
-                "operand roles of {} do not match its operands",
-                self.ir.op(op).name.display(self.ir)
-            )));
-        }
+        debug_assert_eq!(roles.len(), operands.len(), "one operand role per operand");
         if let Some((layout, _)) = native_allocation_descriptor(self.ir, op) {
             validate_allocation_result(self.ir, op, layout, self.managed_layouts)?;
         }
@@ -633,9 +628,7 @@ impl ActionPlanner<'_> {
                     field,
                 } => {
                     let name = self.ir.op(op).name.display(self.ir);
-                    let target = *operands.get(target).ok_or_else(|| {
-                        OwnershipPlanError::new(format!("{name} assigns through no operand"))
-                    })?;
+                    let target = operands[target];
                     if !types_compatible(
                         self.ir,
                         self.ir.value_ty(target),
