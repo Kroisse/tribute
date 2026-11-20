@@ -147,7 +147,9 @@ pub enum OperandRole {
     /// operation releases the unit of the value it replaces, which
     /// [`OperandOwnership::build_replaced_read`] reads. `slot` tells the
     /// fields an operation assigns apart: a struct field's index, or `0`
-    /// for an element at a dynamic index.
+    /// for an element at a dynamic index. The `target` operand itself is a
+    /// `Borrow` for the operation, but a parameter used as a target escapes
+    /// (`design/rc.md` § "Borrowed parameter elision").
     Assign {
         target: usize,
         object: TypeRef,

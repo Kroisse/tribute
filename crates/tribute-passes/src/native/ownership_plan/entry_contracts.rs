@@ -216,7 +216,18 @@ fn value_is_borrowed(
             return false;
         }
         let index = use_.operand_index as usize;
-        match DynOperandOwnership::role(ctx, op, index) {
+        let roles = DynOperandOwnership::get(ctx, op)
+            .and_then(|op| op.operand_roles(ctx).ok())
+            .unwrap_or_default();
+        // Writing into the parameter's object releases the replaced field,
+        // which the caller may still hold as a borrowed projection.
+        if roles
+            .iter()
+            .any(|role| matches!(role, OperandRole::Assign { target, .. } if *target == index))
+        {
+            return false;
+        }
+        match roles.get(index) {
             Some(OperandRole::Borrow | OperandRole::Project { .. }) => return true,
             Some(OperandRole::Forward) => {
                 return value_is_borrowed(
