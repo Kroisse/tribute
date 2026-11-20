@@ -1190,8 +1190,8 @@ func.return %0
 #[test]
 fn test_generated_alias_avoids_every_manual_name_of_a_shared_type() {
     let input = r#"core.module @test {
+  !a = core.i32
   !t0 = core.i32
-  !z = core.i32
 
   func.func @foo(%0: core.tuple<core.i32, core.i32, core.i32, core.i32, core.i32, core.i32>, %1: core.tuple<core.i32, core.i32, core.i32, core.i32, core.i32, core.i32>) {
 func.return
@@ -1201,15 +1201,36 @@ func.return
     let module_op = parse_module(&mut ctx, input).unwrap();
     let printed = module_op.display(&ctx).to_string();
     assert_eq!(printed.matches("!t0 =").count(), 1, "{printed}");
-    assert!(printed.contains("!t1 ="), "{printed}");
+    assert!(printed.contains("!t1 = core.tuple<!a,"), "{printed}");
+    assert_roundtrip(&ctx, module_op);
+}
 
-    let mut reparsed = IrContext::new();
-    parse_module(&mut reparsed, &printed).unwrap();
-    let i32_ty = make_i32_type(&mut reparsed);
-    assert_eq!(reparsed.type_alias_by_text("t0"), Some(i32_ty));
-    assert_eq!(reparsed.type_alias_by_text("z"), Some(i32_ty));
-    let tuple = core::Tuple::params([i32_ty; 6]).intern(&mut reparsed);
-    assert_eq!(reparsed.type_alias_by_text("t1"), Some(tuple.as_type_ref()));
+#[test]
+fn test_shared_type_is_written_as_its_first_alias_in_name_order() {
+    let input = r#"core.module @test {
+  !z = core.i32
+  !pair = core.tuple<!z, !z>
+  !a = core.i32
+
+  func.func @foo(%0: !z) -> !z {
+func.return %0
+  }
+}"#;
+    let mut ctx = IrContext::new();
+    let module_op = parse_module(&mut ctx, input).unwrap();
+    let printed = module_op.display(&ctx).to_string();
+    let expected = r#"core.module @test {
+  !a = core.i32
+  !pair = core.tuple<!a, !a>
+  !z = core.i32
+
+  func.func @foo(%0: !a) -> !a {
+      func.return %0
+  }
+}
+"#;
+    assert_eq!(printed, expected);
+    assert_roundtrip(&ctx, module_op);
 }
 
 #[test]
