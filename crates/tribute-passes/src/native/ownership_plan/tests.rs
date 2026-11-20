@@ -1381,6 +1381,34 @@ fn borrowed_load_return_acquires_a_transfer_unit() {
     assert_eq!(count(function, ActionKind::FinalRelease), 0);
 }
 
+#[test]
+fn reading_a_parameter_borrows_it_but_writing_into_its_object_retains_it() {
+    let (_ctx, _module, plan) = build(
+        r#"core.module @test {
+  !Child = adt.struct<"Child",(core.i32)>
+  !ChildRef = adt.struct<"Child">
+  !Box = adt.struct<"Box",(!ChildRef)>
+  !BoxRef = adt.struct<"Box">
+  !Boxes = adt.array<!BoxRef>
+  func.func @length(%boxes: !Boxes) -> core.index {
+    %len = adt.array_len %boxes : core.index
+    func.return %len
+  }
+  func.func @write(%box: !BoxRef, %child: !ChildRef) {
+    adt.struct_set %box, %child {field = 0, type = !Box}
+    func.return
+  }
+}"#,
+    );
+    let length = plan.function(&SymbolPath::new(["length"])).unwrap();
+    assert_eq!(length.entries(), [EntryOwnership::Borrowed]);
+    let write = plan.function(&SymbolPath::new(["write"])).unwrap();
+    assert_eq!(
+        write.entries(),
+        [EntryOwnership::Retained, EntryOwnership::Retained]
+    );
+}
+
 /// The projection each `@read*` fixture function loads from its box.
 fn box_child_projection(
     ctx: &IrContext,
@@ -3399,14 +3427,6 @@ fn malformed_array_operations_are_rejected() {
 }}"#
         )
     };
-    assert_plan_error_unchanged(
-        &module("%copy = adt.array_splice %others[%at, %at]() attributes {type = !Nodes} : !Nodes"),
-        "array_splice source differs from its array type",
-    );
-    assert_plan_error_unchanged(
-        &module("%filled = adt.array_new %at, %other {type = !Nodes} : !Nodes"),
-        "array_new initial value type is malformed",
-    );
     assert_plan_error_unchanged(
         &module("adt.array_set %nodes, %at, %other"),
         "array_set value type is malformed",

@@ -15,11 +15,11 @@ use trunk_ir::op_flag::Pure;
 
 use rustc_hash::FxHashMap as HashMap;
 
-use trunk_ir::TypeRef;
 use trunk_ir::context::IrContext;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::rewrite::Module;
 use trunk_ir::types::{Attribute, Location};
+use trunk_ir::{OpRef, TypeRef};
 
 use crate::dialect::adt;
 
@@ -121,6 +121,109 @@ pub enum DescriptorFieldsError {
     #[display("adt.enum has no variant at position {tag}")]
     NoVariant { tag: u32 },
 }
+
+/// What an operation does with the ownership unit of one of its operands,
+/// as Swift SIL's `OperandOwnership` states it. An operand that is no
+/// managed reference has no unit, so its role is inert.
+///
+/// See `design/rc.md` § "1. Typed ownership and RTTI plan".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OperandRole {
+    /// The operation reads the operand while it executes; the operand keeps
+    /// its unit. An operation that copies managed values out of the operand
+    /// acquires their units itself.
+    Borrow,
+    /// Result 0 is a field of type `field` read out of the object of layout
+    /// `object` that the operand refers to. It is a borrow derived from the
+    /// operand and holds no unit of its own.
+    Project { object: TypeRef, field: TypeRef },
+    /// Result 0 is the operand itself as another type, sharing its unit.
+    Forward,
+    /// The operand's unit moves into a field of type `field` of the new
+    /// object that result 0 refers to.
+    Initialize { field: TypeRef },
+    /// The operand's unit moves into field `slot`, of type `field`, of the
+    /// object of layout `object` that operand `target` refers to. The
+    /// operation releases the unit of the value it replaces, which
+    /// [`OperandOwnership::build_replaced_read`] reads. `slot` tells the
+    /// fields an operation assigns apart: a struct field's index, or `0`
+    /// for an element at a dynamic index. The `target` operand itself is a
+    /// `Borrow` for the operation, but a parameter used as a target escapes
+    /// (`design/rc.md` § "Borrowed parameter elision").
+    Assign {
+        target: usize,
+        object: TypeRef,
+        slot: u32,
+        field: TypeRef,
+    },
+}
+
+/// Why an operation's operand roles cannot be read: its layout or field
+/// is stale or its operands do not match it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, derive_more::Display, derive_more::Error)]
+#[display("{reason}")]
+pub struct OperandOwnershipError {
+    reason: &'static str,
+}
+
+impl OperandOwnershipError {
+    pub const fn new(reason: &'static str) -> Self {
+        Self { reason }
+    }
+}
+
+/// The ownership role of each operand of an operation that handles managed
+/// references. Ownership planning reads operand roles only through this
+/// interface, never from operation names. An operation without it has no
+/// role the planner acts on; calls, returns, and branches carry their own
+/// contracts.
+///
+/// The planner queries it on IR whose schema holds, but layouts and field
+/// indexes may still be stale, so implementations report those as errors.
+#[trunk_ir::op_interface]
+pub trait OperandOwnership: DialectOp {
+    /// The role of each operand, in operand order.
+    fn operand_roles(&self, ctx: &IrContext) -> Result<Vec<OperandRole>, OperandOwnershipError>;
+
+    /// Build, detached, an operation whose result 0 is the value that the
+    /// [`OperandRole::Assign`] operand of this operation replaces, read
+    /// before the operation runs. `None` for an operation that assigns
+    /// nothing.
+    fn build_replaced_read(&self, ctx: &mut IrContext, location: Location) -> Option<OpRef> {
+        let _ = (ctx, location);
+        None
+    }
+}
+
+impl DynOperandOwnership {
+    /// The role of operand `index` of `op`; `None` when `op` does not
+    /// implement [`OperandOwnership`] or its roles cannot be read.
+    pub fn role(ctx: &IrContext, op: OpRef, index: usize) -> Option<OperandRole> {
+        Self::get(ctx, op)?
+            .operand_roles(ctx)
+            .ok()?
+            .get(index)
+            .copied()
+    }
+}
+
+/// `core.unrealized_conversion_cast` of one value is that value as another
+/// type, so it forwards the operand's unit.
+impl OperandOwnership for trunk_ir::dialect::core::UnrealizedConversionCast {
+    fn operand_roles(&self, ctx: &IrContext) -> Result<Vec<OperandRole>, OperandOwnershipError> {
+        match (
+            ctx.op_operands(self.op_ref()),
+            ctx.op_results(self.op_ref()),
+        ) {
+            ([_], [_]) => Ok(vec![OperandRole::Forward]),
+            _ => Err(OperandOwnershipError::new(
+                "an unrealized cast forwards a unit only from one operand to one result",
+            )),
+        }
+    }
+}
+
+trunk_ir::register_interfaces!(trunk_ir::dialect::core::UnrealizedConversionCast: OperandOwnership);
 
 impl trunk_ir::type_constraint::TypeConstraint for ManagedRef {
     const DESC: &'static trunk_ir::type_constraint::ConstraintDesc =

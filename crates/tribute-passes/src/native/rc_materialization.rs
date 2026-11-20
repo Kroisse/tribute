@@ -9,6 +9,7 @@ use rustc_hash::FxHashMap as HashMap;
 use tribute_ir::dialect::adt;
 use tribute_ir::dialect::adt::layout::{compute_struct_layout, get_struct_fields};
 use tribute_ir::dialect::tribute_rt::{self, RC_HEADER_SIZE};
+use tribute_ir::dialect::tribute_rtti::{DynOperandOwnership, OperandRole};
 use trunk_ir::context::IrContext;
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::rewrite::{Module, TypeConverter};
@@ -35,20 +36,12 @@ enum ScheduledAction {
         value: ValueRef,
         alloc_size: u64,
     },
-    ReleaseReplacedField {
+    /// Release the value that the assigning operation `store` replaces,
+    /// read by its
+    /// [`build_replaced_read`](tribute_ir::dialect::tribute_rtti::OperandOwnership::build_replaced_read).
+    ReleaseReplaced {
         placement: Placement,
-        object: ValueRef,
-        layout: TypeRef,
-        field: u32,
-        field_ty: TypeRef,
-        alloc_size: u64,
-    },
-    /// Release the element of `array` at `index` that an `adt.array_set`
-    /// replaces.
-    ReleaseReplacedElement {
-        placement: Placement,
-        array: ValueRef,
-        index: ValueRef,
+        store: OpRef,
         alloc_size: u64,
     },
     ReleaseMoving {
@@ -139,38 +132,17 @@ fn build_schedule(
                     value: action.value,
                     alloc_size: allocation_size_for_value(ctx, plan, action.value, type_converter)?,
                 }),
-                ActionKind::ReleaseReplacedField
-                    if let ActionAnchor::Before(op) = action.anchor
-                        && adt::ArraySet::matches(ctx, op) =>
-                {
-                    let (array, index, element_ty) =
-                        validate_replaced_element(ctx, op, action.value, action.destination, plan)?;
-                    schedule.push(ScheduledAction::ReleaseReplacedElement {
-                        placement,
-                        array,
-                        index,
-                        alloc_size: allocation_size_for_type(
-                            ctx,
-                            plan,
-                            element_ty,
-                            type_converter,
-                        )?,
-                    });
-                }
                 ActionKind::ReleaseReplacedField => {
-                    let (object, layout, field, field_ty) = validate_replaced_field(
+                    let (store, field_ty) = validate_replaced_field(
                         ctx,
                         action.anchor,
                         action.value,
                         action.destination,
                         plan,
                     )?;
-                    schedule.push(ScheduledAction::ReleaseReplacedField {
+                    schedule.push(ScheduledAction::ReleaseReplaced {
                         placement,
-                        object,
-                        layout,
-                        field,
-                        field_ty,
+                        store,
                         alloc_size: allocation_size_for_type(ctx, plan, field_ty, type_converter)?,
                     });
                 }
@@ -332,11 +304,11 @@ fn projection_owner(
     Ok(alias_root(ctx, get.r#ref(ctx)))
 }
 
-/// The value an exact alias cast chain starts from.
+/// The value a chain of forwarding casts ([`OperandRole::Forward`]) starts
+/// from.
 fn alias_root(ctx: &IrContext, mut value: ValueRef) -> ValueRef {
     while let trunk_ir::ValueDef::OpResult(op, _) = ctx.value_def(value)
-        && (adt::RefCast::matches(ctx, op)
-            || trunk_ir::dialect::core::UnrealizedConversionCast::matches(ctx, op))
+        && DynOperandOwnership::role(ctx, op, 0) == Some(OperandRole::Forward)
     {
         value = ctx.op_operands(op)[0];
     }
@@ -359,63 +331,46 @@ fn placement_for(
     }
 }
 
+/// The assigning operation a replaced-field release is anchored before, and
+/// the type of the field it assigns in `object` at `destination`.
 fn validate_replaced_field(
     ctx: &IrContext,
     anchor: ActionAnchor,
     object: ValueRef,
     destination: u32,
     plan: &NativeOwnershipPlan,
-) -> Result<(ValueRef, TypeRef, u32, TypeRef), RcMaterializationError> {
+) -> Result<(OpRef, TypeRef), RcMaterializationError> {
     let ActionAnchor::Before(op) = anchor else {
         return Err(OwnershipPlanError::new(
-            "replaced-field release must be anchored before its struct_set",
+            "replaced-field release must be anchored before its assignment",
         ));
     };
-    let set = adt::StructSet::from_op(ctx, op).map_err(|_| {
-        OwnershipPlanError::new("replaced-field release anchor is not an adt.struct_set")
-    })?;
-    let field = set.field(ctx);
-    if set.r#ref(ctx) != object || field != destination {
-        return Err(OwnershipPlanError::new(
-            "replaced-field release does not match its planned object or field",
-        ));
-    }
-    let fields = get_struct_fields(ctx, set.r#type(ctx))
-        .ok_or_else(|| OwnershipPlanError::new("replaced-field layout is stale"))?;
-    let field_ty = fields
-        .get(field as usize)
-        .ok_or_else(|| OwnershipPlanError::new("replaced-field index is stale"))?;
-    if !plan.is_managed_type(ctx, *field_ty) {
+    let roles = DynOperandOwnership::get(ctx, op)
+        .ok_or_else(|| OwnershipPlanError::new("replaced-field release anchor assigns nothing"))?
+        .operand_roles(ctx)?;
+    let operands = ctx.op_operands(op);
+    let field_ty = roles
+        .into_iter()
+        .find_map(|role| match role {
+            OperandRole::Assign {
+                target,
+                slot,
+                field,
+                ..
+            } if operands.get(target) == Some(&object) && slot == destination => Some(field),
+            _ => None,
+        })
+        .ok_or_else(|| {
+            OwnershipPlanError::new(
+                "replaced-field release does not match its planned object or field",
+            )
+        })?;
+    if !plan.is_managed_type(ctx, field_ty) {
         return Err(OwnershipPlanError::new(
             "replaced-field release targets an unmanaged field",
         ));
     }
-    Ok((object, set.r#type(ctx), field, *field_ty))
-}
-
-fn validate_replaced_element(
-    ctx: &IrContext,
-    set: OpRef,
-    array: ValueRef,
-    destination: u32,
-    plan: &NativeOwnershipPlan,
-) -> Result<(ValueRef, ValueRef, TypeRef), RcMaterializationError> {
-    let set = adt::ArraySet::from_op(ctx, set)
-        .map_err(|_| OwnershipPlanError::new("replaced-element release anchor is stale"))?;
-    if set.r#ref(ctx) != array || destination != 0 {
-        return Err(OwnershipPlanError::new(
-            "replaced-element release does not match its planned array",
-        ));
-    }
-    let element_ty = tribute_ir::dialect::adt::Array::from_type_ref(ctx, ctx.value_ty(array))
-        .ok_or_else(|| OwnershipPlanError::new("replaced-element array type is stale"))?
-        .element(ctx);
-    if !plan.is_managed_type(ctx, element_ty) {
-        return Err(OwnershipPlanError::new(
-            "replaced-element release targets an unmanaged element",
-        ));
-    }
-    Ok((array, set.index(ctx), element_ty))
+    Ok((op, field_ty))
 }
 
 fn build_operations(ctx: &mut IrContext, action: ScheduledAction) -> (Placement, Vec<OpRef>) {
@@ -437,37 +392,19 @@ fn build_operations(ctx: &mut IrContext, action: ScheduledAction) -> (Placement,
                 .build(ctx, location_for(ctx, placement));
             (placement, vec![release.op_ref()])
         }
-        ScheduledAction::ReleaseReplacedField {
+        ScheduledAction::ReleaseReplaced {
             placement,
-            object,
-            layout,
-            field,
-            field_ty,
+            store,
             alloc_size,
         } => {
             let location = location_for(ctx, placement);
-            let get = adt::StructGet::operands(object)
-                .r#type(layout)
-                .field(field)
-                .results(field_ty)
-                .build(ctx, location);
-            let release = tribute_rt::Release::operands(get.result(ctx))
+            let read = DynOperandOwnership::get(ctx, store)
+                .and_then(|ownership| ownership.build_replaced_read(ctx, location))
+                .expect("a validated assignment reads the value it replaces");
+            let release = tribute_rt::Release::operands(ctx.op_result(read, 0))
                 .alloc_size(alloc_size)
                 .build(ctx, location);
-            (placement, vec![get.op_ref(), release.op_ref()])
-        }
-        ScheduledAction::ReleaseReplacedElement {
-            placement,
-            array,
-            index,
-            alloc_size,
-        } => {
-            let location = location_for(ctx, placement);
-            let get = adt::ArrayGet::operands(array, index).build(ctx, location);
-            let release = tribute_rt::Release::operands(get.result(ctx))
-                .alloc_size(alloc_size)
-                .build(ctx, location);
-            (placement, vec![get.op_ref(), release.op_ref()])
+            (placement, vec![read, release.op_ref()])
         }
         ScheduledAction::ReleaseMoving {
             placement,
