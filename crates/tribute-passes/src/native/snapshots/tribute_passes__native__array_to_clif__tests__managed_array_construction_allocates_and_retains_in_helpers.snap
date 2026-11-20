@@ -3,12 +3,12 @@ source: crates/tribute-passes/src/native/array_to_clif.rs
 expression: lowered
 ---
   clif.func @build(%0: core.ptr, %1: core.ptr, %2: core.i64) -> core.ptr {
-      %3 = tribute_rt.retain %0 : !NodeRef
-      %4 = tribute_rt.retain %1 : !NodeRef
-      %5 = tribute_rt.retain %0 : !NodeRef
-      %6 = tribute_rt.retain %1 : !NodeRef
-      %7 = core.unrealized_conversion_cast %0 : core.ptr to !NodeRef
-      %8 = core.unrealized_conversion_cast %1 : core.ptr to !NodeRef
+      %3 = tribute_rt.retain %0 : !Node
+      %4 = tribute_rt.retain %1 : !Node
+      %5 = tribute_rt.retain %0 : !Node
+      %6 = tribute_rt.retain %1 : !Node
+      %7 = core.unrealized_conversion_cast %0 : core.ptr to !Node
+      %8 = core.unrealized_conversion_cast %1 : core.ptr to !Node
       %9 = clif.iconst 32 : core.i64
       %10 = clif.call @__tribute_alloc(%9) : (core.i64) -> core.ptr
       %11 = clif.iconst 1 : core.i32
@@ -21,16 +21,16 @@ expression: lowered
       clif.store %15, %14 {offset = 0}
       clif.store %7, %14 {offset = 8}
       clif.store %8, %14 {offset = 16}
-      %16 = core.unrealized_conversion_cast %0 : core.ptr to !NodeRef
+      %16 = core.unrealized_conversion_cast %0 : core.ptr to !Node
       %17 = core.unrealized_conversion_cast %2 : core.i64 to core.index
-      %18 = clif.call @__tribute_array_new_5(%17, %16) : (core.index, !NodeRef) -> core.ptr
+      %18 = clif.call @__tribute_array_new_5(%17, %16) : (core.index, !Node) -> core.ptr
       tribute_rt.release %0 {alloc_size = 12}
       tribute_rt.release %18 {alloc_size = 0}
-      %19 = core.unrealized_conversion_cast %1 : core.ptr to !NodeRef
+      %19 = core.unrealized_conversion_cast %1 : core.ptr to !Node
       %20 = core.unrealized_conversion_cast %2 : core.i64 to core.index
-      %21 = clif.call @__tribute_array_new_5(%20, %19) : (core.index, !NodeRef) -> core.ptr
+      %21 = clif.call @__tribute_array_new_5(%20, %19) : (core.index, !Node) -> core.ptr
       tribute_rt.release %21 {alloc_size = 0}
-      %22 = core.unrealized_conversion_cast %1 : core.ptr to !NodeRef
+      %22 = core.unrealized_conversion_cast %1 : core.ptr to !Node
       %23 = core.unrealized_conversion_cast %2 : core.i64 to core.index
       %24 = core.unrealized_conversion_cast %2 : core.i64 to core.index
       %25 = clif.iconst 1 : core.i64

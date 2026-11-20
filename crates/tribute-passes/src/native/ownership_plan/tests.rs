@@ -2999,7 +2999,7 @@ fn nominal_layout_lookup_ignores_unreachable_interner_entries() {
         .insert("test.stale", trunk_ir::Attribute::Bool(true));
     let stale =
         tribute_ir::dialect::adt::Struct::from_fields(&mut ctx, "R", [i64_ty], attrs).as_type_ref();
-    assert!(ctx.type_alias_by_type(stale).is_none());
+    assert!(ctx.type_aliases().iter().all(|&(_, ty)| ty != stale));
     let plan = production_plan(&ctx, module)
         .expect("an unreachable stale layout must not shadow the module declaration");
     assert!(!plan.is_managed_type(&ctx, stale));

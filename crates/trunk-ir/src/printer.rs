@@ -22,6 +22,7 @@
 use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
 use std::cell::Cell;
+use std::collections::hash_map::Entry;
 use std::fmt;
 use std::fmt::Write;
 use std::ops::{ControlFlow, Deref, DerefMut};
@@ -82,9 +83,10 @@ struct AliasDef<'a> {
     name: String,
     ty: TypeRef,
     /// The aliases defined before this one, when the definition may use only
-    /// those: each manual definition makes its alias the one later lines
-    /// use, so when two aliases name one type, a definition after the first
-    /// is written with that alias; definitions whose dependencies form a
+    /// those: the first manual definition of a type makes its alias the one
+    /// later lines use, and when several aliases name one type, the first
+    /// in name order is defined first and names it everywhere; definitions
+    /// whose dependencies form a
     /// cycle, which only an identified type's body can close, write a later
     /// alias in full.
     state: Option<AsmState<'a>>,
@@ -112,14 +114,25 @@ impl<'a> AsmState<'a> {
     }
 
     fn with_names(ctx: &'a IrContext, names: AsmNames, root: OpRef, root_is_module: bool) -> Self {
+        // A type that several names alias is written as the first of them
+        // in name order, the one its module defines first.
+        let mut aliases: HashMap<TypeRef, String> = HashMap::default();
+        for (name, ty) in ctx.type_aliases() {
+            let name = name.to_string();
+            match aliases.entry(*ty) {
+                Entry::Occupied(mut entry) if name < *entry.get() => {
+                    entry.insert(name);
+                }
+                Entry::Occupied(_) => {}
+                Entry::Vacant(entry) => {
+                    entry.insert(name);
+                }
+            }
+        }
         let mut state = Self {
             ctx,
             names: Rc::new(names),
-            aliases: ctx
-                .type_aliases()
-                .iter()
-                .map(|(name, ty)| (*ty, name.to_string()))
-                .collect(),
+            aliases,
             modules: HashMap::default(),
             identified_depth: Cell::new(0),
         };
@@ -163,6 +176,7 @@ impl<'a> AsmState<'a> {
                 aliases.remove(ty);
             }
         }
+        let mut defined = HashSet::default();
         let manual: Vec<_> = manual
             .into_iter()
             .map(|(name, ty)| {
@@ -173,7 +187,10 @@ impl<'a> AsmState<'a> {
                     modules: HashMap::default(),
                     identified_depth: Cell::new(0),
                 });
-                aliases.insert(ty, name.clone());
+                // The first definition of a type names it from then on.
+                if defined.insert(ty) {
+                    aliases.insert(ty, name.clone());
+                }
                 AliasDef { name, ty, state }
             })
             .collect();
@@ -1065,8 +1082,13 @@ fn generate_auto_aliases(
     // topological extraction deterministic for independent candidates.
     candidates.sort_by(|a, b| b.1.cmp(&a.1).then(b.2.cmp(&a.2)).then(a.3.cmp(&b.3)));
 
-    // Name assignment
-    let mut used_names: HashSet<String> = existing.values().cloned().collect();
+    // Name assignment. Several manual names may alias one type, so reserve
+    // every one of them, not only the name `existing` keeps for its type.
+    let mut used_names: HashSet<String> = existing
+        .values()
+        .cloned()
+        .chain(ctx.type_aliases().iter().map(|(name, _)| name.to_string()))
+        .collect();
     let mut next_num = 0usize;
     let mut result = Vec::new();
 
