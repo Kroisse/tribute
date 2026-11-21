@@ -126,6 +126,38 @@ fn cps_legalization_carries_evidence_plans(db: &salsa::DatabaseImpl) {
     assert_eq!(lines.len(), call_masks + call_dups + handle_masks, "{ir}");
 }
 
+/// A handle body's evidence follows the body's row: an instance that the
+/// enclosing row names and the body row does not is masked when the handle
+/// is installed. The call in the body and the `resume` of the reinstalling
+/// arm then pass their evidence unchanged, so the resumed call has no
+/// selection to apply to evidence that lacks that instance.
+#[salsa_test]
+fn handle_masks_instances_its_body_row_does_not_name(db: &salsa::DatabaseImpl) {
+    let code = r#"
+ability Ask {
+    op ask() -> Int
+}
+
+ability Tick {
+    op tick() -> Int
+}
+
+fn mixed(c: fn() ->{e, Tick} Int, k: Int) ->{e, Ask} Int {
+    handle c() {
+        do r { r }
+        op Tick::tick() { mixed(fn() { resume k }, k + +1) }
+    }
+}
+"#;
+    let source = SourceCst::from_source_str(db, "body_row.trb", code);
+    let (ctx, module) = compile_frontend(db, source).expect("frontend should lower");
+    let ir = module.op().display(&ctx).to_string();
+    let lines = planned_lines(&ir);
+    assert_eq!(lines.len(), 1, "{ir}");
+    assert_line(&lines, "tribute_control.handle ", "[{mask = ", &ir);
+    assert!(lines[0].contains("pkg::Ask"), "{ir}");
+}
+
 /// A program whose calls all pass their evidence unchanged carries no
 /// selection, so evidence resolution adds no `effect.mask` or `effect.dup`.
 #[salsa_test]
