@@ -197,7 +197,7 @@ impl<'db> TypeChecker<'db> {
         let deferred_methods = ctx.take_deferred_methods();
         let deferred_constructors = ctx.take_deferred_constructors();
         let become_method_operands = ctx.take_become_method_operands();
-        let evidence = std::mem::take(&mut ctx.evidence);
+        let mut evidence = std::mem::take(&mut ctx.evidence);
         let next_row_var = ctx.next_row_var();
         // Drop ctx now to release the borrow of self.env
         drop(ctx);
@@ -252,6 +252,7 @@ impl<'db> TypeChecker<'db> {
             deferred_constructors,
             func.id,
             &mut func_instances,
+            &mut evidence,
         );
         deferred_resolutions.extend(early_resolutions);
         for error in waiting_errors {
@@ -649,6 +650,7 @@ impl<'db> TypeChecker<'db> {
         mut constructors: Vec<crate::typeck::func_context::DeferredConstructor<'db>>,
         func_node_id: crate::ast::NodeId,
         instances: &mut HashMap<crate::ast::NodeId, crate::typeck::FunctionInstance<'db>>,
+        evidence: &mut crate::typeck::evidence_plan::EvidenceTracker<'db>,
     ) -> DeferredSelections<'db> {
         let mut resolved = HashMap::default();
         let mut resolved_constructors = HashMap::default();
@@ -691,6 +693,12 @@ impl<'db> TypeChecker<'db> {
                             solver,
                         );
                         let callable = instance.ty;
+                        evidence.record_unions(&instance.row_unions);
+                        if mc.value
+                            && let TypeKind::Func { effect, .. } = callable.kind(self.db())
+                        {
+                            evidence.record_reference(mc.node_id, *effect);
+                        }
                         instances.insert(
                             mc.callee,
                             crate::typeck::FunctionInstance {

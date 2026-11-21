@@ -14,7 +14,7 @@ use crate::ast::{
     Decl, DeclEntry, Expr, ExprKind, FuncDecl, HandlerArm, HandlerKind, OpDeclKind, ResolvedRef,
     TypeKind, TypedRef,
 };
-use crate::ast_to_ir::context::IrLoweringCtx;
+use crate::ast_to_ir::context::{FunctionEntry, IrLoweringCtx};
 use crate::ast_to_ir::lower::{FuncSignature, IrBuilder};
 
 use super::declarations::{Declarations, PerformMetadata, ensure_prelude_declaration};
@@ -92,15 +92,35 @@ pub(super) fn lower_evidence_step<'db>(
     }
 }
 
+/// The selection that the entry of the function value made by the reference
+/// `node` applies, lowered.
+pub(super) fn reference_entry_plan<'db>(
+    ctx: &IrLoweringCtx<'db>,
+    node: crate::ast::NodeId,
+    declarations: &mut Declarations<'db>,
+) -> Option<Vec<tribute_control::EvidenceStep>> {
+    let plan = declarations.evidence_plans.get(&node).cloned()?;
+    Some(
+        plan.iter()
+            .map(|step| lower_evidence_step(ctx, step, declarations))
+            .collect(),
+    )
+}
+
 /// Lower a named function value at its exact source-logical callable contract:
 /// the target's signature with the rows `reference` passes. A use that
 /// expects a wider row adapts the value in `IrBuilder::cast_if_needed`.
+///
+/// A reference with an `entry_plan` makes the value a lambda that calls the
+/// function with that selection (`design/type-inference.md`, 여러 tail의
+/// 합집합인 row).
 pub(super) fn lower_function_ref<'db>(
     builder: &mut IrBuilder<'_, 'db>,
     location: Location,
     name: SymbolPath,
     reference: RowArguments,
     declarations: &Declarations<'db>,
+    entry_plan: Option<Vec<tribute_control::EvidenceStep>>,
 ) -> ValueRef {
     let signature = FuncSignature::lookup_logical(builder.ctx, builder.ir, &name)
         .unwrap_or_else(|| panic!("missing logical signature for function reference {name}"));
@@ -109,6 +129,14 @@ pub(super) fn lower_function_ref<'db>(
     let ty = signature
         .instantiate(builder.ir, &args)
         .callable_type(builder.ir);
+    if let Some(plan) = entry_plan {
+        let entry = FunctionEntry {
+            name,
+            rows: args,
+            plan,
+        };
+        return function_entry(builder, location, entry, ty);
+    }
     let symbol = builder.ctx.function_symbol(&name);
     let row_args = FuncSignature::row_args_attribute(builder.ir, &args);
     let op = op(
@@ -130,6 +158,75 @@ pub(super) fn lower_function_ref<'db>(
     result(builder.ir, op)
 }
 
+/// A lambda of the callable type `ty` that calls the function `entry` names
+/// with its parameters and the selection `entry` records. The call is not a
+/// tail call: the callee's frames select their tails again from it when a
+/// handler resumes them (`design/cps-effects.md`, Row 위치에 따른 evidence 선택).
+pub(in crate::ast_to_ir::lower) fn function_entry(
+    builder: &mut IrBuilder<'_, '_>,
+    location: Location,
+    entry: FunctionEntry,
+    ty: TypeRef,
+) -> ValueRef {
+    let callable = tribute_control::FuncSig::from_type_ref(builder.ir, ty)
+        .expect("a function value has a callable type");
+    let inputs = callable.inputs(builder.ir).to_vec();
+    let output = callable.result(builder.ir);
+    let signature = FuncSignature::lookup_logical(builder.ctx, builder.ir, &entry.name)
+        .unwrap_or_else(|| panic!("missing logical signature for function {}", entry.name));
+    let block = builder.ir.create_block(BlockData {
+        location,
+        args: inputs
+            .iter()
+            .map(|ty| BlockArgData {
+                ty: *ty,
+                attrs: Default::default(),
+            })
+            .collect(),
+        ops: Default::default(),
+        parent_region: None,
+    });
+    let params = builder.ir.block_args(block).to_vec();
+    let mut body = IrBuilder::new(builder.ctx, builder.ir, block);
+    let call = named_call(
+        &mut body,
+        location,
+        &entry.name,
+        &signature,
+        &entry.rows,
+        params,
+        CallPosition::Value,
+    );
+    if let Some(plan) = tribute_control::EvidenceStep::plan_attribute(body.ir, entry.plan.clone()) {
+        body.ir
+            .op_attrs_mut(call)
+            .insert(tribute_control::EVIDENCE_PLAN_ATTR, plan);
+    }
+    let value = result(body.ir, call);
+    let value = body.cast_if_needed(location, value, output);
+    op(
+        body.ir,
+        block,
+        location,
+        tribute_control::Return::DEF,
+        |builder| builder.operand(value),
+    );
+    let region = builder.ir.create_region(RegionData {
+        location,
+        blocks: trunk_ir::smallvec::smallvec![block],
+        parent_op: None,
+    });
+    let lambda = op(
+        builder.ir,
+        builder.block,
+        location,
+        tribute_control::Lambda::DEF,
+        |builder| builder.result(ty).region(region),
+    );
+    builder.ctx.record_function_entry(lambda, entry);
+    result(builder.ir, lambda)
+}
+
 /// Reference the function the named-function alias `local` stands for,
 /// with the rows its use `node` passes (`design/tribute-dialects.md`, 지역 람다의
 /// 양화와 인스턴스화), or `None` if `local` is no such alias.
@@ -138,6 +235,7 @@ pub(super) fn lower_alias_reference<'db>(
     node: crate::ast::NodeId,
     local: crate::ast::LocalId,
     declarations: &Declarations<'db>,
+    entry_plan: Option<Vec<tribute_control::EvidenceStep>>,
 ) -> Option<ValueRef> {
     let (function, rows) =
         declarations
@@ -153,6 +251,7 @@ pub(super) fn lower_alias_reference<'db>(
         function.path(builder.ctx.db).clone(),
         RowArguments::Rows(rows),
         declarations,
+        entry_plan,
     ))
 }
 
@@ -747,7 +846,7 @@ pub(super) fn lower_call<'db>(
     let callable_value = indirect_callee.or_else(|| match &*callee.kind {
         ExprKind::Var(reference) => match reference.resolved {
             ResolvedRef::Local { id, .. } => {
-                lower_local_reference(builder, callee.id, id, declarations)
+                lower_local_reference(builder, callee.id, id, declarations, None)
             }
             _ => None,
         },

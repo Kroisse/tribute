@@ -19,7 +19,7 @@ use crate::ast_to_ir::lower::IrBuilder;
 
 use super::callable::{
     CallPosition, RowArguments, attach_evidence_plan, ends_with_exit, lower_alias_reference,
-    lower_become, lower_call, lower_function_ref, lower_handle, lower_lambda,
+    lower_become, lower_call, lower_function_ref, lower_handle, lower_lambda, reference_entry_plan,
 };
 use super::declarations::Declarations;
 use super::nominal::expr_type_for_id;
@@ -97,18 +97,23 @@ pub(super) fn lower_expr<'db>(
             Some(value.result(builder.ir))
         }
         ExprKind::Var(reference) => match reference.resolved {
-            ResolvedRef::Local { id, .. } => Some(
-                lower_local_reference(builder, expr.id, id, declarations)
-                    .unwrap_or_else(|| panic!("missing logical binding for local {id:?}")),
-            ),
+            ResolvedRef::Local { id, .. } => {
+                let entry_plan = reference_entry_plan(builder.ctx, expr.id, declarations);
+                Some(
+                    lower_local_reference(builder, expr.id, id, declarations, entry_plan)
+                        .unwrap_or_else(|| panic!("missing logical binding for local {id:?}")),
+                )
+            }
             ResolvedRef::Function { id } => {
                 let name = id.path(builder.ctx.db);
+                let entry_plan = reference_entry_plan(builder.ctx, expr.id, declarations);
                 Some(lower_function_ref(
                     builder,
                     location,
                     name.clone(),
                     RowArguments::Instance(expr.id),
                     declarations,
+                    entry_plan,
                 ))
             }
             ResolvedRef::AbilityOp { .. } => {
@@ -980,14 +985,17 @@ pub(super) fn quantify_local_rows<'db>(
 }
 
 /// The value the local reference `node` reads: a lambda that quantifies
-/// rows is instantiated with the rows this use passes.
+/// rows is instantiated with the rows this use passes. A use of a
+/// named-function alias with an `entry_plan` makes its value an entry lambda
+/// ([`lower_function_ref`]).
 pub(super) fn lower_local_reference<'db>(
     builder: &mut IrBuilder<'_, 'db>,
     node: crate::ast::NodeId,
     local: crate::ast::LocalId,
     declarations: &Declarations<'db>,
+    entry_plan: Option<Vec<tribute_control::EvidenceStep>>,
 ) -> Option<ValueRef> {
-    if let Some(value) = lower_alias_reference(builder, node, local, declarations) {
+    if let Some(value) = lower_alias_reference(builder, node, local, declarations, entry_plan) {
         return Some(value);
     }
     let value = builder.ctx.lookup(local)?;
