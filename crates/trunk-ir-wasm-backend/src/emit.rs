@@ -270,8 +270,6 @@ struct ModuleInfo {
     /// The supertype index of each GC type, in index order.
     gc_supertypes: Vec<Option<u32>>,
     type_idx_by_type: HashMap<TypeRef, u32>,
-    /// Function type lookup map (wasm.func_sig TypeRef).
-    func_types: HashMap<SymbolPath, TypeRef>,
     /// Function index lookup map (import index or func index).
     func_indices: HashMap<SymbolPath, u32>,
     /// Functions referenced via ref.func that need declarative elem segment.
@@ -716,14 +714,6 @@ fn collect_module_info(ctx: &mut IrContext, module: IrModule) -> CompilationResu
     info.type_idx_by_type = type_idx_by_type;
     info.call_indirect_types = indexed.types;
     info.block_types = indexed.block_types;
-
-    // Build function type lookup map
-    for func in &info.funcs {
-        info.func_types.insert(func.name.clone(), func.func_type);
-    }
-    for import in &info.imports {
-        info.func_types.insert(import.sym.clone(), import.func_type);
-    }
 
     // Build function index map
     for (index, import_def) in info.imports.iter().enumerate() {
