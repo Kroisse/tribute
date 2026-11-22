@@ -1088,11 +1088,18 @@ fn is_odd(n: Int) -> Bool {
   넘길 수 없다. Row tail로 받은 callback을 명시한 ability 아래에서 부르는 호출,
   여러 row 변수의 합집합을 가진 callable이 그 가운데 하나만 받는 callee를 부르는
   호출이 그렇다. 이런 호출은 `become` 없이 쓴다.
+- **합집합 row를 가진 함수 값:** Row가 여러 row 변수의 합집합인 named function을
+  값으로 쓰면 그 값의 진입점이 tail마다 handler를 고르고 callee가 끝날 때까지
+  기억한다([여러 tail의 합집합인 row](type-inference.md#여러-tail의-합집합인-row)).
+  그런 값을 부르는 `become`은 허용되지만 그 진입점의 frame 하나를 남긴다. 값의 타입은
+  이 선택을 드러내지 않으므로 `become` 지점에서 거부할 수 없다. 이런 값을 거쳐
+  반복 횟수에 제한이 없이 도는 재귀는 그 named function을 직접 부르는 `become`으로
+  쓴다.
 
 인자는 일반 호출처럼 왼쪽에서 오른쪽으로 평가한다. 모든 인자를 평가한 뒤 현재
 callable의 지역 값을 정리하고 이전한다. 이 정리는 관찰할 수 없으므로 reference
-counting 같은 구현 세부는 `become`을 거부할 이유가 되지 않는다. 보장은 모든 호출
-규약과 target에 똑같이 적용된다.
+counting 같은 구현 세부는 `become`을 거부할 이유가 되지 않는다. 보장은 위의 합집합
+row를 가진 함수 값을 제외하고 모든 호출 규약과 target에 똑같이 적용된다.
 
 #### Frame을 남기지 않는 자리
 

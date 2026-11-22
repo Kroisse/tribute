@@ -20,6 +20,47 @@ use super::row_binders::RowBinders;
 use crate::SortedMap;
 use crate::ast::{CtorId, LocalId, NodeId, RowVar, SpanMaps, TypeScheme};
 
+/// A named function used as a value through an entry lambda, which calls it
+/// with the tails the reference selects (`design/type-inference.md`, 여러
+/// tail의 합집합인 row).
+#[derive(Clone)]
+pub(crate) struct FunctionEntry {
+    pub name: SymbolPath,
+    /// The rows the reference passes, in the current definition's binders.
+    pub rows: Vec<Row>,
+    pub plan: Vec<tribute_ir::dialect::tribute_control::EvidenceStep>,
+}
+
+impl FunctionEntry {
+    /// This entry for a value whose row adds the explicit instances `added`
+    /// above the value's own open row. The entry then receives a handler of
+    /// each above that row's tail, which the function and each of its tails
+    /// must not see, so each selection first masks them; `tails` reads the
+    /// evidence the call starts with, so its selections mask them as well.
+    pub(crate) fn widened(&self, added: &[SymbolPath]) -> Self {
+        use tribute_ir::dialect::tribute_control::EvidenceStep;
+        let masks = || added.iter().cloned().map(EvidenceStep::Mask);
+        let plan = masks()
+            .chain(self.plan.iter().map(|step| {
+                match step {
+                    EvidenceStep::Tails(plans) => EvidenceStep::Tails(
+                        plans
+                            .iter()
+                            .map(|plan| masks().chain(plan.iter().cloned()).collect())
+                            .collect(),
+                    ),
+                    step => step.clone(),
+                }
+            }))
+            .collect();
+        Self {
+            name: self.name.clone(),
+            rows: self.rows.clone(),
+            plan,
+        }
+    }
+}
+
 /// A source-visible callable synthesized by the logical frontend, such as a
 /// struct-field accessor. These signatures are semantic lowering metadata,
 /// not reconstructed by inspecting emitted operations.
@@ -61,6 +102,8 @@ pub struct IrLoweringCtx<'db> {
     /// names a definition by its joined path as one component, so the path
     /// cannot be read back from the operation.
     function_ref_paths: HashMap<OpRef, SymbolPath>,
+    /// The function each entry lambda of a function value calls.
+    function_entries: HashMap<OpRef, FunctionEntry>,
     /// Extern declarations synthesized for referenced prelude functions.
     logical_emitted_externs: HashSet<SymbolPath>,
     /// Module path as a vector of segments (e.g., ["std", "Option"]).
@@ -111,6 +154,7 @@ impl<'db> IrLoweringCtx<'db> {
             logical_generated_signatures: HashMap::default(),
             logical_source_functions: HashSet::default(),
             function_ref_paths: HashMap::default(),
+            function_entries: HashMap::default(),
             logical_emitted_externs: HashSet::default(),
             module_path: SymbolPath::root(),
             module_block: None,
@@ -348,6 +392,16 @@ impl<'db> IrLoweringCtx<'db> {
     /// The function the `func_ref` operation `op` names.
     pub(crate) fn function_ref_path(&self, op: OpRef) -> Option<&SymbolPath> {
         self.function_ref_paths.get(&op)
+    }
+
+    /// Record that the lambda `op` is the entry of a function value.
+    pub(crate) fn record_function_entry(&mut self, op: OpRef, entry: FunctionEntry) {
+        self.function_entries.insert(op, entry);
+    }
+
+    /// The function value whose entry is the lambda `op`.
+    pub(crate) fn function_entry(&self, op: OpRef) -> Option<&FunctionEntry> {
+        self.function_entries.get(&op)
     }
 
     pub(crate) fn is_logical_source_function(&self, name: &[Symbol]) -> bool {
@@ -590,6 +644,36 @@ mod tests {
 
     fn test_db() -> salsa::DatabaseImpl {
         salsa::DatabaseImpl::new()
+    }
+
+    /// A widened entry masks the added instances before its own selection
+    /// and before each tail's, since `tails` reads the evidence the call
+    /// starts with.
+    #[test]
+    fn widened_entry_masks_added_instances_in_every_selection() {
+        use tribute_ir::dialect::tribute_control::EvidenceStep;
+        let state = SymbolPath::new(["state"]);
+        let reader = SymbolPath::new(["reader"]);
+        let entry = FunctionEntry {
+            name: SymbolPath::new(["both"]),
+            rows: Vec::new(),
+            plan: vec![
+                EvidenceStep::Dup(state.clone()),
+                EvidenceStep::Tails(vec![vec![], vec![EvidenceStep::Mask(state.clone())]]),
+            ],
+        };
+        assert_eq!(
+            entry.widened(std::slice::from_ref(&reader)).plan,
+            [
+                EvidenceStep::Mask(reader.clone()),
+                EvidenceStep::Dup(state.clone()),
+                EvidenceStep::Tails(vec![
+                    vec![EvidenceStep::Mask(reader.clone())],
+                    vec![EvidenceStep::Mask(reader), EvidenceStep::Mask(state)],
+                ]),
+            ]
+        );
+        assert_eq!(entry.widened(&[]).plan, entry.plan);
     }
 
     #[test]

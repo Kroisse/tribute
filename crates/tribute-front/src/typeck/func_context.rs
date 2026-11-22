@@ -715,6 +715,11 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
             .position(|method| method.node_id == node)
         {
             let method = self.solve.deferred_methods.remove(index);
+            if method.value
+                && let TypeKind::Func { effect, .. } = callee_ty.kind(self.db)
+            {
+                self.evidence.record_reference(method.node_id, *effect);
+            }
             self.solve
                 .resolved_deferred_methods
                 .push((method, function, callee_ty));
