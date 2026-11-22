@@ -697,6 +697,84 @@ fn main() ->{Io} Nil {
     assert_program("tails_forwarded.trb", code, "110");
 }
 
+const ASK_TICK: &str = r#"use std::io::{Io, print_line}
+
+ability Ask {
+    op ask() -> Int
+}
+
+ability Tick {
+    op tick() -> Int
+}
+
+fn work() ->{Tick} Int {
+    Tick::tick() + +100
+}
+
+fn answer(c: fn() ->{e, Ask} Int) ->{e} Int {
+    handle c() {
+        do r { r }
+        op Ask::ask() { become answer(fn() { resume +1000 }) }
+    }
+}
+"#;
+
+/// A handler that reinstalls itself resumes the computation from a lambda
+/// whose row lacks an instance the function's row names but the handle body
+/// does not use. The body's evidence leaves that instance out, so the
+/// resumed call finds the evidence it expects.
+#[test]
+fn test_reinstalling_handler_in_a_function_naming_an_unused_instance() {
+    for (name, arm) in [
+        ("reinstall_unused_instance.trb", "mixed"),
+        ("become_reinstall_unused_instance.trb", "become mixed"),
+    ] {
+        let code = format!(
+            r#"{ASK_TICK}
+fn mixed(c: fn() ->{{e, Tick}} Int, k: Int) ->{{e, Ask}} Int {{
+    handle c() {{
+        do r {{ r }}
+        op Tick::tick() {{ {arm}(fn() {{ resume k }}, k + +1) }}
+    }}
+}}
+
+fn main() ->{{Io}} Nil {{
+    let v = handle mixed(work, +1) {{
+        do r {{ r }}
+        op Ask::ask() {{ +0 }}
+    }}
+    print_line(v.to_string)
+}}
+"#
+        );
+        assert_output_on_both_targets(name, &code, "101");
+    }
+}
+
+/// The instance the handle body leaves out still reaches the arms, which run
+/// with the evidence outside the handle.
+#[test]
+fn test_completion_of_a_reinstalled_handler_performs_the_masked_instance() {
+    let code = format!(
+        r#"{ASK_TICK}
+fn mixed(c: fn() ->{{e, Tick}} Int, k: Int) ->{{e, Ask}} Int {{
+    handle c() {{
+        do r {{ r + Ask::ask() }}
+        op Tick::tick() {{ mixed(fn() {{ resume k }}, k + +1) }}
+    }}
+}}
+
+fn main() ->{{Io}} Nil {{
+    let v = answer(fn() {{ mixed(work, +1) }})
+    print_line(v.to_string)
+}}
+"#
+    );
+    // The resumed `work` returns 101 to the reinstalled handle, whose
+    // completion adds the answer; the first handle's completion never runs.
+    assert_output_on_both_targets("reinstall_masked_instance_in_arm.trb", &code, "1101");
+}
+
 /// A callback whose row names an instance beside a tail takes the callee's
 /// own handler of that instance on top of the tail's handlers.
 #[test]

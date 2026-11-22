@@ -16,6 +16,7 @@ use crate::ast::{
 };
 
 use super::super::constraint::ConstraintOriginKind;
+use super::super::evidence_plan::HandleBodyRows;
 use super::super::func_context::FunctionInferenceContext;
 use super::NodeDiagnostic;
 use super::{Mode, TypeChecker};
@@ -494,7 +495,13 @@ impl<'db> TypeChecker<'db> {
                 }
                 let handled_effects = AbilityRow::new(self.db(), selected_effects, None);
                 if let Some((scope, _)) = body_evidence {
-                    ctx.evidence.set_handled(scope, handled_effects);
+                    ctx.evidence.set_body_rows(
+                        scope,
+                        HandleBodyRows {
+                            handled: handled_effects,
+                            body: body_effect_after,
+                        },
+                    );
                 }
                 // Create a result ability row that excludes handled effects
                 // This is the effect that propagates out of the handle expression
@@ -1178,9 +1185,13 @@ impl<'db> TypeChecker<'db> {
                 // into the enclosing scope during convert-phase re-inference.
                 let outer_effect = ctx.current_effect();
                 ctx.set_current_effect(AbilityRow::pure(self.db()));
-                let body_evidence = ctx
-                    .evidence
-                    .enter_handle_body(expr_id, Some(handle_ctx.handled_effects));
+                let body_evidence = ctx.evidence.enter_handle_body(
+                    expr_id,
+                    Some(HandleBodyRows {
+                        handled: handle_ctx.handled_effects,
+                        body: handle_ctx.body_effect,
+                    }),
+                );
                 let converted_body = self.check_expr_with_ctx(ctx, body, Mode::Infer);
                 if let Some((scope, outer_evidence)) = body_evidence {
                     ctx.evidence.restore(outer_evidence);

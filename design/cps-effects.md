@@ -1416,7 +1416,8 @@ callable 또는 handle body row의 명시 label로 확정하기 때문이다.
 Handler와 evidence의 연결은 다음과 같다.
 
 - **Handle body:** 처리하는 label마다 `effect.extend`로 새 marker를 쌓은 evidence를 받는다.
-  바깥 row가 그 label을 명시하면 extend 전에 `mask`로 바깥 marker를 걷어 낸다
+  바깥 row가 명시한 label이 처리하는 label이거나 body row가 명시하지 않은 label이면
+  extend 전에 `mask`로 그 바깥 marker를 걷어 낸다
   ([type-inference.md](type-inference.md#호출의-evidence-선택)).
 - **Handler arm, `do` arm:** handle을 설치한 층의 바깥 evidence로 실행한다.
   General arm은 handle 층의 dispatcher에게서 이 evidence와 exit frame을 받고,

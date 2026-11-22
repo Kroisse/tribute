@@ -548,21 +548,41 @@ fn apply(h: fn(fn() ->{State(Int), r} Nil, fn() ->{r} Nil) ->{State(Int), r} Int
 그래서 이런 callable은 어떻게 불리든 자기 tail마다 evidence를 받고 실행된다. 본문이
 handler를 설치한 뒤에 고르는 tail도 진입할 때 받은 evidence다.
 
-Handle body는 처리하는 label을 새 handler에 묶고 나머지 label은 바깥 그대로
-본다. 바깥 row가 처리하는 label을 명시하면 handle body는 그 바깥 handler를 보지
-않는다. Body row는 그 label을 한 번만 명시하므로 body 안에서 바깥 handler에
-닿는 자리가 없고, 바깥 handler가 남아 있으면 새 handler와 바깥 tail의 handler
-사이에 끼어 tail 자리를 밀어낸다. 그래서 handle 설치도 `k = 0`인 호출처럼 그
-label을 먼저 가린다. 바깥 row가 그 label을 tail로만 가지면 가리지 않는다.
+Handle body의 evidence는 body row의 모양을 따른다. Body row는 body의 perform과
+호출이 요구하는 label의 row이며 처리하는 label을 담는다. Handle body는 처리하는
+label을 새 handler에 묶고, 처리하지 않는 label 가운데 body row가 명시한 것은 바깥
+handler를 그대로 본다. 바깥 row가 명시한 label이라도 처리하는 label과 body row가
+명시하지 않은 label의 바깥 handler는 보지 않는다. 처리하는 label은 body row가 한
+번만 명시하므로 body 안에서 바깥 handler에 닿는 자리가 없고, body row가 명시하지
+않은 label은 body 안의 어떤 자리도 바깥의 명시 handler로 받지 않는다. 그런 바깥
+handler가 남아 있으면 새 handler나 바깥 tail의 handler 앞에 끼어 tail 자리를
+밀어낸다. 그래서 handle 설치도 `k = 0`인 호출처럼 그 label을 먼저 가린다. 바깥
+row가 그 label을 tail로만 가지면 가리지 않는다.
 Handler arm과 `do` arm은 처리한 label이 빠진 row로 검사되므로, arm의
 operation과 호출은 handle 바깥의 handler를 본다. 재개된 계산은 그 handle을 담지
 않으므로([abilities.md](abilities.md#resume이-재개하는-계산)), `resume`은 자신이
 놓인 scope의 evidence에서 handle body의 evidence를 고른다. Arm 본문, arm 안의
 lambda, arm 안에 중첩된 handle body 가운데 어디에 있든 그 scope의 evidence를
-caller로, handle body를 callee로 보고 호출과 같은 규칙으로 고른다. Body는 처리하는
-label과 바깥 evidence의 명시 label을 한 번씩 받는다. Arm 본문의 `resume`은 바깥
-row가 처리한 label을 명시하므로 선택이 그대로 전달이 되고, `resume`을 감싼 다른
-handler의 label은 body row가 명시하지 않으면 가려진다. `fn` arm 본문의
+caller로, handle body를 callee로 보고 호출과 같은 규칙으로 고른다. Body는 body
+row가 명시한 label을 한 번씩 받는다. `resume`의 row는 body row이므로 `resume`이
+놓인 scope의 row도 그 label을 모두 명시하고, 재개된 계산이 받을 handler는 언제나
+그 scope의 evidence에 있다. Arm 본문의 `resume`은 바깥 row가 처리한 label을
+명시하므로 그 label은 그대로 전달하고, 바깥 row가 명시했지만 body row가 명시하지
+않은 label과 `resume`을 감싼 다른 handler의 label은 body row가 명시하지 않으므로
+가린다.
+
+```rust
+fn reinstall(c: fn() ->{e, Tick} Int, k: Int) ->{e, Ask} Int {
+    // Body row는 {Tick | e}다. 설치가 바깥의 명시 Ask를 가리므로 c()와
+    // 아래 resume은 evidence를 그대로 전달한다.
+    handle c() {
+        do r { r }
+        op Tick::tick() { reinstall(fn() { resume k }, k + +1) }
+    }
+}
+```
+
+`fn` arm 본문의
 perform과 호출은 solving이 끝난 뒤 검사하며, `op` operation을 수행하거나 그런
 ability를 요구하는 callable을 호출할 수 없다([abilities.md](abilities.md#fn-operation-handler)).
 
