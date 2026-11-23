@@ -6,6 +6,7 @@
 
 use rustc_hash::FxHashMap as HashMap;
 use std::cell::RefCell;
+use std::collections::hash_map::Entry;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use cranelift_entity::{EntityList, EntityRef, ListPool, PrimaryMap, SecondaryMap};
@@ -213,12 +214,11 @@ pub struct IrContext {
     /// Mapping from block to its argument ValueRefs.
     block_arg_values: SecondaryMap<BlockRef, EntityList<ValueRef>>,
 
-    /// Type aliases: ordered list of `(name, type)` for stable output.
+    /// Type aliases: `(name, type)` in registration order, for stable output.
+    /// Several names may alias one type.
     type_aliases: Vec<(Symbol, TypeRef)>,
-    /// Lookup alias by name.
-    type_alias_by_name: HashMap<Symbol, TypeRef>,
-    /// Reverse lookup: type → alias name (for printer).
-    type_alias_by_type: HashMap<TypeRef, Symbol>,
+    /// The position of each name in `type_aliases`.
+    type_alias_index: HashMap<Symbol, usize>,
     /// The body bound to each identified type ([`IrContext::bind_type_body`]).
     type_bodies: HashMap<TypeRef, TypeRef>,
 
@@ -283,8 +283,7 @@ impl Clone for IrContext {
             result_values: self.result_values.clone(),
             block_arg_values: self.block_arg_values.clone(),
             type_aliases: self.type_aliases.clone(),
-            type_alias_by_name: self.type_alias_by_name.clone(),
-            type_alias_by_type: self.type_alias_by_type.clone(),
+            type_alias_index: self.type_alias_index.clone(),
             type_bodies: self.type_bodies.clone(),
             diagnostics: self.diagnostics.clone(),
         }
@@ -318,8 +317,7 @@ impl IrContext {
             result_values: SecondaryMap::new(),
             block_arg_values: SecondaryMap::new(),
             type_aliases: Vec::new(),
-            type_alias_by_name: HashMap::default(),
-            type_alias_by_type: HashMap::default(),
+            type_alias_index: HashMap::default(),
             type_bodies: HashMap::default(),
             diagnostics: RefCell::new(Vec::new()),
         }
@@ -347,8 +345,7 @@ impl IrContext {
             result_values: secondary_with_capacity(&self.result_values),
             block_arg_values: secondary_with_capacity(&self.block_arg_values),
             type_aliases: self.type_aliases.clone(),
-            type_alias_by_name: self.type_alias_by_name.clone(),
-            type_alias_by_type: self.type_alias_by_type.clone(),
+            type_alias_index: self.type_alias_index.clone(),
             type_bodies: self.type_bodies.clone(),
             diagnostics: self.diagnostics.clone(),
         }
@@ -559,23 +556,18 @@ impl IrContext {
     // Type aliases
     // ========================================================================
 
-    /// Register a type alias. If a name is already registered, it is replaced.
+    /// Register `name` as an alias of `ty`.
+    ///
+    /// A name aliases one type, but several names may alias the same type,
+    /// as conversions that map distinct types to one do. Registering a name
+    /// that is already registered points it at `ty` and keeps its position
+    /// in [`type_aliases`](Self::type_aliases); other names are unaffected.
     pub fn register_type_alias(&mut self, name: Symbol, ty: TypeRef) {
-        if self.type_alias_by_name.get(&name) == Some(&ty) {
+        if self.type_alias_by_name(&name) == Some(ty) {
             return;
         }
         self.bump_revision();
-        if let Some(old_ty) = self.type_alias_by_name.insert(name.clone(), ty) {
-            // Remove old reverse mapping
-            self.type_alias_by_type.remove(&old_ty);
-            // Update ordered list in-place
-            if let Some(entry) = self.type_aliases.iter_mut().find(|(n, _)| *n == name) {
-                entry.1 = ty;
-            }
-        } else {
-            self.type_aliases.push((name.clone(), ty));
-        }
-        self.type_alias_by_type.insert(ty, name);
+        self.insert_type_alias(name, ty);
     }
 
     /// Replace every registered type alias with `entries`, in their order. A
@@ -584,35 +576,32 @@ impl IrContext {
     pub fn replace_type_aliases(&mut self, entries: impl IntoIterator<Item = (Symbol, TypeRef)>) {
         self.bump_revision();
         self.type_aliases.clear();
-        self.type_alias_by_name.clear();
-        self.type_alias_by_type.clear();
+        self.type_alias_index.clear();
         for (name, ty) in entries {
-            if let Some(old_ty) = self.type_alias_by_name.insert(name.clone(), ty) {
-                self.type_alias_by_type.remove(&old_ty);
-                if let Some(entry) = self.type_aliases.iter_mut().find(|(n, _)| *n == name) {
-                    entry.1 = ty;
-                }
-            } else {
-                self.type_aliases.push((name.clone(), ty));
+            self.insert_type_alias(name, ty);
+        }
+    }
+
+    fn insert_type_alias(&mut self, name: Symbol, ty: TypeRef) {
+        match self.type_alias_index.entry(name) {
+            Entry::Occupied(entry) => self.type_aliases[*entry.get()].1 = ty,
+            Entry::Vacant(entry) => {
+                self.type_aliases.push((entry.key().clone(), ty));
+                entry.insert(self.type_aliases.len() - 1);
             }
-            self.type_alias_by_type.insert(ty, name);
         }
     }
 
     /// Look up a type alias by name.
     pub fn type_alias_by_name(&self, name: &Symbol) -> Option<TypeRef> {
-        self.type_alias_by_name.get(name).copied()
+        let &index = self.type_alias_index.get(name)?;
+        Some(self.type_aliases[index].1)
     }
 
     /// Look up a type alias by the text of its name, such as a nominal
     /// type's string name.
     pub fn type_alias_by_text(&self, name: &str) -> Option<TypeRef> {
         self.type_alias_by_name(&Symbol::new(name))
-    }
-
-    /// Look up an alias name for a given type (reverse lookup for printer).
-    pub fn type_alias_by_type(&self, ty: TypeRef) -> Option<Symbol> {
-        self.type_alias_by_type.get(&ty).cloned()
     }
 
     /// Get the ordered list of type aliases.
@@ -2506,7 +2495,51 @@ mod tests {
         assert_eq!(ctx.type_aliases(), [(kept.clone(), i64_ty), (new, i64_ty)]);
         assert_eq!(ctx.type_alias_by_name(&old), None);
         assert_eq!(ctx.type_alias_by_name(&kept), Some(i64_ty));
-        assert_eq!(ctx.type_alias_by_type(i32_ty), None);
-        assert_eq!(ctx.type_alias_by_type(i64_ty), Some(kept));
+    }
+
+    #[test]
+    fn a_second_name_for_an_aliased_type_keeps_the_first() {
+        let mut ctx = IrContext::new();
+        let i32_ty = i32_type(&mut ctx);
+        let [first, second] = ["first", "second"].map(Symbol::new);
+        ctx.register_type_alias(first.clone(), i32_ty);
+        ctx.register_type_alias(second.clone(), i32_ty);
+
+        assert_eq!(
+            ctx.type_aliases(),
+            [(first.clone(), i32_ty), (second.clone(), i32_ty)]
+        );
+        assert_eq!(ctx.type_alias_by_name(&first), Some(i32_ty));
+        assert_eq!(ctx.type_alias_by_name(&second), Some(i32_ty));
+    }
+
+    #[test]
+    fn repointing_a_name_keeps_its_position_and_other_names() {
+        let mut ctx = IrContext::new();
+        let i32_ty = i32_type(&mut ctx);
+        let i64_ty = TypeDataBuilder::new("core.i64").intern(&mut ctx);
+        let [moved, other, last] = ["moved", "other", "last"].map(Symbol::new);
+        ctx.register_type_alias(moved.clone(), i32_ty);
+        ctx.register_type_alias(other.clone(), i64_ty);
+        ctx.register_type_alias(last.clone(), i32_ty);
+
+        let stamp = ctx.analysis_stamp();
+        ctx.register_type_alias(moved.clone(), i64_ty);
+        assert_ne!(ctx.analysis_stamp(), stamp);
+        let stamp = ctx.analysis_stamp();
+        ctx.register_type_alias(moved.clone(), i64_ty);
+        assert_eq!(ctx.analysis_stamp(), stamp);
+
+        assert_eq!(
+            ctx.type_aliases(),
+            [
+                (moved.clone(), i64_ty),
+                (other.clone(), i64_ty),
+                (last.clone(), i32_ty)
+            ]
+        );
+        assert_eq!(ctx.type_alias_by_name(&moved), Some(i64_ty));
+        assert_eq!(ctx.type_alias_by_name(&other), Some(i64_ty));
+        assert_eq!(ctx.type_alias_by_name(&last), Some(i32_ty));
     }
 }

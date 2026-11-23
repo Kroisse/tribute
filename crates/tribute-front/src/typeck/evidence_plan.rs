@@ -12,11 +12,14 @@
 //! - one: the evidence is passed unchanged;
 //! - more: `dup` for each extra position.
 //!
-//! A handle body sees the enclosing evidence with a new handler for each
-//! handled instance. When the enclosing row names a handled instance
-//! explicitly, that handler is first masked: the body row names the instance
-//! once, so nothing in the body can reach the hidden handler, and leaving it
-//! would stand between the new handler and the row tail's handlers.
+//! A handle body's evidence is shaped by the body's own row: a new handler
+//! for each handled instance, and the enclosing handler of each instance the
+//! body row names and does not handle. An instance the enclosing row names
+//! explicitly is first masked when the body handles it or its row does not
+//! name it: nothing in the body takes that handler as an explicit position,
+//! and leaving it would stand between the new handler or the row tail's
+//! handlers and the body. A `resume` then selects exactly the body row's
+//! instances, which the row of its own scope names as well.
 //!
 //! Positions are counted from the callee's declared explicit instances and
 //! the explicit instances its row tail is instantiated with. Applying the
@@ -39,14 +42,29 @@
 //! tail slots are the caller's own. A union one of whose sources is its own
 //! result declares no separate tails.
 //!
+//! A call through a value attaches no tails, since the value's type writes
+//! the union as one row. A reference that makes such a callable a value
+//! instead selects the tails for the value's entry, with the value's own row
+//! as the caller's.
+//!
 //! Checking records each call against the evidence scope it runs in and
 //! computes the selections only after solving, when every row is known.
 
-use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
 use crate::ast::{AbilityInstance, AbilityRow, LocalId, NodeId, RowUnion, RowVar};
 
 use super::EvidenceStep;
+
+/// The rows of a handle body: the instances it handles, and the row of the
+/// body itself, which includes them.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct HandleBodyRows<'db> {
+    pub(crate) handled: AbilityRow<'db>,
+    pub(crate) body: AbilityRow<'db>,
+}
+
+const ROWS_SET: &str = "a handle body's rows are set before plans are computed";
 
 /// The evidence a piece of code runs with.
 #[derive(Clone, Debug)]
@@ -54,10 +72,10 @@ enum EvidenceScope<'db> {
     /// A function or lambda body, with its signature row once it is known.
     Callable(Option<AbilityRow<'db>>),
     /// A handle body: the enclosing scope's evidence with a new handler for
-    /// each handled instance.
+    /// each handled instance, shaped by the body's row.
     HandleBody {
         parent: usize,
-        handled: Option<AbilityRow<'db>>,
+        rows: Option<HandleBodyRows<'db>>,
     },
 }
 
@@ -73,6 +91,8 @@ enum EvidenceSite<'db> {
     Resume { scope: usize, body: usize },
     /// The installation of the handle whose body is `body`.
     Handle { body: usize },
+    /// A named function used as a value, whose instantiated row is `row`.
+    Reference { row: AbilityRow<'db> },
 }
 
 /// The evidence scope that code currently runs in, saved across a nested scope.
@@ -88,6 +108,11 @@ pub(crate) struct EvidenceTracker<'db> {
     sites: HashMap<NodeId, EvidenceSite<'db>>,
     /// Each `become` with the call it applies.
     becomes: Vec<(NodeId, NodeId)>,
+    /// Function references that are the callee of a call.
+    callees: HashSet<NodeId>,
+    /// Calls whose callee is a value rather than a named function or an
+    /// alias of one.
+    value_calls: HashSet<NodeId>,
     /// The unions of every instantiated scheme, with their unsolved rows.
     unions: Vec<RowUnion<'db>>,
     /// The unions the checked function's own signature declares.
@@ -127,18 +152,17 @@ impl<'db> EvidenceTracker<'db> {
         }
     }
 
-    /// Enter a handle body. Its handled instances may be supplied later with
-    /// [`Self::set_handled`] when they are known only after the body.
+    /// Enter a handle body. Its rows may be supplied later with
+    /// [`Self::set_body_rows`] when they are known only after the body.
     pub(crate) fn enter_handle_body(
         &mut self,
         handle: NodeId,
-        handled: Option<AbilityRow<'db>>,
+        rows: Option<HandleBodyRows<'db>>,
     ) -> Option<(usize, SavedEvidenceScope)> {
         let parent = self.current?;
         let saved = self.current;
         let scope = self.scopes.len();
-        self.scopes
-            .push(EvidenceScope::HandleBody { parent, handled });
+        self.scopes.push(EvidenceScope::HandleBody { parent, rows });
         self.current = Some(scope);
         self.sites
             .entry(handle)
@@ -146,9 +170,9 @@ impl<'db> EvidenceTracker<'db> {
         Some((scope, saved))
     }
 
-    pub(crate) fn set_handled(&mut self, scope: usize, row: AbilityRow<'db>) {
-        if let Some(EvidenceScope::HandleBody { handled, .. }) = self.scopes.get_mut(scope) {
-            *handled = Some(row);
+    pub(crate) fn set_body_rows(&mut self, scope: usize, body_rows: HandleBodyRows<'db>) {
+        if let Some(EvidenceScope::HandleBody { rows, .. }) = self.scopes.get_mut(scope) {
+            *rows = Some(body_rows);
         }
     }
 
@@ -174,6 +198,33 @@ impl<'db> EvidenceTracker<'db> {
                 .entry(call)
                 .or_insert(EvidenceSite::Call { scope, callee });
         }
+    }
+
+    /// Record a reference to a named function whose instantiated row is
+    /// `row`. A reference that is a call's callee is marked with
+    /// [`Self::record_callee`] and selects nothing of its own.
+    pub(crate) fn record_reference(&mut self, reference: NodeId, row: AbilityRow<'db>) {
+        if !self.callees.contains(&reference) {
+            self.sites
+                .entry(reference)
+                .or_insert(EvidenceSite::Reference { row });
+        }
+    }
+
+    /// Record that `node` is the callee of a call, which selects the
+    /// evidence itself.
+    pub(crate) fn record_callee(&mut self, node: NodeId) {
+        self.callees.insert(node);
+        if matches!(self.sites.get(&node), Some(EvidenceSite::Reference { .. })) {
+            self.sites.remove(&node);
+        }
+    }
+
+    /// Record that the call `call` calls a value rather than a named
+    /// function or an alias of one. Such a call attaches no tails: a value of
+    /// a multi-tail function is entered through its entry, which does.
+    pub(crate) fn record_value_call(&mut self, call: NodeId) {
+        self.value_calls.insert(call);
     }
 
     /// Record that `operand`, a call or a `resume`, is the operand of the
@@ -234,16 +285,23 @@ impl<'db> EvidenceTracker<'db> {
                         explicit,
                         tail,
                     };
+                    let sources = self.callee_tails(db, *callee);
+                    if sources.is_some() && self.value_calls.contains(node) {
+                        // The value is entered through its entry, which
+                        // selects the tails: the call passes the evidence
+                        // of the value's merged row.
+                        let value = resolve(*callee);
+                        let positions = unique(value.instances(db).iter().cloned());
+                        let plan = caller.select(&positions, value.rest(db));
+                        if !plan.is_empty() {
+                            plans.insert(*node, plan);
+                        }
+                        continue;
+                    }
                     let (positions, callee_tail) = callee_positions(db, *callee, &resolve);
                     let mut plan = caller.select(&positions, callee_tail);
-                    if let Some(sources) = self.callee_tails(db, *callee) {
-                        let plans: Vec<_> = sources
-                            .map(|source| {
-                                let source = resolve(source);
-                                let positions = unique(source.instances(db).iter().cloned());
-                                caller.select(&positions, source.rest(db))
-                            })
-                            .collect();
+                    if let Some(sources) = sources {
+                        let plans = caller.select_tails(db, sources, &resolve);
                         // Each callee tail takes the caller's own tail of the
                         // same index, which the evidence already holds.
                         let own_tails = plans.iter().enumerate().all(|(index, plan)| {
@@ -261,16 +319,39 @@ impl<'db> EvidenceTracker<'db> {
                     // The handle body takes each of its instances once.
                     call_plan(&caller, &body, opens_into(body_tail, tail))
                 }
+                EvidenceSite::Reference { row } => {
+                    // The value's entry calls the function with the value's
+                    // own evidence, so the value's row is the caller's.
+                    let Some(sources) = self.callee_tails(db, *row) else {
+                        continue;
+                    };
+                    let value = resolve(*row);
+                    let caller = ScopeEvidence {
+                        explicit: selectable(db, value),
+                        tail: value.rest(db),
+                        tails: Vec::new(),
+                    };
+                    let (positions, callee_tail) = callee_positions(db, *row, &resolve);
+                    let mut plan = caller.select(&positions, callee_tail);
+                    plan.push(EvidenceStep::Tails(
+                        caller.select_tails(db, sources, &resolve),
+                    ));
+                    plan
+                }
                 EvidenceSite::Handle { body } => {
-                    let EvidenceScope::HandleBody { parent, handled } = &self.scopes[*body] else {
+                    let EvidenceScope::HandleBody { parent, rows } = &self.scopes[*body] else {
                         unreachable!("a handle site names a handle body scope");
                     };
                     let (parent, _) = self.explicit(db, *parent, &resolve, &mut explicit);
-                    handled
-                        .map(|row| resolve(row).instances(db).to_vec())
-                        .unwrap_or_default()
+                    let rows = rows.expect(ROWS_SET);
+                    let handled = resolve(rows.handled);
+                    let named = resolve(rows.body);
+                    parent
                         .into_iter()
-                        .filter(|instance| parent.contains(instance))
+                        .filter(|instance| {
+                            handled.instances(db).contains(instance)
+                                || !named.instances(db).contains(instance)
+                        })
                         .map(EvidenceStep::Mask)
                         .collect()
                 }
@@ -338,21 +419,18 @@ impl<'db> EvidenceTracker<'db> {
         let found = match &self.scopes[scope] {
             EvidenceScope::Callable(Some(row)) => {
                 let row = resolve(*row);
-                // The ambient `Io` has no handler marker to select.
-                let selectable = row
-                    .instances(db)
-                    .iter()
-                    .filter(|instance| !instance.ability_id.is_builtin_io(db))
-                    .cloned();
-                (unique(selectable), row.rest(db))
+                (selectable(db, row), row.rest(db))
             }
             EvidenceScope::Callable(None) => (Vec::new(), None),
-            EvidenceScope::HandleBody { parent, handled } => {
+            EvidenceScope::HandleBody { parent, rows } => {
                 let (parent, tail) = self.explicit(db, *parent, resolve, memo);
-                let handled = handled
-                    .map(|row| resolve(row).instances(db).to_vec())
-                    .unwrap_or_default();
-                (unique(handled.into_iter().chain(parent)), tail)
+                let rows = rows.expect(ROWS_SET);
+                let handled = resolve(rows.handled).instances(db).to_vec();
+                let named = resolve(rows.body);
+                let kept = parent
+                    .into_iter()
+                    .filter(|instance| named.instances(db).contains(instance));
+                (unique(handled.into_iter().chain(kept)), tail)
             }
         };
         memo.insert(scope, found.clone());
@@ -380,6 +458,20 @@ fn callee_positions<'db>(
     (positions, tail)
 }
 
+/// The explicit instances of `row` that have a handler marker to select:
+/// all but the ambient `Io`.
+fn selectable<'db>(
+    db: &'db dyn salsa::Database,
+    row: AbilityRow<'db>,
+) -> Vec<AbilityInstance<'db>> {
+    unique(
+        row.instances(db)
+            .iter()
+            .filter(|instance| !instance.ability_id.is_builtin_io(db))
+            .cloned(),
+    )
+}
+
 /// The sources of a union that its declaration leaves open: one row tail
 /// each. Callers and the callee number the tails by this order.
 fn open_sources<'db>(
@@ -394,6 +486,23 @@ fn open_sources<'db>(
 }
 
 impl<'db> ScopeEvidence<'db> {
+    /// Select the evidence of each tail row in `sources` from this scope's
+    /// evidence, independently.
+    fn select_tails(
+        &self,
+        db: &'db dyn salsa::Database,
+        sources: impl Iterator<Item = AbilityRow<'db>>,
+        resolve: &impl Fn(AbilityRow<'db>) -> AbilityRow<'db>,
+    ) -> Vec<Vec<EvidenceStep<'db>>> {
+        sources
+            .map(|source| {
+                let source = resolve(source);
+                let positions = unique(source.instances(db).iter().cloned());
+                self.select(&positions, source.rest(db))
+            })
+            .collect()
+    }
+
     /// Select the evidence of a row with the explicit `positions` and the
     /// row tail `target` from this scope's evidence.
     fn select(

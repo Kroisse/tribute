@@ -937,8 +937,6 @@ fn post_candidate_failure_restores_alias_maps_and_canonical_ir() {
     .unwrap_err();
     assert_eq!(error.boundary, POST_CPS_BOUNDARY);
     assert_eq!(ctx.type_alias_by_name(&alias_name), Some(source_type));
-    assert_eq!(ctx.type_alias_by_type(source_type), Some(alias_name));
-    assert_eq!(ctx.type_alias_by_type(converted_type), None);
     assert_eq!(ctx.type_alias_by_name(&renamed), None);
     assert_eq!(ctx.type_aliases(), source_aliases);
     assert_eq!(candidate.op().display(&ctx).to_string(), before);

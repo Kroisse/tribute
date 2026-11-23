@@ -5,7 +5,7 @@ use crate::dialect::tribute_control::{
     display_layout_binders, parse_layout_binders,
 };
 use crate::dialect::tribute_rtti::{
-    DescriptorFieldsError, DescriptorLayoutType, ManagedRef, ManagedRefType,
+    DescriptorFieldsError, DescriptorLayoutType, ManagedRef, ManagedRefType, OperandOwnership,
 };
 use trunk_ir::asm_format::TypeAliasHint;
 use trunk_ir::dialect::core::{I1, I8, Index};
@@ -119,6 +119,10 @@ mod adt {
     /// layout's field type with the layout's row binders replaced by the
     /// `row_args` of the result's row instance, using call-site row
     /// substitution; see `design/tribute-dialects.md` § "Nominal row 인자".
+    ///
+    /// **Ownership:** each managed field operand moves its unit into its
+    /// field of the new object (`Initialize`).
+    #[implements(OperandOwnership)]
     #[flags(Pure)]
     #[verify]
     #[asm_format("(" fields ")" attr_dict_bare ":" functional_type(fields, result))]
@@ -130,6 +134,10 @@ mod adt {
     /// field type with the layout's row binders replaced by the `row_args` of
     /// the `ref` operand's row instance, using call-site row substitution; see
     /// `design/tribute-dialects.md` § "Nominal row 인자".
+    ///
+    /// **Ownership:** a managed result is a borrow derived from `ref`
+    /// (`Project`).
+    #[implements(OperandOwnership)]
     #[flags(Pure)]
     #[asm_format(r#ref attr_dict_bare ":" type(result))]
     fn struct_get(r#type: Attr<Type>, field: Attr<u32>, r#ref: Value<_>) -> Value<_> {}
@@ -141,6 +149,11 @@ mod adt {
     /// operation: it is how each target writes the only field of a
     /// `heap.cell` object. Shared mutable state above target lowering is a
     /// `heap.cell` (`design/tribute-dialects.md` § "`heap.cell`").
+    ///
+    /// **Ownership:** borrows `ref`. A managed `value` moves its unit into
+    /// the field, and the unit of the replaced value is released
+    /// (`Assign`).
+    #[implements(OperandOwnership)]
     #[asm_format(r#ref "," value attr_dict_bare)]
     fn struct_set(r#type: Attr<Type>, field: Attr<u32>, r#ref: Value<_>, value: Value<_>) {}
 
@@ -164,6 +177,10 @@ mod adt {
     /// layout's field type with the layout's row binders replaced by the
     /// `row_args` of the result's row instance, using call-site row
     /// substitution; see `design/tribute-dialects.md` § "Nominal row 인자".
+    ///
+    /// **Ownership:** as for `adt.struct_new`, each managed field operand
+    /// moves its unit into its field of the new object (`Initialize`).
+    #[implements(OperandOwnership)]
     #[flags(Pure)]
     #[verify]
     #[asm_format(tag "(" fields ")" attr_dict_bare ":" functional_type(fields, result))]
@@ -171,6 +188,9 @@ mod adt {
 
     /// Whether `ref`, a value of enum layout `type`, is of variant `tag`, the
     /// variant's position as for `adt.variant_new`.
+    ///
+    /// **Ownership:** borrows `ref`.
+    #[implements(OperandOwnership)]
     #[flags(Pure)]
     #[verify]
     #[asm_format(r#ref attr_dict_bare ":" type(result))]
@@ -195,6 +215,7 @@ mod adt {
     ///   position (`design/types.md` § "망라성과 도달 불가 arm"); each target
     ///   computes it from the value's runtime type descriptor
     ///   (`design/runtime-types.md` § "Variant 판별").
+    #[implements(OperandOwnership)]
     #[flags(Pure)]
     #[asm_format(r#ref attr_dict_bare)]
     fn variant_tag(r#type: Attr<Type>, r#ref: Value<_>) -> Value<Index> {}
@@ -206,6 +227,10 @@ mod adt {
     /// field type with the layout's row binders replaced by the `row_args` of
     /// the `ref` operand's row instance, using call-site row substitution; see
     /// `design/tribute-dialects.md` § "Nominal row 인자".
+    ///
+    /// **Ownership:** a managed result is a borrow derived from `ref`
+    /// (`Project`).
+    #[implements(OperandOwnership)]
     #[flags(Pure)]
     #[verify]
     #[asm_format(r#ref attr_dict_bare ":" type(result))]
@@ -264,6 +289,10 @@ mod adt {
     fn enum_decl(name: Attr<String>, r#type: Attr<Type>, variants: Attr<[String]>) {}
 
     /// A `length`-element array whose every element is `initial`.
+    ///
+    /// **Ownership:** borrows `initial`; the operation acquires a unit for
+    /// every element it fills.
+    #[implements(OperandOwnership)]
     #[flags(Pure)]
     #[asm_format(length "," initial attr_dict_bare ":" type(result))]
     fn array_new<A: Array>(
@@ -275,6 +304,10 @@ mod adt {
 
     /// An array of `elements` in order. Its length is the number of
     /// operands, which may be zero.
+    ///
+    /// **Ownership:** each managed element moves its unit into the new array
+    /// (`Initialize`).
+    #[implements(OperandOwnership)]
     #[flags(Pure)]
     #[asm_format(elements attr_dict_bare ":" type(result))]
     fn array_of<A: Array>(r#type: Attr<TypeOf<A>>, elements: Variadic<A::Element>) -> Value<A> {}
@@ -290,6 +323,11 @@ mod adt {
     /// ```text
     /// %r = adt.array_splice %source[%start, %end](%element0, ...) attributes {type = !A} : !A
     /// ```
+    ///
+    /// **Ownership:** borrows `source`; the operation acquires a unit for
+    /// every managed element it copies from it. Each managed operand of
+    /// `elements` moves its unit into the new array (`Initialize`).
+    #[implements(OperandOwnership)]
     #[flags(Pure)]
     #[asm_format(source "[" start "," end "]" "(" elements ")" attr_dict ":" type(result))]
     fn array_splice<A: Array>(
@@ -303,6 +341,10 @@ mod adt {
 
     /// The element at `index`. It requires `index < len`; the target traps
     /// an execution that violates it.
+    ///
+    /// **Ownership:** a managed result is a borrow derived from `ref`
+    /// (`Project`).
+    #[implements(OperandOwnership)]
     #[flags(Pure)]
     #[asm_format(r#ref "," index attr_dict_bare ":" type(result))]
     fn array_get<A: Array>(r#ref: Value<A>, index: Value<Index>) -> Value<A::Element> {}
@@ -312,10 +354,18 @@ mod adt {
     /// a shared array builds the changed array with `adt.array_splice`
     /// instead. It requires `index < len`; the target traps an execution that
     /// violates it.
+    ///
+    /// **Ownership:** borrows `ref`. A managed `value` moves its unit into
+    /// the element, and the unit of the replaced element is released
+    /// (`Assign`).
+    #[implements(OperandOwnership)]
     #[asm_format(r#ref "," index "," value attr_dict_bare)]
     fn array_set<A: Array>(r#ref: Value<A>, index: Value<Index>, value: Value<A::Element>) {}
 
     /// The number of elements.
+    ///
+    /// **Ownership:** borrows `ref`.
+    #[implements(OperandOwnership)]
     #[flags(Pure)]
     #[asm_format(r#ref attr_dict_bare ":" type(result))]
     fn array_len(r#ref: Value<impl Array>) -> Value<Index> {}
@@ -338,6 +388,9 @@ mod adt {
     /// ```text
     /// %empty = adt.ref_is_null %list : tribute_rt.anyref
     /// ```
+    ///
+    /// **Ownership:** borrows `ref`.
+    #[implements(OperandOwnership)]
     #[flags(Pure)]
     #[asm_format(r#ref attr_dict_bare ":" type(r#ref))]
     fn ref_is_null(r#ref: Value<impl ManagedRef>) -> Value<I1> {}
@@ -351,7 +404,10 @@ mod adt {
     /// ```text
     /// %c = adt.ref_cast %v : tribute_rt.anyref to !"pkg::Node"
     /// ```
-    #[implements(Fold)]
+    ///
+    /// **Ownership:** the result is `ref` itself and shares its unit
+    /// (`Forward`).
+    #[implements(Fold, OperandOwnership)]
     #[flags(Pure)]
     #[asm_format(r#ref attr_dict_bare ":" type(r#ref) "to" type(result))]
     fn ref_cast(r#ref: Value<impl ManagedRef>) -> Value<impl ManagedRef> {}
@@ -672,6 +728,7 @@ use trunk_ir::types::{
 
 pub mod convert;
 pub mod layout;
+mod ownership;
 
 /// Type attribute holding a nominal layout's name, a string.
 pub const STRUCT_NAME_ATTR: &str = "name";

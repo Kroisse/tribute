@@ -1357,6 +1357,38 @@ fn borrowed_load_return_acquires_a_transfer_unit() {
     assert_eq!(count(function, ActionKind::FinalRelease), 0);
 }
 
+#[test]
+fn reading_a_parameter_borrows_it_but_writing_into_its_object_retains_it() {
+    let (_ctx, _module, plan) = build(
+        r#"core.module @test {
+  !Child = adt.struct<"Child",(core.i32)>
+  !ChildRef = adt.struct<"Child">
+  !Children = adt.array<!ChildRef>
+  func.func @length(%children: !Children) -> core.index {
+    %len = adt.array_len %children : core.index
+    func.return %len
+  }
+  func.func @read(%cell: heap.cell<!ChildRef>) -> !ChildRef {
+    %child = heap.cell_get %cell : !ChildRef
+    func.return %child
+  }
+  func.func @write(%cell: heap.cell<!ChildRef>, %child: !ChildRef) {
+    heap.cell_set %cell, %child
+    func.return
+  }
+}"#,
+    );
+    for name in ["length", "read"] {
+        let function = plan.function(&SymbolPath::new([name])).unwrap();
+        assert_eq!(function.entries(), [EntryOwnership::Borrowed], "{name}");
+    }
+    let write = plan.function(&SymbolPath::new(["write"])).unwrap();
+    assert_eq!(
+        write.entries(),
+        [EntryOwnership::Retained, EntryOwnership::Retained]
+    );
+}
+
 /// The value each `@read*` fixture function first reads.
 fn first_read(
     ctx: &IrContext,
@@ -2945,7 +2977,7 @@ fn nominal_layout_lookup_ignores_unreachable_interner_entries() {
         .insert("test.stale", trunk_ir::Attribute::Bool(true));
     let stale =
         tribute_ir::dialect::adt::Struct::from_fields(&mut ctx, "R", [i64_ty], attrs).as_type_ref();
-    assert!(ctx.type_alias_by_type(stale).is_none());
+    assert!(ctx.type_aliases().iter().all(|&(_, ty)| ty != stale));
     let plan = production_plan(&ctx, module)
         .expect("an unreachable stale layout must not shadow the module declaration");
     assert!(!plan.is_managed_type(&ctx, stale));
@@ -3373,14 +3405,6 @@ fn malformed_array_operations_are_rejected() {
 }}"#
         )
     };
-    assert_plan_error_unchanged(
-        &module("%copy = adt.array_splice %others[%at, %at]() attributes {type = !Nodes} : !Nodes"),
-        "array_splice source differs from its array type",
-    );
-    assert_plan_error_unchanged(
-        &module("%filled = adt.array_new %at, %other {type = !Nodes} : !Nodes"),
-        "array_new initial value type is malformed",
-    );
     assert_plan_error_unchanged(
         &module("adt.array_set %nodes, %at, %other"),
         "array_set value type is malformed",

@@ -209,7 +209,8 @@ impl<'a, 'db> IrBuilder<'a, 'db> {
 
     /// `value` again as a reference to the same function under the callable
     /// type `target_ty`, if `value` is a function reference and `target_ty`
-    /// has its parameters and result under a row that includes its own.
+    /// has its parameters and result under a row that includes its own. The
+    /// entry of a multi-tail function value is rebuilt the same way.
     ///
     /// This is the only callable adaptation accepted at the source-logical
     /// boundary: a generic `unrealized_conversion_cast` cannot change a
@@ -223,7 +224,11 @@ impl<'a, 'db> IrBuilder<'a, 'db> {
         let trunk_ir::refs::ValueDef::OpResult(producer, _) = self.ir.value_def(value) else {
             return None;
         };
-        let named = tribute_control::FuncRef::from_op(self.ir, producer).ok()?;
+        let entry = self.ctx.function_entry(producer).cloned();
+        let named = match entry {
+            Some(_) => None,
+            None => Some(tribute_control::FuncRef::from_op(self.ir, producer).ok()?),
+        };
         let source = tribute_control::FuncSig::from_type_ref(self.ir, self.ir.value_ty(value))?;
         let target = tribute_control::FuncSig::from_type_ref(self.ir, target_ty)?;
         if target.result(self.ir) != source.result(self.ir)
@@ -232,6 +237,34 @@ impl<'a, 'db> IrBuilder<'a, 'db> {
         {
             return None;
         }
+        let Some(named) = named else {
+            // An entry's selection reads evidence of the value's own row.
+            // Instances a wider row adds above an open row stand between
+            // that row's tail and its handlers, so the widened entry masks
+            // them; a closed row reaches none of them. The ambient `Io` has
+            // no handler to mask.
+            let (source_row, target_row) = (source.row(self.ir), target.row(self.ir));
+            let added: Vec<_> = if source_row.tail.is_some() {
+                let io = self.ctx.ability_symbol(
+                    &crate::ast::AbilityId::builtin_io(self.ctx.db).qualified(self.ctx.db),
+                    &[],
+                );
+                target_row
+                    .instances
+                    .into_iter()
+                    .filter(|instance| *instance != io && !source_row.instances.contains(instance))
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            let entry = entry.expect("a value that is no function reference is an entry");
+            return Some(logical::function_entry(
+                self,
+                location,
+                entry.widened(&added),
+                target_ty,
+            ));
+        };
         let function = named.value(self.ir).clone();
         let row_args = self
             .ir

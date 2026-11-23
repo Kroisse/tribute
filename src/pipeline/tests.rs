@@ -448,15 +448,16 @@ fn main() -> Nil {
     // Each declaration follows its layout through the conversions: its
     // `type` is a published layout, whatever key the conversions gave it,
     // and its name is the source spelling of its type.
+    let aliased = |ty| ctx.type_aliases().iter().any(|&(_, alias)| alias == ty);
     for &op in &ctx.block(block).ops {
         if let Ok(decl) = adt::StructDecl::from_op(&ctx, op) {
             let layout = adt::Struct::from_type_ref(&ctx, decl.r#type(&ctx)).unwrap();
-            assert!(ctx.type_alias_by_type(decl.r#type(&ctx)).is_some());
+            assert!(aliased(decl.r#type(&ctx)));
             assert_eq!(decl.fields(&ctx).len(), layout.fields(&ctx).len());
             declared.push((decl.name(&ctx).to_owned(), decl.r#type(&ctx)));
         } else if let Ok(decl) = adt::EnumDecl::from_op(&ctx, op) {
             let layout = adt::Enum::from_type_ref(&ctx, decl.r#type(&ctx)).unwrap();
-            assert!(ctx.type_alias_by_type(decl.r#type(&ctx)).is_some());
+            assert!(aliased(decl.r#type(&ctx)));
             assert_eq!(decl.variants(&ctx).len(), layout.variant_count(&ctx));
             declared.push((decl.name(&ctx).to_owned(), decl.r#type(&ctx)));
         }

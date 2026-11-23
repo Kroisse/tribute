@@ -126,6 +126,38 @@ fn cps_legalization_carries_evidence_plans(db: &salsa::DatabaseImpl) {
     assert_eq!(lines.len(), call_masks + call_dups + handle_masks, "{ir}");
 }
 
+/// A handle body's evidence follows the body's row: an instance that the
+/// enclosing row names and the body row does not is masked when the handle
+/// is installed. The call in the body and the `resume` of the reinstalling
+/// arm then pass their evidence unchanged, so the resumed call has no
+/// selection to apply to evidence that lacks that instance.
+#[salsa_test]
+fn handle_masks_instances_its_body_row_does_not_name(db: &salsa::DatabaseImpl) {
+    let code = r#"
+ability Ask {
+    op ask() -> Int
+}
+
+ability Tick {
+    op tick() -> Int
+}
+
+fn mixed(c: fn() ->{e, Tick} Int, k: Int) ->{e, Ask} Int {
+    handle c() {
+        do r { r }
+        op Tick::tick() { mixed(fn() { resume k }, k + +1) }
+    }
+}
+"#;
+    let source = SourceCst::from_source_str(db, "body_row.trb", code);
+    let (ctx, module) = compile_frontend(db, source).expect("frontend should lower");
+    let ir = module.op().display(&ctx).to_string();
+    let lines = planned_lines(&ir);
+    assert_eq!(lines.len(), 1, "{ir}");
+    assert_line(&lines, "tribute_control.handle ", "[{mask = ", &ir);
+    assert!(lines[0].contains("pkg::Ask"), "{ir}");
+}
+
 /// A program whose calls all pass their evidence unchanged carries no
 /// selection, so evidence resolution adds no `effect.mask` or `effect.dup`.
 #[salsa_test]
@@ -160,4 +192,73 @@ fn main() -> Nil {
         .expect("frontend should lower");
     let ir = module.op().display(&ctx).to_string();
     assert!(planned_lines(&ir).is_empty(), "{ir}");
+}
+
+/// A multi-tail function used as a value is entered through a lambda whose
+/// call selects the function's tails; the call through the value selects
+/// nothing. Legalization keeps that call a non-tail call, whose frame carries
+/// the selection for a resumed continuation.
+#[salsa_test]
+fn a_multi_tail_function_value_selects_its_tails_in_its_entry(db: &salsa::DatabaseImpl) {
+    let code = r#"
+ability State(s) {
+    op get() -> s
+    op set(value: s) -> Nil
+}
+
+fn both(f: fn() ->{e1} Nil, g: fn() ->{e2} Nil) ->{e1, e2} Nat {
+    f()
+    g()
+    0
+}
+
+fn apply(h: fn(fn() ->{State(Nat)} Nil, fn() ->{State(Nat)} Nil) ->{State(Nat)} Nat) ->{State(Nat)} Nat {
+    h(fn() { State::set(1) }, fn() { State::set(2) })
+}
+
+fn caller() ->{State(Nat)} Nat {
+    apply(both)
+}
+"#;
+    let source = SourceCst::from_source_str(db, "entry.trb", code);
+    let (ctx, module) = compile_frontend(db, source).expect("frontend should lower");
+    let ir = module.op().display(&ctx).to_string();
+    let lines = planned_lines(&ir);
+    // `both` selects its own tails; the entry attaches them; the call
+    // through the value in `apply` selects nothing.
+    assert_line(
+        &lines,
+        "tribute_control.call_indirect",
+        "[{select = 0}]",
+        &ir,
+    );
+    assert_line(
+        &lines,
+        "tribute_control.call_indirect",
+        "[{select = 1}]",
+        &ir,
+    );
+    assert_line(
+        &lines,
+        "tribute_control.call @\"pkg::both\"",
+        "[{tails = [[], []]}]",
+        &ir,
+    );
+    assert_eq!(lines.len(), 3, "{ir}");
+    assert!(!ir.contains("tribute_control.func_ref"), "{ir}");
+
+    let (ctx, module) = run_through_cps_lowering(db, source)
+        .expect("CPS legalization should accept frontend output")
+        .expect("frontend should lower");
+    let ir = module.op().display(&ctx).to_string();
+    let lines = planned_lines(&ir);
+    // The entry's call of `both` passes a frame of its own, and the layer
+    // that rebuilds that frame for a resumed continuation selects the tails
+    // again.
+    let entry = lines
+        .iter()
+        .find(|line| line.contains("@\"pkg::both\"") && line.contains("[{tails = [[], []]}]"))
+        .unwrap_or_else(|| panic!("the entry calls `both` with its tails:\n{ir}"));
+    assert!(entry.contains("__tribute_continuation_frame"), "{ir}");
+    assert_line(&lines, "tail_call_indirect", "[{tails = [[], []]}]", &ir);
 }

@@ -697,6 +697,84 @@ fn main() ->{Io} Nil {
     assert_program("tails_forwarded.trb", code, "110");
 }
 
+const ASK_TICK: &str = r#"use std::io::{Io, print_line}
+
+ability Ask {
+    op ask() -> Int
+}
+
+ability Tick {
+    op tick() -> Int
+}
+
+fn work() ->{Tick} Int {
+    Tick::tick() + +100
+}
+
+fn answer(c: fn() ->{e, Ask} Int) ->{e} Int {
+    handle c() {
+        do r { r }
+        op Ask::ask() { become answer(fn() { resume +1000 }) }
+    }
+}
+"#;
+
+/// A handler that reinstalls itself resumes the computation from a lambda
+/// whose row lacks an instance the function's row names but the handle body
+/// does not use. The body's evidence leaves that instance out, so the
+/// resumed call finds the evidence it expects.
+#[test]
+fn test_reinstalling_handler_in_a_function_naming_an_unused_instance() {
+    for (name, arm) in [
+        ("reinstall_unused_instance.trb", "mixed"),
+        ("become_reinstall_unused_instance.trb", "become mixed"),
+    ] {
+        let code = format!(
+            r#"{ASK_TICK}
+fn mixed(c: fn() ->{{e, Tick}} Int, k: Int) ->{{e, Ask}} Int {{
+    handle c() {{
+        do r {{ r }}
+        op Tick::tick() {{ {arm}(fn() {{ resume k }}, k + +1) }}
+    }}
+}}
+
+fn main() ->{{Io}} Nil {{
+    let v = handle mixed(work, +1) {{
+        do r {{ r }}
+        op Ask::ask() {{ +0 }}
+    }}
+    print_line(v.to_string)
+}}
+"#
+        );
+        assert_output_on_both_targets(name, &code, "101");
+    }
+}
+
+/// The instance the handle body leaves out still reaches the arms, which run
+/// with the evidence outside the handle.
+#[test]
+fn test_completion_of_a_reinstalled_handler_performs_the_masked_instance() {
+    let code = format!(
+        r#"{ASK_TICK}
+fn mixed(c: fn() ->{{e, Tick}} Int, k: Int) ->{{e, Ask}} Int {{
+    handle c() {{
+        do r {{ r + Ask::ask() }}
+        op Tick::tick() {{ mixed(fn() {{ resume k }}, k + +1) }}
+    }}
+}}
+
+fn main() ->{{Io}} Nil {{
+    let v = answer(fn() {{ mixed(work, +1) }})
+    print_line(v.to_string)
+}}
+"#
+    );
+    // The resumed `work` returns 101 to the reinstalled handle, whose
+    // completion adds the answer; the first handle's completion never runs.
+    assert_output_on_both_targets("reinstall_masked_instance_in_arm.trb", &code, "1101");
+}
+
 /// A callback whose row names an instance beside a tail takes the callee's
 /// own handler of that instance on top of the tail's handlers.
 #[test]
@@ -726,4 +804,175 @@ fn main() ->{Io} Nil {
 }
 "#;
     assert_program("selected_tail_explicit_handler.trb", code, "110");
+}
+
+const BOTH_INSTALLING_STATE: &str = r#"
+fn both2(f: fn() ->{e1} Nil, g: fn() ->{e2} Nil) ->{e1, e2} Int {
+    handle {
+        f()
+        g()
+        State::get()
+    } {
+        do r { r }
+        op State::get() { +1000 }
+        op State::set(v) { +2000 }
+    }
+}
+
+fn apply(h: fn(fn() ->{State(Int)} Nil, fn() ->{State(Int)} Nil) ->{State(Int)} Int) ->{State(Int)} Int {
+    h(fn() { State::set(State::get() + +1) }, fn() { State::set(State::get() + +10) })
+}
+"#;
+
+/// A multi-tail function used as a value at a type that makes its tails one
+/// row gives each tail the evidence the value was called with, not the
+/// evidence under the handler the function installs before it calls them.
+#[test]
+fn test_multi_tail_function_value_keeps_its_callers_handlers() {
+    let code = format!(
+        "{BOTH_INSTALLING_STATE}{}",
+        r#"
+fn main() ->{Io} Nil {
+    let total = run_state(fn() {
+        let x = apply(both2)
+        x + State::get()
+    }, +0)
+    show(total)
+}
+"#
+    );
+    // Both callbacks update the caller's state (11); `both2`'s handler
+    // answers only its own `State::get()` (1000).
+    assert_program("multi_tail_function_value.trb", &code, "1011");
+}
+
+/// The same through a named-function alias of the function.
+#[test]
+fn test_multi_tail_function_alias_value_keeps_its_callers_handlers() {
+    let code = format!(
+        "{BOTH_INSTALLING_STATE}{}",
+        r#"
+fn main() ->{Io} Nil {
+    let total = run_state(fn() {
+        let h = both2
+        let x = apply(h)
+        x + State::get()
+    }, +0)
+    show(total)
+}
+"#
+    );
+    assert_program("multi_tail_function_alias_value.trb", &code, "1011");
+}
+
+/// A multi-tail function used as a value at a type that keeps its tails
+/// apart selects each tail from the value's row: the tail that does not name
+/// the instance the value's row names does not see that handler.
+#[test]
+fn test_multi_tail_function_value_selects_each_tail() {
+    let code = r#"
+fn both(f: fn() ->{e1} Nil, g: fn() ->{e2} Nil) ->{e1, e2} Int {
+    f()
+    g()
+    +0
+}
+
+fn apply(
+    h: fn(fn() ->{State(Int), r} Nil, fn() ->{r} Nil) ->{State(Int), r} Int,
+    k: fn() ->{r} Nil
+) ->{State(Int), r} Int {
+    h(fn() { State::set(State::get() + +1) }, k)
+}
+
+fn count_calls(k: fn() ->{t} Nil) ->{t} Int {
+    run_state(fn() {
+        apply(both, k)
+        State::get()
+    }, +0)
+}
+
+fn main() ->{Io} Nil {
+    let outer = run_state(fn() {
+        let calls = count_calls(fn() { State::set(State::get() + +10) })
+        calls * +100 + State::get()
+    }, +0)
+    show(outer)
+}
+"#;
+    assert_program("multi_tail_function_value_split.trb", code, "110");
+}
+
+/// A value whose type keeps a multi-tail function's own row is entered
+/// through the function's entry once: the call through the value selects
+/// nothing again, so the callee's explicit `State` is stacked once over
+/// the first tail and hidden from the second.
+#[test]
+fn test_call_through_a_multi_tail_value_selects_once() {
+    let code = r#"
+fn stateful(f: fn() ->{e1} Nil, g: fn() ->{e2} Nil) ->{e1, e2, State(Int)} Nil {
+    f()
+    g()
+    State::set(State::get() + +100)
+}
+
+fn count_calls(k: fn() ->{t} Nil) ->{t} Int {
+    run_state(fn() {
+        let h = { stateful }
+        h(fn() { State::set(State::get() + +1) }, k)
+        State::get()
+    }, +0)
+}
+
+fn main() ->{Io} Nil {
+    let outer = run_state(fn() {
+        let calls = count_calls(fn() { State::set(State::get() + +10) })
+        calls * +1000 + State::get()
+    }, +0)
+    show(outer)
+}
+"#;
+    // The inner state takes the first callback and `stateful` (101); the
+    // second callback adds 10 to the outer state.
+    assert_program("multi_tail_value_selects_once.trb", code, "101010");
+}
+
+/// A name that several `use`s give different functions, used as a value,
+/// is entered through the selected function's entry.
+#[test]
+fn test_selected_multi_tail_function_value_keeps_its_callers_handlers() {
+    let code = r#"
+mod installing {
+    pub fn both(f: fn() ->{e1} Nil, g: fn() ->{e2} Nil) ->{e1, e2} Int {
+        handle {
+            f()
+            g()
+            super::State::get()
+        } {
+            do r { r }
+            op super::State::get() { +1000 }
+            op super::State::set(v) { +2000 }
+        }
+    }
+}
+
+mod plain {
+    pub fn both(n: Int) -> Int { n }
+}
+
+use installing::both
+use plain::both
+
+fn apply(h: fn(fn() ->{State(Int)} Nil, fn() ->{State(Int)} Nil) ->{State(Int)} Int) ->{State(Int)} Int {
+    h(fn() { State::set(State::get() + +1) }, fn() { State::set(State::get() + +10) })
+}
+
+fn main() ->{Io} Nil {
+    let total = run_state(fn() {
+        let x = apply(both)
+        x + State::get()
+    }, +0)
+    show(total)
+}
+"#;
+    assert_program("selected_multi_tail_function_value.trb", code, "1011");
 }

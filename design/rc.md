@@ -391,6 +391,32 @@ projection의 use를 owner의 use로도 반영한다. `elide_proven_field_borrow
 참여하지 않는다. 선행 facts 분석 실패는 그대로 전파되고 실패한 liveness
 결과는 캐시되지 않는다.
 
+Operation이 operand의 unit을 어떻게 다루는지는 그 operation이
+`OperandOwnership` 인터페이스로 operand마다 선언한다. Swift SIL의
+`OperandOwnership`을 본뜬 역할은 다음과 같다.
+
+- `Borrow`: operation이 실행되는 동안만 읽는다. Operand는 자신의 unit을 지킨다.
+  Operand에서 managed 값을 복사해 담는 operation은 그 unit을 스스로 획득한다.
+- `Project`: 결과가 operand가 가리키는 object의 field이며, operand에서 파생된
+  borrow다.
+- `Copy`: 결과가 operand가 가리키는 object의 field를 복사한 값이다. Object가 살아
+  있는 동안에도 field가 바뀔 수 있으므로 결과는 borrow가 아니며, 읽은 직후 자신의
+  unit을 획득한다. Swift SIL의 `load [copy]`에 해당한다. Operand는 operation 동안
+  빌린다.
+- `Forward`: 결과가 다른 type의 operand 자신이며 같은 unit을 나눈다.
+- `Initialize`: operand의 unit이 결과의 새 object의 field로 옮겨 간다.
+- `Assign`: operand의 unit이 다른 operand가 가리키는 기존 object의 field로 옮겨
+  가고, 바뀌기 전 값의 unit은 replaced-field release로 release한다. 그 값을 읽는
+  operation도 인터페이스가 만든다.
+
+Parameter-entry 계약, projection-owner 사실, action planner와 RC
+materialization은 operand 역할을 이 인터페이스로만 읽으며 operation 이름으로
+판정하지 않는다. 매개변수가 borrow로만 쓰이는 조건은 아래 borrowed parameter
+elision이 operand 역할로 정한다. 인터페이스가 없는 operation의 operand에는
+planner가 적용할 역할이 없다. Call, return, branch와 `tribute_rt.into_raw`는
+각자의 계약을 따른다. 각 operation의 역할은 그 operation 선언의 doc comment가
+정한다.
+
 **Algorithm:**
 
 1. Exact semantic type과 callable contract로 managed value, field와 parameter
@@ -587,20 +613,25 @@ into control flow and atomic operations by RC lowering.
   Ordinary direct call의 caller는 argument의 unit, 또는 argument가 파생된 root의
   unit을 호출이 반환할 때까지 유지하므로 이 불변식을 제공한다.
 
-  Borrowed 사용은 다음뿐이다.
+  Borrowed 사용은 operation이 `OperandOwnership`으로 선언한 operand 역할로
+  판정하며, 다음뿐이다.
 
-  - 매개변수를 읽기 대상으로 삼는 `heap.struct_get`, `heap.variant_get`,
-    `heap.variant_is`, `heap.is_null`.
-  - `heap.cast`와 unrealized conversion cast. Cast result의 모든 사용이 다시
-    borrowed 사용일 때만 transparent하다.
+  - `Borrow`, `Project`, `Copy` operand. `heap.struct_get`, `heap.variant_get`,
+    `heap.variant_is`, `heap.is_null`, `heap.array_get`, `heap.array_len`,
+    `heap.cell_get`의 대상이 여기에 속한다. 단, 같은 operation이 그 operand를 `Assign`의 대상으로
+    삼으면 escape다. 대상 object에 쓰면 바뀌기 전 field가 release되는데, caller가
+    그 field를 borrowed projection으로 아직 쥐고 있을 수 있다.
+  - `Forward` operand. `heap.cast`와 unrealized conversion cast가 여기에
+    속한다. Result의 모든 사용이 다시 borrowed 사용일 때만 transparent하다.
   - Direct `func.call`의 argument. Callee의 대응 매개변수가 borrowed summary를
     가질 때만 해당한다.
 
-  그 밖의 모든 사용은 escape이며 retained를 선택한다. 값으로서의 return과 저장,
-  `heap.struct_update`와 `heap.array_set`의 source, `heap.cell_set`의 대상, branch와
-  block argument 전달, indirect call과 tail
-  call, 다른 region에서의 사용, 알 수 없는 operation이 여기에 속한다. Closure,
-  ability handler, continuation capture는 저장이므로 escape다.
+  그 밖의 모든 사용은 escape이며 retained를 선택한다. 값으로서의 return과
+  `Initialize`나 `Assign` operand로서의 저장, `Assign`의 대상, branch와 block
+  argument 전달, indirect call과 tail call, 다른 region에서의 사용, 역할을
+  선언하지 않은 operation이 여기에 속한다. `heap.struct_update`와
+  `heap.array_set`의 source, `heap.array_set`과 `heap.cell_set`의 대상이 그 예다.
+  Closure, ability handler, continuation capture는 저장이므로 escape다.
 
   Summary는 direct call graph 위의 fixed point다. 후보 매개변수를 borrowed로 두고
   시작해 escape를 찾을 때마다 retained로 내린다. 강등은 단조이고 매개변수 수가
@@ -649,10 +680,11 @@ into control flow and atomic operations by RC lowering.
     alias root(cast를 거친 alias 포함)의 unit을 소비하는 것은 그 root의 마지막 사용일
     때뿐이므로, 파생 borrow가 갱신 뒤에도 쓰이면 갱신은 새 unit을 획득하고 복사로
     끝난다.
-  - `heap.cell_get`의 결과는 borrow하지 않고 읽은 직후 자신의 unit을 획득한다.
-    `heap.cell_set`은 이전 값의 unit을 release하고, 쓰는 쪽은 다른 참조나 호출된
-    함수를 거쳐 같은 cell에 닿을 수 있으므로, 이 unit 없이는 뒤따르는 쓰기가 읽은
-    값을 해제할 수 있다. 판정은 타입만 본다. Module을 훑어 쓰기 대상을 찾지 않는다.
+  - `heap.cell_get`의 결과는 `Copy`이므로 borrow하지 않고 읽은 직후 자신의 unit을
+    획득한다. `heap.cell_set`은 이전 값의 unit을 release하고, 쓰는 쪽은 다른 참조나
+    호출된 함수를 거쳐 같은 cell에 닿을 수 있으므로, 이 unit 없이는 뒤따르는 쓰기가
+    읽은 값을 해제할 수 있다. 판정은 operand 역할만 본다. Module을 훑어 쓰기 대상을
+    찾지 않는다.
 
   이 최적화를 끈 기준 동작은 모든 managed projection이 projection 직후 자신의 unit을
   획득하는 것이다. Exact typed projection 계약을 만족하지 않는 IR은 borrow로도 기준

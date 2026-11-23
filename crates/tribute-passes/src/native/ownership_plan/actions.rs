@@ -465,118 +465,8 @@ impl ActionPlanner<'_> {
         if tribute_ir::dialect::tribute_rt::IntoRaw::matches(self.ir, op) {
             return self.plan_into_raw(op, transferred);
         }
-        // The null inhabitant of its result type owns nothing.
-        if adt::RefNull::matches(self.ir, op) {
-            return Ok(());
-        }
-        if let Ok(new) = adt::StructNew::from_op(self.ir, op) {
-            let layout = new.layout(self.ir);
-            let fields = get_struct_fields(self.ir, layout).ok_or_else(|| {
-                OwnershipPlanError::new(format!(
-                    "struct_new {op:?} has invalid layout {layout} ({:?})",
-                    self.ir.get_type(layout)
-                ))
-            })?;
-            validate_allocation_result(self.ir, op, layout, self.managed_layouts)?;
-            return self.plan_owning_operands(op, 0, fields.iter().copied());
-        }
-        if let Ok(new) = adt::VariantNew::from_op(self.ir, op) {
-            let layout = new.layout(self.ir);
-            let fields = adt::Enum::from_type_ref(self.ir, layout)
-                .ok_or_else(|| OwnershipPlanError::new("variant_new has invalid layout"))?
-                .variant_fields(self.ir, new.variant(self.ir))
-                .ok_or_else(|| OwnershipPlanError::new("variant_new tag is stale"))?;
-            validate_allocation_result(self.ir, op, layout, self.managed_layouts)?;
-            return self.plan_owning_operands(op, 0, fields.iter().copied());
-        }
-        if let Ok(of) = adt::ArrayOf::from_op(self.ir, op) {
-            let element = array_element(self.ir, of.r#type(self.ir))?;
-            validate_allocation_result(self.ir, op, of.r#type(self.ir), self.managed_layouts)?;
-            let count = self.ir.op_operands(op).len();
-            return self.plan_owning_operands(op, 0, std::iter::repeat_n(element, count));
-        }
-        if let Ok(splice) = adt::ArraySplice::from_op(self.ir, op) {
-            // `source` is borrowed for the operation, which acquires the units
-            // of the elements it copies; only the new elements are stores.
-            let array_ty = splice.r#type(self.ir);
-            let element = array_element(self.ir, array_ty)?;
-            validate_allocation_result(self.ir, op, array_ty, self.managed_layouts)?;
-            if self.ir.value_ty(splice.source(self.ir)) != array_ty {
-                return Err(OwnershipPlanError::new(
-                    "array_splice source differs from its array type",
-                ));
-            }
-            let first = SPLICE_ELEMENTS_OPERAND;
-            let count = self.ir.op_operands(op).len().saturating_sub(first);
-            return self.plan_owning_operands(op, first, std::iter::repeat_n(element, count));
-        }
-        if let Ok(new) = adt::ArrayNew::from_op(self.ir, op) {
-            // `initial` is borrowed for the operation, which acquires a unit
-            // for every element it fills.
-            let array_ty = new.r#type(self.ir);
-            let element = array_element(self.ir, array_ty)?;
-            validate_allocation_result(self.ir, op, array_ty, self.managed_layouts)?;
-            if is_typed_managed_reference(self.ir, element, self.managed_layouts)
-                && !types_compatible(
-                    self.ir,
-                    self.ir.value_ty(new.initial(self.ir)),
-                    element,
-                    self.managed_layouts,
-                )
-            {
-                return Err(OwnershipPlanError::new(
-                    "array_new initial value type is malformed",
-                ));
-            }
-            return Ok(());
-        }
-        if let Ok(set) = adt::ArraySet::from_op(self.ir, op) {
-            let element = array_element(self.ir, self.ir.value_ty(set.r#ref(self.ir)))?;
-            if is_typed_managed_reference(self.ir, element, self.managed_layouts) {
-                if !types_compatible(
-                    self.ir,
-                    self.ir.value_ty(set.value(self.ir)),
-                    element,
-                    self.managed_layouts,
-                ) {
-                    return Err(OwnershipPlanError::new("array_set value type is malformed"));
-                }
-                self.actions.push(OwnershipAction {
-                    kind: ActionKind::StoreAcquire,
-                    value: set.value(self.ir),
-                    anchor: ActionAnchor::Before(op),
-                    destination: 0,
-                });
-                self.actions.push(OwnershipAction {
-                    kind: ActionKind::ReleaseReplacedField,
-                    value: set.r#ref(self.ir),
-                    anchor: ActionAnchor::Before(op),
-                    destination: 0,
-                });
-            }
-            return Ok(());
-        }
-        if let Ok(new) = heap::CellNew::from_op(self.ir, op) {
-            let contents = cell_contents(self.ir, self.ir.value_ty(new.result(self.ir)))?;
-            return self.plan_owning_operands(op, 0, [contents]);
-        }
-        if let Ok(set) = heap::CellSet::from_op(self.ir, op) {
-            let contents = cell_contents(self.ir, self.ir.value_ty(set.cell(self.ir)))?;
-            if is_typed_managed_reference(self.ir, contents, self.managed_layouts) {
-                self.actions.push(OwnershipAction {
-                    kind: ActionKind::StoreAcquire,
-                    value: set.value(self.ir),
-                    anchor: ActionAnchor::Before(op),
-                    destination: 0,
-                });
-                self.actions.push(OwnershipAction {
-                    kind: ActionKind::ReleaseReplacedField,
-                    value: set.cell(self.ir),
-                    anchor: ActionAnchor::Before(op),
-                    destination: 0,
-                });
-            }
-            return Ok(());
+        if let Some(roles) = operand_roles(self.ir, op)? {
+            return self.plan_operand_roles(op, &roles);
         }
         if func::Call::matches(self.ir, op)
             || func::CallIndirect::matches(self.ir, op)
@@ -695,42 +585,90 @@ impl ActionPlanner<'_> {
         Ok(())
     }
 
-    /// Plan the stores of the operands of `op` from position `first` on, one
-    /// per entry of `field_types`.
-    fn plan_owning_operands(
+    /// Plan the stores that the operand roles of `op` state. Borrowed,
+    /// projected, and forwarded operands need no action here.
+    fn plan_operand_roles(
         &mut self,
         op: OpRef,
-        first: usize,
-        field_types: impl IntoIterator<Item = TypeRef>,
+        roles: &[OperandRole],
     ) -> Result<(), OwnershipPlanError> {
-        let field_types = field_types.into_iter().collect::<Vec<_>>();
         let operands = self.ir.op_operands(op);
-        if operands.len() < first || field_types.len() != operands.len() - first {
-            return Err(OwnershipPlanError::new(
-                "aggregate constructor arity is malformed",
-            ));
+        debug_assert_eq!(roles.len(), operands.len(), "one operand role per operand");
+        if let Some((layout, _)) = native_allocation_descriptor(self.ir, op) {
+            validate_allocation_result(self.ir, op, layout, self.managed_layouts)?;
         }
-        for (offset, &field_ty) in field_types.iter().enumerate() {
-            let index = first + offset;
-            let operand = operands[index];
-            if is_typed_managed_reference(self.ir, field_ty, self.managed_layouts) {
-                if !types_compatible(
-                    self.ir,
-                    self.ir.value_ty(operand),
-                    field_ty,
-                    self.managed_layouts,
-                ) {
-                    return Err(OwnershipPlanError::new(format!(
-                        "aggregate managed field type is stale at {op:?}: expected {field_ty}, got {}",
-                        self.ir.value_ty(operand)
-                    )));
+        for (index, (&role, &operand)) in roles.iter().zip(operands).enumerate() {
+            match role {
+                OperandRole::Initialize { field } => {
+                    if !is_typed_managed_reference(self.ir, field, self.managed_layouts) {
+                        continue;
+                    }
+                    if !types_compatible(
+                        self.ir,
+                        self.ir.value_ty(operand),
+                        field,
+                        self.managed_layouts,
+                    ) {
+                        return Err(OwnershipPlanError::new(format!(
+                            "aggregate managed field type is stale at {op:?}: expected {field}, got {}",
+                            self.ir.value_ty(operand)
+                        )));
+                    }
+                    self.actions.push(OwnershipAction {
+                        kind: ActionKind::StoreAcquire,
+                        value: operand,
+                        anchor: ActionAnchor::Before(op),
+                        destination: index as u32,
+                    });
                 }
-                self.actions.push(OwnershipAction {
-                    kind: ActionKind::StoreAcquire,
-                    value: operand,
-                    anchor: ActionAnchor::Before(op),
-                    destination: index as u32,
-                });
+                OperandRole::Assign {
+                    target,
+                    object,
+                    slot,
+                    field,
+                } => {
+                    let name = self.ir.op(op).name.display(self.ir);
+                    let target = operands[target];
+                    if !types_compatible(
+                        self.ir,
+                        self.ir.value_ty(target),
+                        object,
+                        self.managed_layouts,
+                    ) {
+                        return Err(OwnershipPlanError::new(format!(
+                            "{name} typed contract is malformed"
+                        )));
+                    }
+                    if !is_typed_managed_reference(self.ir, field, self.managed_layouts) {
+                        continue;
+                    }
+                    if !types_compatible(
+                        self.ir,
+                        self.ir.value_ty(operand),
+                        field,
+                        self.managed_layouts,
+                    ) {
+                        return Err(OwnershipPlanError::new(format!(
+                            "{name} value type is malformed"
+                        )));
+                    }
+                    self.actions.push(OwnershipAction {
+                        kind: ActionKind::StoreAcquire,
+                        value: operand,
+                        anchor: ActionAnchor::Before(op),
+                        destination: slot,
+                    });
+                    self.actions.push(OwnershipAction {
+                        kind: ActionKind::ReleaseReplacedField,
+                        value: target,
+                        anchor: ActionAnchor::Before(op),
+                        destination: slot,
+                    });
+                }
+                OperandRole::Borrow
+                | OperandRole::Project { .. }
+                | OperandRole::Copy { .. }
+                | OperandRole::Forward => {}
             }
         }
         Ok(())
@@ -950,24 +888,6 @@ impl ActionPlanner<'_> {
         }
         Ok(())
     }
-}
-
-/// The operand position of the first new element of an `adt.array_splice`,
-/// after `source`, `start`, and `end`.
-const SPLICE_ELEMENTS_OPERAND: usize = 3;
-
-/// The element type of the array type `array_ty`.
-fn array_element(ctx: &IrContext, array_ty: TypeRef) -> Result<TypeRef, OwnershipPlanError> {
-    tribute_ir::dialect::adt::Array::from_type_ref(ctx, array_ty)
-        .map(|array| array.element(ctx))
-        .ok_or_else(|| OwnershipPlanError::new("array operation has a non-array type"))
-}
-
-/// The type of the value the cell type `cell_ty` holds.
-fn cell_contents(ctx: &IrContext, cell_ty: TypeRef) -> Result<TypeRef, OwnershipPlanError> {
-    heap::Cell::from_type_ref(ctx, cell_ty)
-        .map(|cell| cell.contents(ctx))
-        .ok_or_else(|| OwnershipPlanError::new("cell operation has a non-cell type"))
 }
 
 fn validate_allocation_result(

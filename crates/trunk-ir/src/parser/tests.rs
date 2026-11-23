@@ -1171,6 +1171,69 @@ func.return %0
 }
 
 #[test]
+fn test_two_aliases_of_one_type_roundtrip() {
+    let input = r#"core.module @test {
+  !first = core.tuple<core.i32, core.i32>
+  !second = core.tuple<core.i32, core.i32>
+
+  func.func @foo(%0: !second) -> !second {
+func.return %0
+  }
+}"#;
+    let mut ctx = IrContext::new();
+    let module_op = parse_module(&mut ctx, input).unwrap();
+    let first = ctx.type_alias_by_text("first").expect("first alias");
+    assert_eq!(ctx.type_alias_by_text("second"), Some(first));
+    assert_roundtrip(&ctx, module_op);
+}
+
+#[test]
+fn test_generated_alias_avoids_every_manual_name_of_a_shared_type() {
+    let input = r#"core.module @test {
+  !a = core.i32
+  !t0 = core.i32
+
+  func.func @foo(%0: core.tuple<core.i32, core.i32, core.i32, core.i32, core.i32, core.i32>, %1: core.tuple<core.i32, core.i32, core.i32, core.i32, core.i32, core.i32>) {
+func.return
+  }
+}"#;
+    let mut ctx = IrContext::new();
+    let module_op = parse_module(&mut ctx, input).unwrap();
+    let printed = module_op.display(&ctx).to_string();
+    assert_eq!(printed.matches("!t0 =").count(), 1, "{printed}");
+    assert!(printed.contains("!t1 = core.tuple<!a,"), "{printed}");
+    assert_roundtrip(&ctx, module_op);
+}
+
+#[test]
+fn test_shared_type_is_written_as_its_first_alias_in_name_order() {
+    let input = r#"core.module @test {
+  !z = core.i32
+  !pair = core.tuple<!z, !z>
+  !a = core.i32
+
+  func.func @foo(%0: !z) -> !z {
+func.return %0
+  }
+}"#;
+    let mut ctx = IrContext::new();
+    let module_op = parse_module(&mut ctx, input).unwrap();
+    let printed = module_op.display(&ctx).to_string();
+    let expected = r#"core.module @test {
+  !a = core.i32
+  !pair = core.tuple<!a, !a>
+  !z = core.i32
+
+  func.func @foo(%0: !a) -> !a {
+      func.return %0
+  }
+}
+"#;
+    assert_eq!(printed, expected);
+    assert_roundtrip(&ctx, module_op);
+}
+
+#[test]
 fn test_type_alias_no_alias_backward_compat() {
     // Existing IR without aliases should still round-trip
     let input = r#"core.module @test {

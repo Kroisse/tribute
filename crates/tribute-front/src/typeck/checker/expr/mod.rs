@@ -16,6 +16,7 @@ use crate::ast::{
 };
 
 use super::super::constraint::ConstraintOriginKind;
+use super::super::evidence_plan::HandleBodyRows;
 use super::super::func_context::FunctionInferenceContext;
 use super::NodeDiagnostic;
 use super::{Mode, TypeChecker};
@@ -151,6 +152,7 @@ impl<'db> TypeChecker<'db> {
             } => {
                 ctx.note_call_syntax(expr.id, *syntax);
                 let callee_ty = self.infer_expr_type_with_ctx(ctx, callee);
+                self.record_call_callee(ctx, expr.id, callee);
                 // Conversion re-visits the callee. Keep this one ability-op
                 // inference instance connected to that visit through dedicated
                 // semantic state, never through the concrete node-type table.
@@ -493,7 +495,13 @@ impl<'db> TypeChecker<'db> {
                 }
                 let handled_effects = AbilityRow::new(self.db(), selected_effects, None);
                 if let Some((scope, _)) = body_evidence {
-                    ctx.evidence.set_handled(scope, handled_effects);
+                    ctx.evidence.set_body_rows(
+                        scope,
+                        HandleBodyRows {
+                            handled: handled_effects,
+                            body: body_effect_after,
+                        },
+                    );
                 }
                 // Create a result ability row that excludes handled effects
                 // This is the effect that propagates out of the handle expression
@@ -694,6 +702,7 @@ impl<'db> TypeChecker<'db> {
             } => {
                 ctx.note_call_syntax(expr.id, *syntax);
                 let callee_ty = self.infer_expr_type_with_ctx(ctx, callee);
+                self.record_call_callee(ctx, expr.id, callee);
                 if matches!(&*callee.kind, ExprKind::Var(ResolvedRef::AbilityOp { .. })) {
                     ctx.record_ability_op_callee_type(callee.id, callee_ty);
                 }
@@ -1176,9 +1185,13 @@ impl<'db> TypeChecker<'db> {
                 // into the enclosing scope during convert-phase re-inference.
                 let outer_effect = ctx.current_effect();
                 ctx.set_current_effect(AbilityRow::pure(self.db()));
-                let body_evidence = ctx
-                    .evidence
-                    .enter_handle_body(expr_id, Some(handle_ctx.handled_effects));
+                let body_evidence = ctx.evidence.enter_handle_body(
+                    expr_id,
+                    Some(HandleBodyRows {
+                        handled: handle_ctx.handled_effects,
+                        body: handle_ctx.body_effect,
+                    }),
+                );
                 let converted_body = self.check_expr_with_ctx(ctx, body, Mode::Infer);
                 if let Some((scope, outer_evidence)) = body_evidence {
                     ctx.evidence.restore(outer_evidence);

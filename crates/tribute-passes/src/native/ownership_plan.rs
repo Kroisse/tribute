@@ -9,8 +9,9 @@ use rustc_hash::FxHashSet as HashSet;
 use std::fmt;
 use std::ops::ControlFlow;
 
+use tribute_ir::dialect::adt;
 use tribute_ir::dialect::adt::layout::{get_enum_variants, get_struct_fields};
-use tribute_ir::dialect::{adt, heap};
+use tribute_ir::dialect::tribute_rtti::{DynOperandOwnership, OperandOwnershipError, OperandRole};
 use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::callable::{CallableBody, classify_callable_body};
 use trunk_ir::context::IrContext;
@@ -54,6 +55,23 @@ impl fmt::Display for OwnershipPlanError {
 }
 
 impl std::error::Error for OwnershipPlanError {}
+
+impl From<OperandOwnershipError> for OwnershipPlanError {
+    fn from(error: OperandOwnershipError) -> Self {
+        Self::new(error.to_string())
+    }
+}
+
+/// The operand roles of `op`; `None` when it states none.
+fn operand_roles(
+    ctx: &IrContext,
+    op: OpRef,
+) -> Result<Option<Vec<OperandRole>>, OwnershipPlanError> {
+    DynOperandOwnership::get(ctx, op)
+        .map(|ownership| ownership.operand_roles(ctx))
+        .transpose()
+        .map_err(Into::into)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum EntryOwnership {

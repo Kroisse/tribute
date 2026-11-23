@@ -1390,12 +1390,23 @@ Row가 여러 tail의 합집합인 callable에 관한 선택은 세 연산을 �
 | 연산 | 뜻 | 쓰는 경우 |
 | --- | --- | --- |
 | `tails [plan, ...]` | Caller evidence에 각 tail의 선택을 적용한 값을 callee evidence의 tail 칸에 넣는다 | 이런 callee의 호출 |
-| `select i` | Evidence를 `i`번째 tail 칸이 담은 evidence로 바꾼다. 칸이 없으면 그대로 둔다 | Callee row의 tail이 자기 `i`번째 tail인 호출 |
+| `select i` | Evidence를 `i`번째 tail 칸이 담은 evidence로 바꾼다 | Callee row의 tail이 자기 `i`번째 tail인 호출 |
 | `push L` | 고른 tail evidence 위에 원래 evidence의 `L`의 가장 위 marker를 얹는다 | `select` 뒤, callee가 caller의 명시 `L`을 받는 자리 |
 
 `tails`의 각 선택과 `push`는 그 호출이 시작한 evidence에서 읽는다. Tail의 evidence는
 그 자체로 완전한 evidence이며 caller가 받은 tail 칸을 그대로 가진다. Callee가 받는
 tail 칸은 caller가 받은 같은 번호의 칸을 가린다.
+
+이런 callable은 언제나 자기 tail 칸을 가진 evidence로 실행된다. 직접 호출은 `tails`로
+칸을 채우거나, 모든 tail이 caller의 같은 번호 tail이면 caller의 칸을 넘긴다. 값으로
+쓰인 이런 callable은 참조마다 진입 lambda가 된다. 그 lambda는 값의 row를 가지고
+본문에서 그 function을 `tails`를 가진 일반 호출로 부른다
+([type-inference.md](type-inference.md#여러-tail의-합집합인-row)). 그래서 `select`는
+callee가 그 사이에 설치한 handler를 보지 않는다. 진입 lambda의 호출은 `tails`를
+기억해야 하므로 frame을 남긴다. 값의 row가 열려 있고 그 값을 명시 instance가 더 많은
+row로 넘기면, 진입 lambda는 더해진 instance의 handler를 자기 선택과 각 tail의 선택에서
+먼저 `mask`한다. 그 handler는 값의 row tail과 그 tail의 handler 사이에 있기 때문이다.
+Handler marker가 없는 ambient `Io`는 가리지 않는다.
 
 선택이 모두 그대로 전달인 호출은 evidence를 바꾸지 않는다. 선택은 직접 호출,
 간접 호출, closure 호출, `resume`에 똑같이 적용한다. Perform은 별도의 분류 없이
@@ -1405,7 +1416,8 @@ callable 또는 handle body row의 명시 label로 확정하기 때문이다.
 Handler와 evidence의 연결은 다음과 같다.
 
 - **Handle body:** 처리하는 label마다 `effect.extend`로 새 marker를 쌓은 evidence를 받는다.
-  바깥 row가 그 label을 명시하면 extend 전에 `mask`로 바깥 marker를 걷어 낸다
+  바깥 row가 명시한 label이 처리하는 label이거나 body row가 명시하지 않은 label이면
+  extend 전에 `mask`로 그 바깥 marker를 걷어 낸다
   ([type-inference.md](type-inference.md#호출의-evidence-선택)).
 - **Handler arm, `do` arm:** handle을 설치한 층의 바깥 evidence로 실행한다.
   General arm은 handle 층의 dispatcher에게서 이 evidence와 exit frame을 받고,
