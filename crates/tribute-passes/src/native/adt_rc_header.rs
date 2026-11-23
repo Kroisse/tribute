@@ -1,4 +1,5 @@
-//! Lower `adt.struct_new` and `adt.variant_new` operations with RC header initialization.
+//! Lower `adt.struct_new`, `adt.variant_new`, and `heap.cell_new` operations
+//! with RC header initialization.
 //!
 //! This pass converts ADT construction ops to `clif.*` operations that:
 //! 1. Allocate memory via `__tribute_alloc(payload_size + RC_HEADER_SIZE)`
@@ -19,9 +20,11 @@
 
 use rustc_hash::FxHashMap as HashMap;
 
-use tribute_ir::dialect::adt;
-use tribute_ir::dialect::adt::layout::{compute_struct_layout, compute_variant_layout};
+use tribute_ir::dialect::adt::layout::{
+    StructLayout, compute_struct_layout, compute_variant_layout, natural_layout,
+};
 use tribute_ir::dialect::tribute_rt::{RC_HEADER_SIZE, REFCOUNT_OFFSET, RTTI_IDX_OFFSET};
+use tribute_ir::dialect::{adt, heap};
 use trunk_ir::SymbolPath;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::clif;
@@ -64,12 +67,18 @@ fn lower(
             rtti_map: rtti_map.clone(),
             ptr_ty,
             i64_ty,
+        })
+        .add_pattern(CellNewPattern {
+            rtti_map: rtti_map.clone(),
+            ptr_ty,
+            i64_ty,
         });
     let applicator = arrays.add_patterns(applicator);
 
     let target = ConversionTarget::new()
         .illegal_op("adt.struct_new")
         .illegal_op("adt.variant_new")
+        .illegal_op("heap.cell_new")
         .illegal_op("adt.array_new")
         .illegal_op("adt.array_of")
         .illegal_op("adt.array_splice")
@@ -182,21 +191,6 @@ impl OpRewritePattern for StructNewPattern {
             );
         };
 
-        let loc = ctx.op(op).location;
-        let fields: Vec<_> = ctx.op_operands(op).to_vec();
-
-        let mut ops: Vec<OpRef> = Vec::new();
-
-        // 1. Compute allocation size (payload + RC header)
-        let alloc_size = layout.total_size as u64 + RC_HEADER_SIZE;
-        let size_op = clif::Iconst::operands()
-            .value(alloc_size as i64)
-            .results(self.i64_ty)
-            .build(ctx, loc);
-        let size_val = size_op.result(ctx);
-        ops.push(size_op.op_ref());
-
-        // 2-5. Allocate with the RC header and find the payload
         let rtti_idx = self
             .rtti_map
             .get(&(struct_ty, None))
@@ -209,42 +203,119 @@ impl OpRewritePattern for StructNewPattern {
                     ctx.get_type(struct_ty)
                 )
             });
-        let payload_val = rc_allocation(ctx, loc, size_val, rtti_idx, &mut ops);
-
-        // 6. Store each field at its computed offset (relative to payload)
-        assert_eq!(
-            fields.len(),
-            layout.field_offsets.len(),
-            "adt_rc_header: struct_new operand count ({}) != layout field count ({})",
-            fields.len(),
-            layout.field_offsets.len(),
+        allocate_fields(
+            ctx,
+            rewriter,
+            op,
+            &layout,
+            rtti_idx,
+            (self.i64_ty, self.ptr_ty),
         );
-        for (i, &field_val) in fields.iter().enumerate() {
-            let offset = layout.field_offsets[i] as i32;
-            let store_op = clif::Store::operands(field_val, payload_val)
-                .offset(offset)
-                .build(ctx, loc);
-            ops.push(store_op.op_ref());
-        }
+        Some(())
+    }
+}
 
-        // 7. Identity pass-through
-        let zero_op = clif::Iconst::operands()
-            .value(0)
-            .results(self.i64_ty)
+/// Replace `op` with an RC allocation of `layout` whose header records
+/// `rtti_idx`, storing the operands of `op` as its fields in order.
+fn allocate_fields(
+    ctx: &mut IrContext,
+    rewriter: &mut PatternRewriter<'_>,
+    op: OpRef,
+    layout: &StructLayout,
+    rtti_idx: u32,
+    (i64_ty, ptr_ty): (TypeRef, TypeRef),
+) {
+    let loc = ctx.op(op).location;
+    let fields: Vec<_> = ctx.op_operands(op).to_vec();
+
+    let mut ops: Vec<OpRef> = Vec::new();
+
+    // 1. Compute allocation size (payload + RC header)
+    let alloc_size = layout.total_size as u64 + RC_HEADER_SIZE;
+    let size_op = clif::Iconst::operands()
+        .value(alloc_size as i64)
+        .results(i64_ty)
+        .build(ctx, loc);
+    let size_val = size_op.result(ctx);
+    ops.push(size_op.op_ref());
+
+    // 2-5. Allocate with the RC header and find the payload
+    let payload_val = rc_allocation(ctx, loc, size_val, rtti_idx, &mut ops);
+
+    // 6. Store each field at its computed offset (relative to payload)
+    assert_eq!(
+        fields.len(),
+        layout.field_offsets.len(),
+        "adt_rc_header: allocation operand count ({}) != layout field count ({})",
+        fields.len(),
+        layout.field_offsets.len(),
+    );
+    for (i, &field_val) in fields.iter().enumerate() {
+        let offset = layout.field_offsets[i] as i32;
+        let store_op = clif::Store::operands(field_val, payload_val)
+            .offset(offset)
             .build(ctx, loc);
-        let zero_val = zero_op.result(ctx);
-        ops.push(zero_op.op_ref());
+        ops.push(store_op.op_ref());
+    }
 
-        let identity_op = clif::Iadd::operands(payload_val, zero_val)
-            .results(self.ptr_ty)
-            .build(ctx, loc);
-        ops.push(identity_op.op_ref());
+    // 7. Identity pass-through
+    let zero_op = clif::Iconst::operands()
+        .value(0)
+        .results(i64_ty)
+        .build(ctx, loc);
+    let zero_val = zero_op.result(ctx);
+    ops.push(zero_op.op_ref());
 
-        let last = ops.pop().unwrap();
-        for o in ops {
-            rewriter.insert_op(o);
-        }
-        rewriter.replace_op(last);
+    let identity_op = clif::Iadd::operands(payload_val, zero_val)
+        .results(ptr_ty)
+        .build(ctx, loc);
+    ops.push(identity_op.op_ref());
+
+    let last = ops.pop().unwrap();
+    for o in ops {
+        rewriter.insert_op(o);
+    }
+    rewriter.replace_op(last);
+}
+
+/// Pattern for `heap.cell_new(value)` -> heap allocation + RC header + one
+/// store: a cell's object holds its value as its only field.
+struct CellNewPattern {
+    rtti_map: HashMap<(TypeRef, Option<u32>), u32>,
+    ptr_ty: TypeRef,
+    i64_ty: TypeRef,
+}
+
+impl OpRewritePattern for CellNewPattern {
+    type Op = heap::CellNew;
+
+    fn match_and_rewrite(
+        &self,
+        ctx: &mut IrContext,
+        cell_new: Self::Op,
+        rewriter: &mut PatternRewriter<'_>,
+    ) -> Option<()> {
+        let op = cell_new.op_ref();
+        let cell_ty = ctx.value_ty(cell_new.result(ctx));
+        let contents = ctx.value_ty(cell_new.value(ctx));
+        let contents = rewriter
+            .type_converter()
+            .convert_type_or_identity(ctx, contents);
+        let layout = natural_layout(ctx, [contents]);
+        let rtti_idx = *self.rtti_map.get(&(cell_ty, None)).unwrap_or_else(|| {
+            panic!(
+                "adt_rc_header: missing RTTI entry for cell type {cell_ty:?}; \
+                 ensure its tribute_rtti.layout is declared"
+            )
+        });
+        allocate_fields(
+            ctx,
+            rewriter,
+            op,
+            &layout,
+            rtti_idx,
+            (self.i64_ty, self.ptr_ty),
+        );
         Some(())
     }
 }

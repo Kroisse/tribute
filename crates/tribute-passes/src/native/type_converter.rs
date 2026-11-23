@@ -126,6 +126,10 @@ pub fn native_type_converter(ctx: &mut IrContext) -> (TypeConverter, NativeTypeR
         if is_adt_ptr_type(ctx, ty) {
             return Some(r.core_ptr);
         }
+        // heap.cell → ptr
+        if tribute_ir::dialect::heap::Cell::matches(ctx, ty) {
+            return Some(r.core_ptr);
+        }
         // closure.closure → ptr
         if is_closure_type(ctx, ty) {
             return Some(r.core_ptr);

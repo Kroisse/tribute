@@ -5,6 +5,7 @@
 //!
 //! ## Passes
 //!
+//! - `heap_cells`: Lower `heap.cell` to a one-field struct before `adt` lowering
 //! - `convert_signatures`: Convert function and indirect-call signatures to Wasm types
 //! - `tribute_rt_to_wasm`: Lower boxing/unboxing operations to wasm equivalents
 //! - `const_to_wasm`: Lower string/bytes constants to wasm data segments
@@ -20,6 +21,7 @@ pub mod adt_to_wasm;
 pub mod const_to_wasm;
 pub mod convert_signatures;
 pub mod descriptors;
+pub mod heap_cells;
 pub mod intrinsic_to_wasm;
 pub mod io;
 pub mod lower;

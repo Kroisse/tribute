@@ -1274,7 +1274,9 @@ Object는 두 종류다. `heap.box`가 가리키는 object는 만든 뒤 내용�
 - `heap.cell_new`가 초기값으로 cell을 만들고, `heap.cell_get`이 현재 값을 읽고,
   `heap.cell_set`이 값을 바꾼다. 같은 cell을 가리키는 모든 참조가 바뀐 값을 본다.
   세 operation은 값 하나를 주고받으며, inline 값이면 그 값은 unboxed `adt` 값이다.
-- Cell의 descriptor는 값 하나를 필드로 가진 compiler 소유 값의 descriptor다.
+- Cell의 descriptor는 값 하나를 필드로 가진 compiler 소유 값의 descriptor다. Cell
+  타입에는 layout 매개변수가 없으므로 cell 타입 자신이 그 descriptor를 정한다
+  (`DescriptorLayoutType`).
 - 소스 언어에는 cell이 없다. Compiler가 쓰는 cell은
   [값 delimiter](cps-effects.md#값-delimiter)의 completion cell과 one-shot resumption의
   소비 표시다. Cell에 쓰는 일이 순환을 만들지 않는 근거는 cell마다

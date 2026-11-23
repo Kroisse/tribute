@@ -399,6 +399,10 @@ Operation이 operand의 unit을 어떻게 다루는지는 그 operation이
   Operand에서 managed 값을 복사해 담는 operation은 그 unit을 스스로 획득한다.
 - `Project`: 결과가 operand가 가리키는 object의 field이며, operand에서 파생된
   borrow다.
+- `Copy`: 결과가 operand가 가리키는 object의 field를 복사한 값이다. Object가 살아
+  있는 동안에도 field가 바뀔 수 있으므로 결과는 borrow가 아니며, 읽은 직후 자신의
+  unit을 획득한다. Swift SIL의 `load [copy]`에 해당한다. Operand는 operation 동안
+  빌린다.
 - `Forward`: 결과가 다른 type의 operand 자신이며 같은 unit을 나눈다.
 - `Initialize`: operand의 unit이 결과의 새 object의 field로 옮겨 간다.
 - `Assign`: operand의 unit이 다른 operand가 가리키는 기존 object의 field로 옮겨
@@ -612,9 +616,9 @@ into control flow and atomic operations by RC lowering.
   Borrowed 사용은 operation이 `OperandOwnership`으로 선언한 operand 역할로
   판정하며, 다음뿐이다.
 
-  - `Borrow`나 `Project` operand. `heap.struct_get`, `heap.variant_get`,
-    `heap.variant_is`, `heap.is_null`, `heap.array_get`, `heap.array_len`의
-    대상이 여기에 속한다. 단, 같은 operation이 그 operand를 `Assign`의 대상으로
+  - `Borrow`, `Project`, `Copy` operand. `heap.struct_get`, `heap.variant_get`,
+    `heap.variant_is`, `heap.is_null`, `heap.array_get`, `heap.array_len`,
+    `heap.cell_get`의 대상이 여기에 속한다. 단, 같은 operation이 그 operand를 `Assign`의 대상으로
     삼으면 escape다. 대상 object에 쓰면 바뀌기 전 field가 release되는데, caller가
     그 field를 borrowed projection으로 아직 쥐고 있을 수 있다.
   - `Forward` operand. `heap.cast`와 unrealized conversion cast가 여기에
@@ -676,10 +680,11 @@ into control flow and atomic operations by RC lowering.
     alias root(cast를 거친 alias 포함)의 unit을 소비하는 것은 그 root의 마지막 사용일
     때뿐이므로, 파생 borrow가 갱신 뒤에도 쓰이면 갱신은 새 unit을 획득하고 복사로
     끝난다.
-  - `heap.cell_get`의 결과는 borrow하지 않고 읽은 직후 자신의 unit을 획득한다.
-    `heap.cell_set`은 이전 값의 unit을 release하고, 쓰는 쪽은 다른 참조나 호출된
-    함수를 거쳐 같은 cell에 닿을 수 있으므로, 이 unit 없이는 뒤따르는 쓰기가 읽은
-    값을 해제할 수 있다. 판정은 타입만 본다. Module을 훑어 쓰기 대상을 찾지 않는다.
+  - `heap.cell_get`의 결과는 `Copy`이므로 borrow하지 않고 읽은 직후 자신의 unit을
+    획득한다. `heap.cell_set`은 이전 값의 unit을 release하고, 쓰는 쪽은 다른 참조나
+    호출된 함수를 거쳐 같은 cell에 닿을 수 있으므로, 이 unit 없이는 뒤따르는 쓰기가
+    읽은 값을 해제할 수 있다. 판정은 operand 역할만 본다. Module을 훑어 쓰기 대상을
+    찾지 않는다.
 
   이 최적화를 끈 기준 동작은 모든 managed projection이 projection 직후 자신의 unit을
   획득하는 것이다. Exact typed projection 계약을 만족하지 않는 IR은 borrow로도 기준

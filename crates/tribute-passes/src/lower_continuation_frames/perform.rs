@@ -3,14 +3,14 @@
 
 use tribute_ir::calling_convention::CallingConvention;
 use tribute_ir::calling_convention::{cps_closure_function_type, cps_resume_type};
-use tribute_ir::dialect::{ability, adt, closure, effect, tribute_rt};
+use tribute_ir::dialect::{ability, adt, closure, effect, heap, tribute_rt};
 use trunk_ir::OpName;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{arith, core, func, scf};
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{BlockRef, OpRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{PatternRewriter, RewritePattern};
-use trunk_ir::types::{Attribute, AttributeMap, Location, TypeDataBuilder};
+use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
 
 use super::suffix_layer::frame_dispatch;
 use super::{FrameLayouts, FrameTypes, detach_into};
@@ -53,13 +53,13 @@ fn push_one_shot_resume(
             )
         })?;
     let i1_type = TypeDataBuilder::new("core.i1").intern(ctx);
-    let state_type = adt::Struct::literal(ctx, [i1_type], AttributeMap::new()).as_type_ref();
+    let state_type = heap::Cell::params(i1_type).intern(ctx).as_type_ref();
     let not_consumed = arith::Constant::operands()
         .value(Attribute::Int(0))
         .results(i1_type)
         .build(ctx, location);
     ctx.push_op(block, not_consumed.op_ref());
-    let state = adt::StructNew::operands([not_consumed.result(ctx)])
+    let state = heap::CellNew::operands(not_consumed.result(ctx))
         .results(state_type)
         .build(ctx, location);
     ctx.push_op(block, state.op_ref());
@@ -90,11 +90,7 @@ fn push_one_shot_resume(
         ctx.push_op(wrapper_block, recovered);
         ctx.op_result(recovered, 0)
     };
-    let consumed = adt::StructGet::operands(state)
-        .r#type(state_type)
-        .field(0)
-        .results(i1_type)
-        .build(ctx, location);
+    let consumed = heap::CellGet::operands(state).build(ctx, location);
     ctx.push_op(wrapper_block, consumed.op_ref());
 
     let reject_block = make_block(ctx, location, &[]);
@@ -108,10 +104,7 @@ fn push_one_shot_resume(
         .results(i1_type)
         .build(ctx, location);
     ctx.push_op(enter_block, consumed_true.op_ref());
-    let mark = adt::StructSet::operands(state, consumed_true.result(ctx))
-        .r#type(state_type)
-        .field(0)
-        .build(ctx, location);
+    let mark = heap::CellSet::operands(state, consumed_true.result(ctx)).build(ctx, location);
     ctx.push_op(enter_block, mark.op_ref());
     emit_cps_tail_call_indirect(
         ctx,

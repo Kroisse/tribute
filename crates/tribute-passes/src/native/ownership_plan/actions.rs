@@ -665,7 +665,10 @@ impl ActionPlanner<'_> {
                         destination: slot,
                     });
                 }
-                OperandRole::Borrow | OperandRole::Project { .. } | OperandRole::Forward => {}
+                OperandRole::Borrow
+                | OperandRole::Project { .. }
+                | OperandRole::Copy { .. }
+                | OperandRole::Forward => {}
             }
         }
         Ok(())

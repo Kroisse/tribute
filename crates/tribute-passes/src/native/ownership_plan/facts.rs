@@ -122,10 +122,10 @@ impl NativeOwnershipFunctionFacts {
         &self.projection_owners
     }
 
-    /// The projections a temporary borrow may elide: those whose layout no
-    /// operation in the module assigns. A write
+    /// The projections a temporary borrow may elide: [`OperandRole::Project`]
+    /// results whose layout no operation in the module assigns. A write
     /// releases the previous value, so a projection of a written layout keeps
-    /// its own unit.
+    /// its own unit, as every [`OperandRole::Copy`] result does.
     pub fn borrowable_projection_owners(&self) -> &HashMap<ValueRef, ValueRef> {
         &self.borrowable_projection_owners
     }
@@ -259,7 +259,7 @@ fn compute_function_facts(
     let projection_owners = collect_borrowed_loads(ctx, cfg.blocks(), managed_layouts, &aliases)?;
     let borrowable_projection_owners = projection_owners
         .iter()
-        .filter(|&(&projection, _)| !reads_written_layout(ctx, module, projection))
+        .filter(|&(&projection, _)| !keeps_own_unit(ctx, module, projection))
         .map(|(&projection, &owner)| (projection, owner))
         .collect();
     let block_flow = collect_block_flow(ctx, &cfg, &managed, &aliases);
@@ -446,7 +446,13 @@ fn collect_borrowed_loads(
     let mut borrowed = HashMap::default();
     for &block in blocks {
         for &op in &ctx.block(block).ops {
-            let Some((source, object, field)) = projection(ctx, op)? else {
+            let Some(Projection {
+                source,
+                object,
+                field,
+                ..
+            }) = projection(ctx, op)?
+            else {
                 continue;
             };
             let result = ctx.op_results(op)[0];
@@ -459,26 +465,42 @@ fn collect_borrowed_loads(
     Ok(borrowed)
 }
 
-/// The operand `op` projects a field out of, with the layout of the object
-/// it reads and the field's type; `None` when `op` projects nothing.
-fn projection(
-    ctx: &IrContext,
-    op: OpRef,
-) -> Result<Option<(ValueRef, TypeRef, TypeRef)>, OwnershipPlanError> {
+/// A field read out of the object an operand refers to
+/// ([`OperandRole::Project`] or [`OperandRole::Copy`]).
+struct Projection {
+    source: ValueRef,
+    object: TypeRef,
+    field: TypeRef,
+    copies: bool,
+}
+
+/// The field `op` reads out of one of its operands; `None` when `op` reads
+/// no field.
+fn projection(ctx: &IrContext, op: OpRef) -> Result<Option<Projection>, OwnershipPlanError> {
     let Some(roles) = operand_roles(ctx, op)? else {
         return Ok(None);
     };
     Ok(roles
         .into_iter()
         .zip(ctx.op_operands(op))
-        .find_map(|(role, &operand)| match role {
-            OperandRole::Project { object, field } => Some((operand, object, field)),
-            _ => None,
+        .find_map(|(role, &source)| {
+            let (object, field, copies) = match role {
+                OperandRole::Project { object, field } => (object, field, false),
+                OperandRole::Copy { object, field } => (object, field, true),
+                _ => return None,
+            };
+            Some(Projection {
+                source,
+                object,
+                field,
+                copies,
+            })
         }))
 }
 
-/// Whether `projection` is read from a layout the module writes.
-fn reads_written_layout(
+/// Whether `projection` must acquire its own unit: a copy, or a projection
+/// read from a layout the module writes.
+fn keeps_own_unit(
     ctx: &IrContext,
     module: &NativeOwnershipModuleFacts,
     projection: ValueRef,
@@ -490,7 +512,7 @@ fn reads_written_layout(
     self::projection(ctx, op)
         .ok()
         .flatten()
-        .is_some_and(|(_, object, _)| module.is_written_layout(ctx, object))
+        .is_some_and(|read| read.copies || module.is_written_layout(ctx, read.object))
 }
 
 fn validate_projection_contract(
