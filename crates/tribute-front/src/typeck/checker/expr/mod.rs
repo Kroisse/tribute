@@ -441,13 +441,10 @@ impl<'db> TypeChecker<'db> {
                         continue;
                     };
                     if ability_id.is_builtin_io(self.db()) {
-                        NodeDiagnostic::new(
-                            "builtin ambient ability `std::io::Io` cannot be handled",
+                        self.report_type_error(
                             handler.id,
-                            DiagnosticSeverity::Error,
-                            CompilationPhase::TypeChecking,
-                        )
-                        .accumulate(self.db());
+                            "builtin ambient ability `std::io::Io` cannot be handled",
+                        );
                     } else {
                         handled_ability_ids.push(ability_id);
                     }
@@ -893,9 +890,9 @@ impl<'db> TypeChecker<'db> {
         }
     }
 
-    pub(super) fn report_type_error(&self, node: NodeId, message: String) {
+    pub(super) fn report_type_error(&self, node: NodeId, message: impl Into<String>) {
         NodeDiagnostic::new(
-            message,
+            message.into(),
             node,
             DiagnosticSeverity::Error,
             CompilationPhase::TypeChecking,

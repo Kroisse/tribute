@@ -26,22 +26,8 @@ impl<'db> TypeChecker<'db> {
                 .annotation_type_parameter(name)
                 .expect("known signature parameter"),
             TypeAnnotationKind::Named(name) => {
-                if *name == "Int" {
-                    ctx.int_type()
-                } else if *name == "Nat" {
-                    ctx.nat_type()
-                } else if *name == "Float" {
-                    ctx.float_type()
-                } else if *name == "Bool" {
-                    ctx.bool_type()
-                } else if *name == "Bytes" {
-                    ctx.bytes_type()
-                } else if *name == "Rune" {
-                    ctx.rune_type()
-                } else if *name == "Nil" {
-                    ctx.nil_type()
-                } else if *name == "Never" {
-                    ctx.never_type()
+                if let Some(ty) = ctx.primitive_type(name) {
+                    ty
                 } else {
                     let ty = ctx.named_type_in_scope(
                         SymbolPath::new([name.clone()]),

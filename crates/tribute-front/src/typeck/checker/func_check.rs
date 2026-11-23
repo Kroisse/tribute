@@ -342,8 +342,7 @@ impl<'db> TypeChecker<'db> {
             row_subst,
             &mut body_univars,
         );
-        let retained_unions = solver.row_unions_for_type(inferred_func_ty);
-        let retained_removals = solver.row_removals_for_type(inferred_func_ty);
+        let (retained_unions, retained_removals) = solver.row_relations_for_type(inferred_func_ty);
         let (union_univars, _) = solver.row_union_variables(&retained_unions);
         let (removal_univars, _) = solver.row_removal_variables(&retained_removals);
         for var in union_univars.into_iter().chain(removal_univars) {
@@ -987,13 +986,7 @@ impl<'db> TypeChecker<'db> {
                 call.method
             ),
         };
-        NodeDiagnostic::new(
-            message,
-            call.callee,
-            DiagnosticSeverity::Error,
-            CompilationPhase::TypeChecking,
-        )
-        .accumulate(self.db());
+        self.report_type_error(call.callee, message);
     }
 
     /// Concrete effects of `body` that `declared` does not name.

@@ -1,132 +1,9 @@
 //! Ability row utilities for row-polymorphic effect typing.
 //!
-//! This module provides utility functions for working with effect rows
-//! during type checking, including:
-//!
-//! - Effect containment checks
-//! - Ability row union operations
-//! - Handler typing support (remove_with_constraint)
-//! - Effect conflict detection
+//! This module provides the union operation on effect rows used during
+//! type checking.
 
-use trunk_ir::Symbol;
-
-use crate::ast::{AbilityId, AbilityInstance, AbilityRow, RowVar, Type};
-
-/// Result of attempting to remove an effect from an ability row.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum RemoveResult<'db> {
-    /// Effect was directly present and removed.
-    Removed(AbilityRow<'db>),
-
-    /// Effect was not in the concrete part, but might be in the row variable tail.
-    /// Generates a constraint: `var = {must_contain | remainder}`.
-    NeedsConstraint {
-        /// The row variable that must be decomposed.
-        var: RowVar,
-        /// The effect that must be contained in the row variable.
-        must_contain: AbilityInstance<'db>,
-        /// Fresh row variable for the remainder after removing the effect.
-        remainder: RowVar,
-    },
-
-    /// Effect was not found and the row is closed (no tail variable).
-    NotFound,
-}
-
-/// Check if an ability row contains a specific effect.
-pub fn contains<'db>(
-    db: &'db dyn salsa::Database,
-    row: AbilityRow<'db>,
-    effect: &AbilityInstance<'db>,
-) -> bool {
-    row.instances(db).iter().any(|e| e == effect)
-}
-
-/// Check if an ability row contains an effect with a specific name (ignoring type args).
-pub fn contains_by_name<'db>(
-    db: &'db dyn salsa::Database,
-    row: AbilityRow<'db>,
-    name: &Symbol,
-) -> bool {
-    row.instances(db)
-        .iter()
-        .any(|e| e.ability_id.name(db) == *name)
-}
-
-/// Find all effects matching a given name (ignoring type parameters).
-///
-/// This is used for handler pattern matching where the pattern specifies
-/// only the ability name but we need to find the fully parameterized ability.
-pub fn find_by_name<'db>(
-    db: &'db dyn salsa::Database,
-    row: AbilityRow<'db>,
-    name: &Symbol,
-) -> Vec<AbilityInstance<'db>> {
-    row.instances(db)
-        .iter()
-        .filter(|e| e.ability_id.name(db) == *name)
-        .cloned()
-        .collect()
-}
-
-/// Add an effect to an ability row, returning a new row.
-pub fn add_effect<'db>(
-    db: &'db dyn salsa::Database,
-    row: AbilityRow<'db>,
-    effect: AbilityInstance<'db>,
-) -> AbilityRow<'db> {
-    let mut effects = row.instances(db).to_vec();
-    if !effects.contains(&effect) {
-        effects.push(effect);
-    }
-    row.with_instances(db, effects)
-}
-
-/// Remove an effect from an ability row, returning a new row.
-///
-/// Returns `Some(new_row)` if the effect was present, `None` otherwise.
-pub fn remove_effect<'db>(
-    db: &'db dyn salsa::Database,
-    row: AbilityRow<'db>,
-    effect: &AbilityInstance<'db>,
-) -> Option<AbilityRow<'db>> {
-    let effects = row.instances(db);
-    if let Some(pos) = effects.iter().position(|e| e == effect) {
-        let mut new_effects = effects.to_vec();
-        new_effects.remove(pos);
-        Some(row.with_instances(db, new_effects))
-    } else {
-        None
-    }
-}
-
-/// Remove an effect with row variable decomposition support.
-///
-/// This method handles the case where the effect might be in a row variable tail.
-/// Used by handler typing to correctly remove handled effects from effect rows.
-pub fn remove_with_constraint<'db>(
-    db: &'db dyn salsa::Database,
-    row: AbilityRow<'db>,
-    effect: &AbilityInstance<'db>,
-    fresh_var: impl FnOnce() -> RowVar,
-) -> RemoveResult<'db> {
-    if contains(db, row, effect) {
-        // Direct removal
-        let new_row = remove_effect(db, row, effect).unwrap();
-        RemoveResult::Removed(new_row)
-    } else if let Some(tail) = row.rest(db) {
-        // Row variable decomposition
-        let fresh = fresh_var();
-        RemoveResult::NeedsConstraint {
-            var: *tail,
-            must_contain: effect.clone(),
-            remainder: fresh,
-        }
-    } else {
-        // Closed row without the effect
-        RemoveResult::NotFound
-    }
-}
+use crate::ast::{AbilityRow, RowVar};
 
 /// Union two effect rows, combining their effects.
 pub fn union<'db>(
@@ -156,59 +33,9 @@ pub fn union<'db>(
     (result, constraint)
 }
 
-/// Check for duplicate effects in an ability row.
-///
-/// Effects are considered duplicates only if they have both the same name
-/// AND the same type arguments. For example:
-/// - `State(Int) + State(Text)` = OK (different effects)
-/// - `State(Int) + State(Int)` = conflict (duplicate)
-///
-/// Returns `Some((ability_id, effects))` if duplicates are found.
-pub fn find_conflicting_effects<'db>(
-    db: &'db dyn salsa::Database,
-    row: AbilityRow<'db>,
-) -> Option<(AbilityId<'db>, Vec<AbilityInstance<'db>>)> {
-    use rustc_hash::FxHashSet as HashSet;
-
-    let effects = row.instances(db);
-    let mut seen: HashSet<&AbilityInstance<'db>> = HashSet::default();
-
-    for effect in effects.iter() {
-        if !seen.insert(effect) {
-            // Found a duplicate - return all instances of this effect
-            let duplicates: Vec<AbilityInstance<'db>> =
-                effects.iter().filter(|e| *e == effect).cloned().collect();
-            return Some((effect.ability_id, duplicates));
-        }
-    }
-
-    None
-}
-
-/// Create a simple effect with no type arguments.
-pub fn simple_effect<'db>(
-    _db: &'db dyn salsa::Database,
-    ability_id: AbilityId<'db>,
-) -> AbilityInstance<'db> {
-    AbilityInstance {
-        ability_id,
-        args: Vec::new(),
-    }
-}
-
-/// Create an effect with type arguments.
-pub fn parameterized_effect<'db>(
-    db: &'db dyn salsa::Database,
-    ability_id: AbilityId<'db>,
-    args: Vec<Type<'db>>,
-) -> AbilityInstance<'db> {
-    let _ = db; // db is needed for AbilityId but may not be used here
-    AbilityInstance { ability_id, args }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::ast::{AbilityId, AbilityInstance};
 
     fn test_db() -> salsa::DatabaseImpl {
         salsa::DatabaseImpl::new()
@@ -217,33 +44,6 @@ mod tests {
     /// Helper to create a simple AbilityId with empty module path
     fn test_ability_id<'db>(db: &'db dyn salsa::Database, name: &str) -> AbilityId<'db> {
         AbilityId::source(db, trunk_ir::SymbolPath::new([name]))
-    }
-
-    #[test]
-    fn test_find_by_name() {
-        let db = test_db();
-        let int_ty = crate::ast::Type::new(&db, crate::ast::TypeKind::Int);
-        let float_ty = crate::ast::Type::new(&db, crate::ast::TypeKind::Float);
-        let state_id = test_ability_id(&db, "State");
-        let console_id = test_ability_id(&db, "Console");
-
-        let state_int = parameterized_effect(&db, state_id, vec![int_ty]);
-        let state_float = parameterized_effect(&db, state_id, vec![float_ty]);
-        let console = simple_effect(&db, console_id);
-
-        let row = AbilityRow::new(
-            &db,
-            vec![state_int.clone(), state_float.clone(), console.clone()],
-            None,
-        );
-
-        let state_effects = find_by_name(&db, row, &Symbol::new("State"));
-        assert_eq!(state_effects.len(), 2);
-        assert!(state_effects.contains(&state_int));
-        assert!(state_effects.contains(&state_float));
-
-        let console_effects = find_by_name(&db, row, &Symbol::new("Console"));
-        assert_eq!(console_effects.len(), 1);
     }
 
     // =========================================================================
@@ -272,8 +72,14 @@ mod tests {
         assert_ne!(mod1_state, mod2_state);
 
         // Effects with these AbilityIds should be different
-        let effect1 = simple_effect(&db, mod1_state);
-        let effect2 = simple_effect(&db, mod2_state);
+        let effect1 = AbilityInstance {
+            ability_id: mod1_state,
+            args: Vec::new(),
+        };
+        let effect2 = AbilityInstance {
+            ability_id: mod2_state,
+            args: Vec::new(),
+        };
         assert_ne!(effect1, effect2);
     }
 
@@ -300,9 +106,7 @@ mod laws {
 
     use super::*;
     use crate::ast::RowUnion;
-    use crate::typeck::prop::{
-        AbilityInstanceShape, RowShape, TypeGen, ability_instance_shape, row_shape,
-    };
+    use crate::typeck::prop::{AbilityInstanceShape, RowShape, TypeGen, row_shape};
 
     const ROWS: TypeGen = TypeGen::GROUND.univars(2).row_vars(3);
 
@@ -416,91 +220,6 @@ mod laws {
             let right = join(a, bc);
             prop_assert!(set_eq(&db, left, right));
             prop_assert_eq!(left.rest(&db).is_some(), right.rest(&db).is_some());
-        }
-
-        /// Adding an effect makes the row contain it; adding a present
-        /// effect changes nothing; removing an added absent effect restores
-        /// the row; removing keeps every other effect and the tail.
-        #[test]
-        fn add_and_remove_are_inverse(row in row_shape(ROWS), effect in ability_instance_shape(ROWS)) {
-            let db = salsa::DatabaseImpl::new();
-            let present = has_effect(&row, &effect);
-            let (row, effect) = (row.build(&db), effect.build(&db));
-            let added = add_effect(&db, row, effect.clone());
-            prop_assert!(contains(&db, added, &effect));
-            prop_assert_eq!(contains(&db, row, &effect), present);
-            if present {
-                prop_assert_eq!(added, row);
-                let removed = remove_effect(&db, row, &effect).expect("present effect");
-                prop_assert!(!contains(&db, removed, &effect));
-                prop_assert_eq!(removed.rest(&db), row.rest(&db));
-                prop_assert_eq!(removed.instances(&db).len() + 1, row.instances(&db).len());
-                prop_assert!(row.instances(&db).iter().all(|e| *e == effect || contains(&db, removed, e)));
-                prop_assert!(set_eq(&db, add_effect(&db, removed, effect.clone()), row));
-            } else {
-                prop_assert_eq!(remove_effect(&db, row, &effect), None);
-                prop_assert_eq!(remove_effect(&db, added, &effect), Some(row));
-            }
-        }
-
-        /// Handler removal: a present effect is removed directly; an absent
-        /// one decomposes the tail of an open row with one fresh variable,
-        /// and is not found in a closed row.
-        #[test]
-        fn remove_with_constraint_classifies_rows(row in row_shape(ROWS), effect in ability_instance_shape(ROWS)) {
-            let db = salsa::DatabaseImpl::new();
-            let present = has_effect(&row, &effect);
-            let tail = row.rest;
-            let (row, effect) = (row.build(&db), effect.build(&db));
-            let mut fresh = Fresh::new();
-            let result = remove_with_constraint(&db, row, &effect, || fresh.var());
-            match (present, tail) {
-                (true, _) => {
-                    prop_assert_eq!(fresh.used(), 0);
-                    prop_assert_eq!(
-                        result,
-                        RemoveResult::Removed(remove_effect(&db, row, &effect).unwrap())
-                    );
-                }
-                (false, Some(id)) => {
-                    prop_assert_eq!(fresh.used(), 1);
-                    prop_assert_eq!(
-                        result,
-                        RemoveResult::NeedsConstraint {
-                            var: RowVar { id },
-                            must_contain: effect,
-                            remainder: RowVar { id: fresh.0 },
-                        }
-                    );
-                }
-                (false, None) => {
-                    prop_assert_eq!(fresh.used(), 0);
-                    prop_assert_eq!(result, RemoveResult::NotFound);
-                }
-            }
-        }
-
-        /// A row holding each effect once has no conflict, whatever the
-        /// abilities' names; repeating one effect is reported with both
-        /// instances.
-        #[test]
-        fn conflicts_are_exactly_repeated_effects(
-            row in row_shape(ROWS),
-            pick in any::<proptest::sample::Index>(),
-        ) {
-            let db = salsa::DatabaseImpl::new();
-            prop_assert_eq!(find_conflicting_effects(&db, row.build(&db)), None);
-            if !row.effects.is_empty() {
-                let repeated = row.effects[pick.index(row.effects.len())].clone();
-                let mut effects = row.effects.clone();
-                effects.push(repeated.clone());
-                let doubled = RowShape { effects, rest: row.rest }.build(&db);
-                let repeated = repeated.build(&db);
-                prop_assert_eq!(
-                    find_conflicting_effects(&db, doubled),
-                    Some((repeated.ability_id, vec![repeated.clone(), repeated]))
-                );
-            }
         }
     }
 }
