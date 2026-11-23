@@ -142,8 +142,13 @@ mod adt {
     #[asm_format(r#ref attr_dict_bare ":" type(result))]
     fn struct_get(r#type: Attr<Type>, field: Attr<u32>, r#ref: Value<_>) -> Value<_> {}
 
-    /// Replace field `field` of the struct `ref` of layout `type` with
-    /// `value` in place.
+    /// Overwrite field `field` of the struct object `ref` of layout `type`
+    /// with `value`.
+    ///
+    /// Struct values are immutable, so only target lowering builds this
+    /// operation: it is how each target writes the only field of a
+    /// `heap.cell` object. Shared mutable state above target lowering is a
+    /// `heap.cell` (`design/tribute-dialects.md` § "`heap.cell`").
     ///
     /// **Ownership:** borrows `ref`. A managed `value` moves its unit into
     /// the field, and the unit of the replaced value is released

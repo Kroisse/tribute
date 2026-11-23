@@ -761,6 +761,24 @@ pub(crate) fn substitute_module_types(
     erase_identity_casts(ctx, module);
 }
 
+/// [`substitute_module_types`] where a replacement may still hold types to
+/// convert: the parameters and attributes of each replacement convert as
+/// the rest of the module does, including the new keys of changed nominal
+/// layouts ([`TypeSubstitution::expanding_replacements`]).
+pub(crate) fn substitute_module_types_expanding(
+    ctx: &mut IrContext,
+    module: Module,
+    tag: &str,
+    substitute: impl FnMut(&mut IrContext, TypeRef) -> Option<TypeRef>,
+) {
+    substitute_with(
+        module,
+        tag,
+        TypeSubstitution::new(ctx, substitute).expanding_replacements(),
+    );
+    erase_identity_casts(ctx, module);
+}
+
 /// [`substitute_module_types`] without removing the casts the replacement
 /// turns into identities.
 pub(crate) fn substitute_module_types_keeping_casts(
@@ -769,13 +787,20 @@ pub(crate) fn substitute_module_types_keeping_casts(
     tag: &str,
     substitute: impl FnMut(&mut IrContext, TypeRef) -> Option<TypeRef>,
 ) {
-    let ops = collect_ops(ctx, module.op());
-    let aliases = ctx.type_aliases().to_vec();
-    let layout_roots: Vec<_> = trunk_ir::walk::reachable_types(ctx, module.op())
+    substitute_with(module, tag, TypeSubstitution::new(ctx, substitute));
+}
+
+fn substitute_with<F: FnMut(&mut IrContext, TypeRef) -> Option<TypeRef>>(
+    module: Module,
+    tag: &str,
+    mut physicalizer: TypeSubstitution<'_, F>,
+) {
+    let ops = collect_ops(physicalizer.ctx, module.op());
+    let aliases = physicalizer.ctx.type_aliases().to_vec();
+    let layout_roots: Vec<_> = trunk_ir::walk::reachable_types(physicalizer.ctx, module.op())
         .into_iter()
         .chain(aliases.iter().map(|&(_, ty)| ty))
         .collect();
-    let mut physicalizer = TypeSubstitution::new(ctx, substitute);
     let Ok(_) =
         tribute_ir::dialect::adt::convert::convert_layouts(&mut physicalizer, layout_roots, tag);
     let mut alias_updates = Vec::new();
@@ -835,7 +860,7 @@ pub(crate) fn substitute_module_types_keeping_casts(
         }
     }
 
-    drop(physicalizer);
+    let ctx = physicalizer.ctx;
     for (name, ty) in alias_updates {
         ctx.register_type_alias(name, ty);
     }
@@ -872,6 +897,7 @@ pub(crate) struct TypeSubstitution<'a, F> {
     substitute: F,
     cache: HashMap<TypeRef, TypeRef>,
     visiting: HashSet<TypeRef>,
+    expand_replacements: bool,
 }
 
 impl<'a, F: FnMut(&mut IrContext, TypeRef) -> Option<TypeRef>> TypeSubstitution<'a, F> {
@@ -881,7 +907,16 @@ impl<'a, F: FnMut(&mut IrContext, TypeRef) -> Option<TypeRef>> TypeSubstitution<
             substitute,
             cache: HashMap::default(),
             visiting: HashSet::default(),
+            expand_replacements: false,
         }
+    }
+
+    /// Convert the parameters and attributes of each replacement too, so a
+    /// replacement built from a type's parameters, such as a layout that
+    /// holds them, sees the same conversion as every other type.
+    pub(crate) fn expanding_replacements(mut self) -> Self {
+        self.expand_replacements = true;
+        self
     }
 
     pub(crate) fn convert_type(&mut self, ty: TypeRef) -> TypeRef {
@@ -889,9 +924,25 @@ impl<'a, F: FnMut(&mut IrContext, TypeRef) -> Option<TypeRef>> TypeSubstitution<
             return converted;
         }
         if let Some(replacement) = (self.substitute)(self.ctx, ty) {
+            let replacement = if self.expand_replacements {
+                self.convert_structure(replacement)
+            } else {
+                replacement
+            };
             self.cache.insert(ty, replacement);
             return replacement;
         }
+        // A type that holds itself converts once, from its outermost use.
+        if self.visiting.contains(&ty) {
+            return ty;
+        }
+        let converted = self.convert_structure(ty);
+        self.cache.insert(ty, converted);
+        converted
+    }
+
+    /// `ty` with its parameters and attributes converted.
+    fn convert_structure(&mut self, ty: TypeRef) -> TypeRef {
         if !self.visiting.insert(ty) {
             return ty;
         }
@@ -914,7 +965,6 @@ impl<'a, F: FnMut(&mut IrContext, TypeRef) -> Option<TypeRef>> TypeSubstitution<
             self.ctx.intern_type(converted)
         };
         self.visiting.remove(&ty);
-        self.cache.insert(ty, converted);
         converted
     }
 

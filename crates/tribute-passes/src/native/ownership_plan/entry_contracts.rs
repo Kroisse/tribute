@@ -228,7 +228,9 @@ fn value_is_borrowed(
             return false;
         }
         match roles.get(index) {
-            Some(OperandRole::Borrow | OperandRole::Project { .. }) => return true,
+            Some(OperandRole::Borrow | OperandRole::Project { .. } | OperandRole::Copy { .. }) => {
+                return true;
+            }
             Some(OperandRole::Forward) => {
                 return value_is_borrowed(
                     ctx,

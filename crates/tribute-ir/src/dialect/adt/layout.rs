@@ -83,7 +83,7 @@ pub fn get_enum_variants(ctx: &IrContext, ty: TypeRef) -> Option<Vec<Vec<TypeRef
 
 /// Lay out fields of the given native types in order, each at its natural
 /// alignment.
-fn natural_layout(ctx: &IrContext, fields: impl IntoIterator<Item = TypeRef>) -> StructLayout {
+pub fn natural_layout(ctx: &IrContext, fields: impl IntoIterator<Item = TypeRef>) -> StructLayout {
     let mut offset: u32 = 0;
     let mut max_align: u32 = 1;
     let mut field_offsets = Vec::new();

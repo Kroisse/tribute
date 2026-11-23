@@ -569,11 +569,6 @@ impl<'db> ModuleTypeEnv<'db> {
         ))
     }
 
-    /// Return the number of registered constructors.
-    pub fn constructor_count(&self) -> usize {
-        self.data.constructor_types.len()
-    }
-
     /// Look up enum variants by enum name.
     pub fn lookup_enum_variants(&self, enum_path: &[Symbol]) -> Option<&[Symbol]> {
         self.data
@@ -615,17 +610,6 @@ impl<'db> ModuleTypeEnv<'db> {
     ) -> Option<&AbilityOpInfo<'db>> {
         self.lookup_ability(ability)
             .and_then(|info| info.operations.get(op))
-    }
-
-    /// Debug: print all registered constructors.
-    pub fn debug_print_constructors(&self, db: &'db dyn salsa::Database) {
-        eprintln!(
-            "DEBUG: Registered constructors ({}):",
-            self.data.constructor_types.len()
-        );
-        for id in self.data.constructor_types.keys() {
-            eprintln!("  - {:?} (ctor_name: {:?})", id, id.name(db));
-        }
     }
 
     // =========================================================================
@@ -863,6 +847,29 @@ impl<'db> ModuleTypeEnv<'db> {
     /// Create the Never (bottom) type.
     pub fn never_type(&self) -> Type<'db> {
         Type::new(self.db, TypeKind::Never)
+    }
+
+    /// The primitive type a type name denotes, if it names one.
+    pub fn primitive_type(&self, name: &Symbol) -> Option<Type<'db>> {
+        Some(if name == "Int" {
+            self.int_type()
+        } else if name == "Nat" {
+            self.nat_type()
+        } else if name == "Float" {
+            self.float_type()
+        } else if name == "Bool" {
+            self.bool_type()
+        } else if name == "Bytes" {
+            self.bytes_type()
+        } else if name == "Rune" {
+            self.rune_type()
+        } else if name == "Nil" {
+            self.nil_type()
+        } else if name == "Never" {
+            self.never_type()
+        } else {
+            return None;
+        })
     }
 
     /// Create an error type.

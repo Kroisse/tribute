@@ -909,15 +909,15 @@ fn native_one_shot_wrapper_traps_on_second_invocation() {
     use std::os::unix::process::ExitStatusExt;
 
     let input = r#"core.module @one_shot {tribute.entry = @main} {
-  !state = adt.struct<"OneShotState", (core.i1)>
+  !state = heap.cell<core.i1>
 
   func.func @one_shot_wrapper(%state: !state, %value: core.i32) -> core.i32 attributes {tribute.calling_convention = "direct"} {
-    %consumed = adt.struct_get %state {field = 0, type = !state} : core.i1
+    %consumed = heap.cell_get %state : core.i1
     %answer = scf.if %consumed -> (core.i32) {
       func.unreachable
     } else {
       %consumed_true = arith.constant 1 : core.i1
-      adt.struct_set %state, %consumed_true {field = 0, type = !state}
+      heap.cell_set %state, %consumed_true
       scf.yield %value
     }
     func.return %answer
@@ -925,7 +925,7 @@ fn native_one_shot_wrapper_traps_on_second_invocation() {
 
   func.func @main() -> core.i32 attributes {tribute.calling_convention = "direct"} {
     %not_consumed = arith.constant 0 : core.i1
-    %state = adt.struct_new(%not_consumed) : (core.i1) -> !state
+    %state = heap.cell_new %not_consumed : !state
     %input = arith.constant 0 : core.i32
     %first = func.call @one_shot_wrapper(%state, %input) attributes {tribute.calling_convention = "direct"} : (!state, core.i32) -> core.i32
     %second = func.call @one_shot_wrapper(%state, %first) attributes {tribute.calling_convention = "direct"} : (!state, core.i32) -> core.i32

@@ -6,10 +6,10 @@
 
 use rustc_hash::FxHashMap as HashMap;
 
-use tribute_ir::dialect::adt;
-use tribute_ir::dialect::adt::layout::{compute_struct_layout, get_struct_fields};
+use tribute_ir::dialect::adt::layout::{compute_struct_layout, get_struct_fields, natural_layout};
 use tribute_ir::dialect::tribute_rt::{self, RC_HEADER_SIZE};
 use tribute_ir::dialect::tribute_rtti::{DynOperandOwnership, OperandRole};
+use tribute_ir::dialect::{adt, heap};
 use trunk_ir::context::IrContext;
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::rewrite::{Module, TypeConverter};
@@ -217,6 +217,11 @@ fn allocation_size_for_type(
         return Ok(0);
     }
     let layout = plan.allocation_layout_for_type(ctx, ty)?;
+    // A cell's object holds its value as its only field.
+    if let Some(cell) = heap::Cell::from_type_ref(ctx, layout) {
+        let contents = type_converter.convert_type_or_identity(ctx, cell.contents(ctx));
+        return Ok(u64::from(natural_layout(ctx, [contents]).total_size) + RC_HEADER_SIZE);
+    }
     // Each variant of an enum has its own allocation size, so an enum value's
     // size is also resolved by its header RTTI. So is a closure's: a value of
     // the closure base may be any capture layout, and the native layouts are

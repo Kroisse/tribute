@@ -1,10 +1,8 @@
 //! `resume` and the arms of `handle` expressions.
 
 use rustc_hash::FxHashSet as HashSet;
-use salsa::Accumulator;
 
 use itertools::Itertools;
-use tribute_core::{CompilationPhase, DiagnosticSeverity};
 use trunk_ir::{Symbol, SymbolPath};
 
 use crate::ast::{
@@ -12,7 +10,7 @@ use crate::ast::{
     OpDeclKind, Pattern, ResolvedRef, Type, TypeKind, TypedRef,
 };
 use crate::typeck::InstantiatedHandlerOperation;
-use crate::typeck::checker::{Mode, NodeDiagnostic, TypeChecker};
+use crate::typeck::checker::{Mode, TypeChecker};
 use crate::typeck::func_context::{FunctionInferenceContext, HandleContext};
 use crate::typeck::solver::TypeSolver;
 use crate::typeck::subst;
@@ -42,28 +40,22 @@ impl<'db> TypeChecker<'db> {
         let arg_ty = self.infer_expr_type_with_ctx(ctx, arg);
         let Some(local_id) = local_id else {
             if ctx.mark_handler_error(resume, "resume without resumption") {
-                NodeDiagnostic::new(
+                self.report_type_error(
+                    resume,
                     "`resume` is only valid under a resumptive `op` handler arm; \
                      an `fn` arm has no resumption",
-                    resume,
-                    DiagnosticSeverity::Error,
-                    CompilationPhase::TypeChecking,
-                )
-                .accumulate(self.db());
+                );
             }
             return ctx.error_type();
         };
         if let Some((ability, op)) = ctx.non_resumptive_resume_op(local_id) {
             if ctx.mark_handler_error(resume, "resume in Never operation") {
-                NodeDiagnostic::new(
+                self.report_type_error(
+                    resume,
                     format!(
                         "cannot `resume` in the handler for `{ability}::{op}`, which returns `Never`"
                     ),
-                    resume,
-                    DiagnosticSeverity::Error,
-                    CompilationPhase::TypeChecking,
-                )
-                .accumulate(self.db());
+                );
             }
             return ctx.error_type();
         }
@@ -244,25 +236,16 @@ impl<'db> TypeChecker<'db> {
         } = request;
         let Some(ability_id) = self.extract_ability_id_from_ref(ability) else {
             if ctx.mark_handler_error(arm_id, "unresolved ability") {
-                NodeDiagnostic::new(
-                    format!("handler operation '{}' has no resolved ability", op),
+                self.report_type_error(
                     arm_id,
-                    DiagnosticSeverity::Error,
-                    CompilationPhase::TypeChecking,
-                )
-                .accumulate(self.db());
+                    format!("handler operation '{}' has no resolved ability", op),
+                );
             }
             return self.invalid_handler_operation(ctx, op, syntax_kind, params.len());
         };
         let Some(op_info) = self.env.lookup_ability_op(ability_id, &op) else {
             if ctx.mark_handler_error(arm_id, "unknown operation") {
-                NodeDiagnostic::new(
-                    format!("unknown handler operation '{}'", op),
-                    arm_id,
-                    DiagnosticSeverity::Error,
-                    CompilationPhase::TypeChecking,
-                )
-                .accumulate(self.db());
+                self.report_type_error(arm_id, format!("unknown handler operation '{}'", op));
             }
             return self.invalid_handler_operation(ctx, op, syntax_kind, params.len());
         };
@@ -272,16 +255,13 @@ impl<'db> TypeChecker<'db> {
             && op_info.kind == OpDeclKind::Fn
             && ctx.mark_handler_error(arm_id, "operation kind")
         {
-            NodeDiagnostic::new(
+            self.report_type_error(
+                arm_id,
                 format!(
                     "handler arm uses @{:?} for '{}', but the declared operation is @{:?}",
                     syntax_kind, op, op_info.kind
                 ),
-                arm_id,
-                DiagnosticSeverity::Error,
-                CompilationPhase::TypeChecking,
-            )
-            .accumulate(self.db());
+            );
         }
 
         // A handler must retain the exact instantiated ability from the handled
@@ -344,31 +324,25 @@ impl<'db> TypeChecker<'db> {
                 .clone(),
             [] => {
                 if ctx.mark_handler_error(arm_id, "missing ability instance") {
-                    NodeDiagnostic::new(
+                    self.report_type_error(
+                        arm_id,
                         format!(
                             "cannot determine the instantiated ability for handler operation '{}'",
                             op
                         ),
-                        arm_id,
-                        DiagnosticSeverity::Error,
-                        CompilationPhase::TypeChecking,
-                    )
-                    .accumulate(self.db());
+                    );
                 }
                 return self.invalid_handler_operation(ctx, op, syntax_kind, params.len());
             }
             _ => {
                 if ctx.mark_handler_error(arm_id, "ambiguous ability instance") {
-                    NodeDiagnostic::new(
+                    self.report_type_error(
+                        arm_id,
                         format!(
                             "handler operation '{}' ambiguously matches multiple instantiated abilities",
                             op
                         ),
-                        arm_id,
-                        DiagnosticSeverity::Error,
-                        CompilationPhase::TypeChecking,
-                    )
-                    .accumulate(self.db());
+                    );
                 }
                 return self.invalid_handler_operation(ctx, op, syntax_kind, params.len());
             }
@@ -405,18 +379,15 @@ impl<'db> TypeChecker<'db> {
         if params.len() != op_param_types.len() {
             let node = params.first().map_or(arm_id, |p| p.id);
             if ctx.mark_handler_error(arm_id, "parameter arity") {
-                NodeDiagnostic::new(
+                self.report_type_error(
+                    node,
                     format!(
                         "handler arm has {} parameter(s), but operation '{}' expects {}",
                         params.len(),
                         op,
                         op_param_types.len()
                     ),
-                    node,
-                    DiagnosticSeverity::Error,
-                    CompilationPhase::TypeChecking,
-                )
-                .accumulate(self.db());
+                );
             }
             return self.invalid_handler_operation(ctx, op, syntax_kind, params.len());
         }
@@ -440,17 +411,14 @@ impl<'db> TypeChecker<'db> {
             && matches!(return_type.kind(self.db()), TypeKind::Never)
             && ctx.mark_handler_error(arm_id, "fn arm for a never operation")
         {
-            NodeDiagnostic::new(
+            self.report_type_error(
+                arm_id,
                 format!(
                     "an fn arm cannot handle '{}': the operation never returns, so there is \
                      nothing to continue; use an op arm",
                     op
                 ),
-                arm_id,
-                DiagnosticSeverity::Error,
-                CompilationPhase::TypeChecking,
-            )
-            .accumulate(self.db());
+            );
         }
         InstantiatedHandlerOperation {
             ability: ability_id,
@@ -511,13 +479,7 @@ impl<'db> TypeChecker<'db> {
             if !ctx.mark_handler_error(handler.id, "duplicate arm") {
                 continue;
             }
-            NodeDiagnostic::new(
-                message,
-                handler.id,
-                DiagnosticSeverity::Error,
-                CompilationPhase::TypeChecking,
-            )
-            .accumulate(self.db());
+            self.report_type_error(handler.id, message);
         }
     }
 
@@ -574,7 +536,8 @@ impl<'db> TypeChecker<'db> {
                 continue;
             }
             let plural = if missing.len() == 1 { "an arm" } else { "arms" };
-            NodeDiagnostic::new(
+            self.report_type_error(
+                handle_id,
                 format!(
                     "handling `{}` is missing {plural} for {}",
                     ability_id.name(self.db()),
@@ -582,11 +545,7 @@ impl<'db> TypeChecker<'db> {
                         .iter()
                         .format_with(", ", |op, f| f(&format_args!("`{op}`")))
                 ),
-                handle_id,
-                DiagnosticSeverity::Error,
-                CompilationPhase::TypeChecking,
-            )
-            .accumulate(self.db());
+            );
         }
     }
 

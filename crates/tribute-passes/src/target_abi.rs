@@ -14,10 +14,10 @@ use tribute_ir::calling_convention::{
     CallingConvention, ConventionBearing, DynConventionBearing, cps_closure_function_type,
 };
 use tribute_ir::dialect::adt;
-use tribute_ir::dialect::{ability, closure, effect, tribute_rt};
+use tribute_ir::dialect::{ability, closure, effect, heap, tribute_rt};
 use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
-use trunk_ir::dialect::{core, func};
+use trunk_ir::dialect::{arith, core, func, scf};
 use trunk_ir::op_interface::DynIndirectCallLike;
 use trunk_ir::ops::{DialectOp, DialectType, VariadicResults};
 use trunk_ir::pass::{Pass, PassRunResult};
@@ -30,6 +30,7 @@ use trunk_ir::walk::{WalkAction, walk_op};
 use trunk_ir::{Symbol, SymbolPath};
 
 use crate::convention_table::{ConventionTables, EntryLayout};
+use crate::cps_builders::{make_block, single_block_region};
 
 const ROOT_MAIN_SYMBOL: &str = "__tribute_main";
 const ROOT_DONE_K_SYMBOL: &str = "__tribute_done_k";
@@ -743,6 +744,8 @@ impl Pass for PhysicalizeCpsCallables {
 struct TerminalFunctions {
     frame: RootFrameContract,
     answer: TypeRef,
+    /// The value the cell holds: the completion flag and the answer slot.
+    state_ty: TypeRef,
     cell_ty: TypeRef,
     done: Symbol,
     dispatch: Symbol,
@@ -777,7 +780,9 @@ impl TerminalFunctions {
         dispatch: Symbol,
     ) -> Result<Self, TargetAbiError> {
         let slot = Self::slot_type(ctx, answer);
-        let cell_ty = completion_cell_type(ctx, slot);
+        let flag = core::I1::type_ref(ctx);
+        let state_ty = completion_state_type(ctx, slot);
+        let cell_ty = heap::Cell::params(state_ty).intern(ctx).as_type_ref();
         let contract = physical_parameter_attrs(ctx, CallingConvention::Cps);
         // Each function's environment is its own closure; `Done` captures the
         // cell and `Dispatch` captures nothing.
@@ -813,6 +818,29 @@ impl TerminalFunctions {
             .build(ctx, location);
         ctx.push_op(done_entry, cell.op_ref());
         let cell = cell.result(ctx);
+        // A second `Done` on the same delimiter traps before it writes.
+        let state = heap::CellGet::operands(cell).build(ctx, location);
+        ctx.push_op(done_entry, state.op_ref());
+        let completed = adt::StructGet::operands(state.result(ctx))
+            .r#type(state_ty)
+            .field(0)
+            .results(flag)
+            .build(ctx, location);
+        ctx.push_op(done_entry, completed.op_ref());
+        let reject = make_block(ctx, location, &[]);
+        let trap = func::Unreachable::operands().build(ctx, location);
+        ctx.push_op(reject, trap.op_ref());
+        let accept = make_block(ctx, location, &[]);
+        let accept_yield = scf::Yield::operands([]).build(ctx, location);
+        ctx.push_op(accept, accept_yield.op_ref());
+        let guard = scf::If::operands(completed.result(ctx))
+            .results([])
+            .regions(
+                single_block_region(ctx, location, reject),
+                single_block_region(ctx, location, accept),
+            )
+            .build(ctx, location);
+        ctx.push_op(done_entry, guard.op_ref());
         let stored = if slot == answer {
             done_args[0]
         } else {
@@ -820,10 +848,16 @@ impl TerminalFunctions {
             ctx.push_op(done_entry, erased);
             ctx.op_result(erased, 0)
         };
-        let store = adt::StructSet::operands(cell, stored)
-            .r#type(cell_ty)
-            .field(0)
+        let now_completed = arith::Constant::operands()
+            .value(Attribute::Int(1))
+            .results(flag)
             .build(ctx, location);
+        ctx.push_op(done_entry, now_completed.op_ref());
+        let finished = adt::StructNew::operands([now_completed.result(ctx), stored])
+            .results(state_ty)
+            .build(ctx, location);
+        ctx.push_op(done_entry, finished.op_ref());
+        let store = heap::CellSet::operands(cell, finished.result(ctx)).build(ctx, location);
         ctx.push_op(done_entry, store.op_ref());
         let done_return = func::Return::operands([]).build(ctx, location);
         ctx.push_op(done_entry, done_return.op_ref());
@@ -877,6 +911,7 @@ impl TerminalFunctions {
         Ok(Self {
             frame,
             answer,
+            state_ty,
             cell_ty,
             done,
             dispatch,
@@ -904,7 +939,17 @@ impl TerminalFunctions {
                 .op_ref()
         };
         ops.push(initial);
-        let cell_new = adt::StructNew::operands([ctx.op_result(initial, 0)])
+        let not_completed = arith::Constant::operands()
+            .value(Attribute::Int(0))
+            .results(core::I1::type_ref(ctx))
+            .build(ctx, location);
+        ops.push(not_completed.op_ref());
+        let state =
+            adt::StructNew::operands([not_completed.result(ctx), ctx.op_result(initial, 0)])
+                .results(self.state_ty)
+                .build(ctx, location);
+        ops.push(state.op_ref());
+        let cell_new = heap::CellNew::operands(state.result(ctx))
             .results(self.cell_ty)
             .build(ctx, location);
         ops.push(cell_new.op_ref());
@@ -945,12 +990,13 @@ impl TerminalFunctions {
     /// produces it.
     fn read_answer(&self, ctx: &mut IrContext, location: Location, cell: ValueRef) -> Vec<OpRef> {
         let slot = Self::slot_type(ctx, self.answer);
-        let stored = adt::StructGet::operands(cell)
-            .r#type(self.cell_ty)
-            .field(0)
+        let state = heap::CellGet::operands(cell).build(ctx, location);
+        let stored = adt::StructGet::operands(state.result(ctx))
+            .r#type(self.state_ty)
+            .field(1)
             .results(slot)
             .build(ctx, location);
-        let mut ops = vec![stored.op_ref()];
+        let mut ops = vec![state.op_ref(), stored.op_ref()];
         if slot != self.answer {
             ops.push(tribute_rt::convert_value(
                 ctx,
@@ -988,8 +1034,11 @@ fn module_evidence_type(ctx: &mut IrContext, module: Module) -> Result<TypeRef, 
     Ok(adt::Array::params(marker).intern(ctx).as_type_ref())
 }
 
-fn completion_cell_type(ctx: &mut IrContext, value_ty: TypeRef) -> TypeRef {
-    adt::Struct::literal(ctx, [value_ty], AttributeMap::new()).as_type_ref()
+/// The value a completion cell holds: whether the delimiter completed, and
+/// its answer stored as `slot` (`design/cps-effects.md` § "값 delimiter").
+fn completion_state_type(ctx: &mut IrContext, slot: TypeRef) -> TypeRef {
+    let flag = core::I1::type_ref(ctx);
+    adt::Struct::literal(ctx, [flag, slot], AttributeMap::new()).as_type_ref()
 }
 
 /// Recover semantic R only from authenticated callable and nominal frame metadata.
@@ -2416,9 +2465,12 @@ mod tests {
                 .all(|op| func::TailCall::from_op(&ctx, *op).is_err())
         );
         let nil_ty = core::Nil::params().intern(&mut ctx).as_type_ref();
-        let root_cell = completion_cell_type(&mut ctx, nil_ty);
+        let root_state = completion_state_type(&mut ctx, nil_ty);
+        let root_cell = heap::Cell::params(root_state)
+            .intern(&mut ctx)
+            .as_type_ref();
         assert!(wrapper_ops.iter().any(|op| {
-            adt::StructNew::from_op(&ctx, *op).is_ok()
+            heap::CellNew::from_op(&ctx, *op).is_ok()
                 && ctx.op_result_types(*op).first() == Some(&root_cell)
         }));
         assert!(
@@ -2431,10 +2483,23 @@ mod tests {
                 .iter()
                 .any(|op| adt::StructGet::from_op(&ctx, *op).is_ok())
         );
+        // `Done` reads the completion flag and traps when it is already set,
+        // before it writes the answer: a second `Done` never overwrites it.
+        let done_body = done_k.body(&ctx);
+        let done_ops = ctx.block(ctx.region(done_body).blocks[0]).ops.to_vec();
+        let position = |found: &dyn Fn(OpRef) -> bool| done_ops.iter().position(|&op| found(op));
+        let read = position(&|op| heap::CellGet::matches(&ctx, op)).expect("Done reads the cell");
+        let guard = position(&|op| scf::If::matches(&ctx, op)).expect("Done guards its write");
+        let write = position(&|op| heap::CellSet::matches(&ctx, op)).expect("Done writes the cell");
+        assert!(read < guard && guard < write);
+        let completed = scf::If::from_op(&ctx, done_ops[guard]).unwrap();
+        let then_block = ctx.region(completed.then_region(&ctx)).blocks[0];
         assert!(
-            collect_ops(&ctx, done_k.op_ref())
+            ctx.block(then_block)
+                .ops
                 .iter()
-                .any(|op| adt::StructSet::from_op(&ctx, *op).is_ok())
+                .any(|&op| func::Unreachable::matches(&ctx, op)),
+            "a completed delimiter traps"
         );
         let printed = module.op().display(&ctx).to_string();
         assert!(!printed.contains("__tribute_cps_control"), "{printed}");

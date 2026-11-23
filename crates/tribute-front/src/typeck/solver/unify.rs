@@ -233,6 +233,21 @@ impl<'db> TypeSolver<'db> {
             .all(|(x, y)| solver.unify_types(*x, *y).is_ok())
     }
 
+    /// Whether two instances name the same ability and each pair of
+    /// arguments may unify, without modifying the substitution.
+    pub(super) fn instances_unifiable(
+        &self,
+        a: &crate::ast::AbilityInstance<'db>,
+        b: &crate::ast::AbilityInstance<'db>,
+    ) -> bool {
+        a.ability_id == b.ability_id
+            && a.args.len() == b.args.len()
+            && a.args
+                .iter()
+                .zip(&b.args)
+                .all(|(x, y)| self.types_unifiable(*x, *y))
+    }
+
     /// Check if two types can be unified without modifying substitution.
     ///
     /// This is a quick check that doesn't perform actual unification.
@@ -347,15 +362,9 @@ impl<'db> TypeSolver<'db> {
         }
         let covered = |labels: AbilityRow<'db>, by: AbilityRow<'db>| {
             labels.instances(self.db).iter().all(|effect| {
-                by.instances(self.db).iter().any(|candidate| {
-                    candidate.ability_id == effect.ability_id
-                        && candidate.args.len() == effect.args.len()
-                        && candidate
-                            .args
-                            .iter()
-                            .zip(&effect.args)
-                            .all(|(a, b)| self.types_unifiable(*a, *b))
-                })
+                by.instances(self.db)
+                    .iter()
+                    .any(|candidate| self.instances_unifiable(candidate, effect))
             })
         };
         match (r1.rest(self.db), r2.rest(self.db)) {

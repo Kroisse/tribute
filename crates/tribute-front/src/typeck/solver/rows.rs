@@ -71,7 +71,7 @@ impl<'db> TypeSolver<'db> {
     /// variable imposes no restriction: assigning that row to every variable
     /// satisfies every equation. Keeping it would export implementation-local
     /// existential variables and multiply them at every call.
-    pub(super) fn row_relations_for_type(
+    pub fn row_relations_for_type(
         &self,
         ty: Type<'db>,
     ) -> (
@@ -167,9 +167,6 @@ impl<'db> TypeSolver<'db> {
 
     pub fn row_unions_for_type(&self, ty: Type<'db>) -> Vec<crate::ast::RowUnion<'db>> {
         self.row_relations_for_type(ty).0
-    }
-    pub fn row_removals_for_type(&self, ty: Type<'db>) -> Vec<crate::ast::RowRemoval<'db>> {
-        self.row_relations_for_type(ty).1
     }
 
     // Uniform row lists for dependency analysis only. Subtractions are never
@@ -621,15 +618,12 @@ impl<'db> TypeSolver<'db> {
             if removal.removed.instances(self.db).contains(effect) {
                 continue;
             }
-            if removal.removed.instances(self.db).iter().any(|candidate| {
-                candidate.ability_id == effect.ability_id
-                    && candidate.args.len() == effect.args.len()
-                    && candidate
-                        .args
-                        .iter()
-                        .zip(&effect.args)
-                        .all(|(a, b)| self.types_unifiable(*a, *b))
-            }) {
+            if removal
+                .removed
+                .instances(self.db)
+                .iter()
+                .any(|candidate| self.instances_unifiable(candidate, effect))
+            {
                 ambiguous = true;
             } else {
                 remaining.push(effect.clone());
@@ -660,15 +654,7 @@ impl<'db> TypeSolver<'db> {
                     .result
                     .instances(self.db)
                     .iter()
-                    .filter(|other| {
-                        other.ability_id == effect.ability_id
-                            && other.args.len() == effect.args.len()
-                            && other
-                                .args
-                                .iter()
-                                .zip(&effect.args)
-                                .all(|(a, b)| self.types_unifiable(*a, *b))
-                    })
+                    .filter(|other| self.instances_unifiable(other, effect))
                     .cloned()
                     .collect();
                 match candidates.as_slice() {
@@ -751,15 +737,7 @@ impl<'db> TypeSolver<'db> {
                     .result
                     .instances(self.db)
                     .iter()
-                    .filter(|candidate| {
-                        candidate.ability_id == effect.ability_id
-                            && candidate.args.len() == effect.args.len()
-                            && candidate
-                                .args
-                                .iter()
-                                .zip(&effect.args)
-                                .all(|(a, b)| self.types_unifiable(*a, *b))
-                    })
+                    .filter(|candidate| self.instances_unifiable(candidate, effect))
                     .cloned()
                     .collect();
                 match candidates.as_slice() {

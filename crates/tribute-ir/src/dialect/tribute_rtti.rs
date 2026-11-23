@@ -137,6 +137,12 @@ pub enum OperandRole {
     /// `object` that the operand refers to. It is a borrow derived from the
     /// operand and holds no unit of its own.
     Project { object: TypeRef, field: TypeRef },
+    /// Result 0 is a field of type `field` copied out of the object of
+    /// layout `object` that the operand refers to, as SIL's `load [copy]`
+    /// is. The field may change while the object stays alive, so the
+    /// result is never a borrow: it acquires its own unit right after the
+    /// read. The operand itself is a borrow for the operation.
+    Copy { object: TypeRef, field: TypeRef },
     /// Result 0 is the operand itself as another type, sharing its unit.
     Forward,
     /// The operand's unit moves into a field of type `field` of the new
@@ -398,8 +404,8 @@ pub fn allocation_descriptor(
 }
 
 /// The runtime type descriptor a native allocation operation creates: an
-/// [`allocation_descriptor`], or the array type an array construction
-/// allocates.
+/// [`allocation_descriptor`], the array type an array construction
+/// allocates, or the cell type a `heap.cell_new` allocates.
 pub fn native_allocation_descriptor(
     ctx: &IrContext,
     op: trunk_ir::OpRef,
@@ -410,6 +416,8 @@ pub fn native_allocation_descriptor(
         of.r#type(ctx)
     } else if let Ok(splice) = adt::ArraySplice::from_op(ctx, op) {
         splice.r#type(ctx)
+    } else if let Ok(new) = crate::dialect::heap::CellNew::from_op(ctx, op) {
+        ctx.value_ty(new.result(ctx))
     } else {
         return allocation_descriptor(ctx, op);
     };

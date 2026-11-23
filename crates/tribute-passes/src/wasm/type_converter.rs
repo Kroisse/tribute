@@ -278,36 +278,65 @@ fn unbox_via_i31(
 // Main entry point
 // =============================================================================
 
-/// Replace the shared closure storage and the `tribute_rt` primitives with
-/// their Wasm types everywhere they occur, including inside ADT layouts,
-/// aliases, signatures, and attributes, before target instructions.
-pub(crate) fn convert_builtin_layouts(ctx: &mut IrContext, module: trunk_ir::rewrite::Module) {
-    let shared_closure = crate::closure_lower::closure_struct_type_ref(ctx);
-    let closure = closure_adt_type(ctx);
-    let i32_ty = core::I32::type_ref(ctx);
-    let f64_ty = core::F64::type_ref(ctx);
-    let anyref_ty = wasm_dialect::Anyref::params().intern(ctx).as_type_ref();
-    let i31ref_ty = wasm_dialect::I31ref::params().intern(ctx).as_type_ref();
-    crate::closure_lower::substitute_module_types(ctx, module, "wasm", move |ctx, ty| {
-        if ty == shared_closure {
-            return Some(closure);
-        }
+/// The Wasm types of the builtin layouts `convert_builtin_layouts` replaces.
+#[derive(Clone, Copy)]
+struct BuiltinTypes {
+    shared_closure: TypeRef,
+    closure: TypeRef,
+    i32_ty: TypeRef,
+    f64_ty: TypeRef,
+    anyref_ty: TypeRef,
+    i31ref_ty: TypeRef,
+}
+
+impl BuiltinTypes {
+    /// The replacement of `ty` itself, or `None` when only its parameters
+    /// and attributes may change.
+    fn replace(self, ctx: &mut IrContext, ty: TypeRef) -> Option<TypeRef> {
         use tribute_ir::dialect::tribute_rt::{
             Anyref, Bool, ConventionTableRef, Float, Int, Intref, Nat,
         };
 
+        if ty == self.shared_closure {
+            return Some(self.closure);
+        }
+        // A cell is the one-field struct that holds its value
+        // (`super::heap_cells`). The substitution expands each replacement,
+        // so that field converts like any other.
+        if let Some(cell) = tribute_ir::dialect::heap::Cell::from_type_ref(ctx, ty) {
+            let contents = cell.contents(ctx);
+            return Some(super::heap_cells::cell_layout(ctx, contents));
+        }
         let name = ctx.get_type(ty).name;
         if [Int::NAME, Nat::NAME, Bool::NAME, ConventionTableRef::NAME].contains(&name) {
-            Some(i32_ty)
+            Some(self.i32_ty)
         } else if name == Float::NAME {
-            Some(f64_ty)
+            Some(self.f64_ty)
         } else if name == Anyref::NAME {
-            Some(anyref_ty)
+            Some(self.anyref_ty)
         } else if name == Intref::NAME {
-            Some(i31ref_ty)
+            Some(self.i31ref_ty)
         } else {
             None
         }
+    }
+}
+
+/// Replace the shared closure storage, the `tribute_rt` primitives, and
+/// `heap.cell` with their Wasm types everywhere they occur, including inside
+/// ADT layouts, aliases, signatures, and attributes, before target
+/// instructions.
+pub(crate) fn convert_builtin_layouts(ctx: &mut IrContext, module: trunk_ir::rewrite::Module) {
+    let builtins = BuiltinTypes {
+        shared_closure: crate::closure_lower::closure_struct_type_ref(ctx),
+        closure: closure_adt_type(ctx),
+        i32_ty: core::I32::type_ref(ctx),
+        f64_ty: core::F64::type_ref(ctx),
+        anyref_ty: wasm_dialect::Anyref::params().intern(ctx).as_type_ref(),
+        i31ref_ty: wasm_dialect::I31ref::params().intern(ctx).as_type_ref(),
+    };
+    crate::closure_lower::substitute_module_types_expanding(ctx, module, "wasm", move |ctx, ty| {
+        builtins.replace(ctx, ty)
     });
 }
 
@@ -911,6 +940,35 @@ mod tests {
             "{printed}"
         );
         assert!(printed.contains(": (wasm.anyref) -> core.i32"), "{printed}");
+    }
+
+    #[test]
+    fn a_cell_holds_the_new_key_of_a_changed_layout() {
+        let mut ctx = IrContext::new();
+        let module = trunk_ir::parser::parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  !Answer = adt.struct<"Answer", (tribute_rt.int)>
+  !AnswerRef = adt.struct<"Answer">
+  func.func @f(%cell: heap.cell<!AnswerRef>) -> !AnswerRef {
+    %answer = heap.cell_get %cell : !AnswerRef
+    func.return %answer
+  }
+}"#,
+        );
+
+        super::super::heap_cells::lower(&mut ctx, module);
+        convert_builtin_layouts(&mut ctx, module);
+
+        let printed = module.op().display(&ctx).to_string();
+        // The cell's type and the layout its read names are one struct that
+        // holds the changed layout's new key.
+        assert!(!printed.contains("\"Answer\">"), "{printed}");
+        assert!(!printed.contains("heap."), "{printed}");
+        let function = trunk_ir::dialect::func::Func::from_op(&ctx, module.ops(&ctx)[0]).unwrap();
+        let block = ctx.region(function.body(&ctx)).blocks[0];
+        let get = adt::StructGet::from_op(&ctx, ctx.block(block).ops[0]).unwrap();
+        assert_eq!(ctx.block(block).args[0].ty, get.r#type(&ctx));
     }
 
     #[test]
