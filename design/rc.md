@@ -404,6 +404,10 @@ Operation이 operand의 unit을 어떻게 다루는지는 그 operation이
   unit을 획득한다. Swift SIL의 `load [copy]`에 해당한다. Operand는 operation 동안
   빌린다.
 - `Forward`: 결과가 다른 type의 operand 자신이며 같은 unit을 나눈다.
+- `Consume`: operand의 unit이 operation으로 옮겨 가고, operation은 operand가
+  가리키는 object로 결과를 만든다. Operand가 object의 유일한 참조이면 그 object를
+  다시 쓰고, 아니면 복사한 뒤 unit을 release한다. `heap.struct_update`와
+  `heap.array_set`의 source가 이 역할이다.
 - `Initialize`: operand의 unit이 결과의 새 object의 field로 옮겨 간다.
 - `Assign`: operand의 unit이 다른 operand가 가리키는 기존 object의 field로 옮겨
   가고, 바뀌기 전 값의 unit은 replaced-field release로 release한다. 그 값을 읽는
@@ -627,8 +631,8 @@ into control flow and atomic operations by RC lowering.
     가질 때만 해당한다.
 
   그 밖의 모든 사용은 escape이며 retained를 선택한다. 값으로서의 return과
-  `Initialize`나 `Assign` operand로서의 저장, `Assign`의 대상, branch와 block
-  argument 전달, indirect call과 tail call, 다른 region에서의 사용, 역할을
+  `Initialize`나 `Assign` operand로서의 저장, `Consume` operand, `Assign`의 대상,
+  branch와 block argument 전달, indirect call과 tail call, 다른 region에서의 사용, 역할을
   선언하지 않은 operation이 여기에 속한다. `heap.struct_update`와
   `heap.array_set`의 source, `heap.array_set`과 `heap.cell_set`의 대상이 그 예다.
   Closure, ability handler, continuation capture는 저장이므로 escape다.

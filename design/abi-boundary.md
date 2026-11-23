@@ -194,7 +194,7 @@ compiler가 값마다 표현을 고른다. 표현 선택은 값 의미론인 [`a
 출구 이후에도 보존하는 것:
 
 - 기계 호출 규약, exact signature, 외부 바인딩(`abi`)
-- `heap.box`의 layout과 `heap` operation의 layout 속성, [nominal 선언](tribute-dialects.md#nominal-선언),
+- `heap` operation이 layout을 읽는 `heap.box`의 layout, [nominal 선언](tribute-dialects.md#nominal-선언),
   명시적 layout 식별자, ownership/RTTI 입력(매개변수 속성 `tribute.ownership` 포함)과
   `tribute.types` 같은 타입 식별 metadata
 - Location과 선언 위치 속성 `tribute.definition` 같은 실행에 관여하지 않는

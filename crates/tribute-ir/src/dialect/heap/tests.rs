@@ -62,6 +62,195 @@ fn the_builder_infers_the_read_type() {
     );
 }
 
+const BOXES: &str = r#"core.module @test {
+  !Node = adt.struct<"Node", (core.i32)>
+  !Point = adt.struct<"Point", (core.f64, tribute_rt.anyref)>
+  !Shape = adt.enum<"Shape", [(), (core.f64)]>
+  !t0 = heap.box<!Node, {nullable = true}>
+
+  func.func @structs(%0: core.f64, %1: tribute_rt.anyref, %2: tribute_rt.anyref) -> core.f64 {
+      %3 = heap.struct_new(%0, %1) : (core.f64, tribute_rt.anyref) -> heap.box<!Point>
+      %4 = heap.struct_get %3 {field = 1} : tribute_rt.anyref
+      %5 = heap.struct_update %3, %2 {field = 1} : heap.box<!Point>
+      %6 = heap.struct_get %5 {field = 0} : core.f64
+      func.return %6
+  }
+  func.func @variants(%0: core.f64) -> core.f64 {
+      %1 = heap.variant_new 1(%0) : (core.f64) -> heap.box<!Shape>
+      %2 = heap.variant_is %1 {tag = 1} : core.i1
+      %3 = heap.variant_tag %1 : heap.box<!Shape>
+      %4 = heap.variant_get %1 {field = 0, tag = 1} : core.f64
+      func.return %4
+  }
+  func.func @arrays(%0: core.index, %1: core.i32, %2: core.index) -> core.index {
+      %3 = heap.array_new %0, %1 : heap.box<adt.array<core.i32>>
+      %4 = heap.array_of %1, %1 : heap.box<adt.array<core.i32>>
+      %5 = heap.array_splice %4 [%2, %0] (%1) : heap.box<adt.array<core.i32>>
+      %6 = heap.array_get %5, %2 : core.i32
+      %7 = heap.array_set %3, %2, %6 : heap.box<adt.array<core.i32>>
+      %8 = heap.array_len %7 : heap.box<adt.array<core.i32>>
+      %9 = heap.array_const dense<"0x0102"> : heap.box<adt.array<core.i8>>
+      func.return %8
+  }
+  func.func @nulls(%0: heap.box<!Node>) -> core.i1 {
+      %1 = heap.null : !t0
+      %2 = heap.cast %0 : heap.box<!Node> to !t0
+      %3 = heap.is_null %2 : !t0
+      func.return %3
+  }
+}
+"#;
+
+fn all_body_ops(ctx: &IrContext, module: Module) -> Vec<trunk_ir::OpRef> {
+    module
+        .ops(ctx)
+        .iter()
+        .filter_map(|&op| trunk_ir::dialect::func::Func::from_op(ctx, op).ok())
+        .flat_map(|func| {
+            let entry = ctx.region(func.body(ctx)).blocks[0];
+            ctx.block(entry).ops.to_vec()
+        })
+        .collect()
+}
+
+#[test]
+fn box_operations_round_trip_and_verify() {
+    let (ctx, module) = parse(BOXES);
+    assert_eq!(module.op().display(&ctx).to_string(), BOXES);
+    for op in all_body_ops(&ctx, module) {
+        let violations = OpDef::of(&ctx, op).unwrap().verify(&ctx, op);
+        assert!(
+            violations.is_empty(),
+            "{}: {violations:?}",
+            op.display(&ctx)
+        );
+    }
+}
+
+#[test]
+fn a_box_is_a_managed_reference_and_its_layout_is_not_one() {
+    let (ctx, module) = parse(BOXES);
+    let new = StructNew::from_op(&ctx, all_body_ops(&ctx, module)[0]).unwrap();
+    let boxed = Box::from_type_ref(&ctx, ctx.value_ty(new.result(&ctx))).unwrap();
+    assert!(DynManagedRefType::is_implemented(&ctx, boxed.as_type_ref()));
+    assert!(!boxed.is_nullable(&ctx));
+}
+
+#[test]
+fn updates_consume_their_source_and_reads_project() {
+    use crate::dialect::tribute_rtti::{DynOperandOwnership, OperandRole};
+
+    let (ctx, module) = parse(BOXES);
+    let ops = all_body_ops(&ctx, module);
+    let roles = |op| {
+        DynOperandOwnership::get(&ctx, op)
+            .unwrap()
+            .operand_roles(&ctx)
+            .unwrap()
+    };
+    let anyref = ctx.value_ty(StructNew::from_op(&ctx, ops[0]).unwrap().fields(&ctx)[1]);
+    let point = ctx.value_ty(StructNew::from_op(&ctx, ops[0]).unwrap().result(&ctx));
+    let point = Box::from_type_ref(&ctx, point).unwrap().layout(&ctx);
+    assert_eq!(
+        roles(ops[1]),
+        [OperandRole::Project {
+            object: point,
+            field: anyref
+        }]
+    );
+    assert_eq!(
+        roles(ops[2]),
+        [
+            OperandRole::Consume,
+            OperandRole::Initialize { field: anyref }
+        ]
+    );
+    let array_set = ops
+        .iter()
+        .copied()
+        .find(|&op| ArraySet::matches(&ctx, op))
+        .unwrap();
+    assert!(matches!(
+        roles(array_set)[..],
+        [
+            OperandRole::Consume,
+            OperandRole::Borrow,
+            OperandRole::Initialize { .. }
+        ]
+    ));
+    let cast = ops
+        .iter()
+        .copied()
+        .find(|&op| Cast::matches(&ctx, op))
+        .unwrap();
+    assert_eq!(roles(cast), [OperandRole::Forward]);
+}
+
+/// The function body of a module that declares `!Point`, `!Shape`, and the
+/// nominal `!Node`.
+fn rejected(body: &str) -> String {
+    format!(
+        r#"core.module @test {{
+  !Point = adt.struct<"Point", (core.f64, core.f64)>
+  !Shape = adt.enum<"Shape", [(), (core.f64)]>
+  !Node = adt.struct<"Node", (core.i32)>
+  func.func @f(%0: core.f64, %1: heap.box<!Point>, %2: heap.box<!Shape>, %3: heap.box<!Node, {{nullable = true}}>, %4: heap.box<adt.array<core.i32>>) {{
+    {body}
+    func.return
+  }}
+}}
+"#
+    )
+}
+
+#[test]
+fn box_operations_that_do_not_fit_their_layout_are_rejected() {
+    for body in [
+        // One field too few.
+        "%5 = heap.struct_new(%0) : (core.f64) -> heap.box<!Point>",
+        // A struct built as a box of an enum.
+        "%5 = heap.struct_new(%0) : (core.f64) -> heap.box<!Shape>",
+        // A struct built as a nullable box.
+        "%5 = heap.struct_new(%0, %0) : (core.f64, core.f64) -> heap.box<!Point, {nullable = true}>",
+        // A field past the layout's.
+        "%5 = heap.struct_get %1 {field = 2} : core.f64",
+        // A read of the wrong type.
+        "%5 = heap.struct_get %1 {field = 0} : core.i32",
+        // A read through a nullable box.
+        "%5 = heap.struct_get %3 {field = 0} : core.i32",
+        // A variant the enum does not have.
+        "%5 = heap.variant_new 2(%0) : (core.f64) -> heap.box<!Shape>",
+        "%5 = heap.variant_get %2 {field = 0, tag = 0} : core.f64",
+        // A variant read of a struct.
+        "%5 = heap.variant_tag %1 : heap.box<!Point>",
+        // An update of the wrong type.
+        "%5 = heap.struct_update %1, %4 {field = 0} : heap.box<!Point>",
+        // Null of a non-null box, and a null test of one.
+        "%5 = heap.null : heap.box<!Point>",
+        "%5 = heap.is_null %1 : heap.box<!Point>",
+        // A cast between unrelated layouts, and an identity cast.
+        "%5 = heap.cast %1 : heap.box<!Point> to heap.box<!Shape>",
+        "%5 = heap.cast %1 : heap.box<!Point> to heap.box<!Point>",
+        // An array operation on a struct.
+        "%5 = heap.array_len %1 : heap.box<!Point>",
+    ] {
+        let text = rejected(body);
+        let (ctx, module) = parse(&text);
+        let op = body_ops(&ctx, module)[0];
+        assert!(
+            !OpDef::of(&ctx, op).unwrap().verify(&ctx, op).is_empty(),
+            "accepted: {body}"
+        );
+    }
+}
+
+#[test]
+fn a_box_of_a_non_layout_is_not_a_box() {
+    let mut ctx = IrContext::new();
+    let i32_ty = trunk_ir::types::TypeDataBuilder::new("core.i32").intern(&mut ctx);
+    assert!(Box::params(i32_ty).intern(&mut ctx).is_err());
+}
+
 #[test]
 fn a_value_of_another_type_is_rejected() {
     for text in [

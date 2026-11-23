@@ -241,7 +241,9 @@ fn value_is_borrowed(
                     visiting,
                 );
             }
-            Some(OperandRole::Initialize { .. } | OperandRole::Assign { .. }) => return false,
+            Some(
+                OperandRole::Initialize { .. } | OperandRole::Assign { .. } | OperandRole::Consume,
+            ) => return false,
             None => {}
         }
         if let Ok(call) = func::Call::from_op(ctx, op) {

@@ -1321,8 +1321,9 @@ Object는 두 종류다. `heap.box`가 가리키는 object는 만든 뒤 내용�
   구간에서 `adt`와 `heap`은 함께 쓰인다.
 - Representation/ABI 경계 출구 뒤에 남는 `adt` 값은 unboxed struct 값뿐이다
   ([값의 표현](abi-boundary.md#출구에서-확정되는-물리-계약)). 그 밖의 `adt` layout은
-  `heap.box`의 매개변수, inline 값을 담는 `heap.cell`의 매개변수, `heap` operation의
-  layout 속성, [nominal 선언](#nominal-선언) 안에 남는다. Object 접근은 모두 `heap`
+  `heap.box`의 매개변수, inline 값을 담는 `heap.cell`의 매개변수,
+  [nominal 선언](#nominal-선언) 안에 남는다. `heap` operation은 별도의 layout 속성 없이
+  box operand나 결과의 타입에서 layout을 읽는다. Object 접근은 모두 `heap`
   operation이며 target lowering이 이를 내린다.
 - `Bytes`와 `String` literal(`adt.bytes_const`, `adt.string_const`)은 표현 선택보다
   앞에서 `adt` 값으로 펼친다([string.md](string.md#constant-lowering)). 배열 상수

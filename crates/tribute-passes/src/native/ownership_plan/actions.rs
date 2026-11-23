@@ -665,6 +665,17 @@ impl ActionPlanner<'_> {
                         destination: slot,
                     });
                 }
+                OperandRole::Consume => {
+                    let ty = self.ir.value_ty(operand);
+                    if is_typed_managed_reference(self.ir, ty, self.managed_layouts) {
+                        self.actions.push(OwnershipAction {
+                            kind: ActionKind::StoreAcquire,
+                            value: operand,
+                            anchor: ActionAnchor::Before(op),
+                            destination: index as u32,
+                        });
+                    }
+                }
                 OperandRole::Borrow
                 | OperandRole::Project { .. }
                 | OperandRole::Copy { .. }
