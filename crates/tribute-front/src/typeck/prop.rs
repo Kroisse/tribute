@@ -719,11 +719,6 @@ pub(crate) fn row_shape(cfg: TypeGen) -> BoxedStrategy<RowShape> {
     row_with(cfg, args)
 }
 
-/// Strategy for a single effect under `cfg`.
-pub(crate) fn ability_instance_shape(cfg: TypeGen) -> BoxedStrategy<AbilityInstanceShape> {
-    effect_with(row_args(cfg, &type_shape(TypeGen { depth: 1, ..cfg })))
-}
-
 /// Strategy for a row together with a permutation of its effects.
 pub(crate) fn row_and_shuffle(cfg: TypeGen) -> BoxedStrategy<(RowShape, RowShape)> {
     row_shape(cfg)

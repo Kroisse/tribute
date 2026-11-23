@@ -330,13 +330,7 @@ impl<'db> TypeChecker<'db> {
 
     /// Report a missing part of a function signature, typed as an error.
     fn missing_signature_type(&self, node: crate::ast::NodeId, message: String) -> Type<'db> {
-        NodeDiagnostic::new(
-            message,
-            node,
-            DiagnosticSeverity::Error,
-            CompilationPhase::TypeChecking,
-        )
-        .accumulate(self.db());
+        self.report_type_error(node, message);
         Type::new(self.db(), TypeKind::Error)
     }
 
@@ -809,13 +803,7 @@ impl<'db> TypeChecker<'db> {
         use crate::ast::TypeAnnotationKind;
 
         let report = |ann: &crate::ast::TypeAnnotation, message: String| {
-            NodeDiagnostic::new(
-                message,
-                ann.id,
-                DiagnosticSeverity::Error,
-                CompilationPhase::TypeChecking,
-            )
-            .accumulate(self.db());
+            self.report_type_error(ann.id, message);
         };
         let mut rest = None;
         let mut concrete = Vec::new();
@@ -935,25 +923,9 @@ impl<'db> TypeChecker<'db> {
 
     /// Convert a type name to a primitive type or named type.
     fn primitive_or_named_type(&self, name: Symbol) -> Type<'db> {
-        if name == "Int" {
-            self.env.int_type()
-        } else if name == "Nat" {
-            self.env.nat_type()
-        } else if name == "Float" {
-            self.env.float_type()
-        } else if name == "Bool" {
-            self.env.bool_type()
-        } else if name == "Bytes" {
-            self.env.bytes_type()
-        } else if name == "Rune" {
-            self.env.rune_type()
-        } else if name == "Nil" {
-            self.env.nil_type()
-        } else if name == "Never" {
-            self.env.never_type()
-        } else {
+        self.env.primitive_type(&name).unwrap_or_else(|| {
             self.env
                 .named_type_in_scope(SymbolPath::new([name]), vec![], self.current_prefix())
-        }
+        })
     }
 }

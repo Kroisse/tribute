@@ -1267,26 +1267,6 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
             .add_row_eq_at(r1, r2, ConstraintOrigin { node_id, kind });
     }
 
-    /// Constrain that inferred_effect is subsumed by expected_effect.
-    ///
-    /// In row-polymorphic effect systems, this means the inferred effects
-    /// should be a subset of the expected effects. For now, we use equality
-    /// constraint which is more restrictive but simpler.
-    ///
-    /// This is used when checking lambdas against expected function types:
-    /// if the expected type has effects, the lambda's effect should match.
-    ///
-    /// TODO: Implement proper row subsumption for higher-order effects.
-    pub fn constrain_effect_subtype(
-        &mut self,
-        inferred: AbilityRow<'db>,
-        expected: AbilityRow<'db>,
-    ) {
-        // For simplicity, use row equality.
-        // A more sophisticated system would handle row extension/subsumption.
-        self.solve.constraints.add_row_eq(inferred, expected);
-    }
-
     /// Take the constraint set, leaving an empty set.
     pub fn take_constraints(&mut self) -> ConstraintSet<'db> {
         let mut constraints = std::mem::take(&mut self.solve.constraints);
@@ -1513,6 +1493,11 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
     /// Create the Never (bottom) type.
     pub fn never_type(&self) -> Type<'db> {
         self.env.never_type()
+    }
+
+    /// The primitive type a type name denotes, if it names one.
+    pub fn primitive_type(&self, name: &Symbol) -> Option<Type<'db>> {
+        self.env.primitive_type(name)
     }
 
     /// Create an error type.

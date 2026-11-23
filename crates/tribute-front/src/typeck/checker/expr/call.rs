@@ -1,15 +1,12 @@
 //! Variable references, calls, and method selection.
 
-use salsa::Accumulator;
-
-use tribute_core::{CompilationPhase, DiagnosticSeverity};
 use trunk_ir::SymbolPath;
 
 use crate::ast::{
     AbilityInstance, AbilityRow, Candidates, Expr, ExprKind, ModulePath, NodeId, ResolvedRef, Type,
     TypeKind,
 };
-use crate::typeck::checker::{NodeDiagnostic, TypeChecker};
+use crate::typeck::checker::TypeChecker;
 use crate::typeck::constraint::ConstraintOriginKind;
 use crate::typeck::func_context::FunctionInferenceContext;
 use crate::typeck::solver::TypeSolver;
@@ -106,16 +103,13 @@ impl<'db> TypeChecker<'db> {
         expected: &str,
     ) -> Type<'db> {
         if ctx.mark_module_value_reported(node) {
-            NodeDiagnostic::new(
+            self.report_type_error(
+                node,
                 format!(
                     "expected {expected}, found module `{}`",
                     self.names().path(path.segments(self.db()))
                 ),
-                node,
-                DiagnosticSeverity::Error,
-                CompilationPhase::TypeChecking,
-            )
-            .accumulate(self.db());
+            );
         }
         ctx.error_type()
     }
@@ -626,16 +620,13 @@ impl<'db> TypeChecker<'db> {
             }
             _ => (params, args, ""),
         };
-        NodeDiagnostic::new(
+        self.report_type_error(
+            node,
             format!(
                 "call arity mismatch: expected {params} argument{}{receiver}, found {args}",
                 if params == 1 { "" } else { "s" }
             ),
-            node,
-            DiagnosticSeverity::Error,
-            CompilationPhase::TypeChecking,
-        )
-        .accumulate(self.db());
+        );
     }
 
     /// Select the function a call names among the functions name resolution

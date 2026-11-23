@@ -147,8 +147,7 @@ impl<'db> TypeChecker<'db> {
         } in bindings
         {
             let scheme = if should_generalize {
-                let retained = solver.row_unions_for_type(ty);
-                let removals = solver.row_removals_for_type(ty);
+                let (retained, removals) = solver.row_relations_for_type(ty);
                 let (_, union_rows) = solver.row_union_variables(&retained);
                 let (_, removed_rows) = solver.row_removal_variables(&removals);
                 let no_types = HashMap::default();

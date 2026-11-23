@@ -119,17 +119,6 @@ pub fn substitute_row_binders<'db>(
     ty.fold_with(&mut RowBinderSubst { db, binders, rows })
 }
 
-/// Substitute BoundVars within an ability row.
-///
-/// Returns [`BoundVarOutOfBounds`] if a BoundVar index exceeds `subst.len()`.
-pub fn substitute_ability_row<'db>(
-    db: &'db dyn salsa::Database,
-    row: AbilityRow<'db>,
-    subst: &[Type<'db>],
-) -> Result<AbilityRow<'db>, BoundVarOutOfBounds> {
-    row.try_fold_with(&mut BoundVarSubst::new(db, subst))
-}
-
 /// One instantiation mapping is shared by the signature and its retained rows.
 pub struct SchemeInstance<'db> {
     pub ty: Type<'db>,
@@ -215,14 +204,6 @@ pub fn instantiate_with_arguments<'db>(
 /// Replaces BoundVars with fresh UniVars from the solver. This is similar to
 /// `FunctionInferenceContext::instantiate_scheme` but works with the solver's
 /// type variable allocation instead of the context's.
-pub fn instantiate_scheme_for_solver<'db>(
-    db: &'db dyn salsa::Database,
-    scheme: TypeScheme<'db>,
-    solver: &mut super::solver::TypeSolver<'db>,
-) -> Type<'db> {
-    instantiate_scheme_details_for_solver(db, scheme, solver).ty
-}
-
 pub fn instantiate_scheme_details_for_solver<'db>(
     db: &'db dyn salsa::Database,
     scheme: TypeScheme<'db>,
@@ -398,8 +379,8 @@ mod tests {
         );
         let mut solver = TypeSolver::new(db);
 
-        let first = instantiate_scheme_for_solver(db, scheme, &mut solver);
-        let second = instantiate_scheme_for_solver(db, scheme, &mut solver);
+        let first = instantiate_scheme_details_for_solver(db, scheme, &mut solver).ty;
+        let second = instantiate_scheme_details_for_solver(db, scheme, &mut solver).ty;
 
         let row_tails = |ty: Type<'_>| {
             let TypeKind::Tuple(elements) = ty.kind(db) else {
@@ -509,7 +490,7 @@ mod laws {
             let ty = ty.build(&db);
             prop_assert_eq!(subst(&db, ty, &args), Ok(ty));
             let row = row.build(&db);
-            prop_assert_eq!(substitute_ability_row(&db, row, &args), Ok(row));
+            prop_assert_eq!(row.try_fold_with(&mut BoundVarSubst::new(&db, &args)), Ok(row));
         }
 
         /// Substituting each bound variable by itself is the identity.
