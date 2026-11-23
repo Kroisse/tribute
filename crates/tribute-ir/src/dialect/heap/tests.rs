@@ -317,6 +317,31 @@ fn box_operations_that_do_not_fit_their_layout_are_rejected() {
 }
 
 #[test]
+fn an_operation_on_a_box_of_a_key_without_a_body_is_rejected() {
+    for body in [
+        "%1 = heap.variant_is %0 {tag = 0} : core.i1",
+        "%1 = heap.variant_tag %0 : heap.box<adt.enum<\"Ghost\">>",
+        "%1 = heap.variant_get %0 {field = 0, tag = 0} : core.i32",
+    ] {
+        let text = format!(
+            r#"core.module @test {{
+  func.func @f(%0: heap.box<adt.enum<"Ghost">>) {{
+    {body}
+    func.return
+  }}
+}}
+"#
+        );
+        let (ctx, module) = parse(&text);
+        let op = body_ops(&ctx, module)[0];
+        assert!(
+            !OpDef::of(&ctx, op).unwrap().verify(&ctx, op).is_empty(),
+            "accepted: {body}"
+        );
+    }
+}
+
+#[test]
 fn a_box_of_a_non_layout_is_not_a_box() {
     let mut ctx = IrContext::new();
     let i32_ty = trunk_ir::types::TypeDataBuilder::new("core.i32").intern(&mut ctx);

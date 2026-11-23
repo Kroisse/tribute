@@ -545,18 +545,27 @@ fn box_of_type(ctx: &IrContext, ty: TypeRef) -> Result<Box, BoxError> {
 }
 
 /// The struct layout of `boxed`: a literal layout, a key, or a row
-/// instance's `def`.
+/// instance's `def`. A key must have a body to read its fields from.
 fn struct_layout(ctx: &IrContext, boxed: Box) -> Result<Struct, BoxError> {
-    adt::layout_of(ctx, boxed.layout(ctx))
+    let layout = adt::layout_of(ctx, boxed.layout(ctx))
         .and_then(|layout| Struct::from_type_ref(ctx, layout))
-        .ok_or(BoxError::LayoutKind { kind: "adt.struct" })
+        .ok_or(BoxError::LayoutKind { kind: "adt.struct" })?;
+    if layout.is_nominal(ctx) && layout.body(ctx).is_none() {
+        return Err(BoxError::NoBody);
+    }
+    Ok(layout)
 }
 
-/// The enum layout of `boxed`: a key or a row instance's `def`.
+/// The enum layout of `boxed`: a key or a row instance's `def`, with a
+/// body to read its variants from.
 fn enum_layout(ctx: &IrContext, boxed: Box) -> Result<Enum, BoxError> {
-    adt::layout_of(ctx, boxed.layout(ctx))
+    let layout = adt::layout_of(ctx, boxed.layout(ctx))
         .and_then(|layout| Enum::from_type_ref(ctx, layout))
-        .ok_or(BoxError::LayoutKind { kind: "adt.enum" })
+        .ok_or(BoxError::LayoutKind { kind: "adt.enum" })?;
+    if layout.is_nominal(ctx) && layout.body(ctx).is_none() {
+        return Err(BoxError::NoBody);
+    }
+    Ok(layout)
 }
 
 /// The type of field `field` of the struct objects `boxed` refers to, as
@@ -631,11 +640,7 @@ fn verify_fields(
 impl Verify for StructNew {
     fn verify(&self, ctx: &IrContext) -> Result<(), VerificationError> {
         let boxed = non_null_box(ctx, self.result(ctx))?;
-        let layout = struct_layout(ctx, boxed)?;
-        if layout.is_nominal(ctx) && layout.body(ctx).is_none() {
-            return Err(BoxError::NoBody.into());
-        }
-        let count = layout.fields(ctx).len();
+        let count = struct_layout(ctx, boxed)?.fields(ctx).len();
         Ok(verify_fields(ctx, self.fields(ctx), count, |field| {
             struct_field(ctx, boxed, field)
         })?)
@@ -646,9 +651,6 @@ impl Verify for VariantNew {
     fn verify(&self, ctx: &IrContext) -> Result<(), VerificationError> {
         let boxed = non_null_box(ctx, self.result(ctx))?;
         let layout = enum_layout(ctx, boxed)?;
-        if layout.is_nominal(ctx) && layout.body(ctx).is_none() {
-            return Err(BoxError::NoBody.into());
-        }
         let tag = variant_position(ctx, layout, self.tag(ctx))?;
         let count = layout.variant_fields(ctx, tag).map_or(0, <[_]>::len);
         Ok(verify_fields(ctx, self.fields(ctx), count, |field| {
