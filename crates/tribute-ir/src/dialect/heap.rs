@@ -77,8 +77,12 @@ mod heap {
     ///   types, seen through the box's layout with its row arguments.
     /// - **Ownership:** each managed field operand moves its unit into its
     ///   field (`Initialize`). The result owns one unit.
-    /// - **Effects:** each evaluation allocates; the operation is not `Pure`.
+    /// - **Effects:** the object's identity is not observable, so the
+    ///   operation is `Pure`, as `adt.struct_new` is; so are the other
+    ///   allocations and updates of boxes. A cell's identity is observable,
+    ///   so `heap.cell_new` is not.
     #[implements(OperandOwnership)]
+    #[flags(Pure)]
     #[verify]
     #[asm_format("(" fields ")" attr_dict_bare ":" functional_type(fields, result))]
     fn struct_new(fields: Variadic<_>) -> Value<impl Box> {}
@@ -95,6 +99,7 @@ mod heap {
     ///   are that variant's, as for `heap.struct_new`.
     /// - **Ownership:** as for `heap.struct_new` (`Initialize`).
     #[implements(OperandOwnership)]
+    #[flags(Pure)]
     #[verify]
     #[asm_format(tag "(" fields ")" attr_dict_bare ":" functional_type(fields, result))]
     fn variant_new(tag: Attr<Index>, fields: Variadic<_>) -> Value<impl Box> {}
@@ -134,6 +139,7 @@ mod heap {
     ///   was its only reference, and otherwise copies it
     ///   (`design/rc.md` § "1. Typed ownership and RTTI plan").
     #[implements(OperandOwnership)]
+    #[flags(Pure)]
     #[verify]
     #[asm_format(source "," value attr_dict_bare ":" type(result))]
     fn struct_update<B: Box>(field: Attr<u32>, source: Value<B>, value: Value<_>) -> Value<B> {}
@@ -199,6 +205,7 @@ mod heap {
     /// - **Ownership:** borrows `initial`; the operation acquires a unit
     ///   for every element it fills.
     #[implements(OperandOwnership)]
+    #[flags(Pure)]
     #[verify]
     #[asm_format(length "," initial attr_dict_bare ":" type(result))]
     fn array_new<B, A>(length: Value<Index>, initial: Value<A::Element>) -> Value<B>
@@ -220,6 +227,7 @@ mod heap {
     /// - **Ownership:** each managed element moves its unit into the array
     ///   (`Initialize`).
     #[implements(OperandOwnership)]
+    #[flags(Pure)]
     #[verify]
     #[asm_format(elements attr_dict_bare ":" type(result))]
     fn array_of<B, A>(elements: Variadic<A::Element>) -> Value<B>
@@ -244,6 +252,7 @@ mod heap {
     ///   every managed element it copies from it. Each managed operand of
     ///   `elements` moves its unit into the new array (`Initialize`).
     #[implements(OperandOwnership)]
+    #[flags(Pure)]
     #[verify]
     #[asm_format(source "[" start "," end "]" "(" elements ")" attr_dict ":" type(result))]
     fn array_splice<B, A>(
@@ -297,6 +306,7 @@ mod heap {
     ///   result owns one unit. Lowering may reuse the object as for
     ///   `heap.struct_update`.
     #[implements(OperandOwnership)]
+    #[flags(Pure)]
     #[verify]
     #[asm_format(source "," index "," value attr_dict_bare ":" type(result))]
     fn array_set<B, A>(source: Value<B>, index: Value<Index>, value: Value<A::Element>) -> Value<B>
@@ -336,6 +346,7 @@ mod heap {
     ///
     /// - **Shape:** the result is a non-null box of an `adt.array` of
     ///   `core.i8`, and `value` holds one byte per element.
+    #[flags(Pure)]
     #[verify]
     #[asm_format(value attr_dict_bare ":" type(result))]
     fn array_const<B, A>(value: Attr<Dense>) -> Value<B>
@@ -471,6 +482,8 @@ pub enum BoxError {
     NoBody,
     #[display("expected a non-null box")]
     Nullable,
+    #[display("a non-null box is written without `nullable`, not with `nullable = false`")]
+    NotNullSpelling,
     #[display("expected a nullable box")]
     NotNullable,
     #[display("field {field} is not a field of the layout")]
@@ -501,6 +514,10 @@ impl VerifyType for Box {
             || Array::from_type_ref(ctx, layout).is_some();
         if !is_layout {
             return Err(BoxError::Layout.into());
+        }
+        // Absence is the one spelling of a non-null box.
+        if ctx.type_attrs(ty).get_bool("nullable") == Some(false) {
+            return Err(BoxError::NotNullSpelling.into());
         }
         Ok(Self(ty))
     }

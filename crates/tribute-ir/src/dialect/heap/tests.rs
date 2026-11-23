@@ -252,6 +252,73 @@ fn a_box_of_a_non_layout_is_not_a_box() {
 }
 
 #[test]
+fn a_non_null_box_has_one_spelling() {
+    let (mut ctx, module) = parse(BOXES);
+    let new = StructNew::from_op(&ctx, all_body_ops(&ctx, module)[0]).unwrap();
+    let point = Box::from_type_ref(&ctx, ctx.value_ty(new.result(&ctx)))
+        .unwrap()
+        .layout(&ctx);
+    assert!(Box::params(point).nullable(true).intern(&mut ctx).is_ok());
+    assert!(Box::params(point).nullable(false).intern(&mut ctx).is_err());
+}
+
+#[test]
+fn a_capture_box_and_its_base_box_cast_both_ways() {
+    let text = r#"core.module @test {
+  !base = adt.struct<(core.ptr), {layout = "closure"}>
+  !captures = adt.struct<(core.ptr, core.i32), {closure_base = !base, layout = "closure_captures"}>
+  func.func @f(%0: heap.box<!captures>) {
+    %1 = heap.cast %0 : heap.box<!captures> to heap.box<!base>
+    %2 = heap.cast %1 : heap.box<!base> to heap.box<!captures>
+    func.return
+  }
+}
+"#;
+    let (ctx, module) = parse(text);
+    for op in &body_ops(&ctx, module)[..2] {
+        let violations = OpDef::of(&ctx, *op).unwrap().verify(&ctx, *op);
+        assert!(violations.is_empty(), "{violations:?}");
+    }
+}
+
+#[test]
+fn a_read_through_a_row_instance_sees_its_row_arguments() {
+    let text = r#"core.module @test {
+  !Callback = adt.struct<"Callback"['a0], (tribute_control.func_sig<(core.i64) -> core.i64 row(@Log | 'a0)>)>
+  !Ticked = adt.struct<"Callback"[row(@Tick)]>
+  func.func @f(%0: heap.box<!Ticked>) {
+    func.return
+  }
+}
+"#;
+    let (mut ctx, module) = parse(text);
+    let func = trunk_ir::dialect::func::Func::from_op(&ctx, module.ops(&ctx)[0]).unwrap();
+    let entry = ctx.region(func.body(&ctx)).blocks[0];
+    let boxed = ctx.block_args(entry)[0];
+    let ticked = Box::from_type_ref(&ctx, ctx.value_ty(boxed))
+        .unwrap()
+        .layout(&ctx);
+    let substituted = adt::field_type(&mut ctx, ticked, 0).unwrap();
+    let callback = adt::layout_of(&ctx, ticked).unwrap();
+    let declared = Struct::from_type_ref(&ctx, callback)
+        .unwrap()
+        .field_type(&ctx, 0)
+        .unwrap();
+    assert_ne!(substituted, declared);
+    let location = ctx.op(module.op()).location;
+    for (result, accepted) in [(substituted, true), (declared, false)] {
+        let get = StructGet::operands(boxed)
+            .field(0)
+            .results(result)
+            .build(&mut ctx, location);
+        let violations = OpDef::of(&ctx, get.op_ref())
+            .unwrap()
+            .verify(&ctx, get.op_ref());
+        assert_eq!(violations.is_empty(), accepted, "{violations:?}");
+    }
+}
+
+#[test]
 fn a_value_of_another_type_is_rejected() {
     for text in [
         r#"core.module @test {
