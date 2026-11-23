@@ -342,7 +342,10 @@ fn build_aliases(
                 }
                 continue;
             }
-            if !(adt::RefCast::matches(ctx, op) || core::UnrealizedConversionCast::matches(ctx, op))
+            // Every operation whose result is its operand as another type,
+            // such as `adt.ref_cast`, `heap.cast`, and an unrealized cast.
+            if tribute_ir::dialect::tribute_rtti::DynOperandOwnership::role(ctx, op, 0)
+                != Some(OperandRole::Forward)
             {
                 continue;
             }
@@ -523,7 +526,11 @@ fn validate_projection_contract(
     result: ValueRef,
     managed_layouts: &HashSet<TypeRef>,
 ) -> Result<(), OwnershipPlanError> {
-    let source_ty = ctx.value_ty(source);
+    let mut source_ty = ctx.value_ty(source);
+    // A box operand reads an object of its layout.
+    if let Some(boxed) = tribute_ir::dialect::heap::Box::from_type_ref(ctx, source_ty) {
+        source_ty = boxed.layout(ctx);
+    }
     let source_data = ctx.get_type(source_ty);
     let raw_source = source_data.name.is(ctx, "core.ptr");
     let result_managed = is_managed_value(ctx, result, managed_layouts);

@@ -906,6 +906,7 @@ const LAST_USE_MOVES: &str = r#"core.module @test {
 
 const BOX_UPDATES: &str = r#"core.module @test {
   !Point = adt.struct<"Point", (core.i32, tribute_rt.anyref)>
+  !Shape = adt.enum<"Shape", [(), (core.i32)]>
   func.func @update_last(%point: heap.box<!Point>, %x: core.i32) -> heap.box<!Point> {
     %updated = heap.struct_update %point, %x {field = 0} : heap.box<!Point>
     func.return %updated
@@ -914,6 +915,18 @@ const BOX_UPDATES: &str = r#"core.module @test {
     %first = heap.struct_update %point, %x {field = 0} : heap.box<!Point>
     %second = heap.struct_update %point, %x {field = 0} : heap.box<!Point>
     func.return %second
+  }
+  func.func @reads(%point: heap.box<!Point>, %shape: heap.box<!Shape>, %array: heap.box<adt.array<tribute_rt.anyref>>, %i: core.index) -> core.i32 {
+    %x = heap.struct_get %point {field = 0} : core.i32
+    %any = heap.struct_get %point {field = 1} : tribute_rt.anyref
+    %y = heap.variant_get %shape {field = 0, tag = 1} : core.i32
+    %element = heap.array_get %array, %i : tribute_rt.anyref
+    func.return %x
+  }
+  func.func @is_null(%point: heap.box<!Point>) -> core.i1 {
+    %nullable = heap.cast %point : heap.box<!Point> to heap.box<!Point, {nullable = true}>
+    %null = heap.is_null %nullable : heap.box<!Point, {nullable = true}>
+    func.return %null
   }
 }"#;
 
@@ -956,6 +969,23 @@ fn an_update_consumes_a_unit_of_its_source_box() {
         final_releases(update_twice, ctx.op_result(first, 0)).len(),
         1
     );
+}
+
+#[test]
+fn box_reads_project_and_a_box_cast_shares_its_source_unit() {
+    let (ctx, _module, plan) = build(BOX_UPDATES);
+    let function = |name: &'static str| plan.function(&SymbolPath::new([name])).unwrap();
+
+    // Reads through a box are projections, which hold no unit of their own.
+    let reads = function("reads");
+    for index in [1, 3] {
+        let read = ctx.op_result(entry_op(&ctx, &plan, "reads", index), 0);
+        assert!(final_releases(reads, read).is_empty());
+    }
+
+    // The cast result is its source, so it is never released on its own.
+    let cast = ctx.op_result(entry_op(&ctx, &plan, "is_null", 0), 0);
+    assert!(final_releases(function("is_null"), cast).is_empty());
 }
 
 /// The `index`th operation of a fixture function's entry block.
