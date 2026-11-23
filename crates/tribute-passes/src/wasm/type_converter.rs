@@ -301,12 +301,10 @@ impl BuiltinTypes {
             return Some(self.closure);
         }
         // A cell is the one-field struct that holds its value
-        // (`super::heap_cells`), whose field converts like any other.
+        // (`super::heap_cells`). The substitution expands each replacement,
+        // so that field converts like any other.
         if let Some(cell) = tribute_ir::dialect::heap::Cell::from_type_ref(ctx, ty) {
             let contents = cell.contents(ctx);
-            let contents =
-                crate::closure_lower::TypeSubstitution::new(ctx, |ctx, ty| self.replace(ctx, ty))
-                    .convert_type(contents);
             return Some(super::heap_cells::cell_layout(ctx, contents));
         }
         let name = ctx.get_type(ty).name;
@@ -337,7 +335,7 @@ pub(crate) fn convert_builtin_layouts(ctx: &mut IrContext, module: trunk_ir::rew
         anyref_ty: wasm_dialect::Anyref::params().intern(ctx).as_type_ref(),
         i31ref_ty: wasm_dialect::I31ref::params().intern(ctx).as_type_ref(),
     };
-    crate::closure_lower::substitute_module_types(ctx, module, "wasm", move |ctx, ty| {
+    crate::closure_lower::substitute_module_types_expanding(ctx, module, "wasm", move |ctx, ty| {
         builtins.replace(ctx, ty)
     });
 }
@@ -942,6 +940,35 @@ mod tests {
             "{printed}"
         );
         assert!(printed.contains(": (wasm.anyref) -> core.i32"), "{printed}");
+    }
+
+    #[test]
+    fn a_cell_holds_the_new_key_of_a_changed_layout() {
+        let mut ctx = IrContext::new();
+        let module = trunk_ir::parser::parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  !Answer = adt.struct<"Answer", (tribute_rt.int)>
+  !AnswerRef = adt.struct<"Answer">
+  func.func @f(%cell: heap.cell<!AnswerRef>) -> !AnswerRef {
+    %answer = heap.cell_get %cell : !AnswerRef
+    func.return %answer
+  }
+}"#,
+        );
+
+        super::super::heap_cells::lower(&mut ctx, module);
+        convert_builtin_layouts(&mut ctx, module);
+
+        let printed = module.op().display(&ctx).to_string();
+        // The cell's type and the layout its read names are one struct that
+        // holds the changed layout's new key.
+        assert!(!printed.contains("\"Answer\">"), "{printed}");
+        assert!(!printed.contains("heap."), "{printed}");
+        let function = trunk_ir::dialect::func::Func::from_op(&ctx, module.ops(&ctx)[0]).unwrap();
+        let block = ctx.region(function.body(&ctx)).blocks[0];
+        let get = adt::StructGet::from_op(&ctx, ctx.block(block).ops[0]).unwrap();
+        assert_eq!(ctx.block(block).args[0].ty, get.r#type(&ctx));
     }
 
     #[test]
