@@ -64,6 +64,22 @@ pub(crate) struct HandleBodyRows<'db> {
     pub(crate) body: AbilityRow<'db>,
 }
 
+impl<'db> HandleBodyRows<'db> {
+    fn resolved(self, resolve: impl Fn(AbilityRow<'db>) -> AbilityRow<'db>) -> Self {
+        Self {
+            handled: resolve(self.handled),
+            body: resolve(self.body),
+        }
+    }
+
+    /// Whether the body keeps the enclosing handler of `instance`: the body
+    /// row names the instance and the body does not handle it. The handle
+    /// masks every other enclosing instance.
+    fn keeps(self, db: &'db dyn salsa::Database, instance: &AbilityInstance<'db>) -> bool {
+        self.body.instances(db).contains(instance) && !self.handled.instances(db).contains(instance)
+    }
+}
+
 const ROWS_SET: &str = "a handle body's rows are set before plans are computed";
 
 /// The evidence a piece of code runs with.
@@ -343,15 +359,10 @@ impl<'db> EvidenceTracker<'db> {
                         unreachable!("a handle site names a handle body scope");
                     };
                     let (parent, _) = self.explicit(db, *parent, &resolve, &mut explicit);
-                    let rows = rows.expect(ROWS_SET);
-                    let handled = resolve(rows.handled);
-                    let named = resolve(rows.body);
+                    let rows = rows.expect(ROWS_SET).resolved(&resolve);
                     parent
                         .into_iter()
-                        .filter(|instance| {
-                            handled.instances(db).contains(instance)
-                                || !named.instances(db).contains(instance)
-                        })
+                        .filter(|instance| !rows.keeps(db, instance))
                         .map(EvidenceStep::Mask)
                         .collect()
                 }
@@ -424,13 +435,12 @@ impl<'db> EvidenceTracker<'db> {
             EvidenceScope::Callable(None) => (Vec::new(), None),
             EvidenceScope::HandleBody { parent, rows } => {
                 let (parent, tail) = self.explicit(db, *parent, resolve, memo);
-                let rows = rows.expect(ROWS_SET);
-                let handled = resolve(rows.handled).instances(db).to_vec();
-                let named = resolve(rows.body);
+                let rows = rows.expect(ROWS_SET).resolved(resolve);
                 let kept = parent
                     .into_iter()
-                    .filter(|instance| named.instances(db).contains(instance));
-                (unique(handled.into_iter().chain(kept)), tail)
+                    .filter(|instance| rows.keeps(db, instance));
+                let handled = rows.handled.instances(db).iter().cloned();
+                (unique(handled.chain(kept)), tail)
             }
         };
         memo.insert(scope, found.clone());
