@@ -186,6 +186,64 @@ fn updates_consume_their_source_and_reads_project() {
     assert_eq!(roles(cast), [OperandRole::Forward]);
 }
 
+#[test]
+fn every_box_operation_states_the_role_of_each_operand() {
+    use crate::dialect::tribute_rtti::{DynOperandOwnership, OperandRole};
+
+    let (ctx, module) = parse(BOXES);
+    let ops = all_body_ops(&ctx, module);
+    let roles = |op| {
+        DynOperandOwnership::get(&ctx, op)
+            .map(|op| op.operand_roles(&ctx).unwrap())
+            .unwrap_or_default()
+    };
+    let initialize = |role: &OperandRole| matches!(role, OperandRole::Initialize { .. });
+    for &op in &ops {
+        let roles = roles(op);
+        if DynOperandOwnership::is_implemented(&ctx, op) {
+            assert_eq!(
+                roles.len(),
+                ctx.op_operands(op).len(),
+                "{}",
+                op.display(&ctx)
+            );
+        }
+        if StructNew::matches(&ctx, op) || VariantNew::matches(&ctx, op) {
+            assert!(roles.iter().all(initialize), "{}", op.display(&ctx));
+        } else if VariantGet::matches(&ctx, op) {
+            assert!(matches!(roles[..], [OperandRole::Project { .. }]));
+        } else if ArrayOf::matches(&ctx, op) {
+            assert!(roles.iter().all(initialize));
+        } else if ArraySplice::matches(&ctx, op) {
+            assert!(matches!(
+                roles[..],
+                [
+                    OperandRole::Borrow,
+                    OperandRole::Borrow,
+                    OperandRole::Borrow,
+                    OperandRole::Initialize { .. }
+                ]
+            ));
+        } else if ArrayGet::matches(&ctx, op) {
+            assert!(matches!(
+                roles[..],
+                [OperandRole::Project { .. }, OperandRole::Borrow]
+            ));
+        } else if ArrayNew::matches(&ctx, op)
+            || ArrayLen::matches(&ctx, op)
+            || VariantIs::matches(&ctx, op)
+            || VariantTag::matches(&ctx, op)
+            || IsNull::matches(&ctx, op)
+        {
+            assert!(
+                roles.iter().all(|role| *role == OperandRole::Borrow),
+                "{}",
+                op.display(&ctx)
+            );
+        }
+    }
+}
+
 /// The function body of a module that declares `!Point`, `!Shape`, and the
 /// nominal `!Node`.
 fn rejected(body: &str) -> String {
@@ -233,6 +291,20 @@ fn box_operations_that_do_not_fit_their_layout_are_rejected() {
         "%5 = heap.cast %1 : heap.box<!Point> to heap.box<!Point>",
         // An array operation on a struct.
         "%5 = heap.array_len %1 : heap.box<!Point>",
+        // A variant test and a variant build with a tag or fields the enum
+        // does not have.
+        "%5 = heap.variant_is %2 {tag = 2} : core.i1",
+        "%5 = heap.variant_new 1() : () -> heap.box<!Shape>",
+        // A variant read of a struct, and a struct read of an enum.
+        "%5 = heap.variant_get %1 {field = 0, tag = 0} : core.f64",
+        "%5 = heap.struct_get %2 {field = 0} : core.f64",
+        // An update and an array read through a nullable box.
+        "%5 = heap.struct_update %3, %0 {field = 0} : heap.box<!Node, {nullable = true}>",
+        "%5 = heap.array_get %3, %0 : core.i32",
+        // An array built as a nullable box.
+        "%5 = heap.array_of : heap.box<adt.array<core.i32>, {nullable = true}>",
+        // A cast that changes the layout and the nullability at once.
+        "%5 = heap.cast %3 : heap.box<!Node, {nullable = true}> to heap.box<!Point>",
     ] {
         let text = rejected(body);
         let (ctx, module) = parse(&text);
