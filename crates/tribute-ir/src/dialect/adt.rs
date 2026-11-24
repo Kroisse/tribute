@@ -388,8 +388,11 @@ mod adt {
     /// `source`, and the operation acquires a unit for every managed element
     /// it copies from it. A managed `value` moves its unit into the new
     /// array (`Initialize`).
+    ///
+    /// It is not `Pure`: its bounds trap is reachable
+    /// (`design/tribute-dialects.md` § "Trap"), so dead code elimination
+    /// keeps an update whose result is unused.
     #[implements(OperandOwnership)]
-    #[flags(Pure)]
     #[asm_format(source "," index "," value attr_dict_bare ":" type(result))]
     fn array_set<A: Array>(
         source: Value<A>,
@@ -2332,6 +2335,18 @@ mod tests {
             ),
         );
         trunk_ir::validation::validate_op_schemas(&ctx, module.op()).is_ok()
+    }
+
+    #[test]
+    fn dead_code_elimination_keeps_an_unused_array_update() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            "core.module @test {\n  !A = adt.array<core.i32>\n  func.func @f(%a: !A, %i: core.index, %n: core.i32) -> core.nil {\n    %set = adt.array_set %a, %i, %n : !A\n    func.return\n  }\n}",
+        );
+        trunk_ir::transforms::eliminate_dead_code(&mut ctx, module, Default::default());
+        let text = module.op().display(&ctx).to_string();
+        assert!(text.contains("adt.array_set %"), "{text}");
     }
 
     #[test]
