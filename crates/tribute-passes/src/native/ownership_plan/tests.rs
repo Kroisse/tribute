@@ -538,7 +538,7 @@ fn internal_closure_raw_pointer_handoff_outside_native_evidence_fails_closed() {
   }
   func.func @install() -> core.nil {
     %code = arith.constant 0 : core.i32
-    %env = adt.ref_null : tribute_rt.anyref
+    %env = tribute_rt.null : tribute_rt.anyref
     %closure = adt.struct_new(%code) : (core.i32) -> !_closure
     %raw = core.unrealized_conversion_cast %closure : !_closure to core.ptr
     %result = func.call @escape(%raw) : (core.ptr) -> core.nil
@@ -556,7 +556,7 @@ fn into_raw_transfers_one_exact_closure_unit_without_materializing_rc() {
   !_closure = adt.struct<(tribute_rt.convention_table_ref), {layout = "closure"}>
   func.func @install() -> core.nil {
     %code = arith.constant 0 : core.i32
-    %env = adt.ref_null : tribute_rt.anyref
+    %env = tribute_rt.null : tribute_rt.anyref
     %closure = adt.struct_new(%code) : (core.i32) -> !_closure
     %raw = tribute_rt.into_raw %closure : core.ptr
     func.return
@@ -591,7 +591,7 @@ fn into_raw_fixture(transfers: &str) -> String {
   !_closure = adt.struct<(tribute_rt.convention_table_ref), {layout = "closure"}>
   func.func @transfers() -> core.nil {
     %code = arith.constant 0 : core.i32
-    %env = adt.ref_null : tribute_rt.anyref
+    %env = tribute_rt.null : tribute_rt.anyref
     %closure = adt.struct_new(%code) : (core.i32) -> !_closure
 "#,
         transfers,
@@ -710,7 +710,7 @@ fn into_raw_group_validation_ignores_preserved_field_borrow_acquire() {
   !Owner = adt.struct<"Owner",(!_closure)>
   func.func @transfers() -> core.nil {
     %code = arith.constant 0 : core.i32
-    %env = adt.ref_null : tribute_rt.anyref
+    %env = tribute_rt.null : tribute_rt.anyref
     %stored = adt.struct_new(%code) : (core.i32) -> !_closure
     %owner = adt.struct_new(%stored) : (!_closure) -> !Owner
     %closure = adt.struct_get %owner {field = 0, type = !Owner} : !_closure
@@ -757,7 +757,7 @@ fn into_raw_rejects_non_transfer_and_cross_block_uses_before_mutation() {
   !_closure = adt.struct<(tribute_rt.convention_table_ref), {layout = "closure"}>
   func.func @later_use() -> !_closure {
     %code = arith.constant 0 : core.i32
-    %env = adt.ref_null : tribute_rt.anyref
+    %env = tribute_rt.null : tribute_rt.anyref
     %closure = adt.struct_new(%code) : (core.i32) -> !_closure
     %raw = tribute_rt.into_raw %closure : core.ptr
     func.return %closure
@@ -771,7 +771,7 @@ fn into_raw_rejects_non_transfer_and_cross_block_uses_before_mutation() {
   func.func @cross_block() -> core.nil {
     ^entry:
       %code = arith.constant 0 : core.i32
-      %env = adt.ref_null : tribute_rt.anyref
+      %env = tribute_rt.null : tribute_rt.anyref
       %closure = adt.struct_new(%code) : (core.i32) -> !_closure
       %first = tribute_rt.into_raw %closure : core.ptr
       cf.br [^next]

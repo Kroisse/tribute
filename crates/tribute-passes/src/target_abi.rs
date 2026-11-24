@@ -933,10 +933,7 @@ impl TerminalFunctions {
         let initial = if Self::slot_type(ctx, self.answer) != anyref_ty {
             core::NilValue::operands().build(ctx, location).op_ref()
         } else {
-            adt::RefNull::operands()
-                .results(anyref_ty)
-                .build(ctx, location)
-                .op_ref()
+            tribute_rt::Null::operands().build(ctx, location).op_ref()
         };
         ops.push(initial);
         let not_completed = arith::Constant::operands()

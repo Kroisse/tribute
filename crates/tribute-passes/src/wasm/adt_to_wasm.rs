@@ -47,7 +47,7 @@
 //! - `adt.array_len` -> `wasm.array_len`
 //!
 //! ## Reference Operations
-//! - `adt.ref_null` -> `wasm.ref_null`
+//! - `adt.ref_null` and `tribute_rt.null` -> `wasm.ref_null`
 //! - `adt.ref_is_null` -> `wasm.ref_is_null`
 //! - `adt.ref_cast` -> `wasm.ref_cast`
 //!
@@ -61,8 +61,9 @@
 //! operations before emission.
 
 use super::type_converter::gc_array_type;
-use tribute_ir::dialect::adt;
+use std::marker::PhantomData;
 use tribute_ir::dialect::adt::layout::get_enum_variants;
+use tribute_ir::dialect::{adt, tribute_rt};
 use trunk_ir::context::{IrContext, OpList, RegionList};
 use trunk_ir::dialect::core::{self, IntegerLike};
 use trunk_ir::dialect::wasm as wasm_dialect;
@@ -137,11 +138,12 @@ fn descriptor_operand(
     Some(constant.result(ctx))
 }
 
-/// Lower `adt.ref_null`, `adt.ref_is_null`, and `adt.ref_cast` to their
-/// Wasm operations, the `adt-references-to-wasm` pass.
+/// Lower `adt.ref_null`, `tribute_rt.null`, `adt.ref_is_null`, and
+/// `adt.ref_cast` to their Wasm operations, the `adt-references-to-wasm` pass.
 pub(crate) fn lower_references(ctx: &mut IrContext, module: Module) {
     PatternApplicator::new(TypeConverter::new())
-        .add_pattern(RefNullPattern)
+        .add_pattern(RefNullPattern::<adt::RefNull>(PhantomData))
+        .add_pattern(RefNullPattern::<tribute_rt::Null>(PhantomData))
         .add_pattern(RefIsNullPattern)
         .add_pattern(RefCastPattern)
         .apply_partial(ctx, module);
@@ -966,11 +968,12 @@ fn wasm_index(
     cast.result(ctx)
 }
 
-/// Pattern for `adt.ref_null` -> `wasm.ref_null`
-struct RefNullPattern;
+/// Pattern for a null reference, `adt.ref_null` or `tribute_rt.null`, ->
+/// `wasm.ref_null`
+struct RefNullPattern<Op>(PhantomData<Op>);
 
-impl OpRewritePattern for RefNullPattern {
-    type Op = adt::RefNull;
+impl<Op: DialectOp> OpRewritePattern for RefNullPattern<Op> {
+    type Op = Op;
 
     fn match_and_rewrite(
         &self,
@@ -980,7 +983,7 @@ impl OpRewritePattern for RefNullPattern {
     ) -> Option<()> {
         let op = ref_null.op_ref();
         let loc = ctx.op(op).location;
-        let result_ty = ref_null.result_ty(ctx);
+        let result_ty = ctx.op_result_types(op)[0];
 
         let new_op = wasm_gc_dialect::RefNull::operands()
             .target_type(result_ty)
