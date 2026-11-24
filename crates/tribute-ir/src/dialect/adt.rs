@@ -157,6 +157,30 @@ mod adt {
     #[asm_format(r#ref "," value attr_dict_bare)]
     fn struct_set(r#type: Attr<Type>, field: Attr<u32>, r#ref: Value<_>, value: Value<_>) {}
 
+    /// The struct value `source` with field `field` replaced by `value`.
+    /// `source` itself does not change.
+    ///
+    /// ```text
+    /// %q = adt.struct_update %p, %y {field = 1} : !Point
+    /// ```
+    ///
+    /// The struct layout is the one the type of `source` names, as for
+    /// `adt.struct_new`, and the result has that type. The verifier rejects
+    /// a type that names no struct layout, a nominal layout without a body,
+    /// a field the layout does not have, and a `value` that does not have
+    /// the field's type as the type of `source` sees it.
+    ///
+    /// Representation selection lowers the update of a boxed value to
+    /// `heap.struct_update` (`design/tribute-dialects.md` § "Operation").
+    ///
+    /// **Ownership:** consumes `source`. A managed `value` takes the place
+    /// of the replaced field (`design/rc.md` § "1. Typed ownership and RTTI
+    /// plan").
+    #[flags(Pure)]
+    #[verify]
+    #[asm_format(source "," value attr_dict_bare ":" type(result))]
+    fn struct_update<T>(field: Attr<u32>, source: Value<T>, value: Value<_>) -> Value<T> {}
+
     /// A new value of variant `tag` whose fields are `fields` in order, of
     /// the enum layout its result type names: a nominal layout's key or a
     /// row instance's `def` ([`VariantNew::layout`]).
@@ -1096,6 +1120,50 @@ impl trunk_ir::ops::Verify for StructNew {
             .map(|index| find_field_type(ctx, layout, result, index))
             .collect::<Vec<_>>();
         verify_construction_fields(ctx, fields, &expected, layout.fields(ctx).len())
+    }
+}
+
+/// An `adt.struct_update` whose `value` is not one of field `field`.
+#[derive(Debug, derive_more::Display, derive_more::Error)]
+pub enum StructUpdateError {
+    #[display("the struct layout has no field {field}")]
+    NoField { field: u32 },
+    #[display("the value has type {actual}, but field {field} has type {expected}")]
+    Type {
+        field: u32,
+        actual: String,
+        expected: String,
+    },
+}
+
+impl trunk_ir::ops::Verify for StructUpdate {
+    fn verify(&self, ctx: &IrContext) -> Result<(), trunk_ir::ops::VerificationError> {
+        let source = ctx.value_ty(self.source(ctx));
+        let Some(layout) = Struct::from_type_ref(ctx, layout_of(ctx, source).unwrap_or(source))
+        else {
+            return Err(ConstructionLayoutError { kind: "adt.struct" }.into());
+        };
+        if layout.is_nominal(ctx) && layout.body(ctx).is_none() {
+            return Err(ConstructionFieldError::NoBody.into());
+        }
+        let field = self.field(ctx);
+        if field as usize >= layout.fields(ctx).len() {
+            return Err(StructUpdateError::NoField { field }.into());
+        }
+        let expected = find_field_type(ctx, layout, source, field as usize);
+        let actual = ctx.value_ty(self.value(ctx));
+        if expected != Some(actual) {
+            return Err(StructUpdateError::Type {
+                field,
+                actual: actual.display(ctx).to_string(),
+                expected: expected.map_or_else(
+                    || "no field type".to_owned(),
+                    |ty| ty.display(ctx).to_string(),
+                ),
+            }
+            .into());
+        }
+        Ok(())
     }
 }
 
@@ -2979,6 +3047,54 @@ mod tests {
             let text = valid.replace(
                 "%is_rect = adt.variant_is %shape {tag = 1, type = !Shape} : core.i1",
                 &format!("%bad = {invalid}"),
+            );
+            let module = parse_test_module(&mut ctx, &text);
+            let result = validate_operation_verifiers(&ctx, module).to_string();
+            assert!(result.contains(expected), "{invalid}: {result}");
+        }
+    }
+
+    #[test]
+    fn a_struct_update_replaces_one_field_of_its_source_layout() {
+        let valid = r#"core.module @test {
+  !Point = adt.struct<"Point", (core.f64, core.i32)>
+  !Shape = adt.enum<"Shape", [(), (core.f64)]>
+  !Opaque = adt.struct<"Opaque">
+  func.func @f(%p: !Point, %pair: adt.struct<(core.i32, core.i32)>, %x: core.f64, %n: core.i32, %shape: !Shape, %opaque: !Opaque) -> !Point {
+    %pair2 = adt.struct_update %pair, %n {field = 1} : adt.struct<(core.i32, core.i32)>
+    %q = adt.struct_update %p, %x {field = 0} : !Point
+    func.return %q
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, valid);
+        assert_roundtrip(&ctx, module.op());
+        assert!(validate_operation_verifiers(&ctx, module).is_ok());
+
+        for (invalid, expected) in [
+            (
+                "adt.struct_update %p, %x {field = 2} : !Point",
+                "the struct layout has no field 2",
+            ),
+            (
+                "adt.struct_update %p, %n {field = 0} : !Point",
+                "the value has type core.i32, but field 0 has type core.f64",
+            ),
+            (
+                "adt.struct_update %shape, %x {field = 0} : !Shape",
+                "the result type names no `adt.struct` layout",
+            ),
+            (
+                "adt.struct_update %opaque, %x {field = 0} : !Opaque",
+                "a nominal layout without a body",
+            ),
+        ] {
+            let mut ctx = IrContext::new();
+            let text = valid.replace(
+                "%q = adt.struct_update %p, %x {field = 0} : !Point",
+                &format!(
+                    "%bad = {invalid}\n    %q = adt.struct_update %p, %x {{field = 0}} : !Point"
+                ),
             );
             let module = parse_test_module(&mut ctx, &text);
             let result = validate_operation_verifiers(&ctx, module).to_string();
