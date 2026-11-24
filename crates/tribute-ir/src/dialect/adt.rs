@@ -373,18 +373,30 @@ mod adt {
     #[asm_format(r#ref "," index attr_dict_bare ":" type(result))]
     fn array_get<A: Array>(r#ref: Value<A>, index: Value<Index>) -> Value<A::Element> {}
 
-    /// Replace the element at `index` in place. Every value that refers to
-    /// the same array sees the new element; a producer that must not change
-    /// a shared array builds the changed array with `adt.array_splice`
-    /// instead. It requires `index < len`; the target traps an execution that
-    /// violates it.
+    /// The array `source` with the element at `index` replaced by `value`.
+    /// `source` itself does not change. It requires `index < len`; the
+    /// target traps an execution that violates it.
     ///
-    /// **Ownership:** borrows `ref`. A managed `value` moves its unit into
-    /// the element, and the unit of the replaced element is released
-    /// (`Assign`).
+    /// ```text
+    /// %r = adt.array_set %source, %index, %value : !A
+    /// ```
+    ///
+    /// Representation selection lowers the update of a boxed array to
+    /// `heap.array_set` (`design/tribute-dialects.md` § "Operation").
+    ///
+    /// **Ownership:** as for `adt.array_splice` of the one element: borrows
+    /// `source`, and the operation acquires a unit for every managed element
+    /// it copies from it. A managed `value` moves its unit into the new
+    /// array (`Initialize`).
     #[implements(OperandOwnership)]
-    #[asm_format(r#ref "," index "," value attr_dict_bare)]
-    fn array_set<A: Array>(r#ref: Value<A>, index: Value<Index>, value: Value<A::Element>) {}
+    #[flags(Pure)]
+    #[asm_format(source "," index "," value attr_dict_bare ":" type(result))]
+    fn array_set<A: Array>(
+        source: Value<A>,
+        index: Value<Index>,
+        value: Value<A::Element>,
+    ) -> Value<A> {
+    }
 
     /// The number of elements.
     ///

@@ -416,6 +416,8 @@ pub fn native_allocation_descriptor(
         of.r#type(ctx)
     } else if let Ok(splice) = adt::ArraySplice::from_op(ctx, op) {
         splice.r#type(ctx)
+    } else if let Ok(set) = adt::ArraySet::from_op(ctx, op) {
+        ctx.value_ty(set.result(ctx))
     } else if let Ok(new) = crate::dialect::heap::CellNew::from_op(ctx, op) {
         ctx.value_ty(new.result(ctx))
     } else {
