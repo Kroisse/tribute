@@ -98,6 +98,15 @@ const BOXES: &str = r#"core.module @test {
       %3 = heap.is_null %2 : !t0
       func.return %3
   }
+  func.func @values(%0: heap.box<!Point>, %1: heap.box<!Shape>, %2: heap.box<adt.array<core.i32>>) -> heap.box<!Point> {
+      %3 = heap.unbox %0 : !Point
+      %4 = heap.box_value %3 : heap.box<!Point>
+      %5 = heap.unbox %1 : !Shape
+      %6 = heap.box_value %5 : heap.box<!Shape>
+      %7 = heap.unbox %2 : adt.array<core.i32>
+      %8 = heap.box_value %7 : heap.box<adt.array<core.i32>>
+      func.return %4
+  }
 }
 "#;
 
@@ -229,6 +238,13 @@ fn every_box_operation_states_the_role_of_each_operand() {
                 roles[..],
                 [OperandRole::Project { .. }, OperandRole::Borrow]
             ));
+        } else if BoxValue::matches(&ctx, op) || Unbox::matches(&ctx, op) {
+            // Fusion removes them before ownership planning reads roles.
+            assert!(
+                !DynOperandOwnership::is_implemented(&ctx, op),
+                "{}",
+                op.display(&ctx)
+            );
         } else if ArrayNew::matches(&ctx, op)
             || ArrayLen::matches(&ctx, op)
             || VariantIs::matches(&ctx, op)
@@ -305,6 +321,8 @@ fn box_operations_that_do_not_fit_their_layout_are_rejected() {
         "%5 = heap.array_of : heap.box<adt.array<core.i32>, {nullable = true}>",
         // A cast that changes the layout and the nullability at once.
         "%5 = heap.cast %3 : heap.box<!Node, {nullable = true}> to heap.box<!Point>",
+        // The unboxing of a nullable box.
+        "%5 = heap.unbox %3 : !Node",
     ] {
         let text = rejected(body);
         let (ctx, module) = parse(&text);
@@ -314,6 +332,57 @@ fn box_operations_that_do_not_fit_their_layout_are_rejected() {
             "accepted: {body}"
         );
     }
+}
+
+#[test]
+fn a_value_boxes_only_as_a_non_null_box_of_its_own_layout() {
+    for body in [
+        "%2 = heap.box_value %0 : heap.box<!Point, {nullable = true}>",
+        "%2 = heap.box_value %0 : heap.box<!Shape>",
+        "%2 = heap.box_value %1 : heap.box<adt.enum<\"Ghost\">>",
+        "%2 = heap.unbox %3 : adt.enum<\"Ghost\">",
+    ] {
+        let text = format!(
+            r#"core.module @test {{
+  !Point = adt.struct<"Point", (core.f64, core.f64)>
+  !Shape = adt.enum<"Shape", [(), (core.f64)]>
+  func.func @f(%0: !Point, %1: adt.enum<"Ghost">, %3: heap.box<adt.enum<"Ghost">>) {{
+    {body}
+    func.return
+  }}
+}}
+"#
+        );
+        let (ctx, module) = parse(&text);
+        let op = body_ops(&ctx, module)[0];
+        assert!(
+            !OpDef::of(&ctx, op).unwrap().verify(&ctx, op).is_empty(),
+            "accepted: {body}"
+        );
+    }
+}
+
+#[test]
+fn a_trapping_array_operation_is_kept_when_its_result_is_unused() {
+    let (mut ctx, module) = parse(
+        r#"core.module @test {
+  func.func @f(%0: heap.box<adt.array<core.i32>>, %1: core.index, %2: core.i32) {
+    %3 = heap.array_new %1, %2 : heap.box<adt.array<core.i32>>
+    %4 = heap.array_splice %0 [%1, %1] () : heap.box<adt.array<core.i32>>
+    %5 = heap.array_get %0, %1 : core.i32
+    %6 = heap.array_set %0, %1, %2 : heap.box<adt.array<core.i32>>
+    %7 = heap.array_len %0 : heap.box<adt.array<core.i32>>
+    func.return
+  }
+}
+"#,
+    );
+    trunk_ir::transforms::eliminate_dead_code(&mut ctx, module, Default::default());
+    let text = module.op().display(&ctx).to_string();
+    for kept in ["array_new", "array_splice", "array_get", "array_set"] {
+        assert!(text.contains(&format!("heap.{kept} ")), "{kept}: {text}");
+    }
+    assert!(!text.contains("heap.array_len"), "{text}");
 }
 
 #[test]

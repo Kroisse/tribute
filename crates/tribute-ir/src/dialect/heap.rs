@@ -65,6 +65,47 @@ mod heap {
     #[implements(ManagedRefType, DescriptorLayoutType)]
     struct Cell<Contents>;
 
+    /// A new object holding the `adt` value `value`; the result is its box.
+    ///
+    /// ```text
+    /// %p = heap.box_value %v : heap.box<!Point>
+    /// ```
+    ///
+    /// - **Shape:** the result is a non-null box whose layout is the type
+    ///   of `value`: an `adt.struct` or `adt.enum` layout with a body, or an
+    ///   `adt.array`.
+    /// - **Meaning:** representation selection writes every boxing of a
+    ///   value with this operation, and a target's object access fusion
+    ///   turns it into the allocation or update that builds the value
+    ///   (`design/tribute-dialects.md` § "Object 접근 fusion").
+    /// - **Ownership:** it declares no operand roles. The native target
+    ///   fuses it away before ownership planning.
+    /// - **Effects:** the object's identity is not observable, so the
+    ///   operation is `Pure`, as `heap.struct_new` is.
+    #[flags(Pure)]
+    #[verify]
+    #[asm_format(value attr_dict_bare ":" type(result))]
+    fn box_value<B: Box>(value: Value<B::Layout>) -> Value<B> {}
+
+    /// The `adt` value the object `ref` refers to holds.
+    ///
+    /// ```text
+    /// %v = heap.unbox %p : !Point
+    /// ```
+    ///
+    /// - **Shape:** `ref` is a non-null box of an `adt.struct` or
+    ///   `adt.enum` layout with a body, or of an `adt.array`, and the result
+    ///   has the box's layout as its type.
+    /// - **Meaning:** objects behind a box never change, so every unboxing
+    ///   of a box yields the same value. A target's object access fusion
+    ///   turns the reads of the result into reads of the object
+    ///   (`design/tribute-dialects.md` § "Object 접근 fusion").
+    /// - **Ownership:** as for `heap.box_value`.
+    #[flags(Pure)]
+    #[verify]
+    #[asm_format(r#ref attr_dict_bare ":" type(result))]
+    fn unbox<B: Box>(r#ref: Value<B>) -> Value<B::Layout> {}
+
     /// A new struct object whose fields are `fields` in order, as
     /// `adt.struct_new` builds the value; the result is its box.
     ///
@@ -79,8 +120,8 @@ mod heap {
     ///   field (`Initialize`). The result owns one unit.
     /// - **Effects:** the object's identity is not observable, so the
     ///   operation is `Pure`, as `adt.struct_new` is; so are the other
-    ///   allocations and updates of boxes. A cell's identity is observable,
-    ///   so `heap.cell_new` is not.
+    ///   allocations and updates of boxes that cannot trap. A cell's
+    ///   identity is observable, so `heap.cell_new` is not.
     #[implements(OperandOwnership)]
     #[flags(Pure)]
     #[verify]
@@ -195,6 +236,8 @@ mod heap {
 
     /// A new `length`-element array object whose every element is
     /// `initial`, as `adt.array_new` builds the value; the result is its box.
+    /// The target traps an execution whose `length` exceeds the largest
+    /// array it can represent or allocate, so the operation is not `Pure`.
     ///
     /// ```text
     /// %a = heap.array_new %n, %x : heap.box<adt.array<core.i32>>
@@ -205,7 +248,6 @@ mod heap {
     /// - **Ownership:** borrows `initial`; the operation acquires a unit
     ///   for every element it fills.
     #[implements(OperandOwnership)]
-    #[flags(Pure)]
     #[verify]
     #[asm_format(length "," initial attr_dict_bare ":" type(result))]
     fn array_new<B, A>(length: Value<Index>, initial: Value<A::Element>) -> Value<B>
@@ -240,7 +282,7 @@ mod heap {
     /// A new array object of `source[0, start)`, `elements`, and
     /// `source[end, len)`, as `adt.array_splice` builds the value; the
     /// result is its box. It requires `start ≤ end ≤ len`; the target traps
-    /// an execution that violates it.
+    /// an execution that violates it, so the operation is not `Pure`.
     ///
     /// ```text
     /// %r = heap.array_splice %a[%s, %e](%x) : heap.box<adt.array<core.i32>>
@@ -252,7 +294,6 @@ mod heap {
     ///   every managed element it copies from it. Each managed operand of
     ///   `elements` moves its unit into the new array (`Initialize`).
     #[implements(OperandOwnership)]
-    #[flags(Pure)]
     #[verify]
     #[asm_format(source "[" start "," end "]" "(" elements ")" attr_dict ":" type(result))]
     fn array_splice<B, A>(
@@ -269,7 +310,7 @@ mod heap {
 
     /// The element at `index` of the array object `ref` refers to. It
     /// requires `index < len`; the target traps an execution that violates
-    /// it.
+    /// it, so the operation is not `Pure`.
     ///
     /// ```text
     /// %x = heap.array_get %a, %i : core.i32
@@ -279,7 +320,6 @@ mod heap {
     /// - **Ownership:** a managed result is a borrow derived from `ref`
     ///   (`Project`).
     #[implements(OperandOwnership)]
-    #[flags(Pure)]
     #[verify]
     #[asm_format(r#ref "," index attr_dict_bare ":" type(result))]
     fn array_get<B, A>(r#ref: Value<B>, index: Value<Index>) -> Value<A::Element>
@@ -293,7 +333,7 @@ mod heap {
     /// by `value`, as `adt.array_set` builds the value; the result is its
     /// box. The object `source` refers to does not change for any other
     /// reference. It requires `index < len`; the target traps an execution
-    /// that violates it.
+    /// that violates it, so the operation is not `Pure`.
     ///
     /// ```text
     /// %b = heap.array_set %a, %i, %x : heap.box<adt.array<core.i32>>
@@ -306,7 +346,6 @@ mod heap {
     ///   result owns one unit. Lowering may reuse the object as for
     ///   `heap.struct_update`.
     #[implements(OperandOwnership)]
-    #[flags(Pure)]
     #[verify]
     #[asm_format(source "," index "," value attr_dict_bare ":" type(result))]
     fn array_set<B, A>(source: Value<B>, index: Value<Index>, value: Value<A::Element>) -> Value<B>
@@ -635,6 +674,32 @@ fn verify_fields(
         expect_type(ctx, || format!("field {index}"), operand, field(index)?)?;
     }
     Ok(())
+}
+
+/// Check that `value` is a non-null box whose layout's value it can hold:
+/// a struct or enum layout with a body, or an array.
+fn verify_holds_value(ctx: &IrContext, value: ValueRef) -> Result<(), BoxError> {
+    let boxed = non_null_box(ctx, value)?;
+    let layout = boxed.layout(ctx);
+    if Array::from_type_ref(ctx, layout).is_some() {
+        Ok(())
+    } else if adt::layout_of(ctx, layout).is_some_and(|l| Struct::from_type_ref(ctx, l).is_some()) {
+        struct_layout(ctx, boxed).map(drop)
+    } else {
+        enum_layout(ctx, boxed).map(drop)
+    }
+}
+
+impl Verify for BoxValue {
+    fn verify(&self, ctx: &IrContext) -> Result<(), VerificationError> {
+        Ok(verify_holds_value(ctx, self.result(ctx))?)
+    }
+}
+
+impl Verify for Unbox {
+    fn verify(&self, ctx: &IrContext) -> Result<(), VerificationError> {
+        Ok(verify_holds_value(ctx, self.r#ref(ctx))?)
+    }
 }
 
 impl Verify for StructNew {
