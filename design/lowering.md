@@ -176,6 +176,8 @@ ExitBoundary        closure storage layout, literal expansion (Bytes and
                     String literals to adt values over adt.array_const),
                     representation selection (boxed adt values to heap.box;
                     unboxed values stay adt values and inline fields),
+                    object access fusion (heap.unbox/heap.box_value
+                    around adt ops to heap object ops),
                     value integrity check, global DCE, canonicalization,
                     boundary exit verification
 ── target dialect lowering ──
