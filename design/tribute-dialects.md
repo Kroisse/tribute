@@ -1347,6 +1347,14 @@ Object 접근 fusion은 이 형태를 object operation으로 합치는 target �
   unit을 하나 더 획득하므로, fusion은 그 box의 마지막 사용인지 따지지 않는다.
 - Box에서 나오지 않은 값을 source로 한 갱신이나 읽기는 그 값을 먼저 box에 담은 것으로
   보고 합친다.
+- [강제 위치](abi-boundary.md#표현-선택)에서 unboxed 값을 담는 `heap.box_value`는 그
+  값의 필드로 object를 할당하는 `heap` 할당이 된다. 그런 box의 `heap.unbox`가 내는
+  unboxed 값은 필드마다의 `heap` 읽기와 그 필드로 만든 `adt.struct_new`가 된다.
+
+표현 선택과 fusion 사이에서 boxed 타입의 `adt` 값은 `adt` operation과
+`heap.box_value`의 operand로만 쓰인다. Block 인자, region 결과, 호출 인자, 결과로
+지나는 값은 box다. 이 구간의 최적화도 이 형태를 지키므로 fusion은 boxed 타입의 `adt`
+값을 모두 합칠 수 있다.
 
 Fusion은 [representation/ABI 경계](abi-boundary.md#단계-구성) 안에서 표현 선택 뒤에
 돌며, 출구 검증보다 앞선다. Fusion 뒤에는 `heap.box_value`, `heap.unbox`, boxed 타입의
