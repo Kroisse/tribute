@@ -26,20 +26,22 @@ mod arith {
     #[flags(Pure)]
     #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn muli<T: IntegerOrIndex>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
+    /// Traps on a zero divisor and on the minimum value divided by `-1`, so
+    /// it is not `Pure`.
     #[implements(Fold)]
-    #[flags(Pure)]
     #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn divsi<T: IntegerOrIndex>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
+    /// Traps on a zero divisor, so it is not `Pure`.
     #[implements(Fold)]
-    #[flags(Pure)]
     #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn divui<T: IntegerOrIndex>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
+    /// Traps on a zero divisor and on the minimum value divided by `-1`, so
+    /// it is not `Pure`.
     #[implements(Fold)]
-    #[flags(Pure)]
     #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn remsi<T: IntegerOrIndex>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
+    /// Traps on a zero divisor, so it is not `Pure`.
     #[implements(Fold)]
-    #[flags(Pure)]
     #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn remui<T: IntegerOrIndex>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
     #[flags(Pure)]

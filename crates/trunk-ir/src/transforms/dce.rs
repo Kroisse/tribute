@@ -424,6 +424,33 @@ mod tests {
     }
 
     #[test]
+    fn keeps_unused_trapping_divisions() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @f(%a: core.i32, %b: core.i32) -> core.nil {
+    %q = arith.divsi %a, %b : core.i32
+    %uq = arith.divui %a, %b : core.i32
+    %r = arith.remsi %a, %b : core.i32
+    %ur = arith.remui %a, %b : core.i32
+    %dead = arith.addi %a, %b : core.i32
+    func.return
+  }
+}"#,
+        );
+
+        let result = eliminate_dead_code(&mut ctx, module, DceConfig::default());
+
+        assert_eq!(result.removed_count, 1);
+        let printed = module.op().display(&ctx).to_string();
+        for name in ["arith.divsi", "arith.divui", "arith.remsi", "arith.remui"] {
+            assert!(printed.contains(name), "{name} was removed:\n{printed}");
+        }
+        assert!(!printed.contains("arith.addi"), "{printed}");
+    }
+
+    #[test]
     fn module_pass_sweeps_every_function() {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
