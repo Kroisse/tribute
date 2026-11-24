@@ -1242,6 +1242,7 @@ mod tests {
     %null = adt.ref_null : !S
     %is_null = adt.ref_is_null %null : !S
     %ref = adt.ref_cast %null : !S to !S
+    %anyref_null = tribute_rt.null : tribute_rt.anyref
     wasm.return
   }
 }"#,
@@ -1266,7 +1267,7 @@ mod tests {
                 .iter()
                 .filter(|&&op| ctx.op(op).name.dialect(&ctx) == wasm_gc_dialect::DIALECT_NAME)
                 .count(),
-            16
+            17
         );
         let variant_get = ctx
             .block(block)

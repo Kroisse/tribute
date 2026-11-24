@@ -212,8 +212,8 @@ mod tests {
     use crate::ast_to_ir::lower::IrBuilder;
     use rustc_hash::FxHashMap as HashMap;
     use salsa_test_macros::salsa_test;
-    use tribute_ir::dialect::adt;
     use tribute_ir::dialect::tribute_control::OperationDeclaration;
+    use tribute_ir::dialect::tribute_rt;
     use trunk_ir::context::BlockData;
     use trunk_ir::location::Span;
 
@@ -235,10 +235,7 @@ mod tests {
             ops: Default::default(),
             parent_region: None,
         });
-        let anyref = ctx.anyref_type(&mut ir);
-        let value = adt::RefNull::operands()
-            .results(anyref)
-            .build(&mut ir, location);
+        let value = tribute_rt::Null::operands().build(&mut ir, location);
         ir.push_op(block, value.op_ref());
         let value = value.result(&ir);
         let parameter = ctx.adt_enum_key(&mut ir, &Symbol::new("String"), 0);
