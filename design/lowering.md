@@ -175,9 +175,8 @@ EnterTarget         value integrity check, global DCE (runtime functions
 ExitBoundary        closure storage layout, literal expansion (Bytes and
                     String literals to adt values over adt.array_const),
                     representation selection (boxed adt values to heap.box;
-                    unboxed values stay adt values and inline fields),
-                    object access fusion (heap.unbox/heap.box_value
-                    around adt ops to heap object ops),
+                    unboxed values stay adt values and inline fields;
+                    box access stays at the value level),
                     value integrity check, global DCE, canonicalization,
                     boundary exit verification
 ── target dialect lowering ──
@@ -215,6 +214,7 @@ memory layout.
 After the [boundary](#pipeline-order) exit, Wasm dialect lowering runs:
 
 ```text
+object access fusion
 validate_lowerable_structured_control
 unboxed value scalarization
 convert_builtin_layouts (heap.cell included)
@@ -271,6 +271,7 @@ boundary before emission.
 After the [boundary](#pipeline-order) exit, native lowering runs:
 
 ```text
+object access fusion
 native String/Bytes/I/O/List lowering
 scf_to_cf
 typed ownership/RTTI planning + explicit RC materialization

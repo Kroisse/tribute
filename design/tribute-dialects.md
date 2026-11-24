@@ -1293,8 +1293,9 @@ operation은 `adt` operation을 object 위에서 하는 것이다.
   object를 할당하고 그 box를 낸다. `heap.unbox`는 box가 담은 값을 `adt` 값으로 낸다.
   Box의 object는 바뀌지 않으므로 `heap.unbox`의 결과는 언제 읽어도 같은 값이다.
   [표현 선택](abi-boundary.md#표현-선택)이 boxed 값을 이 둘과 `adt` 값 operation으로
-  나타내고, [object 접근 fusion](#object-접근-fusion)이 모두 object operation으로
-  합친다. 두 operation은 fusion 전에만 있으므로 ownership 역할을 선언하지 않는다.
+  나타내고, target lowering의 [object 접근 fusion](#object-접근-fusion)이 object
+  operation으로 합친다. Native에서는 두 operation이 ownership 계획 전에 사라지므로
+  ownership 역할을 선언하지 않는다.
 
 Object operation은 다음과 같다.
 
@@ -1336,8 +1337,8 @@ operation이 없으므로 fusion과 관계없이 쓴다.
 않고 값 operation으로 다룬다. 함수 밖으로 나가지 않는 box를 필드 값으로 바꾸는 일은
 `heap.unbox`와 `heap.box_value`가 마주 놓인 쌍을 지우는 일이 된다.
 
-Object 접근 fusion은 이 형태를 object operation으로 합치는 target 단계다. 어느 형태를
-어느 operation으로 합칠지는 target이 정한다.
+Object 접근 fusion은 이 형태를 object operation으로 합치는 target 단계다. 합칠 때는
+다음 규칙을 따른다.
 
 - `heap.unbox` 결과에 대한 `adt` 읽기는 box를 빌려 읽는 `heap` 읽기가 된다.
 - `adt` 생성 결과를 담는 `heap.box_value`는 `heap` 할당이 된다. `adt.array_const`를
@@ -1356,10 +1357,11 @@ Object 접근 fusion은 이 형태를 object operation으로 합치는 target �
 지나는 값은 box다. 이 구간의 최적화도 이 형태를 지키므로 fusion은 boxed 타입의 `adt`
 값을 모두 합칠 수 있다.
 
-Fusion은 [representation/ABI 경계](abi-boundary.md#단계-구성) 안에서 표현 선택 뒤에
-돌며, 출구 검증보다 앞선다. Fusion 뒤에는 `heap.box_value`, `heap.unbox`, boxed 타입의
-`adt` 값이 남지 않는다. 그래서 ownership 계획과 target lowering은 object operation만
-본다.
+이 형태는 [representation/ABI 경계](abi-boundary.md#출구-적법성) 출구 계약의
+일부다. Fusion은 출구 뒤 각 target lowering의 첫 단계이며, 어느 형태를 합칠지와 합치지
+않은 형태를 어떻게 내릴지는 target이 정한다. Native는 ownership 계획보다 먼저 모두
+합친다. 그래서 ownership 계획은 `heap.box_value`, `heap.unbox`, boxed 타입의 `adt`
+값을 보지 않고 object operation만 본다.
 
 ### 위치
 
@@ -1368,16 +1370,16 @@ Fusion은 [representation/ABI 경계](abi-boundary.md#단계-구성) 안에서 �
   Compiler가 쓰는 [cell](#heapcell)과 [closure 저장](#closure-저장-layout)이 그렇다.
   Closure 저장도 값 수준의 경계 변환으로 쓰고, 다른 box처럼 fusion이 합친다. 이
   구간에서 `adt`와 `heap`은 함께 쓰인다.
-- Representation/ABI 경계 출구 뒤에 남는 `adt` 값은 unboxed struct 값뿐이다
-  ([값의 표현](abi-boundary.md#출구에서-확정되는-물리-계약)). 그 밖의 `adt` layout은
-  `heap.box`의 매개변수, inline 값을 담는 `heap.cell`의 매개변수,
+- Representation/ABI 경계 출구를 지나는 `adt` 값은 unboxed struct 값과 box 접근
+  안의 boxed 값이다([값의 표현](abi-boundary.md#출구에서-확정되는-물리-계약)). 그 밖의
+  `adt` layout은 `heap.box`의 매개변수, inline 값을 담는 `heap.cell`의 매개변수,
   [nominal 선언](#nominal-선언) 안에 남는다. `heap` operation은 별도의 layout 속성 없이
-  box operand나 결과의 타입에서 layout을 읽는다. 출구 뒤의 object 접근은 모두 object
-  operation이며 target lowering이 이를 내린다.
+  box operand나 결과의 타입에서 layout을 읽는다. Target lowering은 fusion으로 box
+  접근을 object operation으로 합친 뒤 이를 내린다.
 - `Bytes`와 `String` literal(`adt.bytes_const`, `adt.string_const`)은 표현 선택보다
   앞에서 `adt` 값으로 펼친다([string.md](string.md#constant-lowering)). 배열 상수
-  `adt.array_const`는 표현 선택이 box에 담고 fusion이 `heap.array_const`로
-  합치며, target의 상수 lowering이 이를 내린다. 그 결과는 다른 할당처럼 unit 하나를
+  `adt.array_const`는 표현 선택이 box에 담아 출구를 지나고, target lowering의
+  fusion이 `heap.array_const`로 합쳐 상수 lowering이 이를 내린다. 그 결과는 다른 할당처럼 unit 하나를
   가진 object다.
 
 ### Target lowering의 unboxed 값

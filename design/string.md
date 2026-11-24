@@ -459,7 +459,7 @@ target의 선택은 서로 달라도 된다. Target은 배열 상수를 다음�
 
 `Bytes` 표현 struct 값의 표현은 두 target 모두
 [표현 선택](abi-boundary.md#표현-선택)이 정하며, box에 담길 때만 평가마다
-할당한다. 배열 상수는 배열이므로 표현 선택이 box에 담고
+할당한다. 배열 상수는 배열이므로 표현 선택이 box에 담고, target lowering의
 [object 접근 fusion](tribute-dialects.md#object-접근-fusion)이 `heap.array_const`로 합친다.
 Wasm에서 모든 `heap.array_const`는 같은 passive data-segment index 공간을
 사용하며, 동일한 payload는 `String`과 `Bytes` 리터럴 사이에서도 data segment를

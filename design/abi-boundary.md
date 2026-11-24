@@ -60,10 +60,12 @@ pass — native ownership/RTTI 계획, target dialect lowering, backend 검증�
    직접 만들지 않는다.
 5. Closure storage layout 확정
 6. [표현 선택](#표현-선택): boxed 타입의 `adt` 값을 `heap.box`로 바꾸고, unboxed 값은
-   `adt` 값과 inline 필드로 둔다.
-7. [Object 접근 fusion](tribute-dialects.md#object-접근-fusion): 값 수준으로 남은
-   box 접근을 target이 고른 `heap` object operation으로 합친다.
-8. 경계 출구 검증
+   `adt` 값과 inline 필드로 둔다. Box 접근은 값 수준으로 남는다.
+7. 경계 출구 검증
+
+값 수준으로 남은 box 접근을 `heap` object operation으로 합치는
+[object 접근 fusion](tribute-dialects.md#object-접근-fusion)은 경계에 들지 않고 각
+target lowering의 첫 단계로 돈다.
 
 지원되는 FFI/intrinsic bridge의 의미도 이 단계 안에서 완결한다.
 
@@ -87,8 +89,8 @@ compiler가 값마다 표현을 고른다. 표현 선택은 값 의미론인 [`a
 - **Boxed 값은 `heap.box`에 담는다.** 표현 선택은 boxed 값의 operation을 값 수준으로
   남긴다. 생성과 갱신의 결과는 `heap.box_value`로 box에 담고, box를 읽거나 갱신의
   source로 쓸 때는 `heap.unbox`로 꺼낸다. 이 접근을 box를 빌린 읽기, `heap` 할당,
-  source box를 소비하는 `heap` 갱신으로 합치는 일은
-  [object 접근 fusion](tribute-dialects.md#object-접근-fusion)이 한다.
+  source box를 소비하는 `heap` 갱신으로 합칠지는 출구 뒤의
+  [object 접근 fusion](tribute-dialects.md#object-접근-fusion)에서 target이 정한다.
 - **Cell은 표현 선택의 대상이 아니다.** Compiler가 쓰는 [`heap.cell`](tribute-dialects.md#heapcell)은
   표현 선택 전부터 object다. Cell이 담은 값은 다른 object의 필드처럼 저장 표현을
   따르므로, unboxed 값은 cell 안에 inline으로 놓인다.
@@ -120,7 +122,8 @@ compiler가 값마다 표현을 고른다. 표현 선택은 값 의미론인 [`a
   표현 선택과 fusion 사이의 최적화가 필드 값으로 바꿀 수 있다. 이 구간의 box 접근은
   값 수준이므로, 이 최적화는 `heap.box_value`와 `heap.unbox`의 쌍을 지우는 일이다.
   타입의 표현을 바꾸지 않으며, 그 box가 가리킬 object가 관찰되지 않는다는 사실만 쓴다.
-- **Ownership 계획보다 앞선다.** 표현 선택과 fusion은 경계 안에서 끝나므로 ownership 계획이
+- **Ownership 계획보다 앞선다.** 표현 선택은 경계 안에서 끝나고 native target은
+  ownership 계획보다 먼저 box 접근을 모두 합치므로, ownership 계획이
   보는 managed 값은 `heap.box`, `heap.cell`, `tribute_rt.anyref`, `tribute_rt.intref`와
   managed leaf를 가진 unboxed `adt` 값이다. 선택 정책상 unboxed 값의 managed leaf는
   하나 이하이므로, 그런 값은 unit 하나를 가진 managed 값이다.
@@ -155,8 +158,10 @@ compiler가 값마다 표현을 고른다. 표현 선택은 값 의미론인 [`a
   가진다.
 - **값의 표현:** 출구의 값은 scalar, `heap.box`, `heap.cell`, `tribute_rt.anyref`·`intref`,
   unmanaged 포인터 같은 기계 값이거나 unboxed 타입의 `adt` struct 값이다. Boxed 타입의
-  `adt` 값은 없다. Unboxed 값은 object의 필드로는 inline으로 놓이며, target lowering이
-  이를 leaf로 쪼갤 때 매개변수, 결과, block 인자에 나란히 놓인다. 그
+  `adt` 값은 box 접근 안에만 있고, 매개변수, 결과, block 인자로는 box가 지난다
+  ([fusion 전 형태](tribute-dialects.md#object-접근-fusion)). Unboxed 값은 object의
+  필드로는 inline으로 놓이며, target lowering이 이를 leaf로 쪼갤 때 매개변수, 결과,
+  block 인자에 나란히 놓인다. 그
   [scalarization](tribute-dialects.md#target-lowering의-unboxed-값)은 출구가 확정한
   exact signature와 매개변수 ownership 계약을 모든 정의와 호출에 똑같이 leaf 단위로
   옮길 뿐이며, 새 계약을 만들지 않는다.
@@ -191,12 +196,14 @@ compiler가 값마다 표현을 고른다. 표현 선택은 값 의미론인 [`a
 - 의미적 호출 규약과 제어 metadata: `tribute.calling_convention`,
   `tribute.cps_continuation_frame_result`
 - 물리 계약으로 옮기지 않은 채 남은 handler/resume/prompt 정체성과 ability row
-- Boxed 타입의 `adt` 값, `adt` enum·배열 값, 그 값 operation. 출구 뒤에 값을
-  object에 담는 일이 생기면 ownership 계획이 보지 못한 managed 값이 생기므로, 표현
-  선택과 fusion이 끝나지 않은 IR은 출구를 넘지 않는다. `heap.box_value`와
-  `heap.unbox`도 남지 않는다. Literal operation도 표현 선택과 fusion이
-  [`heap` literal](tribute-dialects.md#위치)로 바꾼다. Unboxed struct 값과 그
-  operation(`adt.struct_new`, `adt.struct_get`, `adt.struct_update`)은 남는다.
+- [Fusion 전 형태](tribute-dialects.md#object-접근-fusion)를 벗어난 boxed 타입의
+  `adt` 값과 `adt` enum·배열 값. 그런 값은 `adt` operation이나 `heap.unbox`의 결과로
+  나와 `adt` operation과 `heap.box_value`의 operand로만 쓰일 때 출구를 지난다. 출구
+  뒤에 값의 표현을 고르는 일이 생기면 ownership 계획이 보지 못한 managed 값이
+  생기므로, 표현 선택이 끝나지 않은 IR은 출구를 넘지 않는다. Literal도 같다.
+  `adt.array_const`는 그것을 담는 `heap.box_value`의 operand로만 남는다. Unboxed
+  struct 값과 그 operation(`adt.struct_new`, `adt.struct_get`, `adt.struct_update`)은
+  어디서나 남는다.
 
 출구 이후에도 보존하는 것:
 

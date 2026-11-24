@@ -269,8 +269,8 @@ Source → CST → AST
     → ability dispatch·evidence resolution·handle delimiter 제거
     → target ABI 검증·물리 CPS signature·root/entry bridge
     → target evidence lowering·closure storage·경계 출구 검증
-    ├→ WasmGC lowering → Wasm binary
-    └→ typed ownership/RTTI 계획 → native lowering → native binary
+    ├→ object 접근 fusion → WasmGC lowering → Wasm binary
+    └→ object 접근 fusion → typed ownership/RTTI 계획 → native lowering → native binary
 ```
 
 Frontend는 source의 결과 타입과 operation kind를 보존한다. Continuation과 hidden
