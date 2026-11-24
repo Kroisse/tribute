@@ -170,8 +170,10 @@ mod adt {
     /// a field the layout does not have, and a `value` that does not have
     /// the field's type as the type of `source` sees it.
     ///
-    /// Representation selection lowers the update of a boxed value to
-    /// `heap.struct_update` (`design/tribute-dialects.md` § "Operation").
+    /// Representation selection leaves the update of a boxed value at the
+    /// value level, between `heap.unbox` and `heap.box_value`. A target's
+    /// object access fusion may then fuse the three into
+    /// `heap.struct_update` (`design/tribute-dialects.md` § "`heap`").
     ///
     /// **Ownership:** consumes `source`. A managed `value` takes the place
     /// of the replaced field (`design/rc.md` § "1. Typed ownership and RTTI
@@ -381,8 +383,10 @@ mod adt {
     /// %r = adt.array_set %source, %index, %value : !A
     /// ```
     ///
-    /// Representation selection lowers the update of a boxed array to
-    /// `heap.array_set` (`design/tribute-dialects.md` § "Operation").
+    /// Representation selection leaves the update of a boxed array at the
+    /// value level, between `heap.unbox` and `heap.box_value`. A target's
+    /// object access fusion may then fuse the three into `heap.array_set`
+    /// (`design/tribute-dialects.md` § "`heap`").
     ///
     /// **Ownership:** as for `adt.array_splice` of the one element: borrows
     /// `source`, and the operation acquires a unit for every managed element
