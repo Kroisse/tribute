@@ -580,6 +580,15 @@ broke it.
 `Pure` states no invariant. `NoTerminator` changes the rule for the blocks
 of operations without it, so it has no verifier.
 
+`Pure` lets DCE remove an operation whose results are unused, so an
+operation that can reach a defined trap, such as an array range check or
+integer division by zero, does not declare it. Unlike MLIR, where such an
+execution is undefined and only speculation cares, a reachable trap here is
+an observable end that optimization must keep
+([trap rules](../../design/tribute-dialects.md#trap)). A trap that guards a
+precondition every compiler-generated use establishes, as `list.head` does,
+is an assertion and leaves the operation pure.
+
 `Terminator` marks an operation that must be the last of its block, as
 MLIR's `IsTerminator` does. It says nothing about where control goes, which
 `CallableExit`, `Branch`, and `RegionBranchTerminator` describe; every

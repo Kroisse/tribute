@@ -26,20 +26,22 @@ mod arith {
     #[flags(Pure)]
     #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn muli<T: IntegerOrIndex>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
+    /// Traps on a zero divisor and on the minimum value divided by `-1`, so
+    /// it is not `Pure`.
     #[implements(Fold)]
-    #[flags(Pure)]
     #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn divsi<T: IntegerOrIndex>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
+    /// Traps on a zero divisor, so it is not `Pure`.
     #[implements(Fold)]
-    #[flags(Pure)]
     #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn divui<T: IntegerOrIndex>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
+    /// Traps on a zero divisor, so it is not `Pure`. The minimum value
+    /// modulo `-1` is `0`.
     #[implements(Fold)]
-    #[flags(Pure)]
     #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn remsi<T: IntegerOrIndex>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
+    /// Traps on a zero divisor, so it is not `Pure`.
     #[implements(Fold)]
-    #[flags(Pure)]
     #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn remui<T: IntegerOrIndex>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
     #[flags(Pure)]
@@ -418,8 +420,9 @@ impl Fold for Divui {
 
 /// `arith.remsi const(a), const(b)` → `arith.constant(a%b)` at the result width.
 ///
-/// Mirrors the `arith.divsi` fold: bails on `b == 0` and on `INT_MIN % -1` (which
-/// also traps on Cranelift `srem` and WASM `i32.rem_s`).
+/// Mirrors the `arith.divsi` fold: bails on `b == 0`, which traps, and
+/// conservatively on `INT_MIN % -1`, which Cranelift `srem` and WASM
+/// `i32.rem_s` evaluate to `0` without trapping.
 impl Fold for Remsi {
     fn fold(&self, ctx: &IrContext) -> Option<FoldResult> {
         let op = self.op_ref();

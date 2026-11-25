@@ -288,12 +288,13 @@ mod adt {
     #[asm_format(name r#type variants attr_dict)]
     fn enum_decl(name: Attr<String>, r#type: Attr<Type>, variants: Attr<[String]>) {}
 
-    /// A `length`-element array whose every element is `initial`.
+    /// A `length`-element array whose every element is `initial`. The
+    /// target traps an execution whose `length` exceeds the largest array
+    /// it can represent or allocate, so the operation is not `Pure`.
     ///
     /// **Ownership:** borrows `initial`; the operation acquires a unit for
     /// every element it fills.
     #[implements(OperandOwnership)]
-    #[flags(Pure)]
     #[asm_format(length "," initial attr_dict_bare ":" type(result))]
     fn array_new<A: Array>(
         r#type: Attr<TypeOf<A>>,
@@ -318,7 +319,8 @@ mod adt {
     /// Inserting one element (`start = end`), removing one (no `elements` and
     /// `end = start + 1`), replacing elements, and trimming either end are
     /// all written with this operation. It requires `start ≤ end ≤ len`; the
-    /// target traps an execution that violates it.
+    /// target traps an execution that violates it, so the operation is not
+    /// `Pure`.
     ///
     /// ```text
     /// %r = adt.array_splice %source[%start, %end](%element0, ...) attributes {type = !A} : !A
@@ -328,7 +330,6 @@ mod adt {
     /// every managed element it copies from it. Each managed operand of
     /// `elements` moves its unit into the new array (`Initialize`).
     #[implements(OperandOwnership)]
-    #[flags(Pure)]
     #[asm_format(source "[" start "," end "]" "(" elements ")" attr_dict ":" type(result))]
     fn array_splice<A: Array>(
         r#type: Attr<TypeOf<A>>,
@@ -340,12 +341,11 @@ mod adt {
     }
 
     /// The element at `index`. It requires `index < len`; the target traps
-    /// an execution that violates it.
+    /// an execution that violates it, so the operation is not `Pure`.
     ///
     /// **Ownership:** a managed result is a borrow derived from `ref`
     /// (`Project`).
     #[implements(OperandOwnership)]
-    #[flags(Pure)]
     #[asm_format(r#ref "," index attr_dict_bare ":" type(result))]
     fn array_get<A: Array>(r#ref: Value<A>, index: Value<Index>) -> Value<A::Element> {}
 
@@ -2329,6 +2329,50 @@ mod tests {
         assert!(!array_schema_ok(
             "%v = adt.array_splice %a[%i, %i]() attributes {type = !B} : !B"
         ));
+    }
+
+    /// Run DCE over `body`, whose results are unused, and return the
+    /// printed module.
+    fn after_dead_code_elimination(body: &str) -> String {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            &format!(
+                "core.module @test {{\n  !A = adt.array<core.i32>\n  func.func @f(%a: !A, %i: core.index, %j: core.index, %n: core.i32) -> core.nil {{\n    {body}\n    func.return\n  }}\n}}"
+            ),
+        );
+        trunk_ir::transforms::eliminate_dead_code(
+            &mut ctx,
+            module,
+            trunk_ir::transforms::DceConfig::default(),
+        );
+        module.op().display(&ctx).to_string()
+    }
+
+    #[test]
+    fn dead_code_elimination_keeps_an_unused_array_read() {
+        let printed = after_dead_code_elimination("%v = adt.array_get %a, %i : core.i32");
+        assert!(printed.contains("adt.array_get"), "{printed}");
+    }
+
+    #[test]
+    fn dead_code_elimination_keeps_an_unused_array_splice() {
+        let printed = after_dead_code_elimination(
+            "%v = adt.array_splice %a[%i, %j](%n) attributes {type = !A} : !A",
+        );
+        assert!(printed.contains("adt.array_splice"), "{printed}");
+    }
+
+    #[test]
+    fn dead_code_elimination_keeps_an_unused_array_allocation() {
+        let printed = after_dead_code_elimination("%v = adt.array_new %i, %n {type = !A} : !A");
+        assert!(printed.contains("adt.array_new"), "{printed}");
+    }
+
+    #[test]
+    fn dead_code_elimination_removes_an_unused_array_length() {
+        let printed = after_dead_code_elimination("%len = adt.array_len %a : core.index");
+        assert!(!printed.contains("adt.array_len"), "{printed}");
     }
 
     #[test]
