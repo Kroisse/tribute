@@ -90,7 +90,7 @@ mod heap {
     /// The `adt` value the object `ref` refers to holds.
     ///
     /// ```text
-    /// %v = heap.unbox %p : !Point
+    /// %v = heap.unbox_value %p : !Point
     /// ```
     ///
     /// - **Shape:** `ref` is a non-null box of an `adt.struct` or
@@ -104,7 +104,7 @@ mod heap {
     #[flags(Pure)]
     #[verify]
     #[asm_format(r#ref attr_dict_bare ":" type(result))]
-    fn unbox<B: Box>(r#ref: Value<B>) -> Value<B::Layout> {}
+    fn unbox_value<B: Box>(r#ref: Value<B>) -> Value<B::Layout> {}
 
     /// A new struct object whose fields are `fields` in order, as
     /// `adt.struct_new` builds the value; the result is its box.
@@ -696,7 +696,7 @@ impl Verify for BoxValue {
     }
 }
 
-impl Verify for Unbox {
+impl Verify for UnboxValue {
     fn verify(&self, ctx: &IrContext) -> Result<(), VerificationError> {
         Ok(verify_holds_value(ctx, self.r#ref(ctx))?)
     }

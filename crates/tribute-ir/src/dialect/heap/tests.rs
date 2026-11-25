@@ -99,11 +99,11 @@ const BOXES: &str = r#"core.module @test {
       func.return %3
   }
   func.func @values(%0: heap.box<!Point>, %1: heap.box<!Shape>, %2: heap.box<adt.array<core.i32>>) -> heap.box<!Point> {
-      %3 = heap.unbox %0 : !Point
+      %3 = heap.unbox_value %0 : !Point
       %4 = heap.box_value %3 : heap.box<!Point>
-      %5 = heap.unbox %1 : !Shape
+      %5 = heap.unbox_value %1 : !Shape
       %6 = heap.box_value %5 : heap.box<!Shape>
-      %7 = heap.unbox %2 : adt.array<core.i32>
+      %7 = heap.unbox_value %2 : adt.array<core.i32>
       %8 = heap.box_value %7 : heap.box<adt.array<core.i32>>
       func.return %4
   }
@@ -238,7 +238,7 @@ fn every_box_operation_states_the_role_of_each_operand() {
                 roles[..],
                 [OperandRole::Project { .. }, OperandRole::Borrow]
             ));
-        } else if BoxValue::matches(&ctx, op) || Unbox::matches(&ctx, op) {
+        } else if BoxValue::matches(&ctx, op) || UnboxValue::matches(&ctx, op) {
             // Fusion removes them before ownership planning reads roles.
             assert!(
                 !DynOperandOwnership::is_implemented(&ctx, op),
@@ -322,7 +322,7 @@ fn box_operations_that_do_not_fit_their_layout_are_rejected() {
         // A cast that changes the layout and the nullability at once.
         "%5 = heap.cast %3 : heap.box<!Node, {nullable = true}> to heap.box<!Point>",
         // The unboxing of a nullable box.
-        "%5 = heap.unbox %3 : !Node",
+        "%5 = heap.unbox_value %3 : !Node",
     ] {
         let text = rejected(body);
         let (ctx, module) = parse(&text);
@@ -340,7 +340,7 @@ fn a_value_boxes_only_as_a_non_null_box_of_its_own_layout() {
         "%2 = heap.box_value %0 : heap.box<!Point, {nullable = true}>",
         "%2 = heap.box_value %0 : heap.box<!Shape>",
         "%2 = heap.box_value %1 : heap.box<adt.enum<\"Ghost\">>",
-        "%2 = heap.unbox %3 : adt.enum<\"Ghost\">",
+        "%2 = heap.unbox_value %3 : adt.enum<\"Ghost\">",
     ] {
         let text = format!(
             r#"core.module @test {{

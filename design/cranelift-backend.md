@@ -92,7 +92,7 @@ flowchart TB
         abi["target ABI validation + physicalization\nroot bridge + closure lowering"]
         effect["effect ABI lowering\nevidence runtime 항목 호출 + proper-tail calls"]
         storage["finalize_closure_storage_layout"]
-        fusion["object access fusion\nheap.unbox/box_value + adt.* → heap.*"]
+        fusion["object access fusion\nheap.unbox_value/box_value + adt.* → heap.*"]
         list_lower["opaque List lowering\nnative::list::lower\nlist.* → private RC nodes"]
         cfg["structured control normalization\nscf_to_cf"]
         rc_plan["typed ownership/RTTI plan\nsemantic type + CFG"]

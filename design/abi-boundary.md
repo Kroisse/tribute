@@ -88,7 +88,7 @@ compiler가 값마다 표현을 고른다. 표현 선택은 값 의미론인 [`a
   일은 [target lowering](tribute-dialects.md#target-lowering의-unboxed-값)이 한다.
 - **Boxed 값은 `heap.box`에 담는다.** 표현 선택은 boxed 값의 operation을 값 수준으로
   남긴다. 생성과 갱신의 결과는 `heap.box_value`로 box에 담고, box를 읽거나 갱신의
-  source로 쓸 때는 `heap.unbox`로 꺼낸다. 이 접근을 box를 빌린 읽기, `heap` 할당,
+  source로 쓸 때는 `heap.unbox_value`로 꺼낸다. 이 접근을 box를 빌린 읽기, `heap` 할당,
   source box를 소비하는 `heap` 갱신으로 합칠지는 출구 뒤의
   [object 접근 fusion](tribute-dialects.md#object-접근-fusion)에서 target이 정한다.
 - **Cell은 표현 선택의 대상이 아니다.** Compiler가 쓰는 [`heap.cell`](tribute-dialects.md#heapcell)은
@@ -97,7 +97,7 @@ compiler가 값마다 표현을 고른다. 표현 선택은 값 의미론인 [`a
 - **강제 위치에서는 언제나 box에 담는다.** Unboxed로 고른 타입도 이 위치를 지날 때는
   필드 값으로 object를 할당하고, 거기서 나올 때는 필드를 읽는다. 단, box에서 꺼낸
   값을 바꾸지 않고 같은 layout의 box에 다시 담으면 새로 할당하지 않고 원래 box를
-  retain해 쓴다(box forwarding). 값 수준에서는 `heap.unbox` 결과를 그대로 담는
+  retain해 쓴다(box forwarding). 값 수준에서는 `heap.unbox_value` 결과를 그대로 담는
   `heap.box_value`가 그 box가 된다. Retain으로 공유된 object는 유일하지 않으므로 이후의
   `heap.struct_update`와 `heap.array_set`은 복사 경로를 타고, 공유된 box가 담은 값은
   바뀌지 않는다. 표현 선택은 값이 box에서 나온 출처를 알고 있는 동안
@@ -120,7 +120,7 @@ compiler가 값마다 표현을 고른다. 표현 선택은 값 의미론인 [`a
   남길 수 있다.
 - **할당 제거는 별도의 최적화다.** Boxed 타입이라도 함수 밖으로 나가지 않는 box는
   표현 선택과 fusion 사이의 최적화가 필드 값으로 바꿀 수 있다. 이 구간의 box 접근은
-  값 수준이므로, 이 최적화는 `heap.box_value`와 `heap.unbox`의 쌍을 지우는 일이다.
+  값 수준이므로, 이 최적화는 `heap.box_value`와 `heap.unbox_value`의 쌍을 지우는 일이다.
   타입의 표현을 바꾸지 않으며, 그 box가 가리킬 object가 관찰되지 않는다는 사실만 쓴다.
 - **Ownership 계획보다 앞선다.** 표현 선택은 경계 안에서 끝나고 native target은
   ownership 계획보다 먼저 box 접근을 모두 합치므로, ownership 계획이
@@ -197,7 +197,7 @@ compiler가 값마다 표현을 고른다. 표현 선택은 값 의미론인 [`a
   `tribute.cps_continuation_frame_result`
 - 물리 계약으로 옮기지 않은 채 남은 handler/resume/prompt 정체성과 ability row
 - [Fusion 전 형태](tribute-dialects.md#object-접근-fusion)를 벗어난 boxed 타입의
-  `adt` 값과 `adt` enum·배열 값. 그런 값은 `adt` operation이나 `heap.unbox`의 결과로
+  `adt` 값과 `adt` enum·배열 값. 그런 값은 `adt` operation이나 `heap.unbox_value`의 결과로
   나와 `adt` operation과 `heap.box_value`의 operand로만 쓰일 때 출구를 지난다. 출구
   뒤에 값의 표현을 고르는 일이 생기면 ownership 계획이 보지 못한 managed 값이
   생기므로, 표현 선택이 끝나지 않은 IR은 출구를 넘지 않는다. Literal도 같다.

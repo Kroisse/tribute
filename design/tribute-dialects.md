@@ -882,14 +882,14 @@ storage 확정은 다음 변환을 함께 적용한다.
   그 값을 담는 `heap.box_value`가 된다. Capture가 있으면 결과는 capture layout의
   box에서 base의 box로의 upcast이고, 없으면 base 할당 그대로다. Table 참조는 entry 함수 목록을 담은
   `tribute_rt.convention_table`이 만든다.
-- `closure.entry`는 base의 convention table 필드를 `heap.unbox`와
+- `closure.entry`는 base의 convention table 필드를 `heap.unbox_value`와
   `adt.struct_get`으로 읽고 그 table에서 `tribute_rt.convention_entry`로
   convention의 entry를 읽는 일이 된다. 간접 호출은 closure 필드 하나와 table 원소
   하나를 읽는다.
 - 두 `tribute_rt` operation은 경계 출구를 지나며, target 단계가 convention table을 entry
   함수 목록마다 정적 data 하나로 한 번 만든다.
 - `closure.unpack`은 environment 입력을 base의 box에서 정확한 capture layout의 box로
-  바꾸는 `heap.cast` 하나와, 그 box의 `heap.unbox`에서 capture 필드를 읽는 일이
+  바꾸는 `heap.cast` 하나와, 그 box의 `heap.unbox_value`에서 capture 필드를 읽는 일이
   된다. 이 cast는 위의 복원 규칙을 따르며, Wasm에서는 `ref.cast`, native에서는
   pointer 그대로다.
 - `closure.closure<S>`는 모든 type-bearing surface에서 `S`의 base의 box가 된다.
@@ -1289,9 +1289,9 @@ Object는 두 종류다. `heap.box`가 가리키는 object는 만든 뒤 내용�
 `heap` operation은 두 층이다. 경계 변환은 값과 object 사이를 오가고, object
 operation은 `adt` operation을 object 위에서 하는 것이다.
 
-- 경계 변환: `heap.box_value`, `heap.unbox`. `heap.box_value`는 `adt` 값 하나를 담은
-  object를 할당하고 그 box를 낸다. `heap.unbox`는 box가 담은 값을 `adt` 값으로 낸다.
-  Box의 object는 바뀌지 않으므로 `heap.unbox`의 결과는 언제 읽어도 같은 값이다.
+- 경계 변환: `heap.box_value`, `heap.unbox_value`. `heap.box_value`는 `adt` 값 하나를 담은
+  object를 할당하고 그 box를 낸다. `heap.unbox_value`는 box가 담은 값을 `adt` 값으로 낸다.
+  Box의 object는 바뀌지 않으므로 `heap.unbox_value`의 결과는 언제 읽어도 같은 값이다.
   [표현 선택](abi-boundary.md#표현-선택)이 boxed 값을 이 둘과 `adt` 값 operation으로
   나타내고, target lowering의 [object 접근 fusion](#object-접근-fusion)이 object
   operation으로 합친다. Native에서는 두 operation이 ownership 계획 전에 사라지므로
@@ -1331,25 +1331,25 @@ operation이 없으므로 fusion과 관계없이 쓴다.
 
 ### Object 접근 fusion
 
-표현 선택은 boxed 값의 접근을 값 수준으로 남긴다. Box를 읽는 일은 `heap.unbox` 뒤의
+표현 선택은 boxed 값의 접근을 값 수준으로 남긴다. Box를 읽는 일은 `heap.unbox_value` 뒤의
 `adt` 읽기이고, box를 만드는 일은 `adt` 생성이나 갱신 뒤의 `heap.box_value`다. 값
 의미론이 IR에 그대로 드러나므로, 표현 선택 뒤의 최적화는 object의 identity를 따지지
 않고 값 operation으로 다룬다. 함수 밖으로 나가지 않는 box를 필드 값으로 바꾸는 일은
-`heap.unbox`와 `heap.box_value`가 마주 놓인 쌍을 지우는 일이 된다.
+`heap.unbox_value`와 `heap.box_value`가 마주 놓인 쌍을 지우는 일이 된다.
 
 Object 접근 fusion은 이 형태를 object operation으로 합치는 target 단계다. 합칠 때는
 다음 규칙을 따른다.
 
-- `heap.unbox` 결과에 대한 `adt` 읽기는 box를 빌려 읽는 `heap` 읽기가 된다.
+- `heap.unbox_value` 결과에 대한 `adt` 읽기는 box를 빌려 읽는 `heap` 읽기가 된다.
 - `adt` 생성 결과를 담는 `heap.box_value`는 `heap` 할당이 된다. `adt.array_const`를
   담는 `heap.box_value`는 `heap.array_const`가 된다.
-- `heap.unbox` 결과를 source로 한 `adt` 갱신을 담는 `heap.box_value`는 그 box를
+- `heap.unbox_value` 결과를 source로 한 `adt` 갱신을 담는 `heap.box_value`는 그 box를
   소비하는 `heap` 갱신이 된다. Box를 다른 곳에서도 쓰면 ownership 계획이 소비 전에
   unit을 하나 더 획득하므로, fusion은 그 box의 마지막 사용인지 따지지 않는다.
 - Box에서 나오지 않은 값을 source로 한 갱신이나 읽기는 그 값을 먼저 box에 담은 것으로
   보고 합친다.
 - [강제 위치](abi-boundary.md#표현-선택)에서 unboxed 값을 담는 `heap.box_value`는 그
-  값의 필드로 object를 할당하는 `heap` 할당이 된다. 그런 box의 `heap.unbox`가 내는
+  값의 필드로 object를 할당하는 `heap` 할당이 된다. 그런 box의 `heap.unbox_value`가 내는
   unboxed 값은 필드마다의 `heap` 읽기와 그 필드로 만든 `adt.struct_new`가 된다.
 
 표현 선택과 fusion 사이에서 boxed 타입의 `adt` 값은 `adt` operation과
@@ -1360,7 +1360,7 @@ Object 접근 fusion은 이 형태를 object operation으로 합치는 target �
 이 형태는 [representation/ABI 경계](abi-boundary.md#출구-적법성) 출구 계약의
 일부다. Fusion은 출구 뒤 각 target lowering의 첫 단계이며, 어느 형태를 합칠지와 합치지
 않은 형태를 어떻게 내릴지는 target이 정한다. Native는 ownership 계획보다 먼저 모두
-합친다. 그래서 ownership 계획은 `heap.box_value`, `heap.unbox`, boxed 타입의 `adt`
+합친다. 그래서 ownership 계획은 `heap.box_value`, `heap.unbox_value`, boxed 타입의 `adt`
 값을 보지 않고 object operation만 본다.
 
 ### 위치
