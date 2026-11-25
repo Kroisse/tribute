@@ -171,7 +171,7 @@ mod adt {
     /// the field's type as the type of `source` sees it.
     ///
     /// Representation selection leaves the update of a boxed value at the
-    /// value level, between `heap.unbox` and `heap.box_value`. A target's
+    /// value level, between `heap.unbox_value` and `heap.box_value`. A target's
     /// object access fusion may then fuse the three into
     /// `heap.struct_update` (`design/tribute-dialects.md` § "`heap`").
     ///
@@ -384,7 +384,7 @@ mod adt {
     /// ```
     ///
     /// Representation selection leaves the update of a boxed array at the
-    /// value level, between `heap.unbox` and `heap.box_value`. A target's
+    /// value level, between `heap.unbox_value` and `heap.box_value`. A target's
     /// object access fusion may then fuse the three into `heap.array_set`
     /// (`design/tribute-dialects.md` § "`heap`").
     ///
