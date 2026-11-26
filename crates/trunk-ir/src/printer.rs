@@ -1116,7 +1116,6 @@ fn choose_alias_name(
     next_num: &mut usize,
 ) -> String {
     if let Some(base) = crate::asm_format::suggest_type_alias_name(ctx, ty) {
-        let base = base.to_owned();
         if !used_names.contains(&base) {
             return base;
         }
@@ -1774,8 +1773,8 @@ mod tests {
     }
 
     impl crate::asm_format::TypeAliasHint for Record {
-        fn alias_hint<'a>(&self, ctx: &'a IrContext) -> Option<&'a str> {
-            Some(self.name(ctx))
+        fn alias_hint(&self, ctx: &IrContext, out: &mut dyn fmt::Write) -> fmt::Result {
+            out.write_str(self.name(ctx))
         }
     }
 

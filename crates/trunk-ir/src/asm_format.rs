@@ -27,34 +27,45 @@ use itertools::Itertools as _;
 /// `#[dialect]` opts in with `#[alias_hint]`, and a hand-written definition
 /// adds it with [`TypeDef::with_alias_hint`](crate::TypeDef::with_alias_hint).
 /// A type without a suggestion is aliased only when it is complex enough, under
-/// a numbered name.
+/// a numbered name. As MLIR's `getAlias` does, the hint writes the name, so
+/// it can build one from the type's parameters.
 #[diagnostic::on_unimplemented(
     message = "`{Self}` is declared with `#[alias_hint]` but does not implement `TypeAliasHint`",
     label = "`#[alias_hint]` requires this implementation",
-    note = "add `impl TypeAliasHint for {Self} {{ fn alias_hint<'a>(&self, ctx: &'a IrContext) -> Option<&'a str> {{ .. }} }}`"
+    note = "add `impl TypeAliasHint for {Self} {{ fn alias_hint(&self, ctx: &IrContext, out: &mut dyn fmt::Write) -> fmt::Result {{ .. }} }}`"
 )]
 pub trait TypeAliasHint: DialectType {
-    /// Suggest an alias name for this type. A type the wrapper does not
-    /// accept, such as a malformed one, suggests none.
-    fn alias_hint<'a>(&self, ctx: &'a IrContext) -> Option<&'a str>;
+    /// Write an alias name for this type to `out`. Writing nothing suggests
+    /// none, as a type the wrapper does not accept, such as a malformed
+    /// one, does.
+    fn alias_hint(&self, ctx: &IrContext, out: &mut dyn fmt::Write) -> fmt::Result;
 }
 
 /// A type's alias name hint, calling the wrapper's [`TypeAliasHint`] impl.
-pub type TypeAliasHook = for<'a> fn(&'a IrContext, TypeRef) -> Option<&'a str>;
+pub type TypeAliasHook = fn(&IrContext, TypeRef, &mut dyn fmt::Write) -> fmt::Result;
 
 /// `T`'s alias name hint as a [`TypeDef`](crate::TypeDef) stores it.
-pub(crate) fn erased_alias_hint<T: TypeAliasHint>(ctx: &IrContext, ty: TypeRef) -> Option<&str> {
-    T::from_type_ref(ctx, ty)?.alias_hint(ctx)
+pub(crate) fn erased_alias_hint<T: TypeAliasHint>(
+    ctx: &IrContext,
+    ty: TypeRef,
+    out: &mut dyn fmt::Write,
+) -> fmt::Result {
+    match T::from_type_ref(ctx, ty) {
+        Some(ty) => ty.alias_hint(ctx, out),
+        None => Ok(()),
+    }
 }
 
 /// The alias name `ty`'s definition suggests, if any: an identified type's
 /// identifier, or else its alias hint.
-pub fn suggest_type_alias_name(ctx: &IrContext, ty: TypeRef) -> Option<&str> {
+pub fn suggest_type_alias_name(ctx: &IrContext, ty: TypeRef) -> Option<String> {
     if let Some(identifier) = crate::type_def::identifier(ctx, ty) {
-        return Some(identifier);
+        return Some(identifier.to_owned());
     }
     let hint = crate::TypeDef::of(ctx, ty)?.alias_hint?;
-    hint(ctx, ty)
+    let mut name = String::new();
+    hint(ctx, ty, &mut name).ok()?;
+    (!name.is_empty()).then_some(name)
 }
 
 // =============================================================================

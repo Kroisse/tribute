@@ -357,8 +357,8 @@ mod tests {
     }
 
     impl crate::asm_format::TypeAliasHint for HandWritten {
-        fn alias_hint<'a>(&self, _ctx: &'a IrContext) -> Option<&'a str> {
-            Some("handy")
+        fn alias_hint(&self, _ctx: &IrContext, out: &mut dyn std::fmt::Write) -> std::fmt::Result {
+            out.write_str("handy")
         }
     }
 
@@ -372,7 +372,7 @@ mod tests {
         let ty = crate::TypeDataBuilder::new("type_hooks_test.hand_written").intern(&mut ctx);
         assert!(ctx.get_type(ty).name.is_registered());
         assert_eq!(
-            crate::asm_format::suggest_type_alias_name(&ctx, ty),
+            crate::asm_format::suggest_type_alias_name(&ctx, ty).as_deref(),
             Some("handy")
         );
         let verifier = def.verifier.unwrap();
@@ -383,7 +383,9 @@ mod tests {
         // The builders also run outside constant evaluation.
         let built = TypeDef::new("type_hooks_test.unregistered").with_alias_hint::<HandWritten>();
         assert!(built.verifier.is_none() && built.asm_format.is_none());
-        assert_eq!((built.alias_hint.unwrap())(&ctx, ty), Some("handy"));
+        let mut hint = String::new();
+        (built.alias_hint.unwrap())(&ctx, ty, &mut hint).unwrap();
+        assert_eq!(hint, "handy");
     }
 
     #[test]

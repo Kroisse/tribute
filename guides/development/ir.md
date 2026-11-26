@@ -255,9 +255,12 @@ where
   `with_asm_format`. A `#[verify]` type's wrapper accepts only types that
   pass the verifier, so its `params(..)` builder's `intern` runs the verifier
   and returns a `Result`. `#[alias_hint]` requires
-  `trunk_ir::asm_format::TypeAliasHint`, the alias name the printer gives
-  the type when it generates aliases; a hand-written `TypeDef` adds it with
-  `with_alias_hint`. `#[implements(..)]` on a type registers the wrapper's
+  `trunk_ir::asm_format::TypeAliasHint`, which writes the alias name the
+  printer gives the type when it generates aliases, as MLIR's `getAlias`
+  does, so a hint can build a name from the type's parameters, as
+  `heap.box` writes `Point_box`; writing nothing suggests none. A
+  hand-written `TypeDef` adds it with `with_alias_hint`.
+  `#[implements(..)]` on a type registers the wrapper's
   [type interfaces](#type-interfaces).
 - `#[identified]` on a type requires `trunk_ir::type_def::IdentifiedType`,
   whose `identifier` reads an instance's identifier; a hand-written

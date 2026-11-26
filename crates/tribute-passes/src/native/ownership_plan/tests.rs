@@ -907,8 +907,8 @@ const LAST_USE_MOVES: &str = r#"core.module @test {
 const BOX_CAST: &str = r#"core.module @test {
   !Point = adt.struct<"Point", (core.i32, tribute_rt.anyref)>
   func.func @is_null(%point: heap.box<!Point>) -> core.i1 {
-    %nullable = heap.cast %point : heap.box<!Point> to heap.box<!Point, {nullable = true}>
-    %null = heap.is_null %nullable : heap.box<!Point, {nullable = true}>
+    %nullable = heap.cast %point : heap.box<!Point> to heap.box<null !Point>
+    %null = heap.is_null %nullable : heap.box<null !Point>
     func.return %null
   }
 }"#;
