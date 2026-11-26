@@ -176,7 +176,8 @@ ExitBoundary        closure storage layout, literal expansion (Bytes and
                     String literals to adt values over adt.array_const),
                     representation selection (boxed adt values to heap.box;
                     unboxed values stay adt values and inline fields;
-                    box access stays at the value level),
+                    box access stays at the value level; boxed struct
+                    types recorded in the module),
                     value integrity check, global DCE, canonicalization,
                     boundary exit verification
 ── target dialect lowering ──
@@ -214,7 +215,6 @@ memory layout.
 After the [boundary](#pipeline-order) exit, Wasm dialect lowering runs:
 
 ```text
-object access fusion
 validate_lowerable_structured_control
 unboxed value scalarization
 convert_builtin_layouts (heap.cell included)
@@ -257,7 +257,8 @@ func_to_wasm
 
 `heap` is a Tribute dialect, so its Wasm lowering belongs to `tribute-passes`,
 not to this pass group. `convert_builtin_layouts` turns each `heap.cell` into
-the one-field struct that holds its value, and `adt_to_wasm` lowers the rest.
+the one-field struct that holds its value, and `adt_to_wasm` lowers the rest,
+including `adt` operations on boxed values, directly to GC object accesses.
 
 Expected boundary: backend-ready Wasm IR contains `wasm.*` plus explicitly
 allowed infrastructure operations.
@@ -271,7 +272,6 @@ boundary before emission.
 After the [boundary](#pipeline-order) exit, native lowering runs:
 
 ```text
-object access fusion
 native String/Bytes/I/O/List lowering
 scf_to_cf
 typed ownership/RTTI planning + explicit RC materialization

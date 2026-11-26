@@ -114,7 +114,7 @@ std::runtime::ByteArray:  adt.array<core.i8>  →  [len: i64] [bytes...]
   release는 일반 struct의 [type-specific release](#type-specific-release)이고, byte
   배열의 release는 managed 원소가 없는 배열의 release다.
 - `start + len ≤ len(data)`는 `std`가 지키는 불변식이다([string.md](string.md#내부-표현)).
-  메모리 안전성은 이 불변식에 기대지 않는다. `heap.array_get`은 범위 밖 index를 trap으로
+  메모리 안전성은 이 불변식에 기대지 않는다. 배열의 `adt.array_get`은 범위 밖 index를 trap으로
   끝내고, byte 범위를 받는 runtime 함수는 overflow를 검사한 덧셈으로 범위를 확인한 뒤
   벗어나면 실행을 끝낸다. 범위 검사 없이 byte 주소를 만드는 경로는 없다.
 
@@ -153,7 +153,7 @@ Array: [len: i64] [element: E...]
 ### 정적 객체
 
 정적 객체는 compiler가 프로그램의 data에 둔, 해제되지 않는 RC 객체다. 지금은
-byte 배열 상수(원소가 `core.i8`인 `heap.array_const`)만 정적 객체가 된다.
+byte 배열 상수(원소가 `core.i8`인 `adt.array_const`)만 정적 객체가 된다.
 
 ```text
 [-8] refcount: u32 = 2^31
@@ -406,8 +406,8 @@ Operation이 operand의 unit을 어떻게 다루는지는 그 operation이
 - `Forward`: 결과가 다른 type의 operand 자신이며 같은 unit을 나눈다.
 - `Consume`: operand의 unit이 operation으로 옮겨 가고, operation은 operand가
   가리키는 object로 결과를 만든다. Operand가 object의 유일한 참조이면 그 object를
-  다시 쓰고, 아니면 복사한 뒤 unit을 release한다. `heap.struct_update`와
-  `heap.array_set`의 source가 이 역할이다.
+  다시 쓰고, 아니면 복사한 뒤 unit을 release한다. Boxed 값의 `adt.struct_update`와
+  `adt.array_set`의 source가 이 역할이다.
 - `Initialize`: operand의 unit이 결과의 새 object의 field로 옮겨 간다.
 - `Assign`: operand의 unit이 다른 operand가 가리키는 기존 object의 field로 옮겨
   가고, 바뀌기 전 값의 unit은 replaced-field release로 release한다. 그 값을 읽는
@@ -419,7 +419,24 @@ materialization은 operand 역할을 이 인터페이스로만 읽으며 operati
 elision이 operand 역할로 정한다. 인터페이스가 없는 operation의 operand에는
 planner가 적용할 역할이 없다. Call, return, branch와 `tribute_rt.into_raw`는
 각자의 계약을 따른다. 각 operation의 역할은 그 operation 선언의 doc comment가
-정한다.
+정한다. `adt` operation과 `heap.box_value`, `heap.unbox_value`처럼 값 타입의 표현에
+따라 역할이 달라지는 operation은
+[표현 선택](abi-boundary.md#표현-선택)이 module에 기록한 표현으로 역할을 고른다.
+
+Boxed 타입의 `adt` operation은 다음 역할을 가진다
+([표현 선택 뒤의 형태](tribute-dialects.md#표현-선택-뒤의-형태)).
+
+- 할당: `adt.struct_new`, `adt.variant_new`, `adt.array_of`, `adt.array_splice`,
+  `adt.array_new`, `adt.array_const`는 새 object를 결과로 낸다. Object에 저장되는
+  operand는 `Initialize`다. `adt.array_new`의 `initial`과 `adt.array_splice`의
+  `source`는 `Borrow`이며, 복사한 managed 원소마다 operation이 unit을 획득한다.
+- 읽기: `adt.struct_get`, `adt.variant_get`, `adt.array_get`의 object operand는
+  `Project`이고, `adt.variant_is`, `adt.variant_tag`, `adt.array_len`은 `Borrow`다.
+- 갱신: `adt.struct_update`와 `adt.array_set`의 source는 `Consume`이고, 넣는 값은
+  `Initialize`처럼 결과 object의 필드로 옮겨 가는 저장 자리다.
+- `heap.box_value`와 `heap.unbox_value`는 `Forward`다. 값과 그 box는 같은 object이며
+  unit 하나를 나눈다. 강제 위치에서 unboxed 타입의 값을 담을 때는 `heap.box_value`의
+  operand가 `Initialize`이고 `heap.unbox_value`가 `Project`다.
 
 **Algorithm:**
 
@@ -441,10 +458,11 @@ unit을 획득한다.
 위치로 돌려주면 첫 위치만 source의 unit을 받고, 나머지 위치마다 return 직전에 새
 unit을 획득한다. Borrowed source는 모든 위치에서 새 unit을 획득한다.
 
-Aggregate field로의 저장(`heap.struct_new`, `heap.variant_new`의 값,
-`heap.struct_update`와 `heap.array_set`이 넣는 값, `heap.array_of`와
-`heap.array_splice`의 `elements`, `heap.cell_new`와 `heap.cell_set`의 값),
-`heap.struct_update`와 `heap.array_set`의 source box, ordinary call의 consumed
+Aggregate field로의 저장(boxed 값의 `adt.struct_new`, `adt.variant_new`의 값,
+`adt.struct_update`와 `adt.array_set`이 넣는 값, `adt.array_of`와
+`adt.array_splice`의 `elements`, 강제 위치에서 unboxed 값을 담는 `heap.box_value`의
+operand, `heap.cell_new`와 `heap.cell_set`의 값), boxed 값의 `adt.struct_update`와
+`adt.array_set`의 source, ordinary call의 consumed
 매개변수는 독립된 unit을 받는 자리다. 기준 동작은 그
 자리마다 직전에 새 unit을 획득하고 값의 unit은 값에 남긴다. Last-use move 정책을
 켜면 그 operation이 값의 마지막 사용일 때 값의 unit을 그 자리로 옮기고, 획득도 뒤따르는
@@ -454,20 +472,21 @@ operation이 값이나 값에서 파생된 borrow를 쓰지 않는다. 옮길 un
 값은 owned root여야 하며, 파생 borrow와 borrowed 매개변수는 옮기지 않는다. 또한 그
 operation이 값의 root에 닿는 모든 operand가 unit을 받는 자리여야 한다. Indirect
 call의 callee, `heap.cell_set`의 대상 cell, borrowed·retained
-매개변수로의 argument, `heap.array_new`의 `initial`, `heap.array_splice`의 `source`,
+매개변수로의 argument, `adt.array_new`의 `initial`, `adt.array_splice`의 `source`,
 값에서 파생된 borrow는 호출이나 저장 동안 caller의
 unit에 기대므로, 이런 operand가
 하나라도 있으면 모든 자리가 기준 동작대로 획득한다. 한 operation이 한 값을 여러
 자리에 넘기면 첫 자리만 unit을 받고 나머지는 획득한다.
 
-`heap.array_new`는 `initial`을, `heap.array_splice`는 `source`를 operation 동안
+`adt.array_new`는 `initial`을, `adt.array_splice`는 `source`를 operation 동안
 빌린다. `initial`을 담은 원소마다, 그리고 `source`에서 결과로 복사한 managed 원소마다
 operation 자신이 unit을 하나씩 획득한다. 이 원소의 수는 실행 때 정해지므로 plan은
 이 획득을 action으로 갖지 않으며, release 함수가 field를 release하는 것처럼
 operation의 lowering이 소유한다. 결과는 unit 하나를 갖는 새 owned 값이다.
 
-`heap.struct_update`와 `heap.array_set`은 source box의 unit을 소비하고 unit 하나를
-가진 결과 box를 낸다. Lowering은 source object의 refcount가 1이면 그 object를
+Boxed 값의 `adt.struct_update`와 `adt.array_set`은 source object의 unit을 한 번
+소비하고 unit 하나를 가진 결과 object를 낸다. `adt.struct_update`가 필드 여럿을
+바꿔도 source는 한 번만 소비한다. Lowering은 source object의 refcount가 1이면 그 object를
 제자리에서 고쳐 결과로 쓴다. 바뀌는 필드나 원소의 옛 값은 replaced-field release로
 release하고 새 값을 쓰며, 나머지 필드의 unit은 그대로 결과로 넘어간다. Refcount가
 1보다 크면 같은 크기의 새 object를 할당해 바뀌지 않는 managed 필드와 원소를 retain해
@@ -531,6 +550,13 @@ block을 만들므로 이런 edge를 만들지 않는다.
 자체로 managed다. Cell object는 담은 managed 값의 unit 하나를 가지며, `Done` closure가
 capture한 completion cell처럼 cell을 다른 object에 담으면 그 필드가 cell의 unit 하나를
 가진다. `tribute_rt.anyref`/`intref`도 각자의 typed contract로 분류한다.
+
+`adt` 값의 분류는 [표현 선택](abi-boundary.md#표현-선택)이 module에 기록한 타입의
+표현을 따른다. Boxed 타입의 `adt` 값은 그 box와 같은 object이며, object의 unit
+하나를 box와 나눈다. 그 operation의 역할은
+[위](#1-typed-ownership-and-rtti-plan)의 boxed `adt` operation 목록이 정한다.
+
+아래 규칙은 unboxed 타입의 `adt` 값에만 적용한다.
 Unboxed `adt` 값은 managed leaf가 하나 이하이므로, managed leaf가 있으면 그 leaf의
 unit 하나를 가진 managed 값이다. 이 분류는 `ManagedRefType` 표지가 아니라 layout의
 필드 타입에서 정한다. 값과 그 managed leaf는 같은 unit을 나누므로:
@@ -538,8 +564,8 @@ unit 하나를 가진 managed 값이다. 이 분류는 `ManagedRefType` 표지�
 - `adt.struct_new`의 managed operand는 unit을 받는 자리다. 결과 값이 그 unit을
   가진다.
 - `adt.struct_get`이 managed leaf를 꺼내면 그 결과는 값에서 파생된 borrow다.
-- `adt.struct_update`는 source 값을 소비한다. Managed leaf를 바꾸면 새 leaf operand는
-  unit을 받는 자리이고 이전 leaf의 unit은 release한다. 다른 leaf를 바꾸면 source의
+- `adt.struct_update`는 source 값을 소비한다. 바꾸는 필드에 managed leaf가 들어 있으면 새 leaf operand는
+  unit을 받는 자리이고 이전 leaf의 unit은 release한다. 다른 필드만 바꾸면 source의
   unit이 결과로 넘어간다.
 
 이 operation들은 그 밖의 RC 동작을 만들지 않는다. 한 unboxed 값을 두 번 쓰면 unit을
@@ -620,21 +646,23 @@ into control flow and atomic operations by RC lowering.
   Borrowed 사용은 operation이 `OperandOwnership`으로 선언한 operand 역할로
   판정하며, 다음뿐이다.
 
-  - `Borrow`, `Project`, `Copy` operand. `heap.struct_get`, `heap.variant_get`,
-    `heap.variant_is`, `heap.is_null`, `heap.array_get`, `heap.array_len`,
-    `heap.cell_get`의 대상이 여기에 속한다. 단, 같은 operation이 그 operand를 `Assign`의 대상으로
-    삼으면 escape다. 대상 object에 쓰면 바뀌기 전 field가 release되는데, caller가
-    그 field를 borrowed projection으로 아직 쥐고 있을 수 있다.
-  - `Forward` operand. `heap.cast`와 unrealized conversion cast가 여기에
-    속한다. Result의 모든 사용이 다시 borrowed 사용일 때만 transparent하다.
+  - `Borrow`, `Project`, `Copy` operand. Boxed 값의 `adt.struct_get`,
+    `adt.variant_get`, `adt.variant_is`, `adt.variant_tag`, `adt.array_get`,
+    `adt.array_len`과 `heap.is_null`, `heap.cell_get`의 대상이 여기에 속한다. 단,
+    같은 operation이 그 operand를 `Assign`의 대상으로 삼으면 escape다. 대상
+    object에 쓰면 바뀌기 전 field가 release되는데, caller가 그 field를 borrowed
+    projection으로 아직 쥐고 있을 수 있다.
+  - `Forward` operand. `heap.cast`, boxed 타입의 `heap.box_value`와
+    `heap.unbox_value`, unrealized conversion cast가 여기에 속한다. Result의 모든
+    사용이 다시 borrowed 사용일 때만 transparent하다.
   - Direct `func.call`의 argument. Callee의 대응 매개변수가 borrowed summary를
     가질 때만 해당한다.
 
   그 밖의 모든 사용은 escape이며 retained를 선택한다. 값으로서의 return과
   `Initialize`나 `Assign` operand로서의 저장, `Consume` operand, `Assign`의 대상,
   branch와 block argument 전달, indirect call과 tail call, 다른 region에서의 사용, 역할을
-  선언하지 않은 operation이 여기에 속한다. `heap.struct_update`와
-  `heap.array_set`의 source, `heap.array_set`과 `heap.cell_set`의 대상이 그 예다.
+  선언하지 않은 operation이 여기에 속한다. Boxed 값의 `adt.struct_update`와
+  `adt.array_set`의 source, `heap.cell_set`의 대상이 그 예다.
   Closure, ability handler, continuation capture는 저장이므로 escape다.
 
   Summary는 direct call graph 위의 fixed point다. 후보 매개변수를 borrowed로 두고
@@ -657,8 +685,8 @@ into control flow and atomic operations by RC lowering.
   For a proven borrowed parameter, RC insertion omits both the entry `retain`
   and every parameter `release`; this keeps acquisition and release decisions
   under one ownership proof instead of matching generated releases afterward.
-- **Temporary field borrows:** Typed planning은 `heap.struct_get` 또는
-  `heap.variant_get`이 읽은 exact declared managed field와 `heap.array_get`이 읽은
+- **Temporary field borrows:** Typed planning은 boxed 값의 `adt.struct_get` 또는
+  `adt.variant_get`이 읽은 exact declared managed field와 `adt.array_get`이 읽은
   managed 원소를 그 projection의 owner에서 파생된 temporary borrow로 분류할 수
   있다. Managed leaf를 가진 inline 필드도 바깥 object의 declared managed field이며,
   그 필드를 읽은 unboxed 값은 같은 규칙으로 borrow가 된다.
@@ -680,8 +708,8 @@ into control flow and atomic operations by RC lowering.
     해당한다. Retained 매개변수로의 ordinary call은 callee가 스스로 unit을 획득하고
     caller의 root가 호출 동안 살아 있으므로 caller-side 획득이 없다.
   - Box가 가리키는 object는 다른 참조가 보는 동안 바뀌지 않으므로, box에서 읽은
-    projection은 borrow할 수 있다. `heap.struct_update`와 `heap.array_set`이 source
-    alias root(cast를 거친 alias 포함)의 unit을 소비하는 것은 그 root의 마지막 사용일
+    projection은 borrow할 수 있다. `adt.struct_update`와 `adt.array_set`이 source
+    alias root(cast와 경계 변환을 거친 alias 포함)의 unit을 소비하는 것은 그 root의 마지막 사용일
     때뿐이므로, 파생 borrow가 갱신 뒤에도 쓰이면 갱신은 새 unit을 획득하고 복사로
     끝난다.
   - `heap.cell_get`의 결과는 `Copy`이므로 borrow하지 않고 읽은 직후 자신의 unit을
@@ -904,7 +932,7 @@ Native closure는 RC header, convention table 주소, capture를 담은 RC 객�
 ([closure 저장 layout](tribute-dialects.md#closure-저장-layout),
 [native 배치](cranelift-backend.md#메모리-관리-reference-counting)).
 
-- `closure.new`는 capture layout의 `heap.struct_new`가 되므로 각 capture는 aggregate
+- `closure.new`는 capture layout의 boxed `adt.struct_new`가 되므로 각 capture는 aggregate
   field로의 저장이다. Capture 자리는 독립된 unit을 받으며, capture가 값의 마지막
   사용이면 [last-use move](#1-typed-ownership-and-rtti-plan) 규칙을 그대로 따른다.
   Capture 없는 closure는 base layout 할당이며 unit을 받는 필드가 없다.
@@ -956,8 +984,8 @@ managed 참조는 항상 그 저장보다 먼저 만들어진 object를 가리�
   있으므로 순환을 닫지 못한다.
 - **Evidence와 marker도 만든 뒤 바뀌지 않는다.** [Evidence](#evidence)가 정한 대로
   먼저 만들어진 object만 가리킨다.
-- **유일한 object의 제자리 갱신은 순환을 닫지 못한다.** `heap.struct_update`와
-  `heap.array_set`은 refcount가 1인 object만 제자리에서 고친다. Source는 owned root이고
+- **유일한 object의 제자리 갱신은 순환을 닫지 못한다.** Boxed 값의 `adt.struct_update`와
+  `adt.array_set`은 refcount가 1인 object만 제자리에서 고친다. Source는 owned root이고
   갱신이 그 하나뿐인 unit을 소비했으므로, 다른 어떤 object나 참조도 그 object를 가리키지
   않는다. 그래서 새로 쓰는 값이 그 object에 닿을 수 없다. Borrowed 매개변수나 파생
   borrow는 unit이 없으므로 source가 될 때 갱신은 새 unit을 획득하고 복사한다.
@@ -978,9 +1006,9 @@ managed 참조는 항상 그 저장보다 먼저 만들어진 object를 가리�
   Root `main`의 delimiter는 `Nil`을 답으로 받으므로 managed 참조를 쓰지 않는다.
   One-shot resumption이 소비 여부를 표시하는 cell은 managed가 아닌 flag를 담는다.
   [Cell에서 읽은 값](#3-rc-optimization-pass)은 borrow하지 않는다.
-- **배열도 만든 뒤 다른 참조가 보는 원소가 바뀌지 않는다.** `heap.array_new`,
-  `heap.array_of`, `heap.array_splice`는 operand와 `source`의 원소로 새 배열을 채우므로
-  struct처럼 이미 있는 object만 담는다. `heap.array_set`은 위의 유일한 object 규칙을
+- **배열도 만든 뒤 다른 참조가 보는 원소가 바뀌지 않는다.** `adt.array_new`,
+  `adt.array_of`, `adt.array_splice`는 operand와 `source`의 원소로 새 배열을 채우므로
+  struct처럼 이미 있는 object만 담는다. `adt.array_set`은 위의 유일한 object 규칙을
   따른다. 공유된 배열을 제자리에서 바꾸는 쓰기는 없다.
 - **Inline 값은 간선을 더하지 않는다.** Object 안에 inline으로 놓인 값의 managed
   leaf는 바깥 object가 직접 가진 필드이며, 만들 때 채우는 다른 필드처럼 이미 있는
@@ -1124,7 +1152,7 @@ RTTI index는 전체 프로그램 컴파일을 전제로 한 프로그램 내부
 
 - Compiler MAY reorder struct fields for optimal layout
 - Original field order preserved in `field_offsets` mapping
-- All access via `heap.struct_get(field_idx)` uses offset from mapping
+- All access via boxed `adt.struct_get(field_idx)` uses offset from mapping
 
 **Example:**
 

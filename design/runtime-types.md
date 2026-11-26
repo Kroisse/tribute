@@ -135,8 +135,9 @@ Nominal IR에는 descriptor 선언이 없다. Descriptor의 identity는 할당 o
   경계는 `(layout 타입, tag)`마다 번호와 필드 종류를 정해 module 수준
   `tribute_rtti.layout` 선언으로 남긴다. Native 배열의 descriptor는
   `(adt.array 타입, tag 없음)`이다. `adt.array<core.i8>`의 번호는 이 경계가 정하지
-  않고 예약 번호를 그대로 쓴다. 할당 operation(`heap.struct_new`,
-  `heap.variant_new`, native에서 배열을 만드는 [`heap` 배열 operation](tribute-dialects.md#heap))을
+  않고 예약 번호를 그대로 쓴다. 할당 operation(boxed 값의 `adt.struct_new`,
+  `adt.variant_new`, native에서 배열을 만드는 [`adt` 배열 operation](tribute-dialects.md#adt-배열),
+  강제 위치에서 unboxed 값을 담는 `heap.box_value`)을
   내리는 pass는 번호를 스스로 정하지 않고 이 선언에서 읽어 할당에 새긴 뒤 선언을
   지운다. Native는 RC header의 RTTI index, Wasm은 사용자 struct와 variant 객체의
   첫 필드에 새긴다.
@@ -207,7 +208,7 @@ WasmGC 객체에는 header가 없으므로 객체가 descriptor를 필드로 가
   비교한다. Payload에는 tag 필드를 두지 않고, variant 객체는 자기 필드만 가진다.
 - 프로그램이 할당하지 않는 variant는 descriptor 번호가 없으며, 그 variant에 대한
   판별은 두 target 모두에서 항상 거짓이다.
-- 값의 variant가 enum 선언에서 몇 번째인지(`heap.variant_tag`)도 descriptor로
+- 값의 variant가 enum 선언에서 몇 번째인지(`adt.variant_tag`)도 descriptor로
   구한다. Wasm은 descriptor 필드에서 enum의 첫 번호를 뺀다. Native는
   [RTTI table](rc.md#rtti-table)에서 그 descriptor 레코드의 `tag_index`를 읽는다.
   두 target 모두 할당 여부와 관계없이 선언 위치를 낸다.

@@ -145,11 +145,6 @@ pub enum OperandRole {
     Copy { object: TypeRef, field: TypeRef },
     /// Result 0 is the operand itself as another type, sharing its unit.
     Forward,
-    /// The operand's unit moves into the operation, which builds result 0
-    /// from the object the operand refers to: it reuses that object when
-    /// the operand is its only reference, and otherwise copies it and
-    /// releases the unit.
-    Consume,
     /// The operand's unit moves into a field of type `field` of the new
     /// object that result 0 refers to.
     Initialize { field: TypeRef },
