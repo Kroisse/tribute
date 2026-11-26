@@ -3,7 +3,7 @@ mod d {
     mod d {
         struct Slot {
             #[default(false)]
-            pinned: Attr<bool>,
+            pinned: Option<Attr<bool>>,
         }
     }
 }

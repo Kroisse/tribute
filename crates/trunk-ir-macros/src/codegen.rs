@@ -1180,15 +1180,19 @@ fn gen_type_struct_and_trait(
     let full_name = format!("{dialect}.{type_name}");
     let def_static = format_ident!("__{}_TYPE_DEF", type_name.to_shouty_snake_case());
     // The spans point a missing impl at its attribute.
-    let verifier = match td.verify {
-        Some(span) => {
-            let mut sname = sname.clone();
-            sname.set_span(span);
-            quote_spanned!(span=> Some(
-                <#sname as #crate_path::ops::__private::DeclaredVerifyType>::VERIFIER
-            ))
-        }
-        None => quote!(None),
+    let declared_verifier = td.verify.map(|span| {
+        let mut sname = sname.clone();
+        sname.set_span(span);
+        quote_spanned!(span=>
+            <#sname as #crate_path::ops::__private::DeclaredVerifyType>::VERIFIER
+        )
+    });
+    let verifier = match gen_type_default_check(crate_path, td, declared_verifier.as_ref()) {
+        Some(check) => quote!(Some(#check)),
+        None => match declared_verifier {
+            Some(verifier) => quote!(Some(#verifier)),
+            None => quote!(None),
+        },
     };
     let asm_format = match td.asm_format {
         Some(span) => {
@@ -1274,6 +1278,50 @@ fn gen_type_struct_and_trait(
             }
         }
     }
+}
+
+/// For a type with a `#[default(v)]` attribute, a verifier that rejects the
+/// default written out, then runs the declared verifier, if any. A type is
+/// interned by its contents, so a written default would be another type
+/// than the one its absence spells.
+fn gen_type_default_check(
+    crate_path: &TokenStream,
+    td: &TypeDefData,
+    declared: Option<&TokenStream>,
+) -> Option<TokenStream> {
+    let checks = td
+        .attrs
+        .iter()
+        .filter_map(|attr| {
+            let is_default = gen_is_default(crate_path, attr)?;
+            let name = &attr.name;
+            let message =
+                format!("attribute `{name}` holds its default value; absence is its only spelling");
+            Some(quote! {
+                if attrs.get(#name).is_some_and(|value| (#is_default)(ctx, value)) {
+                    return Err(#message.into());
+                }
+            })
+        })
+        .collect::<Vec<_>>();
+    if checks.is_empty() {
+        return None;
+    }
+    let declared = match declared {
+        Some(verifier) => quote!((#verifier)(ctx, ty)),
+        None => quote!(Ok(())),
+    };
+    Some(quote! {{
+        fn __verify_defaults(
+            ctx: &#crate_path::IrContext,
+            ty: #crate_path::TypeRef,
+        ) -> Result<(), #crate_path::ops::VerificationError> {
+            let attrs = ctx.type_attrs(ty);
+            #(#checks)*
+            #declared
+        }
+        __verify_defaults
+    }})
 }
 
 /// Whether `ty` has the declared parameter count and attributes: required
@@ -1423,7 +1471,15 @@ fn gen_type_builder(crate_path: &TokenStream, dialect: &str, td: &TypeDefData) -
             let #field = self.#field.map(|value| #kind::write(ctx, value));
         });
         methods.push(gen_attr_setter(crate_path, attr));
-        if attr.optional {
+        if let Some(is_default) = gen_is_default(crate_path, attr) {
+            // Absence is the canonical form of the default, so the builder
+            // never stores it.
+            build_stmts.push(quote! {
+                if let Some(value) = #field.filter(|value| !(#is_default)(ctx, value)) {
+                    __builder = __builder.attr(#name_str, value);
+                }
+            });
+        } else if attr.optional {
             build_stmts.push(quote! {
                 if let Some(value) = #field {
                     __builder = __builder.attr(#name_str, value);

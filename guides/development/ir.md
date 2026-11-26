@@ -127,9 +127,13 @@ where
   floating-point values by their bits, so `-0.0` is not the default `0.0`.
   The accessor returns `v` when the
   attribute is absent, and the builder, the parser, and the printer drop a
-  value equal to `v`, so absence is the canonical form. Type attributes take
-  no default. Results are `Value<C>` or `Option<Value<C>>` (accessor
-  `result`) or `Variadic<C>` / `Values<L>` (accessor `results`). The macro
+  value equal to `v`, so absence is the canonical form. A type attribute
+  takes a default the same way, as `heap.box` declares `nullable`. A type is
+  interned by its contents, so a written default would be another type: the
+  builder omits it, and the definition's verifier, which IR validation runs,
+  rejects a type that holds it. Results are `Value<C>` or
+  `Option<Value<C>>` (accessor `result`) or `Variadic<C>` / `Values<L>`
+  (accessor `results`). The macro
   implements the `ops::VariadicResults` mixin for every wrapper with
   variadic results, as ODS attaches MLIR's `OpTrait::VariadicResults`:
   `single_result` returns the result of an operation with exactly one, and

@@ -205,6 +205,35 @@ mod tests {
         struct Tagged<Elem> {
             tag: Attr<String>,
         }
+
+        struct Slot {
+            #[default(false)]
+            pinned: Attr<bool>,
+        }
+    }
+
+    #[test]
+    fn a_default_type_attribute_has_one_spelling() {
+        let mut ctx = IrContext::new();
+        let plain = Slot::params().intern(&mut ctx);
+        // The builder omits the default, so both spell the same type.
+        assert_eq!(Slot::params().pinned(false).intern(&mut ctx), plain);
+        assert!(!plain.pinned(&ctx));
+        let pinned = Slot::params().pinned(true).intern(&mut ctx);
+        assert_ne!(pinned, plain);
+        assert!(pinned.pinned(&ctx));
+
+        // The default written out is another interned type, which the
+        // definition's verifier rejects and no wrapper accepts.
+        let written = crate::TypeDataBuilder::new(Slot::NAME)
+            .attr("pinned", false)
+            .intern(&mut ctx);
+        let verifier = TypeDef::of(&ctx, written)
+            .and_then(|def| def.verifier)
+            .unwrap();
+        assert!(verifier(&ctx, written).is_err());
+        assert!(Slot::from_type_ref(&ctx, written).is_none());
+        assert!(verifier(&ctx, pinned.as_type_ref()).is_ok());
     }
 
     impl crate::type_verifier::VerifyType for Checked {

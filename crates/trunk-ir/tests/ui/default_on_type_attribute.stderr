@@ -1,4 +1,4 @@
-error: a type attribute takes no `#[default(..)]`: types intern their attributes, so a stored default would make another type
+error: attribute `pinned` is `Option<Attr<..>>`; a defaulted attribute is `Attr<..>`
  --> tests/ui/default_on_type_attribute.rs:2:5
   |
 2 |     #[trunk_ir::dialect]
