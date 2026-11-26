@@ -22,6 +22,7 @@ fn describe(db: &dyn salsa::Database, step: &EvidenceStep<'_>) -> String {
         EvidenceStep::Dup(instance) => format!("dup {}", instance.ability_id.name(db)),
         EvidenceStep::Push(instance) => format!("push {}", instance.ability_id.name(db)),
         EvidenceStep::Select(index) => format!("select {index}"),
+        EvidenceStep::Fresh => "fresh".to_owned(),
         EvidenceStep::Tails(plans) => format!(
             "tails {}",
             plans.iter().format_with(" ", |plan, f| f(&format_args!(
@@ -357,6 +358,57 @@ fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
             .all(|plan| !plan.starts_with("go(")),
         "{:#?}",
         plans(db, source)
+    );
+}
+
+/// A tail whose row is closed takes a fresh evidence with the handlers that
+/// row names: the caller's evidence holds handlers it cannot reach, and the
+/// handler the callee pushes on the selected tail would stack on one of them.
+/// A caller whose closed row names the same instances passes its own.
+#[salsa_test]
+fn a_closed_tail_takes_a_fresh_evidence(db: &salsa::DatabaseImpl) {
+    let source = format!(
+        "{STATE}{}",
+        r#"
+fn two(f: fn(Int) ->{State(Int), e1} Int, g: fn() ->{e2} Nil, n: Int) ->{State(Int), e1, e2} Int {
+    g()
+    f(n)
+}
+
+fn closed(n: Int) ->{State(Int)} Int {
+    two(closed, fn() { Nil }, n)
+}
+
+fn open(n: Int, h: fn() ->{r} Nil) ->{State(Int), r} Int {
+    two(closed, h, n)
+}
+
+fn same(f: fn(Int) ->{e1} Int, g: fn() ->{e2} Nil, n: Int) ->{e1, e2} Int {
+    g()
+    f(n)
+}
+
+fn passes(n: Int) ->{State(Int)} Int {
+    same(passes, fn() { State::set(n) }, n)
+}
+"#
+    );
+    let plans = plans(db, &source);
+    assert!(
+        plans.contains(&"f(n): select 0, push State".to_owned()),
+        "{plans:#?}"
+    );
+    assert!(
+        plans.contains(&"two(closed, fn() { Nil }, n): tails [fresh] [fresh]".to_owned()),
+        "{plans:#?}"
+    );
+    assert!(
+        plans.contains(&"two(closed, h, n): tails [fresh] [mask State]".to_owned()),
+        "{plans:#?}"
+    );
+    assert!(
+        plans.contains(&"same(passes, fn() { State::set(n) }, n): tails [] []".to_owned()),
+        "{plans:#?}"
     );
 }
 

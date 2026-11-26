@@ -180,7 +180,7 @@ impl<'db> TypeVisitable<'db> for EvidenceStep<'db> {
             Self::Mask(instance) | Self::Dup(instance) | Self::Push(instance) => {
                 AbilityInstance::visit_with(instance, visitor)
             }
-            Self::Select(_) => ControlFlow::Continue(()),
+            Self::Select(_) | Self::Fresh => ControlFlow::Continue(()),
             Self::Tails(plans) => plans.visit_with(visitor),
         }
     }
@@ -193,6 +193,7 @@ impl<'db> TypeFoldable<'db> for EvidenceStep<'db> {
             Self::Dup(instance) => Self::Dup(instance.try_fold_with(folder)?),
             Self::Push(instance) => Self::Push(instance.try_fold_with(folder)?),
             Self::Select(index) => Self::Select(index),
+            Self::Fresh => Self::Fresh,
             Self::Tails(plans) => Self::Tails(plans.try_fold_with(folder)?),
         })
     }

@@ -37,6 +37,7 @@ impl FunctionEntry {
     /// each above that row's tail, which the function and each of its tails
     /// must not see, so each selection first masks them; `tails` reads the
     /// evidence the call starts with, so its selections mask them as well.
+    /// A selection that starts fresh holds none of them.
     pub(crate) fn widened(&self, added: &[SymbolPath]) -> Self {
         use tribute_ir::dialect::tribute_control::EvidenceStep;
         let masks = || added.iter().cloned().map(EvidenceStep::Mask);
@@ -46,7 +47,10 @@ impl FunctionEntry {
                     EvidenceStep::Tails(plans) => EvidenceStep::Tails(
                         plans
                             .iter()
-                            .map(|plan| masks().chain(plan.iter().cloned()).collect())
+                            .map(|plan| match plan.first() {
+                                Some(EvidenceStep::Fresh) => plan.clone(),
+                                _ => masks().chain(plan.iter().cloned()).collect(),
+                            })
                             .collect(),
                     ),
                     step => step.clone(),

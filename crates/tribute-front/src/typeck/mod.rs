@@ -266,8 +266,11 @@ pub enum EvidenceStep<'db> {
     /// The callee's row tail is the caller's row tail of this index, so the
     /// callee takes that tail's evidence.
     Select(u32),
+    /// The target row is closed, so it takes an evidence that holds only
+    /// the handlers the following `Push` steps add.
+    Fresh,
     /// The callee names this caller-explicit instance, which the selected
-    /// row tail's evidence does not hold.
+    /// row tail's evidence or the fresh evidence does not hold.
     Push(crate::ast::AbilityInstance<'db>),
     /// The callee's row is a union of row tails: each takes the caller's
     /// evidence after its own plan.

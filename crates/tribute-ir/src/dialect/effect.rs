@@ -122,8 +122,9 @@ mod effect {
     }
 
     /// The evidence a computation starts on when no handler is installed
-    /// around it: the root entry's, and a value delimiter's in a `Direct`
-    /// flow, whose callable receives none. The target ABI boundary builds it.
+    /// around it: the root entry's, a value delimiter's in a `Direct` flow,
+    /// whose callable receives none, and the evidence a `fresh` selection
+    /// starts from. The target ABI boundary builds it.
     #[asm_format(attr_dict_bare ":" type(result))]
     fn initial_evidence() -> Value<impl Evidence> {}
 

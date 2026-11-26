@@ -266,6 +266,12 @@ fn apply_evidence_plan(
                     .build(ctx, location);
                 stack_op(ctx, (tail.op_ref(), tail.result(ctx)))
             }
+            EvidenceStep::Fresh => {
+                let fresh = effect::InitialEvidence::operands()
+                    .results(ctx.value_ty(evidence))
+                    .build(ctx, location);
+                stack_op(ctx, (fresh.op_ref(), fresh.result(ctx)))
+            }
             EvidenceStep::Push(instance) => {
                 let push = effect::Push::operands(selected, evidence)
                     .ability(instance.clone())
@@ -585,6 +591,33 @@ mod tests {
                 r#"%9 = effect.mask @State %0 : !evidence"#,
                 r#"%10 = effect.with_tail %8, %9 {index = 1} : !evidence"#,
                 r#"func.tail_call_indirect %2(%10, %6) attributes {tribute.calling_convention = "cps"} : (!evidence, core.i32) -> core.never"#,
+            ],
+            "{body:#?}"
+        );
+    }
+
+    #[test]
+    fn a_fresh_selection_starts_from_the_initial_evidence() {
+        let input = final_dispatch_fixture(
+            r#"%direct = func.call @callee(%ev, %prompt) attributes {tribute.calling_convention = "evidence_direct", evidence_plan = [{tails = [[{fresh = unit}, {push = @State}], [{fresh = unit}]]}]} : (!evidence, core.i32) -> core.i32
+    func.tail_call_indirect %tr(%ev, %direct) attributes {tribute.calling_convention = "cps"} : (!evidence, core.i32) -> core.never"#,
+        );
+        let mut ctx = IrContext::new();
+        let module = parse_with_evidence_marker(&mut ctx, &input);
+
+        resolve_evidence_dispatch(&mut ctx, module).unwrap();
+
+        let body = test_body(&ctx, module);
+        assert_eq!(
+            body,
+            [
+                r#"%4 = effect.initial_evidence : !evidence"#,
+                r#"%5 = effect.push @State %4, %0 : !evidence"#,
+                r#"%6 = effect.with_tail %0, %5 {index = 0} : !evidence"#,
+                r#"%7 = effect.initial_evidence : !evidence"#,
+                r#"%8 = effect.with_tail %6, %7 {index = 1} : !evidence"#,
+                r#"%9 = func.call @callee(%8, %1) attributes {tribute.calling_convention = "evidence_direct"} : (!evidence, core.i32) -> core.i32"#,
+                r#"func.tail_call_indirect %2(%0, %9) attributes {tribute.calling_convention = "cps"} : (!evidence, core.i32) -> core.never"#,
             ],
             "{body:#?}"
         );

@@ -37,7 +37,10 @@
 //! evidence after that tail's own selection, and the callee's calls whose
 //! callee row ends in one of those tails select that tail's evidence. A
 //! selected tail holds none of the handlers the callable itself names, so
-//! each position that takes one pushes it. A callee whose every tail takes
+//! each position that takes one pushes it. A tail whose row is closed takes
+//! a fresh evidence with the handlers that row names, unless the caller's
+//! evidence holds nothing else: a handler the row cannot reach would stay
+//! beneath the ones pushed later. A callee whose every tail takes
 //! the caller's tail of the same index and nothing else attaches no tails: its
 //! tail slots are the caller's own. A union one of whose sources is its own
 //! result declares no separate tails.
@@ -508,9 +511,43 @@ impl<'db> ScopeEvidence<'db> {
             .map(|source| {
                 let source = resolve(source);
                 let positions = unique(source.instances(db).iter().cloned());
-                self.select(&positions, source.rest(db))
+                let target = source.rest(db);
+                if self.leaves_handlers_beneath(&positions, target) {
+                    // The tail's row is closed and reaches none of them, and
+                    // a handler pushed on the selected tail would stack on
+                    // one of the same instance.
+                    std::iter::once(EvidenceStep::Fresh)
+                        .chain(
+                            self.explicit
+                                .iter()
+                                .filter(|instance| positions.contains(instance))
+                                .cloned()
+                                .map(EvidenceStep::Push),
+                        )
+                        .collect()
+                } else {
+                    self.select(&positions, target)
+                }
             })
             .collect()
+    }
+
+    /// Whether this scope's evidence holds handlers that a row with the
+    /// explicit `positions` and the row tail `target` cannot reach: the row
+    /// is closed, and the scope's row is open or names other instances.
+    fn leaves_handlers_beneath(
+        &self,
+        positions: &[AbilityInstance<'db>],
+        target: Option<&'db RowVar>,
+    ) -> bool {
+        let closed =
+            target.is_none_or(|target| Some(target) != self.tail && !self.tails.contains(&target));
+        let same = self.tail.is_none()
+            && self
+                .explicit
+                .iter()
+                .all(|instance| positions.contains(instance));
+        closed && !same
     }
 
     /// Select the evidence of a row with the explicit `positions` and the

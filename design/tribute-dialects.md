@@ -668,10 +668,14 @@ Source `become`인 `tail_call`과 `tail_call_indirect`는 caller의 evidence를 
   `{tails = [plan, ...]}`는 callee의 tail마다 선택 하나를 담고 목록의 마지막
   원소로만 온다. 각 선택은 같은 문법의 목록이고 `tails`를 다시 담지 않는다.
   `push`와 `tails`의 선택은 연산이 시작한 evidence에서 읽는다.
+- `{fresh = unit}`은 빈 evidence로 바꾸며 목록의 첫 원소로만 온다. 닫힌 row가 받는
+  evidence를 만들며, 그 row의 label은 뒤따르는 `push`가 둘러싼 evidence에서 얹는다.
+  `push`는 `select`나 `fresh` 뒤에만 온다.
 
   ```text
   {evidence_plan = [{select = 0}, {push = @State}]}
   {evidence_plan = [{dup = @State}, {tails = [[], [{mask = @State}]]}]}
+  {evidence_plan = [{tails = [[{fresh = unit}, {push = @State}], [{fresh = unit}]]}]}
   ```
 
 - 속성이 없으면 그대로 전달한다. 빈 목록은 쓰지 않는다.
@@ -686,7 +690,8 @@ Source `become`인 `tail_call`과 `tail_call_indirect`는 caller의 evidence를 
   호출에는 옮기지 않는다. Frame 펼치기는 frame operation의 선택을 층을 다시 만드는
   transfer와 `ability.handle_dispatch`에 옮긴다.
   `resolve_evidence`가 이를 `effect.mask`/`effect.dup`와
-  `effect.tail`/`effect.push`/`effect.with_tail`로 만든다
+  `effect.tail`/`effect.push`/`effect.with_tail`로, `fresh`를
+  `effect.initial_evidence`로 만든다
   ([cps-effects.md](cps-effects.md#row-directed-evidence)).
 
 Callable operation의 physical lowering은

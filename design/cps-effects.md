@@ -1228,7 +1228,8 @@ Handle 하나는 실행 중 여러 번 설치될 수 있다. 처음 설치한 �
 [tribute-dialects.md](tribute-dialects.md#direct-style-control))은
 같은 pass가 그 호출의 evidence operand 앞에 `effect.mask`/`effect.dup`과
 `effect.tail`/`effect.push`/`effect.with_tail`로 만들고 속성을
-지운다. Delimiter의 선택은 extend 전에 바깥 evidence에 적용한다.
+지운다. `fresh`는 `effect.initial_evidence`가 된다. Delimiter의 선택은 extend 전에
+바깥 evidence에 적용한다.
 CPS legalization은 선택을 계산하거나 바꾸지 않고 만든 호출로 옮기기만 한다. 층을
 다시 만드는 transfer와 delimiter에도 같은 선택을 옮긴다.
 이 pass는 함수 signature나 본문 형상에서 hidden evidence를 추론하지 않는다.
@@ -1391,11 +1392,14 @@ Row가 여러 tail의 합집합인 callable에 관한 선택은 세 연산을 �
 | --- | --- | --- |
 | `tails [plan, ...]` | Caller evidence에 각 tail의 선택을 적용한 값을 callee evidence의 tail 칸에 넣는다 | 이런 callee의 호출 |
 | `select i` | Evidence를 `i`번째 tail 칸이 담은 evidence로 바꾼다 | Callee row의 tail이 자기 `i`번째 tail인 호출 |
-| `push L` | 고른 tail evidence 위에 원래 evidence의 `L`의 가장 위 marker를 얹는다 | `select` 뒤, callee가 caller의 명시 `L`을 받는 자리 |
+| `push L` | 고른 evidence 위에 원래 evidence의 `L`의 가장 위 marker를 얹는다 | `select`나 `fresh` 뒤, callee가 caller의 명시 `L`을 받는 자리 |
+| `fresh` | Evidence를 빈 evidence로 바꾼다 | 닫힌 row가 받는 evidence. 뒤따르는 `push`가 그 row의 label을 얹는다 |
 
 `tails`의 각 선택과 `push`는 그 호출이 시작한 evidence에서 읽는다. Tail의 evidence는
-그 자체로 완전한 evidence이며 caller가 받은 tail 칸을 그대로 가진다. Callee가 받는
-tail 칸은 caller가 받은 같은 번호의 칸을 가린다.
+그 자체로 완전한 evidence다. 인스턴스 row가 caller의 tail로 이어지는 tail의
+evidence는 caller가 받은 tail 칸을 그대로 가지고, 닫힌 row의 evidence는 `fresh`로
+만들어 그 row의 label만 가진다. Callee가 받는 tail 칸은 caller가 받은 같은 번호의
+칸을 대신한다. 대신한 칸을 다시 읽는 연산은 없으므로 그 칸은 남기지 않는다.
 
 이런 callable은 언제나 자기 tail 칸을 가진 evidence로 실행된다. 직접 호출은 `tails`로
 칸을 채우거나, 모든 tail이 caller의 같은 번호 tail이면 caller의 칸을 넘긴다. 값으로
@@ -1484,7 +1488,8 @@ closure를 돌려준다. `extend`는 같은 ability의 기존 marker를 새 mark
 `shadowed`로 두고 `outer` 인자를 marker에 기록한다. `mask`는 그 칸을 `shadowed`로
 바꾸고, `shadowed`가 `None`이면 칸을 지운다. `dup`은 가장 위 marker의 복사본이
 원본을 가리게 하며 복사본은 원본의 `outer`를 그대로 가진다. `with_tail`은 `slot` 칸에 `outer`가 `tail`인
-marker를 두고, `tail`은 그 칸의 `outer`를, 칸이 없으면 `ev` 자신을 돌려준다.
+marker를 두며, 그 칸에 있던 marker는 `shadowed`로 남기지 않는다. `tail`은 그 칸의
+`outer`를, 칸이 없으면 `ev` 자신을 돌려준다.
 `push`는 `source`의 가장 위 marker를 복사해 `ev`의 같은 ability 위에 얹으며 복사본은
 원본의 `outer`를 가진다.
 

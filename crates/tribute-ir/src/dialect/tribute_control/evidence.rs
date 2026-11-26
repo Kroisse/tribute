@@ -8,7 +8,8 @@ pub const EVIDENCE_PLAN_ATTR: &str = "evidence_plan";
 
 /// One element of an `evidence_plan`. `{mask = instance}`, `{dup = instance}`,
 /// and `{push = instance}` name an exact `ability.decl` symbol;
-/// `{select = index}` names a row tail of the surrounding callable, and
+/// `{select = index}` names a row tail of the surrounding callable,
+/// `{fresh = unit}` starts from the empty evidence, and
 /// `{tails = [plan, ...]}` holds one plan for each row tail of the callee.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum EvidenceStep {
@@ -18,8 +19,11 @@ pub enum EvidenceStep {
     Dup(SymbolPath),
     /// Take the evidence of the surrounding callable's row tail `index`.
     Select(u32),
+    /// Take the empty evidence: the evidence of a closed row, whose handlers
+    /// the following `Push` steps add.
+    Fresh,
     /// Put the surrounding evidence's top handler of the instance on top of
-    /// the selected evidence.
+    /// the selected or fresh evidence.
     Push(SymbolPath),
     /// Give each row tail of the callee the surrounding evidence after its
     /// plan.
@@ -31,7 +35,7 @@ impl EvidenceStep {
     pub fn instance(&self) -> Option<&SymbolPath> {
         match self {
             Self::Mask(instance) | Self::Dup(instance) | Self::Push(instance) => Some(instance),
-            Self::Select(_) | Self::Tails(_) => None,
+            Self::Select(_) | Self::Fresh | Self::Tails(_) => None,
         }
     }
 
@@ -63,6 +67,10 @@ impl EvidenceStep {
                     .map_err(|_| "evidence_plan select must be a row tail index".into()),
                 _ => Err("evidence_plan select must be a row tail index".into()),
             },
+            "fresh" => match value {
+                Attribute::Unit => Ok(Self::Fresh),
+                _ => Err("evidence_plan fresh takes no value".into()),
+            },
             "tails" => {
                 let Attribute::List(plans) = value else {
                     return Err("evidence_plan tails must be a list of plans".into());
@@ -82,7 +90,7 @@ impl EvidenceStep {
                     .map(Self::Tails)
             }
             other => Err(format!(
-                "evidence_plan element must be mask, dup, select, push, or tails, found {other}"
+                "evidence_plan element must be mask, dup, select, fresh, push, or tails, found {other}"
             )),
         }
     }
@@ -93,6 +101,7 @@ impl EvidenceStep {
             Self::Dup(instance) => ("dup", Attribute::SymbolRef(instance.clone())),
             Self::Push(instance) => ("push", Attribute::SymbolRef(instance.clone())),
             Self::Select(index) => ("select", Attribute::Int(i128::from(*index))),
+            Self::Fresh => ("fresh", Attribute::Unit),
             Self::Tails(plans) => (
                 "tails",
                 Attribute::List(
@@ -182,7 +191,7 @@ pub(crate) fn verify_evidence_plan(
     verify_evidence_steps(&steps, true)
 }
 
-/// Check one plan: an optional leading `select`, then the steps on ability
+/// Check one plan: an optional leading `select` or `fresh`, then the steps on ability
 /// instances, each instance changed in one way, then an optional `tails`
 /// whose plans follow the same rule without `tails` of their own.
 fn verify_evidence_steps(steps: &[EvidenceStep], tails_allowed: bool) -> Result<(), String> {
@@ -192,9 +201,16 @@ fn verify_evidence_steps(steps: &[EvidenceStep], tails_allowed: bool) -> Result<
             EvidenceStep::Select(_) if index != 0 => {
                 return Err("evidence_plan select must be the first step".into());
             }
-            EvidenceStep::Select(_) => {}
-            EvidenceStep::Push(_) if !matches!(steps[0], EvidenceStep::Select(_)) => {
-                return Err("evidence_plan push requires a selected row tail".into());
+            EvidenceStep::Fresh if index != 0 => {
+                return Err("evidence_plan fresh must be the first step".into());
+            }
+            EvidenceStep::Select(_) | EvidenceStep::Fresh => {}
+            EvidenceStep::Push(_)
+                if !matches!(steps[0], EvidenceStep::Select(_) | EvidenceStep::Fresh) =>
+            {
+                return Err(
+                    "evidence_plan push requires a selected row tail or a fresh evidence".into(),
+                );
             }
             EvidenceStep::Tails(_) if !tails_allowed => {
                 return Err("an evidence_plan of a row tail may not attach tails".into());
