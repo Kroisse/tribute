@@ -60,6 +60,14 @@ pub trait OpFlag {
 /// Pure operations: no side effects, safe to remove if unused.
 ///
 /// DCE may eliminate an operation with this flag if its results are unused.
+///
+/// A trap that a correctly compiled program can reach is a side effect: it
+/// is a defined end of execution, not undefined behavior, so removing the
+/// operation would remove the trap. An operation whose declaration states
+/// such a trap, such as a range check or integer division by zero, does not
+/// declare this flag. A trap that only guards a precondition every
+/// compiler-generated use establishes is an assertion, not a reachable end,
+/// and does not keep an operation from being pure.
 #[op_flag]
 pub struct Pure;
 

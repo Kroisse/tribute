@@ -177,6 +177,11 @@ operation의 계약은 각자의 선언
   정의된 종료다. 범위 검사 실패처럼 올바른 compiler가 만든 프로그램도 도달하는
   trap을 `func.unreachable`로 쓰지 않는다. 최적화는 `func.trap`에 이르는 경로를
   실행되지 않는 경로로 가정해 지우지 않는다.
+- **Trap하는 operation.** 배열 범위 검사나 0으로 나누는 정수 나눗셈처럼 올바른
+  프로그램이 도달할 수 있는 trap을 선언한 operation은 결과를 쓰지 않아도 실행이
+  관찰된다. 그래서 그런 operation은 `Pure`가 아니며, dead code 제거가 지우지
+  않는다. 모든 compiler 생성 사용이 성립시키는 전제를 지키는 trap(`list.head`의
+  빈 list)은 단언이므로 `Pure`를 막지 않는다.
 - **원인의 전달.** Cause keyword는 `tribute_control.trap`의 `cause`에서
   `func.trap`의 `code`로, native에서는 `clif.trap`의 `code`로 그대로 내려간다.
   Wasm의 `unreachable` 명령은 operand가 없으므로 `func.trap`을 `wasm.unreachable`로
