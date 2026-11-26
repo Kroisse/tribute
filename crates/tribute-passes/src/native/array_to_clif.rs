@@ -875,7 +875,7 @@ mod tests {
             r#"core.module @test {
   !Ints = adt.array<core.i32>
   func.func @access(%ints: !Ints, %at: core.index, %value: core.i32) -> core.i32 {
-    %set = adt.array_set %ints, %at, %value : !Ints
+    %set = adt.array_set %ints[%at] = %value : !Ints
     %read = adt.array_get %set, %at : core.i32
     %len = adt.array_len %set : core.index
     func.return %read

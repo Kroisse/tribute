@@ -3440,7 +3440,7 @@ fn an_array_update_builds_a_new_array_and_leaves_reads_borrowed() {
     func.return %value
   }
   func.func @replace(%nodes: !Nodes, %at: core.index, %node: !NodeRef) -> !Nodes {
-    %replaced = adt.array_set %nodes, %at, %node : !Nodes
+    %replaced = adt.array_set %nodes[%at] = %node : !Nodes
     func.return %replaced
   }
 }"#;
@@ -3477,7 +3477,7 @@ fn malformed_array_operations_are_rejected() {
         )
     };
     assert_plan_error_unchanged(
-        &module("%nodes2 = adt.array_set %nodes, %at, %other : !Nodes"),
+        &module("%nodes2 = adt.array_set %nodes[%at] = %other : !Nodes"),
         "aggregate managed field type is stale",
     );
     assert_plan_error_unchanged(

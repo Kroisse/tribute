@@ -60,7 +60,7 @@ const ARRAY_OPERATIONS: &str = r#"
       %inserted = adt.array_splice %pair[%i1, %i1](%b) attributes {type = !Nodes} : !Nodes
       %trimmed = adt.array_splice %inserted[%i0, %i1]() attributes {type = !Nodes} : !Nodes
       %replaced = adt.array_splice %filled[%i0, %i2](%b, %a, %b) attributes {type = !Nodes} : !Nodes
-      %set = adt.array_set %filled, %i1, %b : !Nodes
+      %set = adt.array_set %filled[%i1] = %b : !Nodes
       %t0 = adt.array_get %trimmed, %i0 : !NodeRef
       %v0 = adt.struct_get %t0 {field = 0, type = !Node} : core.i32
       %f1 = adt.array_get %set, %i1 : !NodeRef
@@ -72,7 +72,7 @@ const ARRAY_OPERATIONS: &str = r#"
       %ints = adt.array_of %one, %two {type = !Ints} : !Ints
       %more = adt.array_new %i2, %two {type = !Ints} : !Ints
       %joined = adt.array_splice %ints[%i2, %i2](%one) attributes {type = !Ints} : !Ints
-      %more_set = adt.array_set %more, %i0, %one : !Ints
+      %more_set = adt.array_set %more[%i0] = %one : !Ints
       %w0 = adt.array_get %joined, %i2 : core.i32
       %w1 = adt.array_get %more_set, %i0 : core.i32
       %n0 = adt.array_len %replaced : core.index
@@ -115,7 +115,7 @@ fn an_index_at_the_length_traps_before_the_access() {
     assert_traps_without_access(
         r#"
       %ints = adt.array_new %i2, %one {type = !Ints} : !Ints
-      %set = adt.array_set %ints, %i3, %two : !Ints
+      %set = adt.array_set %ints[%i3] = %two : !Ints
       %sum = arith.constant 0 : core.i32"#,
     );
 }

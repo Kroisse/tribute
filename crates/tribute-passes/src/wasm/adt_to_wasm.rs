@@ -1236,7 +1236,7 @@ mod tests {
     %filled = adt.array_new %count, %zero {type = !A} : !A
     %array = adt.array_of %one, %zero {type = !A} : !A
     %element = adt.array_get %array, %at : core.i32
-    %set = adt.array_set %array, %at, %element : !A
+    %set = adt.array_set %array[%at] = %element : !A
     %length = adt.array_len %filled : core.index
 
     %null = adt.ref_null : !S

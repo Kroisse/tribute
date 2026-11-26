@@ -7,6 +7,7 @@ use crate::dialect::tribute_control::{
 use crate::dialect::tribute_rtti::{
     DescriptorFieldsError, DescriptorLayoutType, ManagedRef, ManagedRefType, OperandOwnership,
 };
+use syntax::{ElementSubscript, FieldSubscript};
 use trunk_ir::asm_format::TypeAliasHint;
 use trunk_ir::dialect::core::{I1, I8, Index};
 use trunk_ir::op_flag::Pure;
@@ -157,31 +158,34 @@ mod adt {
     #[asm_format(r#ref "," value attr_dict_bare)]
     fn struct_set(r#type: Attr<Type>, field: Attr<u32>, r#ref: Value<_>, value: Value<_>) {}
 
-    /// The struct value `source` with field `field` replaced by `value`.
-    /// `source` itself does not change.
+    /// The struct value `source` with each field of `fields` replaced by
+    /// the value of `values` at the same position. `source` itself does not
+    /// change.
     ///
     /// ```text
-    /// %q = adt.struct_update %p, %y {field = 1} : !Point
+    /// %q = adt.struct_update %p[1] = %y : !Point
+    /// %r = adt.struct_update %p[0, 1] = %x, %y : !Point
     /// ```
     ///
     /// The struct layout is the one the type of `source` names, as for
-    /// `adt.struct_new`, and the result has that type. The verifier rejects
-    /// a type that names no struct layout, a nominal layout without a body,
-    /// a field the layout does not have, and a `value` that does not have
-    /// the field's type as the type of `source` sees it.
+    /// `adt.struct_new`, and the result has that type. `fields` is not
+    /// empty and strictly ascending, so a field is replaced at most once and
+    /// one update has one spelling. The verifier rejects a type that names
+    /// no struct layout, a nominal layout without a body, a field the layout
+    /// does not have, fields out of order or written twice, and a value
+    /// that does not have its field's type as the type of `source` sees it.
     ///
-    /// Representation selection leaves the update of a boxed value at the
-    /// value level, between `heap.unbox_value` and `heap.box_value`. A target's
-    /// object access fusion may then fuse the three into
-    /// `heap.struct_update` (`design/tribute-dialects.md` § "`heap`").
+    /// For a type representation selection chose boxed, target lowering
+    /// lowers the update to an update of the object
+    /// (`design/tribute-dialects.md` § "`heap`").
     ///
-    /// **Ownership:** consumes `source`. A managed `value` takes the place
-    /// of the replaced field (`design/rc.md` § "1. Typed ownership and RTTI
-    /// plan").
+    /// **Ownership:** consumes `source` once, however many fields it
+    /// replaces. A managed value takes the place of its replaced field
+    /// (`design/rc.md` § "1. Typed ownership and RTTI plan").
     #[flags(Pure)]
     #[verify]
-    #[asm_format(source "," value attr_dict_bare ":" type(result))]
-    fn struct_update<T>(field: Attr<u32>, source: Value<T>, value: Value<_>) -> Value<T> {}
+    #[asm_format(custom(FieldSubscript(source, fields)) "=" values attr_dict_bare ":" type(result))]
+    fn struct_update<T>(fields: Attr<[u32]>, source: Value<T>, values: Variadic<_>) -> Value<T> {}
 
     /// A new value of variant `tag` whose fields are `fields` in order, of
     /// the enum layout its result type names: a nominal layout's key or a
@@ -380,13 +384,11 @@ mod adt {
     /// target traps an execution that violates it.
     ///
     /// ```text
-    /// %r = adt.array_set %source, %index, %value : !A
+    /// %r = adt.array_set %source[%index] = %value : !A
     /// ```
     ///
-    /// Representation selection leaves the update of a boxed array at the
-    /// value level, between `heap.unbox_value` and `heap.box_value`. A target's
-    /// object access fusion may then fuse the three into `heap.array_set`
-    /// (`design/tribute-dialects.md` § "`heap`").
+    /// Target lowering lowers the update of a boxed array to an update of
+    /// the object (`design/tribute-dialects.md` § "`heap`").
     ///
     /// **Ownership:** as for `adt.array_splice` of the one element: borrows
     /// `source`, and the operation acquires a unit for every managed element
@@ -397,7 +399,7 @@ mod adt {
     /// (`design/tribute-dialects.md` § "Trap"), so dead code elimination
     /// keeps an update whose result is unused.
     #[implements(OperandOwnership)]
-    #[asm_format(source "," index "," value attr_dict_bare ":" type(result))]
+    #[asm_format(custom(ElementSubscript(source, index)) "=" value attr_dict_bare ":" type(result))]
     fn array_set<A: Array>(
         source: Value<A>,
         index: Value<Index>,
@@ -773,6 +775,7 @@ use trunk_ir::types::{
 pub mod convert;
 pub mod layout;
 mod ownership;
+mod syntax;
 
 /// Type attribute holding a nominal layout's name, a string.
 pub const STRUCT_NAME_ATTR: &str = "name";
@@ -1142,9 +1145,15 @@ impl trunk_ir::ops::Verify for StructNew {
     }
 }
 
-/// An `adt.struct_update` whose `value` is not one of field `field`.
+/// An `adt.struct_update` whose fields or values do not fit its layout.
 #[derive(Debug, derive_more::Display, derive_more::Error)]
 pub enum StructUpdateError {
+    #[display("{values} value(s) for {fields} field(s)")]
+    Count { fields: usize, values: usize },
+    #[display("an update replaces at least one field")]
+    Empty,
+    #[display("field {field} does not come after field {previous}")]
+    Order { previous: u32, field: u32 },
     #[display("the struct layout has no field {field}")]
     NoField { field: u32 },
     #[display("the value has type {actual}, but field {field} has type {expected}")]
@@ -1165,22 +1174,38 @@ impl trunk_ir::ops::Verify for StructUpdate {
         if layout.is_nominal(ctx) && layout.body(ctx).is_none() {
             return Err(ConstructionFieldError::NoBody.into());
         }
-        let field = self.field(ctx);
-        if field as usize >= layout.fields(ctx).len() {
-            return Err(StructUpdateError::NoField { field }.into());
-        }
-        let expected = find_field_type(ctx, layout, source, field as usize);
-        let actual = ctx.value_ty(self.value(ctx));
-        if expected != Some(actual) {
-            return Err(StructUpdateError::Type {
-                field,
-                actual: actual.display(ctx).to_string(),
-                expected: expected.map_or_else(
-                    || "no field type".to_owned(),
-                    |ty| ty.display(ctx).to_string(),
-                ),
+        let fields = self.fields(ctx).collect::<Vec<_>>();
+        let values = self.values(ctx);
+        if fields.len() != values.len() {
+            return Err(StructUpdateError::Count {
+                fields: fields.len(),
+                values: values.len(),
             }
             .into());
+        }
+        if fields.is_empty() {
+            return Err(StructUpdateError::Empty.into());
+        }
+        if let Some(&[previous, field]) = fields.windows(2).find(|pair| pair[0] >= pair[1]) {
+            return Err(StructUpdateError::Order { previous, field }.into());
+        }
+        for (&field, &value) in fields.iter().zip(values) {
+            if field as usize >= layout.fields(ctx).len() {
+                return Err(StructUpdateError::NoField { field }.into());
+            }
+            let expected = find_field_type(ctx, layout, source, field as usize);
+            let actual = ctx.value_ty(value);
+            if expected != Some(actual) {
+                return Err(StructUpdateError::Type {
+                    field,
+                    actual: actual.display(ctx).to_string(),
+                    expected: expected.map_or_else(
+                        || "no field type".to_owned(),
+                        |ty| ty.display(ctx).to_string(),
+                    ),
+                }
+                .into());
+            }
         }
         Ok(())
     }
@@ -2346,11 +2371,11 @@ mod tests {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
             &mut ctx,
-            "core.module @test {\n  !A = adt.array<core.i32>\n  func.func @f(%a: !A, %i: core.index, %n: core.i32) -> core.nil {\n    %set = adt.array_set %a, %i, %n : !A\n    func.return\n  }\n}",
+            "core.module @test {\n  !A = adt.array<core.i32>\n  func.func @f(%a: !A, %i: core.index, %n: core.i32) -> core.nil {\n    %set = adt.array_set %a[%i] = %n : !A\n    func.return\n  }\n}",
         );
         trunk_ir::transforms::eliminate_dead_code(&mut ctx, module, Default::default());
         let text = module.op().display(&ctx).to_string();
-        assert!(text.contains("adt.array_set %"), "{text}");
+        assert!(text.contains("adt.array_set %0[%1] = %2 : "), "{text}");
     }
 
     #[test]
@@ -3086,14 +3111,15 @@ mod tests {
     }
 
     #[test]
-    fn a_struct_update_replaces_one_field_of_its_source_layout() {
+    fn a_struct_update_replaces_fields_of_its_source_layout() {
         let valid = r#"core.module @test {
   !Point = adt.struct<"Point", (core.f64, core.i32)>
   !Shape = adt.enum<"Shape", [(), (core.f64)]>
   !Opaque = adt.struct<"Opaque">
   func.func @f(%p: !Point, %pair: adt.struct<(core.i32, core.i32)>, %x: core.f64, %n: core.i32, %shape: !Shape, %opaque: !Opaque) -> !Point {
-    %pair2 = adt.struct_update %pair, %n {field = 1} : adt.struct<(core.i32, core.i32)>
-    %q = adt.struct_update %p, %x {field = 0} : !Point
+    %pair2 = adt.struct_update %pair[1] = %n : adt.struct<(core.i32, core.i32)>
+    %both = adt.struct_update %p[0, 1] = %x, %n : !Point
+    %q = adt.struct_update %p[0] = %x : !Point
     func.return %q
   }
 }"#;
@@ -3101,31 +3127,50 @@ mod tests {
         let module = parse_test_module(&mut ctx, valid);
         assert_roundtrip(&ctx, module.op());
         assert!(validate_operation_verifiers(&ctx, module).is_ok());
+        let printed = module.op().display(&ctx).to_string();
+        assert!(
+            printed.contains("adt.struct_update %0[0, 1] = %2, %3 : "),
+            "{printed}"
+        );
 
         for (invalid, expected) in [
             (
-                "adt.struct_update %p, %x {field = 2} : !Point",
+                "adt.struct_update %p[2] = %x : !Point",
                 "the struct layout has no field 2",
             ),
             (
-                "adt.struct_update %p, %n {field = 0} : !Point",
+                "adt.struct_update %p[0] = %n : !Point",
                 "the value has type core.i32, but field 0 has type core.f64",
             ),
             (
-                "adt.struct_update %shape, %x {field = 0} : !Shape",
+                "adt.struct_update %p[1, 0] = %n, %x : !Point",
+                "field 0 does not come after field 1",
+            ),
+            (
+                "adt.struct_update %p[0, 0] = %x, %x : !Point",
+                "field 0 does not come after field 0",
+            ),
+            (
+                "adt.struct_update %p[0, 1] = %x : !Point",
+                "1 value(s) for 2 field(s)",
+            ),
+            (
+                "adt.struct_update %p[] = : !Point",
+                "an update replaces at least one field",
+            ),
+            (
+                "adt.struct_update %shape[0] = %x : !Shape",
                 "the result type names no `adt.struct` layout",
             ),
             (
-                "adt.struct_update %opaque, %x {field = 0} : !Opaque",
+                "adt.struct_update %opaque[0] = %x : !Opaque",
                 "a nominal layout without a body",
             ),
         ] {
             let mut ctx = IrContext::new();
             let text = valid.replace(
-                "%q = adt.struct_update %p, %x {field = 0} : !Point",
-                &format!(
-                    "%bad = {invalid}\n    %q = adt.struct_update %p, %x {{field = 0}} : !Point"
-                ),
+                "%q = adt.struct_update %p[0] = %x : !Point",
+                &format!("%bad = {invalid}\n    %q = adt.struct_update %p[0] = %x : !Point"),
             );
             let module = parse_test_module(&mut ctx, &text);
             let result = validate_operation_verifiers(&ctx, module).to_string();
