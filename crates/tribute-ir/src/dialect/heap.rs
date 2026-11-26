@@ -101,6 +101,7 @@ mod heap {
     /// - **Effects:** the object's identity is not observable, so the
     ///   operation is `Pure`. A cell's identity is observable, so
     ///   `heap.cell_new` is not.
+    #[implements(OperandOwnership)]
     #[flags(Pure)]
     #[verify]
     #[asm_format(value attr_dict_bare ":" type(result))]
@@ -124,6 +125,7 @@ mod heap {
     /// - **Ownership:** for a boxed type, the result is `ref` itself and
     ///   shares its unit (`Forward`). For an unboxed type, the result is a
     ///   borrow of the object's field (`Project`).
+    #[implements(OperandOwnership)]
     #[flags(Pure)]
     #[verify]
     #[asm_format(r#ref attr_dict_bare ":" type(result))]

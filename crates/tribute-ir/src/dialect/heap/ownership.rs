@@ -5,10 +5,27 @@ use trunk_ir::ops::DialectType;
 use trunk_ir::types::Location;
 use trunk_ir::{OpRef, TypeRef};
 
-use super::{Cast, Cell, CellGet, CellNew, CellSet, IsNull};
+use super::{BoxValue, Cast, Cell, CellGet, CellNew, CellSet, IsNull, UnboxValue};
 use crate::dialect::tribute_rtti::{OperandOwnership, OperandOwnershipError, OperandRole};
 
 type Result<T, E = OperandOwnershipError> = std::result::Result<T, E>;
+
+// Until representation selection records the struct types it leaves
+// unboxed, every `adt` value is the object its box refers to, so both
+// boundary conversions are the boxed case: the result shares the operand's
+// unit.
+
+impl OperandOwnership for BoxValue {
+    fn operand_roles(&self, _ctx: &IrContext) -> Result<Vec<OperandRole>> {
+        Ok(vec![OperandRole::Forward])
+    }
+}
+
+impl OperandOwnership for UnboxValue {
+    fn operand_roles(&self, _ctx: &IrContext) -> Result<Vec<OperandRole>> {
+        Ok(vec![OperandRole::Forward])
+    }
+}
 
 impl OperandOwnership for IsNull {
     fn operand_roles(&self, _ctx: &IrContext) -> Result<Vec<OperandRole>> {

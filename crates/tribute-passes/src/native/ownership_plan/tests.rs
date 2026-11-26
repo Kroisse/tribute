@@ -913,6 +913,32 @@ const BOX_CAST: &str = r#"core.module @test {
   }
 }"#;
 
+const BOX_ROUND_TRIP: &str = r#"core.module @test {
+  !Ints = adt.array<core.i32>
+  func.func @len(%x: core.i32) -> core.index {
+    %ints = adt.array_of %x {type = !Ints} : !Ints
+    %boxed = heap.box_value %ints : heap.box<!Ints>
+    %unboxed = heap.unbox_value %boxed : !Ints
+    %len = adt.array_len %unboxed : core.index
+    func.return %len
+  }
+}"#;
+
+#[test]
+fn boxing_and_unboxing_share_one_unit() {
+    let (ctx, _module, plan) = build(BOX_ROUND_TRIP);
+    let function = plan.function(&SymbolPath::new(["len"])).unwrap();
+    let [ints, boxed, unboxed] =
+        [0, 1, 2].map(|index| ctx.op_result(entry_op(&ctx, &plan, "len", index), 0));
+    let read = entry_op(&ctx, &plan, "len", 3);
+
+    // The array, its box, and the unboxed value are one root: only the
+    // array is released, once, after the last read through the others.
+    assert!(final_releases(function, boxed).is_empty());
+    assert!(final_releases(function, unboxed).is_empty());
+    assert_eq!(final_releases(function, ints), [ActionAnchor::After(read)]);
+}
+
 #[test]
 fn a_box_cast_shares_its_source_unit() {
     let (ctx, _module, plan) = build(BOX_CAST);
