@@ -203,6 +203,7 @@ fn allocation_size_for_type(
     ty: TypeRef,
     type_converter: &TypeConverter,
 ) -> Result<u64, RcMaterializationError> {
+    let ty = crate::native::ownership_plan::boxed_object_type(ctx, ty);
     // `anyref`/`intref` deliberately carry no nominal allocation identity.
     // Zero is a dispatch-only dynamic-size signal: header RTTI must resolve it
     // to an exact release function before deallocation. It is never a shallow

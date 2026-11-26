@@ -420,6 +420,45 @@ fn continuation_frame_capture_materializes_the_typed_entry_and_store_actions() {
 }
 
 #[test]
+fn a_box_releases_its_layout_object() {
+    let mut ctx = IrContext::new();
+    let module = parse_test_module(
+        &mut ctx,
+        r#"core.module @test {
+  !Point = adt.struct<"Point", (core.i32)>
+  !Ints = adt.array<core.i32>
+  func.func @point(%x: core.i32) -> heap.box<!Point> {
+    %p = adt.struct_new(%x) : (core.i32) -> !Point
+    %b = heap.box_value %p : heap.box<!Point>
+    func.return %b
+  }
+  func.func @ints(%x: core.i32) -> heap.box<!Ints> {
+    %a = adt.array_of %x {type = !Ints} : !Ints
+    %b = heap.box_value %a : heap.box<!Ints>
+    func.return %b
+  }
+  func.func @drop(%x: core.i32) -> core.nil {
+    %point = func.call @point(%x) : (core.i32) -> heap.box<!Point>
+    %ints = func.call @ints(%x) : (core.i32) -> heap.box<!Ints>
+    func.return
+  }
+}"#,
+    );
+    let plan = acquiring_plan(&ctx, module).expect("typed ownership plan");
+    materialize(&mut ctx, module, &plan).expect("typed RC materialization");
+    let materialized = module.op().display(&ctx).to_string();
+    let drop = materialized
+        .split("func.func @drop")
+        .nth(1)
+        .expect("the caller is printed");
+    // The struct box releases its i32 payload (4) and the header (8); the
+    // array box's size depends on its length, so its header RTTI resolves it.
+    assert_eq!(drop.matches("tribute_rt.release").count(), 2, "{drop}");
+    assert!(drop.contains("alloc_size = 12"), "{drop}");
+    assert!(drop.contains("alloc_size = 0"), "{drop}");
+}
+
+#[test]
 fn nested_continuation_frame_closure_releases_use_exact_header_inclusive_sizes() {
     let mut ctx = IrContext::new();
     let module = parse_test_module(
