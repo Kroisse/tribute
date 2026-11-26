@@ -58,7 +58,8 @@ mod heap {
     #[alias_hint]
     #[implements(ManagedRefType)]
     struct Box<Layout> {
-        nullable: Option<Attr<bool>>,
+        #[default(false)]
+        nullable: Attr<bool>,
     }
 
     /// A managed reference to a mutable object holding one value of type
@@ -255,8 +256,6 @@ pub enum BoxError {
     NoBody,
     #[display("expected a non-null box")]
     Nullable,
-    #[display("a non-null box is written without `nullable`, not with `nullable = false`")]
-    NotNullSpelling,
     #[display("expected a nullable box")]
     NotNullable,
     #[display("a cast between boxes of unrelated layouts")]
@@ -276,18 +275,7 @@ impl VerifyType for Box {
         if !is_layout {
             return Err(BoxError::Layout.into());
         }
-        // Absence is the one spelling of a non-null box.
-        if ctx.type_attrs(ty).get_bool("nullable") == Some(false) {
-            return Err(BoxError::NotNullSpelling.into());
-        }
         Ok(Self(ty))
-    }
-}
-
-impl Box {
-    /// Whether this box type has a null value.
-    pub fn is_nullable(self, ctx: &IrContext) -> bool {
-        self.nullable(ctx) == Some(true)
     }
 }
 
@@ -298,11 +286,7 @@ impl TypeAsmFormat for Box {
     fn print(&self, p: &mut AsmPrinter<'_>) -> fmt::Result {
         let s = p.state();
         let ctx = s.ctx();
-        let nullable = if self.is_nullable(ctx) {
-            "nullable "
-        } else {
-            ""
-        };
+        let nullable = if self.nullable(ctx) { "nullable " } else { "" };
         write!(p, "heap.box<{nullable}{}", s.ty(self.layout(ctx)))?;
         let mut rest = ctx
             .get_type(self.as_type_ref())
@@ -339,7 +323,7 @@ impl TypeAliasHint for Box {
         let Some(layout) = suggest_type_alias_name(ctx, self.layout(ctx)) else {
             return Ok(());
         };
-        let suffix = if self.is_nullable(ctx) { "nbox" } else { "box" };
+        let suffix = if self.nullable(ctx) { "nbox" } else { "box" };
         write!(out, "{layout}_{suffix}")
     }
 }
@@ -347,7 +331,7 @@ impl TypeAliasHint for Box {
 /// The box type of `value`, required to be non-null.
 fn non_null_box(ctx: &IrContext, value: ValueRef) -> Result<Box, BoxError> {
     let boxed = Box::from_type_ref(ctx, ctx.value_ty(value)).ok_or(BoxError::Layout)?;
-    if boxed.is_nullable(ctx) {
+    if boxed.nullable(ctx) {
         return Err(BoxError::Nullable);
     }
     Ok(boxed)
@@ -404,7 +388,7 @@ impl Verify for IsNull {
 /// The box type `ty`, required to be nullable.
 fn nullable_box(ctx: &IrContext, ty: TypeRef) -> Result<Box, BoxError> {
     let boxed = Box::from_type_ref(ctx, ty).ok_or(BoxError::Layout)?;
-    if !boxed.is_nullable(ctx) {
+    if !boxed.nullable(ctx) {
         return Err(BoxError::NotNullable);
     }
     Ok(boxed)
@@ -417,9 +401,9 @@ impl Verify for Cast {
         let to = Box::from_type_ref(ctx, ctx.value_ty(self.result(ctx))).ok_or(BoxError::Layout)?;
         let (from_layout, to_layout) = (from.layout(ctx), to.layout(ctx));
         let related = if from_layout == to_layout {
-            from.is_nullable(ctx) != to.is_nullable(ctx)
+            from.nullable(ctx) != to.nullable(ctx)
         } else {
-            from.is_nullable(ctx) == to.is_nullable(ctx)
+            from.nullable(ctx) == to.nullable(ctx)
                 && (closure_base_of(ctx, from_layout) == Some(to_layout)
                     || closure_base_of(ctx, to_layout) == Some(from_layout))
         };

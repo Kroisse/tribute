@@ -143,12 +143,12 @@ fn a_nullable_box_writes_nullable_before_its_layout() {
     assert!(
         Box::from_type_ref(&ctx, ctx.value_ty(null))
             .unwrap()
-            .is_nullable(&ctx)
+            .nullable(&ctx)
     );
     assert!(
         !Box::from_type_ref(&ctx, ctx.value_ty(plain))
             .unwrap()
-            .is_nullable(&ctx)
+            .nullable(&ctx)
     );
     let printed = module.op().display(&ctx).to_string();
     assert!(printed.contains("heap.box<nullable !Node>"), "{printed}");
@@ -207,7 +207,7 @@ fn a_box_is_a_managed_reference() {
     let boxing = BoxValue::from_op(&ctx, all_body_ops(&ctx, module)[1]).unwrap();
     let boxed = Box::from_type_ref(&ctx, ctx.value_ty(boxing.result(&ctx))).unwrap();
     assert!(DynManagedRefType::is_implemented(&ctx, boxed.as_type_ref()));
-    assert!(!boxed.is_nullable(&ctx));
+    assert!(!boxed.nullable(&ctx));
 }
 
 #[test]
@@ -329,8 +329,19 @@ fn a_box_of_a_non_layout_is_not_a_box() {
 fn a_non_null_box_has_one_spelling() {
     let (mut ctx, module) = parse(BOXES);
     let point = boxed_layout(&ctx, all_body_ops(&ctx, module)[1]);
+    let plain = Box::params(point).intern(&mut ctx).unwrap();
     assert!(Box::params(point).nullable(true).intern(&mut ctx).is_ok());
-    assert!(Box::params(point).nullable(false).intern(&mut ctx).is_err());
+    // `nullable` defaults to false: the builder omits it, and the type that
+    // holds it is rejected.
+    assert_eq!(
+        Box::params(point).nullable(false).intern(&mut ctx).unwrap(),
+        plain
+    );
+    let written = trunk_ir::TypeDataBuilder::new(Box::NAME)
+        .param(point)
+        .attr("nullable", false)
+        .intern(&mut ctx);
+    assert!(Box::from_type_ref(&ctx, written).is_none());
 }
 
 #[test]
