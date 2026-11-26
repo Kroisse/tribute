@@ -32,7 +32,7 @@ mod heap {
     /// ```text
     /// heap.box<!Point>
     /// heap.box<adt.array<core.i8>>
-    /// heap.box<null !Node>
+    /// heap.box<nullable !Node>
     /// ```
     ///
     /// - **Layout:** `Layout` is an `adt.struct` or `adt.enum` layout (a
@@ -47,12 +47,12 @@ mod heap {
     ///   for `core.ref`. Only compiler-made representations use null; see
     ///   `heap.null`, `heap.is_null`, and `heap.cast`. Retaining or releasing
     ///   null does nothing.
-    /// - **Syntax:** a nullable box writes `null` before its layout, as
-    ///   WebAssembly writes `(ref null $t)`. Other type attributes follow
-    ///   the layout as `, {..}`.
+    /// - **Syntax:** a nullable box writes `nullable`, the name of its
+    ///   attribute, before its layout. Other type attributes follow the
+    ///   layout as `, {..}`.
     /// - **Alias:** a box of a layout that suggests an alias suggests that
-    ///   name with `_box`, and a nullable one with `_box_null`:
-    ///   `!Point_box`, `!Node_box_null`.
+    ///   name with `_box`, and a nullable one with `_nbox`: `!Point_box`,
+    ///   `!Node_nbox`.
     #[verify]
     #[asm_format]
     #[alias_hint]
@@ -134,7 +134,7 @@ mod heap {
     /// The null inhabitant of its result type, a nullable box.
     ///
     /// ```text
-    /// %n = heap.null : heap.box<null !Node>
+    /// %n = heap.null : heap.box<nullable !Node>
     /// ```
     ///
     /// - **Shape:** the result is a box with `nullable = true`.
@@ -148,7 +148,7 @@ mod heap {
     /// Whether the nullable box `ref` is null.
     ///
     /// ```text
-    /// %empty = heap.is_null %n : heap.box<null !Node>
+    /// %empty = heap.is_null %n : heap.box<nullable !Node>
     /// ```
     ///
     /// - **Shape:** `ref` is a box with `nullable = true`.
@@ -162,7 +162,7 @@ mod heap {
     /// `ref` as its result type, another box of the same object.
     ///
     /// ```text
-    /// %n = heap.cast %b : heap.box<!Node> to heap.box<null !Node>
+    /// %n = heap.cast %b : heap.box<!Node> to heap.box<nullable !Node>
     /// ```
     ///
     /// - **Shape:** the two types are boxes that differ only in
@@ -291,20 +291,24 @@ impl Box {
     }
 }
 
-/// The type attribute the `null` keyword writes.
-const NULLABLE_ATTR: &str = "nullable";
+/// The type attribute, and the keyword that writes it before the layout.
+const NULLABLE: &str = "nullable";
 
 impl TypeAsmFormat for Box {
     fn print(&self, p: &mut AsmPrinter<'_>) -> fmt::Result {
         let s = p.state();
         let ctx = s.ctx();
-        let null = if self.is_nullable(ctx) { "null " } else { "" };
-        write!(p, "heap.box<{null}{}", s.ty(self.layout(ctx)))?;
+        let nullable = if self.is_nullable(ctx) {
+            "nullable "
+        } else {
+            ""
+        };
+        write!(p, "heap.box<{nullable}{}", s.ty(self.layout(ctx)))?;
         let mut rest = ctx
             .get_type(self.as_type_ref())
             .attrs
             .iter()
-            .filter(|&(key, _)| ctx.str(key) != NULLABLE_ATTR)
+            .filter(|&(key, _)| ctx.str(key) != NULLABLE)
             .peekable();
         if rest.peek().is_some() {
             write!(p, ", {}", s.attr_dict(rest))?;
@@ -313,17 +317,17 @@ impl TypeAsmFormat for Box {
     }
 
     fn parse(p: &mut AsmParser<'_>, name: &str) -> ParseResult<Option<TypeRef>> {
-        let null = p.parse_optional_keyword("null");
+        let nullable = p.parse_optional_keyword(NULLABLE);
         let layout = p.parse_type()?;
         let mut attrs = parse_dict_tail(p)?;
         p.parse_punct(">")?;
-        if null {
-            if attrs.view(p.ctx()).contains_key(NULLABLE_ATTR) {
-                return Err(p.expected("`null` or a `nullable` attribute, not both"));
+        if nullable {
+            if attrs.view(p.ctx()).contains_key(NULLABLE) {
+                return Err(p.expected("`nullable` once, as the keyword or the attribute"));
             }
             attrs
                 .view_mut(p.ctx_mut())
-                .insert(NULLABLE_ATTR, Attribute::Bool(true));
+                .insert(NULLABLE, Attribute::Bool(true));
         }
         p.build_type(name, vec![(layout, AttributeMap::new())], attrs)
             .map(Some)
@@ -335,8 +339,8 @@ impl TypeAliasHint for Box {
         let Some(layout) = suggest_type_alias_name(ctx, self.layout(ctx)) else {
             return Ok(());
         };
-        let null = if self.is_nullable(ctx) { "_null" } else { "" };
-        write!(out, "{layout}_box{null}")
+        let suffix = if self.is_nullable(ctx) { "nbox" } else { "box" };
+        write!(out, "{layout}_{suffix}")
     }
 }
 

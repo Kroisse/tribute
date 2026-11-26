@@ -64,7 +64,7 @@ fn the_builder_infers_the_read_type() {
 
 const BOXES: &str = r#"core.module @test {
   !Node = adt.struct<"Node", (core.i32)>
-  !Node_box_null = heap.box<null !Node>
+  !Node_nbox = heap.box<nullable !Node>
   !Point = adt.struct<"Point", (core.f64, tribute_rt.anyref)>
   !Point_box = heap.box<!Point>
   !Shape = adt.enum<"Shape", [(), (core.f64)]>
@@ -80,9 +80,9 @@ const BOXES: &str = r#"core.module @test {
       func.return %4
   }
   func.func @nulls(%0: heap.box<!Node>) -> core.i1 {
-      %1 = heap.null : !Node_box_null
-      %2 = heap.cast %0 : heap.box<!Node> to !Node_box_null
-      %3 = heap.is_null %2 : !Node_box_null
+      %1 = heap.null : !Node_nbox
+      %2 = heap.cast %0 : heap.box<!Node> to !Node_nbox
+      %3 = heap.is_null %2 : !Node_nbox
       func.return %3
   }
 }
@@ -123,11 +123,11 @@ fn box_operations_round_trip_and_verify() {
 }
 
 #[test]
-fn a_nullable_box_writes_null_before_its_layout() {
+fn a_nullable_box_writes_nullable_before_its_layout() {
     let (ctx, module) = parse(
         r#"core.module @test {
   !Node = adt.struct<"Node", (core.i32)>
-  func.func @f(%0: heap.box<null !Node>, %1: heap.box<!Node, {nullable = true}>, %2: heap.box<!Node>) {
+  func.func @f(%0: heap.box<nullable !Node>, %1: heap.box<!Node, {nullable = true}>, %2: heap.box<!Node>) {
     func.return
   }
 }
@@ -151,15 +151,15 @@ fn a_nullable_box_writes_null_before_its_layout() {
             .is_nullable(&ctx)
     );
     let printed = module.op().display(&ctx).to_string();
-    assert!(printed.contains("heap.box<null !Node>"), "{printed}");
-    assert!(!printed.contains("nullable"), "{printed}");
+    assert!(printed.contains("heap.box<nullable !Node>"), "{printed}");
+    assert!(!printed.contains("nullable = true"), "{printed}");
 }
 
 #[test]
-fn null_and_a_nullable_attribute_are_not_written_together() {
+fn nullable_is_written_once() {
     let mut ctx = IrContext::new();
     let text = r#"core.module @test {
-  func.func @f(%0: heap.box<null adt.array<core.i32>, {nullable = true}>) {
+  func.func @f(%0: heap.box<nullable adt.array<core.i32>, {nullable = true}>) {
     func.return
   }
 }
@@ -173,7 +173,7 @@ fn a_box_suggests_the_alias_of_its_layout() {
 
     let (ctx, module) = parse(
         r#"core.module @test {
-  func.func @f(%0: heap.box<null adt.struct<"Node", (core.i32)>>, %1: heap.box<adt.struct<"Node", (core.i32)>>, %2: heap.box<adt.array<core.i32>>) {
+  func.func @f(%0: heap.box<nullable adt.struct<"Node", (core.i32)>>, %1: heap.box<adt.struct<"Node", (core.i32)>>, %2: heap.box<adt.array<core.i32>>) {
     func.return
   }
 }
@@ -189,14 +189,14 @@ fn a_box_suggests_the_alias_of_its_layout() {
     assert_eq!(
         names,
         [
-            Some("Node_box_null".to_owned()),
+            Some("Node_nbox".to_owned()),
             Some("Node_box".to_owned()),
             None
         ]
     );
     let printed = module.op().display(&ctx).to_string();
     assert!(
-        printed.contains("!Node_box_null = heap.box<null !Node>"),
+        printed.contains("!Node_nbox = heap.box<nullable !Node>"),
         "{printed}"
     );
 }
@@ -237,7 +237,7 @@ fn rejected(body: &str) -> String {
   !Point = adt.struct<"Point", (core.f64, core.f64)>
   !Shape = adt.enum<"Shape", [(), (core.f64)]>
   !Node = adt.struct<"Node", (core.i32)>
-  func.func @f(%0: core.f64, %1: heap.box<!Point>, %2: heap.box<!Shape>, %3: heap.box<null !Node>, %4: heap.box<adt.array<core.i32>>) {{
+  func.func @f(%0: core.f64, %1: heap.box<!Point>, %2: heap.box<!Shape>, %3: heap.box<nullable !Node>, %4: heap.box<adt.array<core.i32>>) {{
     {body}
     func.return
   }}
@@ -256,7 +256,7 @@ fn reference_operations_that_do_not_fit_their_box_are_rejected() {
         "%5 = heap.cast %1 : heap.box<!Point> to heap.box<!Shape>",
         "%5 = heap.cast %1 : heap.box<!Point> to heap.box<!Point>",
         // A cast that changes the layout and the nullability at once.
-        "%5 = heap.cast %3 : heap.box<null !Node> to heap.box<!Point>",
+        "%5 = heap.cast %3 : heap.box<nullable !Node> to heap.box<!Point>",
         // The unboxing of a nullable box.
         "%5 = heap.unbox_value %3 : !Node",
     ] {
@@ -273,7 +273,7 @@ fn reference_operations_that_do_not_fit_their_box_are_rejected() {
 #[test]
 fn a_value_boxes_only_as_a_non_null_box_of_its_own_layout() {
     for body in [
-        "%4 = heap.box_value %0 : heap.box<null !Point>",
+        "%4 = heap.box_value %0 : heap.box<nullable !Point>",
         "%4 = heap.box_value %0 : heap.box<!Shape>",
         "%4 = heap.box_value %1 : heap.box<adt.enum<\"Ghost\">>",
         "%4 = heap.unbox_value %2 : adt.enum<\"Ghost\">",
