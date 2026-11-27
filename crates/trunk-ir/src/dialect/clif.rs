@@ -784,9 +784,13 @@ impl CallLike for ReturnCall {
     }
 }
 
+/// The immediate sign-extended from its result's width, since an immediate
+/// may also spell a narrow value as unsigned (`255 : core.i8` is `-1`).
 impl ConstantLike for Iconst {
     fn constant_value(&self, ctx: &IrContext) -> Attribute {
-        Attribute::Int(self.value(ctx).into())
+        let value = i128::from(self.value(ctx));
+        let width = IntegerLike::width(ctx, ctx.value_ty(self.result(ctx)));
+        Attribute::Int(width.map_or(value, |width| arith::wrap_signed_to_width(value, width)))
     }
 }
 
@@ -929,6 +933,31 @@ mod tests {
 }
 "#
         );
+    }
+
+    #[test]
+    fn unsigned_immediates_read_as_signed_constants_of_their_width() {
+        let mut ctx = crate::IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @f() -> core.i8 {
+    %a = clif.iconst 255 : core.i8
+    %b = clif.iconst 2 : core.i8
+    %r = arith.divsi %a, %b : core.i8
+    func.return %r
+  }
+}"#,
+        );
+        PatternApplicator::new(TypeConverter::new())
+            .add_pattern_box(Box::new(FoldDispatchPattern::from_ops(
+                fold_ops_for_dialect("arith"),
+            )))
+            .apply_partial(&mut ctx, module);
+        // `-1 / 2` is `0`; reading the immediate as `255` would give `127`.
+        let printed = module.op().display(&ctx).to_string();
+        assert!(printed.contains("arith.constant 0 : core.i8"), "{printed}");
+        assert!(!printed.contains("arith.divsi"), "{printed}");
     }
 
     #[test]
