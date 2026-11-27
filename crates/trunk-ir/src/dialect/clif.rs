@@ -7,7 +7,8 @@ use crate::dialect::core::{I8, I32, IntegerLike};
 use crate::op_flag::{IsolatedFromAbove, NoTerminator, Terminator};
 use crate::op_interface::{CallLike, IndirectCallLike};
 use crate::ops::{DialectOp, DialectType};
-use crate::types::{Attribute, AttributeMap, TypeDataBuilder};
+use crate::transforms::canonicalize::{ConstantLike, Fold, FoldResult, const_int_value};
+use crate::types::{Attribute, AttributeMap, Location, TypeDataBuilder};
 use crate::{IrContext, SymbolPath};
 use itertools::Itertools;
 use rustc_hash::FxHashSet as HashSet;
@@ -137,6 +138,7 @@ mod clif {
     fn r#return(values: Variadic<_>) {}
 
     // Constants
+    #[implements(ConstantLike)]
     #[asm_format(attr_dict_bare value ":" type(result))]
     fn iconst(value: Attr<i64>) -> Value<_> {}
 
@@ -147,10 +149,13 @@ mod clif {
     fn f64const(value: Attr<f64>) -> Value<_> {}
 
     // Integer arithmetic
+    #[implements(Fold)]
     #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn iadd(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[implements(Fold)]
     #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn isub(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[implements(Fold)]
     #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn imul(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
     #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
@@ -779,6 +784,79 @@ impl CallLike for ReturnCall {
     }
 }
 
+impl ConstantLike for Iconst {
+    fn constant_value(&self, ctx: &IrContext) -> Attribute {
+        Attribute::Int(self.value(ctx).into())
+    }
+}
+
+/// The `clif` constant materializer: a `clif.iconst` of an integer type of
+/// at most 64 bits holding an integer that fits `i64`.
+fn materialize_constant(
+    ctx: &mut IrContext,
+    value: Attribute,
+    ty: crate::TypeRef,
+    location: Location,
+) -> Option<crate::OpRef> {
+    let Attribute::Int(value) = value else {
+        return None;
+    };
+    let value = i64::try_from(value).ok()?;
+    if IntegerLike::width(ctx, ty)? > 64 {
+        return None;
+    }
+    Some(
+        Iconst::operands()
+            .value(value)
+            .results(ty)
+            .build(ctx, location)
+            .op_ref(),
+    )
+}
+
+crate::register_constant_materializer!(DIALECT_NAME, materialize_constant);
+
+/// Fold a binary integer operation whose operands are both constants to
+/// `apply` of them, wrapped to the result's width.
+fn fold_integer_binary(
+    ctx: &IrContext,
+    op: crate::OpRef,
+    apply: fn(i128, i128) -> i128,
+) -> Option<FoldResult> {
+    let &[lhs, rhs] = ctx.op_operands(op) else {
+        return None;
+    };
+    let &[result_ty] = ctx.op_result_types(op) else {
+        return None;
+    };
+    let (a, b) = (const_int_value(ctx, lhs)?, const_int_value(ctx, rhs)?);
+    let width = IntegerLike::width(ctx, result_ty)?;
+    Some(FoldResult::Constant(Attribute::Int(
+        arith::wrap_signed_to_width(apply(a, b), width),
+    )))
+}
+
+/// `clif.iadd const(a), const(b)` → `clif.iconst(wrap(a+b))`.
+impl Fold for Iadd {
+    fn fold(&self, ctx: &IrContext) -> Option<FoldResult> {
+        fold_integer_binary(ctx, self.op_ref(), i128::wrapping_add)
+    }
+}
+
+/// `clif.isub const(a), const(b)` → `clif.iconst(wrap(a-b))`.
+impl Fold for Isub {
+    fn fold(&self, ctx: &IrContext) -> Option<FoldResult> {
+        fold_integer_binary(ctx, self.op_ref(), i128::wrapping_sub)
+    }
+}
+
+/// `clif.imul const(a), const(b)` → `clif.iconst(wrap(a*b))`.
+impl Fold for Imul {
+    fn fold(&self, ctx: &IrContext) -> Option<FoldResult> {
+        fold_integer_binary(ctx, self.op_ref(), i128::wrapping_mul)
+    }
+}
+
 /// Attach the required exact callable contract to a `clif` indirect transfer.
 ///
 /// Returns `false` without mutation when the operation is not a `clif`
@@ -808,6 +886,50 @@ mod tests {
     use crate::op_def::OpDef;
     use crate::op_interface::DynIndirectCallLike;
     use crate::parser::parse_test_module;
+    use crate::rewrite::{PatternApplicator, TypeConverter};
+    use crate::transforms::canonicalize::{FoldDispatchPattern, fold_ops_for_dialect};
+
+    #[test]
+    fn integer_folds_materialize_clif_constants() {
+        let mut ctx = crate::IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  clif.func @f(%x: core.i8) -> (core.i8, core.i8) {
+      %a = clif.iconst 100 : core.i8
+      %b = clif.iconst 100 : core.i8
+      %sum = clif.iadd %a, %b : core.i8
+      %c = clif.iconst 3 : core.i8
+      %product = clif.imul %sum, %c : core.i8
+      %partial = clif.isub %x, %c : core.i8
+      clif.return %product, %partial
+  }
+}"#,
+        );
+        let result = PatternApplicator::new(TypeConverter::new())
+            .add_pattern_box(Box::new(FoldDispatchPattern::from_ops(
+                fold_ops_for_dialect("clif"),
+            )))
+            .apply_partial(&mut ctx, module);
+        assert!(result.reached_fixpoint);
+        // `100 + 100` wraps to `-56` in eight bits, and `-56 * 3` to `88`.
+        // The subtraction of a parameter stays.
+        assert_eq!(
+            module.op().display(&ctx).to_string(),
+            r#"core.module @test {
+  clif.func @f(%0: core.i8) -> (core.i8, core.i8) {
+      %1 = clif.iconst 100 : core.i8
+      %2 = clif.iconst 100 : core.i8
+      %3 = clif.iconst -56 : core.i8
+      %4 = clif.iconst 3 : core.i8
+      %5 = clif.iconst 88 : core.i8
+      %6 = clif.isub %0, %4 : core.i8
+      clif.return %5, %6
+  }
+}
+"#
+        );
+    }
 
     #[test]
     fn indirect_call_interface_uses_clif_owned_sig() {

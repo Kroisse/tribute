@@ -652,6 +652,31 @@ A hook that core infrastructure reaches through the definition, such as a
 verifier, an assembly format, an alias hint, or an identifier, belongs on
 `TypeDef` instead.
 
+### Folding
+
+An operation folds by implementing the `Fold` interface of
+`transforms::canonicalize`; the doc comment on `Fold` states the contract.
+A fold reads an operand's constant with `constant_value` or
+`const_int_value`, which accept any operation implementing `ConstantLike`,
+and returns `FoldResult::Constant(attr)` for a constant result. The
+canonicalize driver builds that constant with the folded operation's
+dialect materializer, registered next to the dialect
+([folding](../../design/ir.md#folding과-상수-materialization)):
+
+```rust
+fn materialize_constant(
+    ctx: &mut IrContext,
+    value: Attribute,
+    ty: TypeRef,
+    location: Location,
+) -> Option<OpRef> { .. }
+
+trunk_ir::register_constant_materializer!(DIALECT_NAME, materialize_constant);
+```
+
+The materializer returns a detached operation, or `None` without changing
+the IR when the dialect has no constant for the value and type.
+
 ## Working with IR
 
 A declared type is built like an operation: start from its parameters in

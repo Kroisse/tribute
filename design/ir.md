@@ -176,6 +176,30 @@ operation의 block이 `Terminator`로 끝나야 한다는 규칙은 flag가 없�
 Wasm backend 경계의 검증이 이를 실행한다. Pass가 이 규칙을 어긴 IR을 남기면 그
 pass의 오류다.
 
+### Folding과 상수 materialization
+
+Operation의 fold는 `Fold` interface가 말한다(MLIR의 `fold`). Fold는 IR을 바꾸지
+않고 결과만 돌려주며, canonicalize driver가 그 결과를 적용한다. 결과는 기존 값,
+상수 attribute, 또는 operation의 region 하나를 부모 block에 펼치는 splice다.
+적용한 결과는 항상 operation을 IR에서 없애야 한다(strict progress). 상수
+operation은 자기 값으로 fold하지 않는다.
+
+Fold는 operand가 상수인지를 `ConstantLike` interface로 읽는다(MLIR의
+`ConstantLike`). 이 interface는 상수 operation의 값을 attribute로 돌려주므로 fold는
+그 상수를 정의한 dialect의 operation 이름을 알지 않는다. 정수 attribute는 폭과
+상관없이 `i128`로 부호 확장해 담는다.
+
+상수 attribute 결과는 fold한 operation의 dialect가 자기 상수 operation으로
+만든다(MLIR의 `Dialect::materializeConstant`). 각 dialect는 attribute와 결과
+타입에서 detached 상수 operation을 만드는 materializer를 하나까지 등록하며, 그
+dialect의 상수가 담을 수 없는 값이면 IR을 바꾸지 않고 거절한다. Driver는
+materializer가 없거나 거절하면 operation을 그대로 둔다. Materializer는 타입이
+아니라 dialect에 속한다. 같은 정수 타입(`core.i64`)을 여러 dialect의 상수
+(`arith.constant`, `clif.iconst`)가 만들므로 타입만으로는 어느 상수를 만들지 정할
+수 없고, 같은 수준의 operation을 계속 쓰려면 fold한 operation의 dialect가 정해야
+한다. 따라서 driver는 특정 dialect를 알지 않으며 constant folding은 target lowering
+뒤의 dialect에서도 같은 방식으로 동작한다.
+
 ## 선언적 operation schema
 
 Operation verifier의 로컬 계약은 `#[dialect]` operation 정의에서 선언적으로

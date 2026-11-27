@@ -533,14 +533,14 @@ impl RegionBranchTerminator for Break {
 // =========================================================================
 
 use crate::context::IrContext;
-use crate::dialect::arith::const_int_value;
 use crate::dialect::core::{I1, IntegerOrIndex};
 use crate::ops::DialectOp;
 use crate::refs::{OpRef, ValueRef};
-use crate::transforms::canonicalize::{Fold, FoldResult};
+use crate::transforms::canonicalize::{Fold, FoldResult, const_int_value};
 use crate::types::Attribute;
 
-/// `scf.if(arith.constant Int(c) : core.i1)` → splice the chosen region's
+/// `scf.if(const Int(c) : core.i1)`, a condition any `ConstantLike`
+/// operation defines → splice the chosen region's
 /// body into the parent block.
 ///
 /// When the condition is a compile-time constant, exactly one branch
@@ -592,7 +592,7 @@ impl Fold for If {
     }
 }
 
-/// `scf.index_switch(arith.constant Int(c))` → splice the selected region's
+/// `scf.index_switch(const Int(c))` → splice the selected region's
 /// body into the parent block.
 ///
 /// The region is the case region whose value equals the selector, or the

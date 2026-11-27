@@ -13,63 +13,54 @@
 //!
 //! - [`FoldResult::Forward`] — RAUW the op's result with an existing
 //!   value.
-//! - [`FoldResult::ArithConst`] — replace with a fresh `arith.constant`
-//!   of the op's result type.
+//! - [`FoldResult::Constant`] — replace the op with a constant of its
+//!   result type, which the op's dialect builds through its
+//!   [constant materializer](crate::register_constant_materializer).
 //! - [`FoldResult::Splice`] — splice a body of ops into the parent
 //!   block before the matched op and RAUW its results with the
 //!   supplied values; the dispatcher additionally drops anything
 //!   still attached to the matched op's regions (e.g. yields and the
 //!   dead branch in `scf.if(const)`).
 //!
-//! Currently registered (across `arith`, `core`, `scf`, `adt`, `tribute_rt`):
-//!
-//! - `arith.addi`/`subi`/`muli` — integer identity (`x+0`, `x-0`,
-//!   `x*0`, `x*1`) and constant folding at the result type's bit-width.
-//! - `core.unrealized_conversion_cast` — identity (same source/target
-//!   type) and round-trip elimination (`A → B → A`).
-//! - `scf.if` / `scf.index_switch` with a constant condition or selector — splice
-//!   the chosen arm.
-//! - `adt.struct_get` of an `adt.struct_new`, and identity `adt.ref_cast`.
-//! - `tribute_rt.unbox_*` of the matching `box_*`.
-//!
-//! Float and div/rem folds are deferred until each one's edge cases
-//! (NaN/-0.0, division-by-zero) are pinned down.
+//! A fold reads its operands' constants through [`ConstantLike`], with
+//! [`constant_value`] and [`const_int_value`], without naming the dialect
+//! that defines them. Folds are owned by their dialects: `arith`, `clif`,
+//! `core`, `scf`, `adt`, and `tribute_rt` register them today.
+
+use std::sync::LazyLock;
 
 use trunk_ir_macros::op_interface;
 
 use crate::OpName;
 use crate::analysis::AnalysisCache;
 use crate::context::IrContext;
-use crate::dialect::{arith, func};
+use crate::dialect::func;
 use crate::ops::DialectOp;
 use crate::pass::{Pass, PassRunResult};
-use crate::refs::{OpRef, ValueRef};
+use crate::refs::{OpRef, TypeRef, ValueDef, ValueRef};
 use crate::rewrite::{
     PatternApplicator, PatternRewriter, RewritePattern, RewriteScope, TypeConverter,
 };
-use crate::types::Attribute;
+use crate::types::{Attribute, Location};
 
 // =========================================================================
 // Fold API
 // =========================================================================
 
-/// Result of trying to fold an operation.
+/// Result of trying to fold an operation, the counterpart of MLIR's
+/// `OpFoldResult` (an attribute or an existing value) plus [`Splice`] for
+/// inlining one of the operation's regions.
 ///
-/// Folds are *strict-progress* rewrites — applying one must remove the op
-/// from the IR. A fold function that produces another op of the same
-/// (dialect, op_name) would loop the canonicalize pass; this is a bug in
-/// the fold, not a property the driver tries to detect.
+/// [`Splice`]: FoldResult::Splice
 #[derive(Debug, Clone)]
 pub enum FoldResult {
     /// RAUW the op's single result with this existing value.
     Forward(ValueRef),
-    /// Replace with a freshly-built `arith.constant` of the op's result type,
-    /// carrying this attribute. The driver materializes the const op.
-    ///
-    /// Specifically named `ArithConst` (not `Const`) so that future
-    /// const-producing dialects require an explicit new variant — the
-    /// driver currently knows only how to build `arith.constant`.
-    ArithConst(Attribute),
+    /// Replace the op with a constant of its single result's type carrying
+    /// this attribute. The driver asks the op's dialect to materialize it
+    /// and leaves the op unchanged when the dialect has no materializer or
+    /// declines the attribute.
+    Constant(Attribute),
     /// Splice a sequence of body ops into the matched op's parent block
     /// (in order, immediately before the matched op), then erase the
     /// matched op while RAUW'ing its results to `results`.
@@ -92,13 +83,124 @@ pub enum FoldResult {
     },
 }
 
-/// An operation that folds into a canonical form.
+/// An operation that folds into a canonical form, the counterpart of
+/// MLIR's `fold` hook.
 ///
 /// The context is read-only; the canonicalize driver applies the returned
-/// [`FoldResult`] after the fold returns.
+/// [`FoldResult`] after the fold returns. A fold follows three rules:
+///
+/// - **Strict progress.** Applying a result removes the operation from the
+///   IR, so a fold returns `None` unless it simplifies something. It never
+///   produces another operation of its own kind, and a [`ConstantLike`]
+///   operation never folds to its own value, or the driver would rebuild
+///   it forever.
+/// - **Materialization.** A [`FoldResult::Constant`] names only the value.
+///   The driver builds the constant with the materializer of the folded
+///   operation's dialect, so a fold returns an attribute that dialect's
+///   constants can hold at the result type. When the materializer declines
+///   it, the operation stays as it was.
+/// - **Operand constants.** A fold reads its operands' constant values
+///   with [`constant_value`] or [`const_int_value`], which accept a
+///   constant of any dialect through [`ConstantLike`]. It does not match
+///   another dialect's constant operation by name.
 #[op_interface]
 pub trait Fold: DialectOp {
     fn fold(&self, ctx: &IrContext) -> Option<FoldResult>;
+}
+
+/// An operation whose single result is a compile-time constant, the
+/// counterpart of MLIR's `ConstantLike`.
+///
+/// Folds read their operands' values through it, so a fold recognizes a
+/// constant of any dialect. The attribute uses the representation
+/// [`FoldResult::Constant`] does: [`Attribute::Int`] holds an integer of
+/// any width sign-extended to `i128`.
+#[op_interface]
+pub trait ConstantLike: DialectOp {
+    fn constant_value(&self, ctx: &IrContext) -> Attribute;
+}
+
+/// The constant value of `value`, if a [`ConstantLike`] operation defines
+/// it.
+pub fn constant_value(ctx: &IrContext, value: ValueRef) -> Option<Attribute> {
+    let ValueDef::OpResult(producer, _) = ctx.value_def(value) else {
+        return None;
+    };
+    Some(DynConstantLike::get(ctx, producer)?.constant_value(ctx))
+}
+
+/// The integer constant of `value`, if a [`ConstantLike`] operation defines
+/// it with an [`Attribute::Int`].
+pub fn const_int_value(ctx: &IrContext, value: ValueRef) -> Option<i128> {
+    match constant_value(ctx, value)? {
+        Attribute::Int(v) => Some(v),
+        _ => None,
+    }
+}
+
+// =========================================================================
+// Constant materialization
+// =========================================================================
+
+/// A dialect's constant materialization hook, the counterpart of MLIR's
+/// `Dialect::materializeConstant`.
+///
+/// It builds a detached constant operation of the dialect whose single
+/// result has type `ty` and holds `value`, at `location`. It returns `None`
+/// without changing the IR when the dialect has no constant for that value
+/// and type.
+pub type MaterializeConstantFn =
+    fn(ctx: &mut IrContext, value: Attribute, ty: TypeRef, location: Location) -> Option<OpRef>;
+
+/// Inventory entry registering a dialect's [`MaterializeConstantFn`].
+///
+/// Emitted by [`register_constant_materializer!`](crate::register_constant_materializer).
+#[doc(hidden)]
+pub struct ConstantMaterializerRegistration {
+    pub dialect: &'static str,
+    pub materialize: MaterializeConstantFn,
+}
+
+inventory::collect!(ConstantMaterializerRegistration);
+
+/// Register a dialect's constant materializer, a [`MaterializeConstantFn`],
+/// for the dialect named by its `DIALECT_NAME`.
+///
+/// ```text
+/// register_constant_materializer!(DIALECT_NAME, materialize_constant);
+/// ```
+///
+/// A dialect registers at most one; a second registration for the same
+/// dialect panics when the registry is first queried.
+#[macro_export]
+macro_rules! register_constant_materializer {
+    ($dialect:expr, $materialize:path) => {
+        $crate::__private::inventory::submit! {
+            $crate::transforms::canonicalize::ConstantMaterializerRegistration {
+                dialect: $dialect,
+                materialize: $materialize,
+            }
+        }
+    };
+}
+
+static MATERIALIZERS: LazyLock<crate::__private::HashMap<&'static str, MaterializeConstantFn>> =
+    LazyLock::new(|| {
+        let mut registry = crate::__private::HashMap::default();
+        for entry in inventory::iter::<ConstantMaterializerRegistration> {
+            let previous = registry.insert(entry.dialect, entry.materialize);
+            assert!(
+                previous.is_none(),
+                "dialect `{}` registers two constant materializers",
+                entry.dialect
+            );
+        }
+        registry
+    });
+
+/// The constant materializer `dialect` registers, if any.
+pub fn constant_materializer(dialect: &str) -> Option<MaterializeConstantFn> {
+    MATERIALIZERS.get(dialect).copied()
 }
 
 /// One `RewritePattern` that dispatches to per-op folds through
@@ -106,7 +208,7 @@ pub trait Fold: DialectOp {
 ///
 /// Replaces N individual self-filtering patterns (one per op kind) with
 /// a single O(1) dispatcher: instead of every pattern testing
-/// whether it is `arith.addi`, the dispatcher looks the op's name up in
+/// whether the op is its own, the dispatcher looks the op's name up in
 /// the [`Fold`] registry and calls the fold directly. Duplicate
 /// registrations for the same operation panic when the registry is first
 /// queried.
@@ -149,17 +251,21 @@ impl RewritePattern for FoldDispatchPattern {
                 rewriter.erase_op(vec![v]);
                 Some(())
             }
-            FoldResult::ArithConst(attr) => {
-                let loc = ctx.op(op).location;
-                let result_ty = match ctx.op_result_types(op) {
-                    [t] => *t,
-                    _ => return None,
+            FoldResult::Constant(value) => {
+                let &[result_ty] = ctx.op_result_types(op) else {
+                    return rewriter.no_match("a constant fold needs exactly one result");
                 };
-                let new_const = arith::Constant::operands()
-                    .value(attr)
-                    .results(result_ty)
-                    .build(ctx, loc);
-                rewriter.replace_op(new_const.op_ref());
+                let data = ctx.op(op);
+                let location = data.location;
+                let materialize = rewriter.require(
+                    constant_materializer(data.name.dialect(ctx)),
+                    "the dialect has no constant materializer",
+                )?;
+                let constant = rewriter.require(
+                    materialize(ctx, value, result_ty, location),
+                    "the dialect declined to materialize the constant",
+                )?;
+                rewriter.replace_op(constant);
                 Some(())
             }
             FoldResult::Splice { body, results } => apply_splice(ctx, rewriter, op, body, results),

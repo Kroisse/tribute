@@ -9,6 +9,7 @@
 #[trunk_ir::dialect]
 mod arith {
     #[verify]
+    #[implements(ConstantLike)]
     #[flags(Pure)]
     #[asm_format(attr_dict_bare value ":" type(result))]
     fn constant(value: Attr<_>) -> Value<impl NumericLike> {}
@@ -160,10 +161,10 @@ mod arith {
 // =========================================================================
 // Canonicalization folds
 //
-// Owned by this dialect and aggregated by `transforms::canonicalize` via
-// [`folds`]. Each fold returns a `FoldResult` describing how the
-// pass should rewrite the op (or `None` to leave it alone). The driver
-// dispatches by (dialect, op_name) so folds don't self-filter.
+// Owned by this dialect and aggregated by `transforms::canonicalize`
+// through the `Fold` interface. Each fold returns a `FoldResult`
+// describing how the pass should rewrite the op (or `None` to leave it
+// alone); a constant result is built by `materialize_constant`.
 // =========================================================================
 
 use crate::context::IrContext;
@@ -171,8 +172,8 @@ use crate::dialect::core::{FloatLike, I1, Index, IntegerLike, IntegerOrIndex, Nu
 use crate::op_flag::Pure;
 use crate::ops::DialectOp;
 use crate::refs::{OpRef, TypeRef, ValueDef, ValueRef};
-use crate::transforms::canonicalize::{Fold, FoldResult};
-use crate::types::Attribute;
+use crate::transforms::canonicalize::{ConstantLike, Fold, FoldResult, const_int_value};
+use crate::types::{Attribute, Location};
 
 crate::attr_kind::keyword_kind! {
     /// How `arith.cmpi` compares its signless integer operands.
@@ -203,16 +204,45 @@ crate::attr_kind::keyword_kind! {
     }
 }
 
+/// Whether an `arith.constant` of type `ty` can hold `value`.
+fn constant_holds(ctx: &IrContext, value: &Attribute, ty: TypeRef) -> bool {
+    match value {
+        Attribute::Int(_) => IntegerOrIndex::matches(ctx, ty),
+        Attribute::Bool(_) => I1::matches(ctx, ty),
+        Attribute::FloatBits(_) => FloatLike::matches(ctx, ty),
+        _ => false,
+    }
+}
+
+impl ConstantLike for Constant {
+    fn constant_value(&self, ctx: &IrContext) -> Attribute {
+        self.value(ctx)
+    }
+}
+
+/// The `arith` constant materializer: an `arith.constant` of `ty` holding
+/// `value`, for an integer, boolean, or float that type can hold.
+fn materialize_constant(
+    ctx: &mut IrContext,
+    value: Attribute,
+    ty: TypeRef,
+    location: Location,
+) -> Option<OpRef> {
+    constant_holds(ctx, &value, ty).then(|| {
+        Constant::operands()
+            .value(value)
+            .results(ty)
+            .build(ctx, location)
+            .op_ref()
+    })
+}
+
+crate::register_constant_materializer!(DIALECT_NAME, materialize_constant);
+
 impl crate::ops::Verify for Constant {
     fn verify(&self, ctx: &IrContext) -> Result<(), crate::ops::VerificationError> {
         let ty = ctx.value_ty(self.result(ctx));
-        let accepted = match self.value(ctx) {
-            Attribute::Int(_) => IntegerOrIndex::matches(ctx, ty),
-            Attribute::Bool(_) => I1::matches(ctx, ty),
-            Attribute::FloatBits(_) => FloatLike::matches(ctx, ty),
-            _ => false,
-        };
-        if accepted {
+        if constant_holds(ctx, &self.value(ctx), ty) {
             Ok(())
         } else {
             Err(format!(
@@ -310,18 +340,19 @@ impl crate::ops::Verify for IndexCastui {
 impl Fold for Addi {
     fn fold(&self, ctx: &IrContext) -> Option<FoldResult> {
         let op = self.op_ref();
-        let (lhs, rhs) = two_operands(ctx, op)?;
-        if const_int_value(ctx, rhs) == Some(0) {
+        let ((lhs, a), (rhs, b)) = binary_operand_constants(ctx, op)?;
+        if b == Some(0) {
             return Some(FoldResult::Forward(lhs));
         }
-        if const_int_value(ctx, lhs) == Some(0) {
+        if a == Some(0) {
             return Some(FoldResult::Forward(rhs));
         }
-        let (a, b) = (const_int_value(ctx, lhs)?, const_int_value(ctx, rhs)?);
+        let (a, b) = (a?, b?);
         let width = IntegerLike::width(ctx, single_result_type(ctx, op)?)?;
-        Some(FoldResult::ArithConst(Attribute::Int(
-            wrap_signed_to_width(a.wrapping_add(b), width),
-        )))
+        Some(FoldResult::Constant(Attribute::Int(wrap_signed_to_width(
+            a.wrapping_add(b),
+            width,
+        ))))
     }
 }
 
@@ -332,15 +363,16 @@ impl Fold for Addi {
 impl Fold for Subi {
     fn fold(&self, ctx: &IrContext) -> Option<FoldResult> {
         let op = self.op_ref();
-        let (lhs, rhs) = two_operands(ctx, op)?;
-        if const_int_value(ctx, rhs) == Some(0) {
+        let ((lhs, a), (_, b)) = binary_operand_constants(ctx, op)?;
+        if b == Some(0) {
             return Some(FoldResult::Forward(lhs));
         }
-        let (a, b) = (const_int_value(ctx, lhs)?, const_int_value(ctx, rhs)?);
+        let (a, b) = (a?, b?);
         let width = IntegerLike::width(ctx, single_result_type(ctx, op)?)?;
-        Some(FoldResult::ArithConst(Attribute::Int(
-            wrap_signed_to_width(a.wrapping_sub(b), width),
-        )))
+        Some(FoldResult::Constant(Attribute::Int(wrap_signed_to_width(
+            a.wrapping_sub(b),
+            width,
+        ))))
     }
 }
 
@@ -351,21 +383,22 @@ impl Fold for Subi {
 impl Fold for Muli {
     fn fold(&self, ctx: &IrContext) -> Option<FoldResult> {
         let op = self.op_ref();
-        let (lhs, rhs) = two_operands(ctx, op)?;
-        if const_int_value(ctx, rhs) == Some(0) || const_int_value(ctx, lhs) == Some(0) {
-            return Some(FoldResult::ArithConst(Attribute::Int(0)));
+        let ((lhs, a), (rhs, b)) = binary_operand_constants(ctx, op)?;
+        if b == Some(0) || a == Some(0) {
+            return Some(FoldResult::Constant(Attribute::Int(0)));
         }
-        if const_int_value(ctx, rhs) == Some(1) {
+        if b == Some(1) {
             return Some(FoldResult::Forward(lhs));
         }
-        if const_int_value(ctx, lhs) == Some(1) {
+        if a == Some(1) {
             return Some(FoldResult::Forward(rhs));
         }
-        let (a, b) = (const_int_value(ctx, lhs)?, const_int_value(ctx, rhs)?);
+        let (a, b) = (a?, b?);
         let width = IntegerLike::width(ctx, single_result_type(ctx, op)?)?;
-        Some(FoldResult::ArithConst(Attribute::Int(
-            wrap_signed_to_width(a.wrapping_mul(b), width),
-        )))
+        Some(FoldResult::Constant(Attribute::Int(wrap_signed_to_width(
+            a.wrapping_mul(b),
+            width,
+        ))))
     }
 }
 
@@ -391,9 +424,10 @@ impl Fold for Divsi {
         if is_signed_overflow_at_width(a, b, width) {
             return None;
         }
-        Some(FoldResult::ArithConst(Attribute::Int(
-            wrap_signed_to_width(a.wrapping_div(b), width),
-        )))
+        Some(FoldResult::Constant(Attribute::Int(wrap_signed_to_width(
+            a.wrapping_div(b),
+            width,
+        ))))
     }
 }
 
@@ -412,9 +446,10 @@ impl Fold for Divui {
             return None;
         }
         let result = a_u.wrapping_div(b_u);
-        Some(FoldResult::ArithConst(Attribute::Int(
-            wrap_signed_to_width(result as i128, width),
-        )))
+        Some(FoldResult::Constant(Attribute::Int(wrap_signed_to_width(
+            result as i128,
+            width,
+        ))))
     }
 }
 
@@ -435,9 +470,10 @@ impl Fold for Remsi {
         if is_signed_overflow_at_width(a, b, width) {
             return None;
         }
-        Some(FoldResult::ArithConst(Attribute::Int(
-            wrap_signed_to_width(a.wrapping_rem(b), width),
-        )))
+        Some(FoldResult::Constant(Attribute::Int(wrap_signed_to_width(
+            a.wrapping_rem(b),
+            width,
+        ))))
     }
 }
 
@@ -456,9 +492,10 @@ impl Fold for Remui {
             return None;
         }
         let result = a_u.wrapping_rem(b_u);
-        Some(FoldResult::ArithConst(Attribute::Int(
-            wrap_signed_to_width(result as i128, width),
-        )))
+        Some(FoldResult::Constant(Attribute::Int(wrap_signed_to_width(
+            result as i128,
+            width,
+        ))))
     }
 }
 
@@ -472,21 +509,22 @@ impl Fold for Remui {
 impl Fold for Andi {
     fn fold(&self, ctx: &IrContext) -> Option<FoldResult> {
         let op = self.op_ref();
-        let (lhs, rhs) = two_operands(ctx, op)?;
-        if const_int_value(ctx, rhs) == Some(0) || const_int_value(ctx, lhs) == Some(0) {
-            return Some(FoldResult::ArithConst(Attribute::Int(0)));
+        let ((lhs, a), (rhs, b)) = binary_operand_constants(ctx, op)?;
+        if b == Some(0) || a == Some(0) {
+            return Some(FoldResult::Constant(Attribute::Int(0)));
         }
-        if const_int_value(ctx, rhs) == Some(-1) {
+        if b == Some(-1) {
             return Some(FoldResult::Forward(lhs));
         }
-        if const_int_value(ctx, lhs) == Some(-1) {
+        if a == Some(-1) {
             return Some(FoldResult::Forward(rhs));
         }
-        let (a, b) = (const_int_value(ctx, lhs)?, const_int_value(ctx, rhs)?);
+        let (a, b) = (a?, b?);
         let width = IntegerLike::width(ctx, single_result_type(ctx, op)?)?;
-        Some(FoldResult::ArithConst(Attribute::Int(
-            wrap_signed_to_width(a & b, width),
-        )))
+        Some(FoldResult::Constant(Attribute::Int(wrap_signed_to_width(
+            a & b,
+            width,
+        ))))
     }
 }
 
@@ -498,21 +536,22 @@ impl Fold for Andi {
 impl Fold for Ori {
     fn fold(&self, ctx: &IrContext) -> Option<FoldResult> {
         let op = self.op_ref();
-        let (lhs, rhs) = two_operands(ctx, op)?;
-        if const_int_value(ctx, rhs) == Some(0) {
+        let ((lhs, a), (rhs, b)) = binary_operand_constants(ctx, op)?;
+        if b == Some(0) {
             return Some(FoldResult::Forward(lhs));
         }
-        if const_int_value(ctx, lhs) == Some(0) {
+        if a == Some(0) {
             return Some(FoldResult::Forward(rhs));
         }
-        if const_int_value(ctx, rhs) == Some(-1) || const_int_value(ctx, lhs) == Some(-1) {
-            return Some(FoldResult::ArithConst(Attribute::Int(-1)));
+        if b == Some(-1) || a == Some(-1) {
+            return Some(FoldResult::Constant(Attribute::Int(-1)));
         }
-        let (a, b) = (const_int_value(ctx, lhs)?, const_int_value(ctx, rhs)?);
+        let (a, b) = (a?, b?);
         let width = IntegerLike::width(ctx, single_result_type(ctx, op)?)?;
-        Some(FoldResult::ArithConst(Attribute::Int(
-            wrap_signed_to_width(a | b, width),
-        )))
+        Some(FoldResult::Constant(Attribute::Int(wrap_signed_to_width(
+            a | b,
+            width,
+        ))))
     }
 }
 
@@ -526,18 +565,19 @@ impl Fold for Ori {
 impl Fold for Xori {
     fn fold(&self, ctx: &IrContext) -> Option<FoldResult> {
         let op = self.op_ref();
-        let (lhs, rhs) = two_operands(ctx, op)?;
-        if const_int_value(ctx, rhs) == Some(0) {
+        let ((lhs, a), (rhs, b)) = binary_operand_constants(ctx, op)?;
+        if b == Some(0) {
             return Some(FoldResult::Forward(lhs));
         }
-        if const_int_value(ctx, lhs) == Some(0) {
+        if a == Some(0) {
             return Some(FoldResult::Forward(rhs));
         }
-        let (a, b) = (const_int_value(ctx, lhs)?, const_int_value(ctx, rhs)?);
+        let (a, b) = (a?, b?);
         let width = IntegerLike::width(ctx, single_result_type(ctx, op)?)?;
-        Some(FoldResult::ArithConst(Attribute::Int(
-            wrap_signed_to_width(a ^ b, width),
-        )))
+        Some(FoldResult::Constant(Attribute::Int(wrap_signed_to_width(
+            a ^ b,
+            width,
+        ))))
     }
 }
 
@@ -567,7 +607,7 @@ fn fold_index_cast(ctx: &IrContext, op: OpRef, signed: bool) -> Option<FoldResul
     let result_ty = single_result_type(ctx, op)?;
     if let Some(value) = const_int_value(ctx, operand) {
         return index_cast_const(ctx, value, ctx.value_ty(operand), result_ty, signed)
-            .map(|value| FoldResult::ArithConst(Attribute::Int(value)));
+            .map(|value| FoldResult::Constant(Attribute::Int(value)));
     }
     let width = IntegerLike::width(ctx, result_ty)?;
     if let ValueDef::OpResult(producer, _) = ctx.value_def(operand)
@@ -632,22 +672,19 @@ fn single_result_type(ctx: &IrContext, op: OpRef) -> Option<TypeRef> {
     }
 }
 
-/// If `value` is the result of an `arith.constant Int(_)`, return
-/// its raw integer attribute.
-///
-/// Uses the dialect-generated `Const` typed wrapper so the match is
-/// rename-safe and tied to the schema rather than literal `"arith"` /
-/// `"const"` / `"value"` strings.
-pub(crate) fn const_int_value(ctx: &IrContext, value: ValueRef) -> Option<i128> {
-    let producer = match ctx.value_def(value) {
-        ValueDef::OpResult(op, _) => op,
-        ValueDef::BlockArg(_, _) => return None,
-    };
-    let const_op = Constant::from_op(ctx, producer).ok()?;
-    match const_op.value(ctx) {
-        Attribute::Int(v) => Some(v),
-        _ => None,
-    }
+/// An operand and its integer constant, `None` when it is not one.
+type OperandConstant = (ValueRef, Option<i128>);
+
+/// The two operands of a binary `op` with their integer constants.
+fn binary_operand_constants(
+    ctx: &IrContext,
+    op: OpRef,
+) -> Option<(OperandConstant, OperandConstant)> {
+    let (lhs, rhs) = two_operands(ctx, op)?;
+    Some((
+        (lhs, const_int_value(ctx, lhs)),
+        (rhs, const_int_value(ctx, rhs)),
+    ))
 }
 
 /// Truncate `value` to `width` bits, sign-extended back to i128.
@@ -656,7 +693,7 @@ pub(crate) fn const_int_value(ctx: &IrContext, value: ValueRef) -> Option<i128> 
 /// arithmetic shift, which sign-extends from the top bit of the kept
 /// portion — matching the two's-complement wrap semantics of every
 /// concrete integer width supported here.
-fn wrap_signed_to_width(value: i128, width: u32) -> i128 {
+pub(crate) fn wrap_signed_to_width(value: i128, width: u32) -> i128 {
     debug_assert!((1..=128).contains(&width));
     if width == 128 {
         return value;
