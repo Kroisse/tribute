@@ -32,6 +32,7 @@ use trunk_ir_macros::{dialect_interface, op_interface};
 use crate::OpName;
 use crate::analysis::AnalysisCache;
 use crate::context::IrContext;
+use crate::dialect::core::IntegerLike;
 use crate::dialect::func;
 use crate::ops::{Dialect, DialectOp};
 use crate::pass::{Pass, PassRunResult};
@@ -110,12 +111,52 @@ pub trait Fold: DialectOp {
 /// counterpart of MLIR's `ConstantLike`.
 ///
 /// Folds read their operands' values through it, so a fold recognizes a
-/// constant of any dialect. The attribute uses the representation
-/// [`FoldResult::Constant`] does: [`Attribute::Int`] holds an integer of
-/// any width sign-extended to `i128`.
+/// constant of any dialect. An integer of a fixed width is reported as
+/// [`canonical_int`] writes it, sign-extended from its width to `i128`, so
+/// the same bits read the same whichever dialect defines them and however
+/// the operation spells them: `255 : core.i8` and `-1 : core.i8` both read
+/// `-1`, and a `core.i1` true reads `-1`. An integer outside its width's
+/// range, which the operation's verifier rejects, is reported as written.
+///
+/// How a constant is written is its dialect's choice, which its
+/// [`ConstantMaterializer`] makes.
 #[op_interface]
 pub trait ConstantLike: DialectOp {
     fn constant_value(&self, ctx: &IrContext) -> Attribute;
+}
+
+/// The canonical form of the integer `value` held in `width` bits: the
+/// value sign-extended from `width` bits. `None` when `value` fits neither
+/// the signed nor the unsigned range of the width.
+///
+/// [`ConstantLike`] reports integers in this form, and folds compute in
+/// it; a materializer accepts any value of the same bits.
+pub fn canonical_int(value: i128, width: u32) -> Option<i128> {
+    if width == 0 {
+        return None;
+    }
+    if width >= 128 {
+        return Some(value);
+    }
+    let max = if width == 127 {
+        i128::MAX
+    } else {
+        (1i128 << width) - 1
+    };
+    if !(-(1i128 << (width - 1))..=max).contains(&value) {
+        return None;
+    }
+    let shift = 128 - width;
+    Some((value << shift) >> shift)
+}
+
+/// [`canonical_int`] of `value` held in a value of type `ty`, or `value`
+/// itself when `ty` has no fixed width, such as `core.index`.
+pub fn canonical_int_of_type(ctx: &IrContext, value: i128, ty: TypeRef) -> Option<i128> {
+    match IntegerLike::width(ctx, ty) {
+        Some(width) => canonical_int(value, width),
+        None => Some(value),
+    }
 }
 
 /// The constant value of `value`, if a [`ConstantLike`] operation defines
@@ -565,6 +606,43 @@ mod tests {
             count_ops(&ctx, module, crate::dialect::arith::Muli::NAME),
             0
         );
+    }
+
+    #[test]
+    fn a_declined_materialization_leaves_the_operation() {
+        // `x * 0` folds to the constant `0`, but `arith` has no constant of
+        // `core.foo`, so its materializer declines and the multiplication
+        // stays.
+        let input = r#"core.module @test {
+  func.func @f(%x: core.foo) -> core.foo {
+    %z = arith.constant 0 : core.foo
+    %r = arith.muli %x, %z : core.foo
+    func.return %r
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, input);
+
+        let result = canonicalize(&mut ctx, module);
+        assert!(result.reached_fixpoint);
+        assert_eq!(result.total_changes, 0);
+        assert_eq!(
+            count_ops(&ctx, module, crate::dialect::arith::Muli::NAME),
+            1
+        );
+    }
+
+    #[test]
+    fn canonical_int_reads_either_spelling_of_the_same_bits() {
+        assert_eq!(canonical_int(255, 8), Some(-1));
+        assert_eq!(canonical_int(-1, 8), Some(-1));
+        assert_eq!(canonical_int(-1, 1), Some(-1));
+        assert_eq!(canonical_int(1, 1), Some(-1));
+        assert_eq!(canonical_int(2, 1), None);
+        assert_eq!(canonical_int(256, 8), None);
+        assert_eq!(canonical_int(-129, 8), None);
+        assert_eq!(canonical_int(i128::MIN, 128), Some(i128::MIN));
+        assert_eq!(canonical_int(i128::MAX, 127), Some(-1));
     }
 
     #[test]

@@ -194,8 +194,13 @@ operation은 자기 값으로 fold하지 않는다.
 
 Fold는 operand가 상수인지를 `ConstantLike` interface로 읽는다(MLIR의
 `ConstantLike`). 이 interface는 상수 operation의 값을 attribute로 돌려주므로 fold는
-그 상수를 정의한 dialect의 operation 이름을 알지 않는다. 정수 attribute는 폭과
-상관없이 `i128`로 부호 확장해 담는다.
+그 상수를 정의한 dialect의 operation 이름을 알지 않는다. 고정 폭 정수는 같은
+비트가 어느 dialect에서든 같은 값으로 읽히도록, 그 폭에서 `i128`로 부호 확장한
+정규형으로 돌려준다. 상수 operation은 같은 비트를 부호 있는 값과 부호 없는 값
+어느 쪽으로 써도 되므로(`255 : core.i8`과 `-1 : core.i8`), 정규형은 그 표기와
+상관없이 값을 정한다. 따라서 `core.i1`의 참은 `-1`로 읽힌다. 상수를 어떻게
+쓰는지는 materializer가 정하며, `core.i1`의 참은 backend가 내리는 대로 `1`로
+쓴다.
 
 상수 attribute 결과는 fold한 operation의 dialect가 자기 상수 operation으로
 만든다(MLIR의 `Dialect::materializeConstant`). Dialect는 `ConstantMaterializer`

@@ -8,7 +8,7 @@ use crate::op_flag::{IsolatedFromAbove, NoTerminator, Terminator};
 use crate::op_interface::{CallLike, IndirectCallLike};
 use crate::ops::{DialectOp, DialectType};
 use crate::transforms::canonicalize::{
-    ConstantLike, ConstantMaterializer, Fold, FoldResult, const_int_value,
+    ConstantLike, ConstantMaterializer, Fold, FoldResult, canonical_int_of_type, const_int_value,
 };
 use crate::types::{Attribute, AttributeMap, Location, TypeDataBuilder};
 use crate::{IrContext, SymbolPath};
@@ -140,6 +140,19 @@ mod clif {
     fn r#return(values: Variadic<_>) {}
 
     // Constants
+    /// An integer constant, Cranelift's `iconst`. The immediate holds the
+    /// bits of the result's integer type, read signed or unsigned: `-1`
+    /// and `255` are the same `core.i8`. The native emitter stores the
+    /// immediate as written in the result's Cranelift type, which for a
+    /// `core.i1` is `I8`, so a one-bit true is written `1`.
+    ///
+    /// As a `ConstantLike`, it reports the canonical form of its value
+    /// (`transforms::canonicalize::canonical_int`), sign-extended from the
+    /// width, so `clif.iconst 1 : core.i1` reads `-1`.
+    ///
+    /// ```text
+    /// %c = clif.iconst 200 : core.i8
+    /// ```
     #[implements(ConstantLike)]
     #[asm_format(attr_dict_bare value ":" type(result))]
     fn iconst(value: Attr<i64>) -> Value<_> {}
@@ -786,13 +799,14 @@ impl CallLike for ReturnCall {
     }
 }
 
-/// The immediate sign-extended from its result's width, since an immediate
-/// may also spell a narrow value as unsigned (`255 : core.i8` is `-1`).
+/// The immediate in its canonical form for the result's width, since an
+/// immediate may also spell a narrow value as unsigned (`255 : core.i8` is
+/// `-1`).
 impl ConstantLike for Iconst {
     fn constant_value(&self, ctx: &IrContext) -> Attribute {
         let value = i128::from(self.value(ctx));
-        let width = IntegerLike::width(ctx, ctx.value_ty(self.result(ctx)));
-        Attribute::Int(width.map_or(value, |width| arith::wrap_signed_to_width(value, width)))
+        let ty = ctx.value_ty(self.result(ctx));
+        Attribute::Int(canonical_int_of_type(ctx, value, ty).unwrap_or(value))
     }
 }
 
@@ -977,6 +991,33 @@ mod tests {
         // A `core.i1` lives in a Cranelift `I8` that the emitter adds
         // without masking, so `1 + 1` is `2` there, not the one-bit `0`.
         assert_eq!(result.total_changes, 0);
+    }
+
+    #[test]
+    fn a_one_bit_true_immediate_selects_the_then_region() {
+        let mut ctx = crate::IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @f(%x: core.i32, %y: core.i32) -> core.i32 {
+    %t = clif.iconst 1 : core.i1
+    %r = scf.if %t -> (core.i32) {
+      scf.yield %x
+    } else {
+      scf.yield %y
+    }
+    func.return %r
+  }
+}"#,
+        );
+        PatternApplicator::new(TypeConverter::new())
+            .add_pattern_box(Box::new(FoldDispatchPattern::from_ops(
+                fold_ops_for_dialect("scf"),
+            )))
+            .apply_partial(&mut ctx, module);
+        let printed = module.op().display(&ctx).to_string();
+        assert!(!printed.contains("scf.if"), "{printed}");
+        assert!(printed.contains("func.return %0"), "{printed}");
     }
 
     #[test]

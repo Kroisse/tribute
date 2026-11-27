@@ -8,6 +8,19 @@
 
 #[trunk_ir::dialect]
 mod arith {
+    /// A numeric constant: an `Int` of an integer or `core.index` type, a
+    /// `Bool` of `core.i1`, or `FloatBits` of a float type.
+    ///
+    /// An integer may be written signed or unsigned within its width; a
+    /// `core.i1` true is written `1`, as the backends lower it. As a
+    /// `ConstantLike`, it reports an integer of a fixed width in its
+    /// canonical form (`transforms::canonicalize::canonical_int`),
+    /// sign-extended from the width: `arith.constant 255 : core.i8` reads
+    /// `-1`, and so does `arith.constant 1 : core.i1`.
+    ///
+    /// ```text
+    /// %c = arith.constant 42 : core.i32
+    /// ```
     #[verify]
     #[implements(ConstantLike)]
     #[flags(Pure)]
@@ -173,7 +186,7 @@ use crate::op_flag::Pure;
 use crate::ops::DialectOp;
 use crate::refs::{OpRef, TypeRef, ValueDef, ValueRef};
 use crate::transforms::canonicalize::{
-    ConstantLike, ConstantMaterializer, Fold, FoldResult, const_int_value,
+    ConstantLike, ConstantMaterializer, Fold, FoldResult, canonical_int_of_type, const_int_value,
 };
 use crate::types::{Attribute, Location};
 
@@ -218,12 +231,20 @@ fn constant_holds(ctx: &IrContext, value: &Attribute, ty: TypeRef) -> bool {
 
 impl ConstantLike for Constant {
     fn constant_value(&self, ctx: &IrContext) -> Attribute {
-        self.value(ctx)
+        match self.value(ctx) {
+            Attribute::Int(value) => {
+                let ty = ctx.value_ty(self.result(ctx));
+                Attribute::Int(canonical_int_of_type(ctx, value, ty).unwrap_or(value))
+            }
+            value => value,
+        }
     }
 }
 
 /// Materializes an `arith.constant` of `ty` holding `value`, for an
-/// integer, boolean, or float that type can hold.
+/// integer, boolean, or float that type can hold. An integer is written in
+/// its [canonical form](crate::transforms::canonicalize::canonical_int),
+/// except that a `core.i1` is written `0` or `1`, as the backends lower it.
 impl ConstantMaterializer for Dialect {
     fn materialize_constant(
         &self,
@@ -232,6 +253,17 @@ impl ConstantMaterializer for Dialect {
         ty: TypeRef,
         location: Location,
     ) -> Option<OpRef> {
+        let value = match value {
+            Attribute::Int(value) => {
+                let value = canonical_int_of_type(ctx, value, ty)?;
+                Attribute::Int(if I1::matches(ctx, ty) {
+                    value & 1
+                } else {
+                    value
+                })
+            }
+            value => value,
+        };
         constant_holds(ctx, &value, ty).then(|| {
             Constant::operands()
                 .value(value)
@@ -805,6 +837,33 @@ mod canonicalize_tests {
         run_arith_patterns(&mut ctx, module);
         let value = return_value_int_const(&ctx, module);
         (ctx, module, value)
+    }
+
+    #[test]
+    fn unsigned_spellings_read_as_their_signed_value() {
+        // `255 : core.i8` is `-1`, so `-1 / 2` folds to `0`, not `127`.
+        let (_, _, value) = fold_function(
+            "",
+            "core.i8",
+            "    %a = arith.constant 255 : core.i8\n    %b = arith.constant 2 : core.i8\n    %r = arith.divsi %a, %b : core.i8\n    func.return %r",
+        );
+        assert_eq!(value, Some(0));
+    }
+
+    #[test]
+    fn folded_one_bit_true_is_written_as_one() {
+        let (ctx, module, _) = fold_function(
+            "",
+            "core.i1",
+            "    %f = arith.constant 0 : core.i1\n    %t = arith.constant 1 : core.i1\n    %r = arith.subi %f, %t : core.i1\n    func.return %r",
+        );
+        // `0 - true` is the sign-extended `-1`, written `1`.
+        let printed = module.op().display(&ctx).to_string();
+        assert!(!printed.contains("arith.subi"), "{printed}");
+        assert!(
+            printed.contains("%2 = arith.constant 1 : core.i1\n      func.return %2"),
+            "{printed}"
+        );
     }
 
     #[test]
