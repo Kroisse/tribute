@@ -77,9 +77,20 @@ jobs:
       - name: Check formatting
         uses: actions-rust-lang/rustfmt@v1
 
+  # Coverage runs the whole suite on Linux x86_64. This job adds macOS arm64
+  # only for the packages whose results depend on the host: the native
+  # backend, the runtime and its sysroot, and the compiler's end-to-end
+  # tests, which also run the cross-process determinism check that Coverage
+  # skips. The other crates compile and run the same IR on every host.
   test:
     name: Test
     runs-on: macos-latest
+    env:
+      TEST_PACKAGES: >-
+        -p tribute
+        -p trunk-ir-cranelift-backend
+        -p tribute-runtime
+        -p tribute-sysroot
     steps:
       - uses: actions/checkout@v7
         with:
@@ -105,10 +116,10 @@ jobs:
       # Build with the test profile and dev-dependency features, so the test
       # run reuses these artifacts instead of rebuilding dependencies.
       - name: Build tests
-        run: cargo nextest run --workspace --no-run
+        run: cargo nextest run $TEST_PACKAGES --no-run
 
       - name: Run tests
-        run: cargo nextest run --workspace
+        run: cargo nextest run $TEST_PACKAGES
 
   canonical-native:
     name: Canonical native example (${{ matrix.platform }})
