@@ -176,8 +176,9 @@ mod adt {
     /// that does not have its field's type as the type of `source` sees it.
     ///
     /// For a type representation selection chose boxed, target lowering
-    /// lowers the update to an update of the object
-    /// (`design/tribute-dialects.md` § "`heap`").
+    /// lowers the update to an update of the object, in place when the
+    /// consumed reference is its only one (`design/tribute-dialects.md`
+    /// § "표현 선택 뒤의 형태").
     ///
     /// **Ownership:** consumes `source` once, however many fields it
     /// replaces. A managed value takes the place of its replaced field
@@ -388,7 +389,8 @@ mod adt {
     /// ```
     ///
     /// Target lowering lowers the update of a boxed array to an update of
-    /// the object (`design/tribute-dialects.md` § "`heap`").
+    /// the object, in place when the consumed reference is its only one
+    /// (`design/tribute-dialects.md` § "표현 선택 뒤의 형태").
     ///
     /// **Ownership:** as for `adt.array_splice` of the one element: borrows
     /// `source`, and the operation acquires a unit for every managed element
