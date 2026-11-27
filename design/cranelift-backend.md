@@ -169,8 +169,8 @@ Cranelift에서 가장 좁은 정수는 `I8`이므로 `core.i1`은 `I8`에 담�
   코드는 `arith`의 선언 폭 의미, 곧 선언 폭에서 계산한 fold 결과와 같은 값을 낸다.
 - 정수 상수는 선언 폭에서 0으로 확장한 immediate로 낮춘다. `core.i1`의 `-1`은
   `clif.iconst 1`이다.
-- `andi`/`ori`/`xori`, 부호 없는 비교·나눗셈·나머지·오른쪽 shift, `extui`,
-  `uitofp`는 0으로 확장된 입력을 그대로 읽는다. `icmp`/`fcmp`의 결과는 0 또는 1이다.
+- `andi`/`ori`/`xori`, 부호 없는 비교·나눗셈·나머지·오른쪽 shift, `extui`는 0으로
+  확장된 입력을 그대로 읽는다. `icmp`/`fcmp`의 결과는 0 또는 1이다.
 - 부호 있는 해석이 필요한 연산(부호 있는 `cmpi` predicate, `divsi`, `remsi`,
   `shrsi`, `extsi`, `sitofp`)은 선언 폭에서 부호 확장한 값으로 계산해야 한다.
   그렇게 낮추지 못하는 연산은 낮추지 않고 변환 경계에서 거부한다.
