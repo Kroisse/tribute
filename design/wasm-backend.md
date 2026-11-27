@@ -61,8 +61,8 @@ Native (Cranelift) 백엔드는
 
 ```text
 tribute-ir (High-level)
-├── heap.struct_new
-├── heap.variant_new
+├── adt.struct_new / adt.variant_new / adt.array_*   # boxed 값의 object 접근
+├── heap.box_value / heap.unbox_value / heap.cell_*
 ├── closure.new
 ├── effect.extend
 ├── effect.dispatch_tail / effect.dispatch_cps
@@ -91,8 +91,8 @@ Shared ability lowering은 `effect.*`를 만들며 Marker field 번호나 closur
 [representation/ABI 경계](abi-boundary.md#representationabi-경계) 안에서 `effect.*`를 공유
 value/control dialect로 낮춘다. Evidence 조회와 확장은
 [evidence runtime 항목](cps-effects.md#handle-evidence-extension--handler-closures)을
-`func.call`로 호출한다. Canonical closure layout은 `heap.struct_get`으로
-풀고, semantic role에 맞게 `func.call_indirect` 또는 `call_conv = "tail"`
+`func.call`로 호출한다. Canonical closure layout은 `heap.unbox_value`와
+`adt.struct_get`으로 풀고, semantic role에 맞게 `func.call_indirect` 또는 `call_conv = "tail"`
 signature의 proper-tail `func.tail_call_indirect`를 만든다. 이 lowering은 `wasm.*`
 operation을 만들지 않고 `tribute.calling_convention`을 읽거나 쓰지 않는다.
 
@@ -559,7 +559,7 @@ signature처럼 다른 타입 안에 들어 있는 타입까지 구조적으로 
 선언된 field 타입과 그 field의 값이 같은 타입 표기를 쓰므로, 이후 단계는 두 표기를
 use site에서 맞추지 않으며 그 뒤의 Wasm IR에는 `tribute_rt` 타입이 나타나지 않는다.
 Layout 필드 안의 [nominal 값 타입](tribute-dialects.md#nominal-값-타입)은 이 첫
-단계의 대상이 아니다. `heap` 연산이 `heap.box` 안의 nominal layout을 읽는 동안에는 layout에 남고,
+단계의 대상이 아니다. Object 접근이 `heap.box` 안의 nominal layout을 읽는 동안에는 layout에 남고,
 Wasm dialect lowering의 마지막 단계가 없앤다.
 
 [`core.index`](ir.md#coreindex-주소-폭-정수)는 module memory의 index type이 된다.
@@ -580,12 +580,12 @@ Closure는 environment를 따로 두지 않는다.
 
 WasmGC 배열 명령(`array.new`, `array.new_fixed`, `array.get`, `array.set`,
 `array.len`, `array.copy`)의 index와 길이는 memory의 index type과 관계없이 `i32`다.
-ADT lowering은 `heap` 배열 operation의 `core.index`를 이 폭에 맞춘다.
+ADT lowering은 `adt` 배열 operation의 `core.index`를 이 폭에 맞춘다.
 
 - 32비트 memory에서는 `core.index`가 이미 `i32`이므로 그대로 넘긴다.
 - memory64에서 index, `start`, `end`, 길이는 `i32`의 부호 없는 범위를 넘으면 trap한
   뒤 `i32`로 좁힌다. GC 배열의 길이는 이 범위 안에 있으므로 좁힐 수 없는 index는
-  어차피 범위 밖이고, trap은 [`heap` 배열 operation](tribute-dialects.md#heap)의 범위 계약과 같다.
+  어차피 범위 밖이고, trap은 [`adt` 배열 operation](tribute-dialects.md#adt-배열)의 범위 계약과 같다.
 - `array.len`의 결과는 0 확장으로 `core.index`가 된다.
 
 ### Structural GC 타입과 descriptor 필드
@@ -648,12 +648,13 @@ descriptor](runtime-types.md#wasm-배치) index를 두어 runtime identity를 �
   layout, 배열, boxing된 scalar는 `Described`의 subtype이 아니므로 `anyref`에서
   `Described`로의 cast는 실패할 수 있다.
 - `heap.box`가 가리키는 object는 만든 뒤 바뀌지 않으므로 사용자 struct와 variant의
-  필드도 immutable이다. Wasm에는 refcount가 없으므로 `heap.struct_update`와
-  `heap.array_set`은 언제나 새 GC object를 만든다. `heap.cell<T>`는 `T`의 leaf마다
+  필드도 immutable이다. Wasm에는 refcount가 없으므로 boxed 값의 `adt.struct_update`와
+  `adt.array_set`은 언제나 새 GC object를 만든다. Boxed 타입의 `heap.box_value`와
+  `heap.unbox_value`는 code를 남기지 않는다. `heap.cell<T>`는 `T`의 leaf마다
   mutable 필드 하나를 가진 GC struct다. `heap.cell_get`은 leaf마다 `struct.get`,
   `heap.cell_set`은 leaf마다 `struct.set`이며, 그 사이에 다른 코드가 cell을 읽지 않으므로
   여러 필드에 나눠 써도 한 번의 쓰기로 보인다. 다른 object의 inline 필드를 읽고
-  쓰는 `heap` operation도 leaf마다 GC struct 필드 접근이 되고, unboxed `adt` 값은
+  쓰는 object 접근도 leaf마다 GC struct 필드 접근이 되고, unboxed `adt` 값은
   [leaf로 쪼갠다](tribute-dialects.md#target-lowering의-unboxed-값).
 - `nullable` box는 null을 허용하는 GC 참조(`(ref null $t)`)여야 한다. Non-null
   box는 null을 허용하지 않는 참조로 낼 수 있으나, 그렇게 할지는 emission이 정한다.

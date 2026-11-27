@@ -420,6 +420,45 @@ fn continuation_frame_capture_materializes_the_typed_entry_and_store_actions() {
 }
 
 #[test]
+fn a_box_releases_its_layout_object() {
+    let mut ctx = IrContext::new();
+    let module = parse_test_module(
+        &mut ctx,
+        r#"core.module @test {
+  !Point = adt.struct<"Point", (core.i32)>
+  !Ints = adt.array<core.i32>
+  func.func @point(%x: core.i32) -> heap.box<!Point> {
+    %p = adt.struct_new(%x) : (core.i32) -> !Point
+    %b = heap.box_value %p : heap.box<!Point>
+    func.return %b
+  }
+  func.func @ints(%x: core.i32) -> heap.box<!Ints> {
+    %a = adt.array_of %x {type = !Ints} : !Ints
+    %b = heap.box_value %a : heap.box<!Ints>
+    func.return %b
+  }
+  func.func @drop(%x: core.i32) -> core.nil {
+    %point = func.call @point(%x) : (core.i32) -> heap.box<!Point>
+    %ints = func.call @ints(%x) : (core.i32) -> heap.box<!Ints>
+    func.return
+  }
+}"#,
+    );
+    let plan = acquiring_plan(&ctx, module).expect("typed ownership plan");
+    materialize(&mut ctx, module, &plan).expect("typed RC materialization");
+    let materialized = module.op().display(&ctx).to_string();
+    let drop = materialized
+        .split("func.func @drop")
+        .nth(1)
+        .expect("the caller is printed");
+    // The struct box releases its i32 payload (4) and the header (8); the
+    // array box's size depends on its length, so its header RTTI resolves it.
+    assert_eq!(drop.matches("tribute_rt.release").count(), 2, "{drop}");
+    assert!(drop.contains("alloc_size = 12"), "{drop}");
+    assert!(drop.contains("alloc_size = 0"), "{drop}");
+}
+
+#[test]
 fn nested_continuation_frame_closure_releases_use_exact_header_inclusive_sizes() {
     let mut ctx = IrContext::new();
     let module = parse_test_module(
@@ -903,6 +942,51 @@ const LAST_USE_MOVES: &str = r#"core.module @test {
       func.return %box
   }
 }"#;
+
+const BOX_CAST: &str = r#"core.module @test {
+  !Point = adt.struct<"Point", (core.i32, tribute_rt.anyref)>
+  func.func @is_null(%point: heap.box<!Point>) -> core.i1 {
+    %nullable = heap.cast %point : heap.box<!Point> to heap.box<nullable !Point>
+    %null = heap.is_null %nullable : heap.box<nullable !Point>
+    func.return %null
+  }
+}"#;
+
+const BOX_ROUND_TRIP: &str = r#"core.module @test {
+  !Ints = adt.array<core.i32>
+  func.func @len(%x: core.i32) -> core.index {
+    %ints = adt.array_of %x {type = !Ints} : !Ints
+    %boxed = heap.box_value %ints : heap.box<!Ints>
+    %unboxed = heap.unbox_value %boxed : !Ints
+    %len = adt.array_len %unboxed : core.index
+    func.return %len
+  }
+}"#;
+
+#[test]
+fn boxing_and_unboxing_share_one_unit() {
+    let (ctx, _module, plan) = build(BOX_ROUND_TRIP);
+    let function = plan.function(&SymbolPath::new(["len"])).unwrap();
+    let [ints, boxed, unboxed] =
+        [0, 1, 2].map(|index| ctx.op_result(entry_op(&ctx, &plan, "len", index), 0));
+    let read = entry_op(&ctx, &plan, "len", 3);
+
+    // The array, its box, and the unboxed value are one root: only the
+    // array is released, once, after the last read through the others.
+    assert!(final_releases(function, boxed).is_empty());
+    assert!(final_releases(function, unboxed).is_empty());
+    assert_eq!(final_releases(function, ints), [ActionAnchor::After(read)]);
+}
+
+#[test]
+fn a_box_cast_shares_its_source_unit() {
+    let (ctx, _module, plan) = build(BOX_CAST);
+    let function = plan.function(&SymbolPath::new(["is_null"])).unwrap();
+
+    // The cast result is its source, so it is never released on its own.
+    let cast = ctx.op_result(entry_op(&ctx, &plan, "is_null", 0), 0);
+    assert!(final_releases(function, cast).is_empty());
+}
 
 /// The `index`th operation of a fixture function's entry block.
 fn entry_op(

@@ -322,6 +322,7 @@ fn is_typed_managed_reference(
     }
     tribute_ir::dialect::tribute_rt::Anyref::matches(ctx, ty)
         || tribute_ir::dialect::tribute_rt::Intref::matches(ctx, ty)
+        || tribute_ir::dialect::heap::Box::matches(ctx, ty)
 }
 
 fn is_managed_value(ctx: &IrContext, value: ValueRef, managed_layouts: &HashSet<TypeRef>) -> bool {
@@ -599,11 +600,19 @@ fn field_kind(ctx: &IrContext, ty: TypeRef, managed_layouts: &HashSet<TypeRef>) 
 /// The aggregate layout that owns the native allocation of a value of the
 /// exact semantic managed reference type `ty`, among the planned
 /// `managed_layouts`: the type itself, a nominal layout's key.
+/// The type of the object a value of type `ty` refers to: a box's layout,
+/// or `ty` itself. A box and the `adt` value it holds release the same
+/// object.
+pub(super) fn boxed_object_type(ctx: &IrContext, ty: TypeRef) -> TypeRef {
+    tribute_ir::dialect::heap::Box::from_type_ref(ctx, ty).map_or(ty, |boxed| boxed.layout(ctx))
+}
+
 pub(super) fn allocation_layout(
     ctx: &IrContext,
     managed_layouts: &HashSet<TypeRef>,
     ty: TypeRef,
 ) -> Result<TypeRef, OwnershipPlanError> {
+    let ty = boxed_object_type(ctx, ty);
     if managed_layouts.contains(&ty) {
         return Ok(ty);
     }

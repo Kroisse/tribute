@@ -367,39 +367,43 @@ Array:  [length: i64] [elements, stride = element size]
 배열의 stride, 할당 크기와 소유 규칙은 [rc.md](rc.md#array)를, byte literal의 정적
 객체는 [rc.md](rc.md#정적-객체)를 따른다.
 
-[`heap` 배열 operation](tribute-dialects.md#heap)은 RC header lowering 단계에서
+Boxed 값의 `adt` operation은 [object 접근](tribute-dialects.md#표현-선택-뒤의-형태)으로
+바로 내려간다. [`adt` 배열 operation](tribute-dialects.md#adt-배열)은 RC header lowering 단계에서
 struct 할당과 함께 낮춘다. [할당 크기](rc.md#array)로 `__tribute_alloc`을 부르고 header에 배열
 타입의 RTTI index를 기록한 뒤 `len`을 payload offset 0에 쓴다.
 
-- `heap.array_new`는 모든 원소 자리에 `initial`을 쓴다.
-- `heap.array_of`는 operand를 차례로 원소 자리에 쓴다. 각 operand의 unit은 plan이
+- `adt.array_new`는 모든 원소 자리에 `initial`을 쓴다.
+- `adt.array_of`는 operand를 차례로 원소 자리에 쓴다. 각 operand의 unit은 plan이
   저장 자리에 둔 것(기준 동작의 획득이나 last-use move)이다.
-- `heap.array_splice`는 `source`의 두 범위를 결과의 앞뒤로 복사하고 그 사이에
+- `adt.array_splice`는 `source`의 두 범위를 결과의 앞뒤로 복사하고 그 사이에
   `elements`를 쓴다.
-- 원소가 managed 참조이면 `heap.array_new`와 `heap.array_splice`는 채우거나 복사한
+- 원소가 managed 참조이면 `adt.array_new`와 `adt.array_splice`는 채우거나 복사한
   원소마다 retain한다. 이 획득은 [operation이 소유한다](rc.md#1-typed-ownership-and-rtti-plan).
-- `heap.array_set`과 `heap.struct_update`는 [rc.md](rc.md#1-typed-ownership-and-rtti-plan)가
+- Boxed 값의 `adt.array_set`과 `adt.struct_update`는 [rc.md](rc.md#1-typed-ownership-and-rtti-plan)가
   정한 제자리 경로와 복사 경로로 내려간다. 제자리 경로는 새 값의 unit을 먼저 확보한
   뒤 이전 값에 replaced-field release를 적용하므로, 새 값이 이전 값과 같은 object여도
   release가 그것을 먼저 해제하지 않는다. 복사 경로의 크기는 배열이면 같은 길이,
   struct이면 layout의 정적 할당 크기다.
-- `heap.array_get`, `heap.array_set`, `heap.array_len`은 `len`과 원소 자리의
+- `adt.array_get`, `adt.array_set`, `adt.array_len`은 `len`과 원소 자리의
   `clif.load`/`clif.store`가 된다. 원소 자리는 `payload + 8 + index × stride`다.
 - `heap.cell<T>`는 `T`의 leaf마다 필드 하나를 가진 RC object다. `heap.cell_get`과
   `heap.cell_set`은 그 필드들의 `clif.load`/`clif.store`이며, `heap.cell_set`은 이전
   값의 managed leaf에 replaced-field release를 적용한다.
-- Inline 필드를 읽고 쓰는 `heap` operation은 inline 값의 leaf마다 `mem.struct`
+- Boxed 타입의 `heap.box_value`와 `heap.unbox_value`는 code를 남기지 않는다. 강제
+  위치에서 unboxed 값을 담는 `heap.box_value`는 그 값의 필드를 가진 object를
+  할당하고, `heap.unbox_value`는 그 필드를 읽는다.
+- Inline 필드를 읽고 쓰는 object 접근은 inline 값의 leaf마다 `mem.struct`
   offset의 `clif.load`/`clif.store`가 되고, unboxed `adt` 값은
   [leaf로 쪼갠다](tribute-dialects.md#target-lowering의-unboxed-값).
 
-`heap.array_new`와 `heap.array_splice`가 원소를 채우거나 복사하는 반복은 배열
-descriptor마다 한 번 만드는 helper `clif.func`가 맡는다. `heap.struct_update`와
-`heap.array_set`의 복사 경로도 layout마다 한 번 만드는 helper `clif.func`가 맡으며,
-갱신 자리에는 refcount 검사, 제자리 경로, helper 호출만 남는다. `heap.array_splice`의
+`adt.array_new`와 `adt.array_splice`가 원소를 채우거나 복사하는 반복은 배열
+descriptor마다 한 번 만드는 helper `clif.func`가 맡는다. Boxed 값의 `adt.struct_update`와
+`adt.array_set`의 복사 경로도 layout마다 한 번 만드는 helper `clif.func`가 맡으며,
+갱신 자리에는 refcount 검사, 제자리 경로, helper 호출만 남는다. `adt.array_splice`의
 `elements`는 helper가 남겨 둔 자리에 호출한 쪽이 쓴다.
 
-범위 검사는 모든 `heap.array_get`, `heap.array_set`, `heap.array_splice` 앞에 둔다.
-[`heap` 선언](tribute-dialects.md#heap)이 정한 전제(`index < len`,
+범위 검사는 모든 `adt.array_get`, `adt.array_set`, `adt.array_splice` 앞에 둔다.
+[`adt` 선언](tribute-dialects.md#adt-배열)이 정한 전제(`index < len`,
 `start ≤ end ≤ len`)를 부호 없는 정수 비교로 검사하고, 어기면 `clif.trapnz`로
 끝낸다. 할당 크기 계산이 넘치는 길이도 `clif.trapnz`다. `clif.trapnz`는 terminator가
 아니므로 검사가 block을 나누지 않는다.

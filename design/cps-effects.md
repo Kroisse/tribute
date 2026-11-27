@@ -1598,7 +1598,7 @@ struct 위의 `wasm.func`로 compile된다.
 Marker는 `outer: Slots(Marker)`로 자기 배열을 담으므로 그대로 쓰면 재귀 GC 타입이
 된다. Wasm target은 원소가 참조인 배열을 struct field에 `arrayref`로 저장하고 읽을
 때 구체 배열로 cast하며([GC 배열 표현][wasm-gc-arrays]), evidence 배열의 원소는
-`structref`로 저장한다. Evidence 값은 `heap` 연산이 모두 Wasm 연산으로 바뀔 때까지
+`structref`로 저장한다. Evidence 값은 object 접근이 모두 Wasm 연산으로 바뀔 때까지
 `heap.box<adt.array<..>>` 타입을 유지하고, 그 뒤 한 번에 `wasm_gc.array<wasm.structref>`로
 바뀐다.
 

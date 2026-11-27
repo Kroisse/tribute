@@ -205,6 +205,35 @@ mod tests {
         struct Tagged<Elem> {
             tag: Attr<String>,
         }
+
+        struct Slot {
+            #[default(false)]
+            pinned: Attr<bool>,
+        }
+    }
+
+    #[test]
+    fn a_default_type_attribute_has_one_spelling() {
+        let mut ctx = IrContext::new();
+        let plain = Slot::params().intern(&mut ctx);
+        // The builder omits the default, so both spell the same type.
+        assert_eq!(Slot::params().pinned(false).intern(&mut ctx), plain);
+        assert!(!plain.pinned(&ctx));
+        let pinned = Slot::params().pinned(true).intern(&mut ctx);
+        assert_ne!(pinned, plain);
+        assert!(pinned.pinned(&ctx));
+
+        // The default written out is another interned type, which the
+        // definition's verifier rejects and no wrapper accepts.
+        let written = crate::TypeDataBuilder::new(Slot::NAME)
+            .attr("pinned", false)
+            .intern(&mut ctx);
+        let verifier = TypeDef::of(&ctx, written)
+            .and_then(|def| def.verifier)
+            .unwrap();
+        assert!(verifier(&ctx, written).is_err());
+        assert!(Slot::from_type_ref(&ctx, written).is_none());
+        assert!(verifier(&ctx, pinned.as_type_ref()).is_ok());
     }
 
     impl crate::type_verifier::VerifyType for Checked {
@@ -357,8 +386,8 @@ mod tests {
     }
 
     impl crate::asm_format::TypeAliasHint for HandWritten {
-        fn alias_hint<'a>(&self, _ctx: &'a IrContext) -> Option<&'a str> {
-            Some("handy")
+        fn alias_hint(&self, _ctx: &IrContext, out: &mut dyn std::fmt::Write) -> std::fmt::Result {
+            out.write_str("handy")
         }
     }
 
@@ -372,7 +401,7 @@ mod tests {
         let ty = crate::TypeDataBuilder::new("type_hooks_test.hand_written").intern(&mut ctx);
         assert!(ctx.get_type(ty).name.is_registered());
         assert_eq!(
-            crate::asm_format::suggest_type_alias_name(&ctx, ty),
+            crate::asm_format::suggest_type_alias_name(&ctx, ty).as_deref(),
             Some("handy")
         );
         let verifier = def.verifier.unwrap();
@@ -383,7 +412,9 @@ mod tests {
         // The builders also run outside constant evaluation.
         let built = TypeDef::new("type_hooks_test.unregistered").with_alias_hint::<HandWritten>();
         assert!(built.verifier.is_none() && built.asm_format.is_none());
-        assert_eq!((built.alias_hint.unwrap())(&ctx, ty), Some("handy"));
+        let mut hint = String::new();
+        (built.alias_hint.unwrap())(&ctx, ty, &mut hint).unwrap();
+        assert_eq!(hint, "handy");
     }
 
     #[test]

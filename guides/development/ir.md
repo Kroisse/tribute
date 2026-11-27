@@ -127,9 +127,13 @@ where
   floating-point values by their bits, so `-0.0` is not the default `0.0`.
   The accessor returns `v` when the
   attribute is absent, and the builder, the parser, and the printer drop a
-  value equal to `v`, so absence is the canonical form. Type attributes take
-  no default. Results are `Value<C>` or `Option<Value<C>>` (accessor
-  `result`) or `Variadic<C>` / `Values<L>` (accessor `results`). The macro
+  value equal to `v`, so absence is the canonical form. A type attribute
+  takes a default the same way, as `heap.box` declares `nullable`. A type is
+  interned by its contents, so a written default would be another type: the
+  builder omits it, and the definition's verifier, which IR validation runs,
+  rejects a type that holds it. Results are `Value<C>` or
+  `Option<Value<C>>` (accessor `result`) or `Variadic<C>` / `Values<L>`
+  (accessor `results`). The macro
   implements the `ops::VariadicResults` mixin for every wrapper with
   variadic results, as ODS attaches MLIR's `OpTrait::VariadicResults`:
   `single_result` returns the result of an operation with exactly one, and
@@ -255,9 +259,12 @@ where
   `with_asm_format`. A `#[verify]` type's wrapper accepts only types that
   pass the verifier, so its `params(..)` builder's `intern` runs the verifier
   and returns a `Result`. `#[alias_hint]` requires
-  `trunk_ir::asm_format::TypeAliasHint`, the alias name the printer gives
-  the type when it generates aliases; a hand-written `TypeDef` adds it with
-  `with_alias_hint`. `#[implements(..)]` on a type registers the wrapper's
+  `trunk_ir::asm_format::TypeAliasHint`, which writes the alias name the
+  printer gives the type when it generates aliases, as MLIR's `getAlias`
+  does, so a hint can build a name from the type's parameters, as
+  `heap.box` writes `Point_box`; writing nothing suggests none. A
+  hand-written `TypeDef` adds it with `with_alias_hint`.
+  `#[implements(..)]` on a type registers the wrapper's
   [type interfaces](#type-interfaces).
 - `#[identified]` on a type requires `trunk_ir::type_def::IdentifiedType`,
   whose `identifier` reads an instance's identifier; a hand-written

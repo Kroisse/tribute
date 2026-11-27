@@ -574,17 +574,18 @@ fn instance_rows(ctx: &IrContext, ty: TypeRef) -> Vec<Row> {
 // A named ADT type suggests its `name` as its alias.
 impl TypeAliasHint for Struct {
     /// The layout's name, or a literal layout's runtime `layout` identifier.
-    fn alias_hint<'a>(&self, ctx: &'a IrContext) -> Option<&'a str> {
-        self.name(ctx).or_else(|| {
+    fn alias_hint(&self, ctx: &IrContext, out: &mut dyn std::fmt::Write) -> std::fmt::Result {
+        let name = self.name(ctx).or_else(|| {
             ctx.type_attrs(self.as_type_ref())
                 .get_str(crate::runtime_layout::LAYOUT_ATTR)
-        })
+        });
+        out.write_str(name.unwrap_or_default())
     }
 }
 
 impl TypeAliasHint for Enum {
-    fn alias_hint<'a>(&self, ctx: &'a IrContext) -> Option<&'a str> {
-        self.name(ctx)
+    fn alias_hint(&self, ctx: &IrContext, out: &mut dyn std::fmt::Write) -> std::fmt::Result {
+        out.write_str(self.name(ctx).unwrap_or_default())
     }
 }
 
@@ -2391,7 +2392,7 @@ mod tests {
             named(&mut ctx, Enum::NAME, "Option"),
         ];
         let names = types.map(|ty| suggest_type_alias_name(&ctx, ty));
-        assert_eq!(names, [Some("Point"), Some("Option")]);
+        assert_eq!(names, [Some("Point".into()), Some("Option".into())]);
         assert_eq!(suggest_type_alias_name(&ctx, i32_ty), None);
     }
 

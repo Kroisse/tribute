@@ -342,7 +342,10 @@ fn build_aliases(
                 }
                 continue;
             }
-            if !(adt::RefCast::matches(ctx, op) || core::UnrealizedConversionCast::matches(ctx, op))
+            // Every operation whose result is its operand as another type,
+            // such as `adt.ref_cast`, `heap.cast`, and an unrealized cast.
+            if tribute_ir::dialect::tribute_rtti::DynOperandOwnership::role(ctx, op, 0)
+                != Some(OperandRole::Forward)
             {
                 continue;
             }

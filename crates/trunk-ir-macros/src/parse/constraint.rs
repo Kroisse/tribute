@@ -673,15 +673,21 @@ pub(super) fn parse_type_fields(stream: TokenStream) -> Result<Vec<AttrDef>, Str
     let mut names = HashSet::default();
     while has_remaining(&iter) {
         let mut docs = Vec::new();
+        let mut default = None;
         while peek_punct(&iter, '#') {
             consume_punct(&mut iter)?;
             let bracket = expect_group(&mut iter, Delimiter::Bracket)?;
-            if parse_default(&bracket)?.is_some() {
-                return Err("a type attribute takes no `#[default(..)]`: types intern their attributes, so a stored default would make another type".into());
+            if let Some(value) = parse_default(&bracket)? {
+                if default.replace(value).is_some() {
+                    return Err("duplicate `#[default(..)]`".into());
+                }
+                continue;
             }
             if !matches!(bracket.stream().into_iter().next(), Some(TokenTree::Ident(i)) if i == "doc")
             {
-                return Err("a type attribute field takes only doc comments".into());
+                return Err(
+                    "a type attribute field takes only doc comments and `#[default(..)]`".into(),
+                );
             }
             docs.push(bracket);
         }
@@ -715,14 +721,19 @@ pub(super) fn parse_type_fields(stream: TokenStream) -> Result<Vec<AttrDef>, Str
                 }
             }
         };
+        if default.is_some() {
+            check_default(&name, optional, list)?;
+        }
         attrs.push(AttrDef {
             name,
             raw_ident: ident,
             kind,
             list,
-            optional,
+            // A defaulted attribute may be absent, which is its canonical
+            // form.
+            optional: optional || default.is_some(),
             binds: None,
-            default: None,
+            default,
             docs,
         });
         if has_remaining(&iter) {
