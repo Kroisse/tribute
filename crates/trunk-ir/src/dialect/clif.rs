@@ -796,8 +796,11 @@ impl ConstantLike for Iconst {
     }
 }
 
-/// Materializes a `clif.iconst` of an integer type of at most 64 bits
-/// holding an integer that fits `i64`.
+/// Materializes a `clif.iconst` of an integer type of at most 64 bits.
+///
+/// The immediate is the value's bit pattern zero-extended from the type's
+/// width, which the native emitter stores as written: a `core.i1` lives in
+/// a Cranelift `I8`, so true is `1`, not the sign-extended `-1`.
 impl ConstantMaterializer for Dialect {
     fn materialize_constant(
         &self,
@@ -809,10 +812,15 @@ impl ConstantMaterializer for Dialect {
         let Attribute::Int(value) = value else {
             return None;
         };
-        let value = i64::try_from(value).ok()?;
-        if IntegerLike::width(ctx, ty)? > 64 {
+        let width = IntegerLike::width(ctx, ty)?;
+        if !(1..=64).contains(&width) {
             return None;
         }
+        // Either reading of the width's bits: signed or unsigned.
+        if !(-(1i128 << (width - 1))..(1i128 << width)).contains(&value) {
+            return None;
+        }
+        let value = (value as u64 & (u64::MAX >> (64 - width))) as i64;
         Some(
             Iconst::operands()
                 .value(value)
@@ -921,15 +929,16 @@ mod tests {
             )))
             .apply_partial(&mut ctx, module);
         assert!(result.reached_fixpoint);
-        // `100 + 100` wraps to `-56` in eight bits, and `-56 * 3` to `88`.
-        // The subtraction of a parameter stays.
+        // `100 + 100` wraps to `-56` in eight bits, written as its bits
+        // `200`, and `-56 * 3` to `88`. The subtraction of a parameter
+        // stays.
         assert_eq!(
             module.op().display(&ctx).to_string(),
             r#"core.module @test {
   clif.func @f(%0: core.i8) -> (core.i8, core.i8) {
       %1 = clif.iconst 100 : core.i8
       %2 = clif.iconst 100 : core.i8
-      %3 = clif.iconst -56 : core.i8
+      %3 = clif.iconst 200 : core.i8
       %4 = clif.iconst 3 : core.i8
       %5 = clif.iconst 88 : core.i8
       %6 = clif.isub %0, %4 : core.i8
@@ -937,6 +946,34 @@ mod tests {
   }
 }
 "#
+        );
+    }
+
+    #[test]
+    fn folded_booleans_materialize_as_one_not_minus_one() {
+        let mut ctx = crate::IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  clif.func @f() -> core.i1 {
+      %t = clif.iconst 1 : core.i1
+      %f = clif.iconst 0 : core.i1
+      %r = clif.iadd %t, %f : core.i1
+      clif.return %r
+  }
+}"#,
+        );
+        PatternApplicator::new(TypeConverter::new())
+            .add_pattern_box(Box::new(FoldDispatchPattern::from_ops(
+                fold_ops_for_dialect("clif"),
+            )))
+            .apply_partial(&mut ctx, module);
+        // The fold's sign-extended `-1` is written as the bit `1`, which a
+        // Cranelift `I8` holding the boolean reads back as true.
+        let printed = module.op().display(&ctx).to_string();
+        assert!(
+            printed.contains("%2 = clif.iconst 1 : core.i1\n      clif.return %2"),
+            "{printed}"
         );
     }
 
