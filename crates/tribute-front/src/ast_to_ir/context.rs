@@ -37,7 +37,8 @@ impl FunctionEntry {
     /// each above that row's tail, which the function and each of its tails
     /// must not see, so each selection first masks them; `tails` reads the
     /// evidence the call starts with, so its selections mask them as well.
-    /// A selection that starts fresh holds none of them.
+    /// A selection that starts fresh holds none of them, and pushes only
+    /// instances of the value's own row, which `added` does not repeat.
     pub(crate) fn widened(&self, added: &[SymbolPath]) -> Self {
         use tribute_ir::dialect::tribute_control::EvidenceStep;
         let masks = || added.iter().cloned().map(EvidenceStep::Mask);
@@ -678,6 +679,27 @@ mod tests {
             ]
         );
         assert_eq!(entry.widened(&[]).plan, entry.plan);
+    }
+
+    /// A tail that starts fresh holds no added instance to mask.
+    #[test]
+    fn widened_entry_leaves_a_fresh_tail_unmasked() {
+        use tribute_ir::dialect::tribute_control::EvidenceStep;
+        let state = SymbolPath::new(["state"]);
+        let reader = SymbolPath::new(["reader"]);
+        let fresh = vec![EvidenceStep::Fresh, EvidenceStep::Push(state)];
+        let entry = FunctionEntry {
+            name: SymbolPath::new(["both"]),
+            rows: Vec::new(),
+            plan: vec![EvidenceStep::Tails(vec![fresh.clone(), vec![]])],
+        };
+        assert_eq!(
+            entry.widened(std::slice::from_ref(&reader)).plan,
+            [
+                EvidenceStep::Mask(reader.clone()),
+                EvidenceStep::Tails(vec![fresh, vec![EvidenceStep::Mask(reader)]]),
+            ]
+        );
     }
 
     #[test]
