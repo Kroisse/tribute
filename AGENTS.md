@@ -56,6 +56,11 @@ cargo run -- --log=tribute_front::typeck=trace compile file.trb
 
 - Base new PRs on origin/main by default. Only stack on an unmerged PR if the
   user asks.
+- Before opening a PR, have an agent that did not write the change review
+  the diff against origin/main. Give it the diff, the linked issue, and the
+  relevant design docs, not your own reasoning or conclusions (in Claude
+  Code, `/code-review`). Fix its findings or list each declined one, with
+  the reason, in the PR description.
 - Use the Edit tool rather than `sed` for source changes, to avoid touching
   unrelated lines.
 - When the user asks for a specific small change, make it first, then share
