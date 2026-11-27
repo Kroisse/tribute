@@ -17,21 +17,13 @@ env:
   # set. Match Cargo.toml's dev profile, which the test profile shares, so
   # `cargo run` and `cargo test` in one job do not rebuild every dependency.
   CARGO_PROFILE_DEV_DEBUG: line-tables-only
-  # setup-rust-toolchain runs `brew install bash` on macOS. On the
-  # self-hosted runner the Homebrew prefix belongs to another user, so a
-  # Homebrew API refresh fails to take its download lock and fails the step.
-  HOMEBREW_NO_AUTO_UPDATE: 1
 
 jobs:
   lint:
     name: Lint
-    runs-on: [self-hosted, macOS]
+    runs-on: macos-latest
     permissions:
       contents: read
-    # The self-hosted runner cleans target/ on checkout and has no Actions
-    # cache; kache keeps compiled crates across runs instead.
-    env:
-      RUSTC_WRAPPER: kache
     steps:
       - uses: actions/checkout@v7
         with:
@@ -42,7 +34,8 @@ jobs:
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           components: clippy
-          cache: false
+          # Only main saves caches; PRs restore them without evicting main's.
+          cache-save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install cargo-binstall
         uses: taiki-e/install-action@v2
@@ -84,13 +77,20 @@ jobs:
       - name: Check formatting
         uses: actions-rust-lang/rustfmt@v1
 
+  # Coverage runs the whole suite on Linux x86_64. This job adds macOS arm64
+  # only for the packages whose results depend on the host: the native
+  # backend, the runtime and its sysroot, and the compiler's end-to-end
+  # tests, which also run the cross-process determinism check that Coverage
+  # skips. The other crates compile and run the same IR on every host.
   test:
     name: Test
-    runs-on: [self-hosted, macOS]
-    # The self-hosted runner cleans target/ on checkout and has no Actions
-    # cache; kache keeps compiled crates across runs instead.
+    runs-on: macos-latest
     env:
-      RUSTC_WRAPPER: kache
+      TEST_PACKAGES: >-
+        -p tribute
+        -p trunk-ir-cranelift-backend
+        -p tribute-runtime
+        -p tribute-sysroot
     steps:
       - uses: actions/checkout@v7
         with:
@@ -102,7 +102,8 @@ jobs:
         with:
           # trybuild snapshots include standard-library source excerpts.
           components: rust-src
-          cache: false
+          # Only main saves caches; PRs restore them without evicting main's.
+          cache-save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install cargo-nextest and wasmtime
         uses: taiki-e/install-action@v2
@@ -115,10 +116,10 @@ jobs:
       # Build with the test profile and dev-dependency features, so the test
       # run reuses these artifacts instead of rebuilding dependencies.
       - name: Build tests
-        run: cargo nextest run --workspace --no-run
+        run: cargo nextest run $TEST_PACKAGES --no-run
 
       - name: Run tests
-        run: cargo nextest run --workspace -j 8
+        run: cargo nextest run $TEST_PACKAGES
 
   canonical-native:
     name: Canonical native example (${{ matrix.platform }})
@@ -129,17 +130,10 @@ jobs:
       matrix:
         include:
           - platform: macOS
-            runner_json: '["self-hosted", "macOS"]'
-            cache: false
-            rustc_wrapper: kache
+            runner: macos-latest
           - platform: Ubuntu
-            runner_json: '"ubuntu-latest"'
-            cache: true
-            # An empty wrapper tells Cargo to run rustc directly.
-            rustc_wrapper: ''
-    runs-on: ${{ fromJSON(matrix.runner_json) }}
-    env:
-      RUSTC_WRAPPER: ${{ matrix.rustc_wrapper }}
+            runner: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -149,7 +143,6 @@ jobs:
       - name: Setup Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          cache: ${{ matrix.cache }}
           # Only main saves caches; PRs restore them without evicting main's.
           cache-save-if: ${{ github.ref == 'refs/heads/main' }}
 
