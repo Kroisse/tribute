@@ -834,7 +834,8 @@ impl ConstantMaterializer for Dialect {
 crate::register_interfaces!(Dialect: ConstantMaterializer);
 
 /// Fold a binary integer operation whose operands are both constants to
-/// `apply` of them, wrapped to the result's width.
+/// `apply` of them, wrapped to the result's width, when that width is a
+/// native Cranelift integer width.
 fn fold_integer_binary(
     ctx: &IrContext,
     op: crate::OpRef,
@@ -846,8 +847,14 @@ fn fold_integer_binary(
     let &[result_ty] = ctx.op_result_types(op) else {
         return None;
     };
-    let (a, b) = (const_int_value(ctx, lhs)?, const_int_value(ctx, rhs)?);
+    // The native emitter computes a narrower integer, such as a `core.i1`
+    // in a Cranelift `I8`, at its native width without masking, so wrapping
+    // to the declared width would not match what it computes.
     let width = IntegerLike::width(ctx, result_ty)?;
+    if !matches!(width, 8 | 16 | 32 | 64) {
+        return None;
+    }
+    let (a, b) = (const_int_value(ctx, lhs)?, const_int_value(ctx, rhs)?);
     Some(FoldResult::Constant(Attribute::Int(
         arith::wrap_signed_to_width(apply(a, b), width),
     )))
@@ -950,31 +957,26 @@ mod tests {
     }
 
     #[test]
-    fn folded_booleans_materialize_as_one_not_minus_one() {
+    fn integer_folds_skip_widths_narrower_than_their_native_type() {
         let mut ctx = crate::IrContext::new();
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
   clif.func @f() -> core.i1 {
       %t = clif.iconst 1 : core.i1
-      %f = clif.iconst 0 : core.i1
-      %r = clif.iadd %t, %f : core.i1
+      %r = clif.iadd %t, %t : core.i1
       clif.return %r
   }
 }"#,
         );
-        PatternApplicator::new(TypeConverter::new())
+        let result = PatternApplicator::new(TypeConverter::new())
             .add_pattern_box(Box::new(FoldDispatchPattern::from_ops(
                 fold_ops_for_dialect("clif"),
             )))
             .apply_partial(&mut ctx, module);
-        // The fold's sign-extended `-1` is written as the bit `1`, which a
-        // Cranelift `I8` holding the boolean reads back as true.
-        let printed = module.op().display(&ctx).to_string();
-        assert!(
-            printed.contains("%2 = clif.iconst 1 : core.i1\n      clif.return %2"),
-            "{printed}"
-        );
+        // A `core.i1` lives in a Cranelift `I8` that the emitter adds
+        // without masking, so `1 + 1` is `2` there, not the one-bit `0`.
+        assert_eq!(result.total_changes, 0);
     }
 
     #[test]
