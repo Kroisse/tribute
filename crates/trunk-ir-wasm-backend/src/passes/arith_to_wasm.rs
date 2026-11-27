@@ -222,6 +222,7 @@ impl OpRewritePattern for ArithConstPattern {
                             .or_else(|| u32::try_from(v).ok().map(|v| v as i32)),
                         "integer constant does not fit in 32 bits",
                     )?;
+                    let v = if is_bool(ctx, result_ty) { v & 1 } else { v };
                     wasm_dialect::I32Const::operands()
                         .value(v)
                         .results(result_ty)
@@ -475,7 +476,11 @@ impl RewritePattern for ArithBinOpPattern {
             return None;
         };
 
-        rewriter.replace_op(new_op);
+        // Subtraction and multiplication carry into the bits above a
+        // boolean. (`arith.addi` on a boolean is not lowered.)
+        let normalize =
+            is_bool(ctx, result_ty) && [arith::Subi::NAME, arith::Muli::NAME].contains(&name);
+        replace_normalized(ctx, rewriter, new_op, normalize);
         Some(())
     }
 }
@@ -715,7 +720,8 @@ impl RewritePattern for ArithNegPattern {
                         .results(i32_ty)
                         .build(ctx, loc);
                     rewriter.insert_op(zero.op_ref());
-                    rewriter.replace_op(sub.op_ref());
+                    let normalize = is_bool(ctx, result_ty);
+                    replace_normalized(ctx, rewriter, sub.op_ref(), normalize);
                     Some(())
                 }
                 "i64" => {
@@ -872,7 +878,9 @@ impl RewritePattern for ArithBitwisePattern {
             return None;
         };
 
-        rewriter.replace_op(new_op);
+        // A left shift moves bits past a boolean.
+        let normalize = is_bool(ctx, result_ty) && name == arith::Shli::NAME;
+        replace_normalized(ctx, rewriter, new_op, normalize);
         Some(())
     }
 }
@@ -957,6 +965,40 @@ impl RewritePattern for ArithConversionPattern {
         rewriter.replace_op(new_op);
         Some(())
     }
+}
+
+/// Whether `ty` is `core.i1`, which an `i32` holds as 0 or 1.
+fn is_bool(ctx: &IrContext, ty: TypeRef) -> bool {
+    IntegerLike::width(ctx, ty) == Some(1)
+}
+
+/// Replace the operation being rewritten with `new_op`, followed, when
+/// `normalize`, by an `i32.and` with 1 that clears the bits above a boolean
+/// result.
+fn replace_normalized(
+    ctx: &mut IrContext,
+    rewriter: &mut PatternRewriter<'_>,
+    new_op: OpRef,
+    normalize: bool,
+) {
+    if !normalize {
+        rewriter.replace_op(new_op);
+        return;
+    }
+    rewriter.insert_op(new_op);
+    let value = ctx.op_results(new_op)[0];
+    let ty = ctx.value_ty(value);
+    let loc = ctx.op(new_op).location;
+    let i32_ty = intern_i32_type(ctx);
+    let one = wasm_dialect::I32Const::operands()
+        .value(1)
+        .results(i32_ty)
+        .build(ctx, loc);
+    rewriter.insert_op(one.op_ref());
+    let and = wasm_dialect::I32And::operands(value, one.result(ctx))
+        .results(ty)
+        .build(ctx, loc);
+    rewriter.replace_op(and.op_ref());
 }
 
 /// Whether `ty` is an 8- or 16-bit integer.
@@ -1191,6 +1233,32 @@ core.module @test {
             "i8 addition should remain:\n{output}"
         );
         assert_eq!(output.matches("wasm.i32_add").count(), 1, "{output}");
+    }
+
+    #[test]
+    fn boolean_results_stay_zero_or_one() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @f(%a: core.i1, %b: core.i1) {
+    %t = arith.constant -1 : core.i1
+    %d = arith.subi %a, %b : core.i1
+    %m = arith.muli %a, %t : core.i1
+    %n = arith.negi %a : core.i1
+    %s = arith.shli %a, %b : core.i1
+    %x = arith.xori %a, %b : core.i1
+    func.return
+  }
+}"#,
+        );
+
+        lower(&mut ctx, module, TypeConverter::new());
+
+        let output = module.op().display(&ctx).to_string();
+        assert!(!output.contains("arith."), "{output}");
+        assert!(!output.contains("wasm.i32_const -1"), "{output}");
+        assert_eq!(output.matches("wasm.i32_and").count(), 4, "{output}");
     }
 
     #[test]

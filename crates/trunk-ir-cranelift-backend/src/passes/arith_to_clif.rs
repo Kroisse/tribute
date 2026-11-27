@@ -10,6 +10,11 @@
 //! - `arith.{extsi,extui,trunci}` -> `clif.{sextend,uextend,ireduce}`
 //! - `arith.{sitofp,uitofp,fptosi,fptoui}` -> `clif.fcvt_{from,to}_{sint,uint}`
 //! - `arith.{extf,truncf}` -> `clif.{fpromote,fdemote}`
+//!
+//! An integer narrower than the Cranelift integer that holds it, such as
+//! `core.i1` in an `I8`, stays zero-extended: results that can set the bits
+//! above its declared width are masked back to it (see
+//! `design/cranelift-backend.md`, "Cranelift 정수보다 좁은 정수").
 
 use trunk_ir::OpName;
 use trunk_ir::context::IrContext;
@@ -94,6 +99,48 @@ impl OpRewritePattern for NilValuePattern {
     }
 }
 
+/// The mask that keeps an integer of type `declared` zero-extended in the
+/// Cranelift integer that holds its `converted` type, when the declared
+/// width is the narrower one.
+///
+/// Cranelift's narrowest integer is `I8`, which also holds `core.i1`, and
+/// type conversion may widen an integer further. Bits above the declared
+/// width are zero in every value, so an operation whose result can set them
+/// clears them.
+fn zero_extension_mask(ctx: &IrContext, declared: TypeRef, converted: TypeRef) -> Option<i64> {
+    let width = IntegerLike::width(ctx, declared)?;
+    let held = IntegerLike::width(ctx, converted)?.max(8);
+    (width < held).then(|| (1i64 << width) - 1)
+}
+
+/// Replace the operation being rewritten with `new_op`, followed by a
+/// `clif.band` with `mask` when the result must be cleared above its
+/// declared width.
+fn replace_zero_extended(
+    ctx: &mut IrContext,
+    rewriter: &mut PatternRewriter<'_>,
+    new_op: OpRef,
+    mask: Option<i64>,
+) {
+    let Some(mask) = mask else {
+        rewriter.replace_op(new_op);
+        return;
+    };
+    rewriter.insert_op(new_op);
+    let value = ctx.op_results(new_op)[0];
+    let ty = ctx.value_ty(value);
+    let loc = ctx.op(new_op).location;
+    let mask = clif::Iconst::operands()
+        .value(mask)
+        .results(ty)
+        .build(ctx, loc);
+    rewriter.insert_op(mask.op_ref());
+    let band = clif::Band::operands(value, mask.result(ctx))
+        .results(ty)
+        .build(ctx, loc);
+    rewriter.replace_op(band.op_ref());
+}
+
 /// The `iconst` immediate of `value` in an integer type of `width` bits, if
 /// `value` is in the signed or unsigned range of that width.
 fn integer_immediate(value: i128, width: u32) -> Option<i64> {
@@ -154,11 +201,15 @@ impl OpRewritePattern for ArithConstPattern {
             }
             _ => match value {
                 Attribute::Int(v) => {
-                    let width = IntegerLike::width(ctx, result_ty).unwrap_or(64);
+                    let width = IntegerLike::width(ctx, raw_result_ty).unwrap_or(64);
                     let v = rewriter.require(
                         integer_immediate(v, width),
                         "integer constant does not fit its type",
                     )?;
+                    let v = match zero_extension_mask(ctx, raw_result_ty, result_ty) {
+                        Some(mask) => v & mask,
+                        None => v,
+                    };
                     clif::Iconst::operands()
                         .value(v)
                         .results(result_ty)
@@ -276,7 +327,13 @@ impl RewritePattern for ArithBinOpPattern {
             return None;
         };
 
-        rewriter.replace_op(new_op);
+        // Wrapping addition, subtraction, and multiplication carry into the
+        // bits above a narrower declared width.
+        let mask = [arith::Addi::NAME, arith::Subi::NAME, arith::Muli::NAME]
+            .contains(&name)
+            .then(|| zero_extension_mask(ctx, ctx.op_result_types(op)[0], result_ty))
+            .flatten();
+        replace_zero_extended(ctx, rewriter, new_op, mask);
         Some(())
     }
 }
@@ -382,12 +439,12 @@ impl RewritePattern for ArithNegPattern {
 
         if let Ok(negi) = arith::Negi::from_op(ctx, op) {
             let operand = negi.operand(ctx);
-            rewriter.replace_op(
-                clif::Ineg::operands(operand)
-                    .results(ty)
-                    .build(ctx, loc)
-                    .op_ref(),
-            );
+            let ineg = clif::Ineg::operands(operand)
+                .results(ty)
+                .build(ctx, loc)
+                .op_ref();
+            let mask = zero_extension_mask(ctx, ctx.op_result_types(op)[0], ty);
+            replace_zero_extended(ctx, rewriter, ineg, mask);
             Some(())
         } else if let Ok(negf) = arith::Negf::from_op(ctx, op) {
             let operand = negf.operand(ctx);
@@ -484,7 +541,11 @@ impl RewritePattern for ArithBitwisePattern {
             return None;
         };
 
-        rewriter.replace_op(new_op);
+        // A left shift moves bits past a narrower declared width.
+        let mask = (name == arith::Shli::NAME)
+            .then(|| zero_extension_mask(ctx, ctx.op_result_types(op)[0], result_ty))
+            .flatten();
+        replace_zero_extended(ctx, rewriter, new_op, mask);
         Some(())
     }
 }
@@ -670,6 +731,181 @@ mod tests {
             .add_conversion(move |ctx, ty| core::Index::matches(ctx, ty).then_some(i64_ty));
         super::lower(&mut ctx, module, type_converter).unwrap();
         module.op().display(&ctx).to_string()
+    }
+
+    /// Evaluate the value `@f` returns after lowering, with each `clif`
+    /// integer operation computed at the width of the Cranelift integer
+    /// that holds its type, and return its bits zero-extended.
+    fn evaluate_lowered(ctx: &IrContext, module: trunk_ir::rewrite::Module) -> u64 {
+        use std::ops::ControlFlow;
+        use trunk_ir::dialect::core::IntegerLike;
+        use trunk_ir::dialect::{clif, core, func};
+        use trunk_ir::ops::DialectOp;
+        use trunk_ir::walk::{WalkAction, walk_op};
+
+        let mut values = rustc_hash::FxHashMap::<trunk_ir::refs::ValueRef, u64>::default();
+        let mut returned = None;
+        let _ = walk_op::<()>(ctx, module.op(), &mut |op| {
+            let operand = |i: usize| values[&ctx.op_operands(op)[i]];
+            let result = if let Ok(iconst) = clif::Iconst::from_op(ctx, op) {
+                Some(iconst.value(ctx) as u64)
+            } else if clif::Iadd::matches(ctx, op) {
+                Some(operand(0).wrapping_add(operand(1)))
+            } else if clif::Isub::matches(ctx, op) {
+                Some(operand(0).wrapping_sub(operand(1)))
+            } else if clif::Imul::matches(ctx, op) {
+                Some(operand(0).wrapping_mul(operand(1)))
+            } else if clif::Ineg::matches(ctx, op) {
+                Some(operand(0).wrapping_neg())
+            } else if clif::Band::matches(ctx, op) {
+                Some(operand(0) & operand(1))
+            } else if core::UnrealizedConversionCast::matches(ctx, op) {
+                Some(operand(0))
+            } else if func::Return::matches(ctx, op) {
+                returned = Some(operand(0));
+                None
+            } else {
+                assert!(
+                    ctx.op_results(op).is_empty(),
+                    "unexpected operation {}",
+                    ctx.op(op).name.display(ctx)
+                );
+                None
+            };
+            if let Some(bits) = result {
+                let value = ctx.op_results(op)[0];
+                let held = IntegerLike::width(ctx, ctx.value_ty(value)).unwrap().max(8);
+                let mask = if held == 64 {
+                    u64::MAX
+                } else {
+                    (1 << held) - 1
+                };
+                values.insert(value, bits & mask);
+            }
+            ControlFlow::Continue(WalkAction::Advance)
+        });
+        returned.expect("@f returns a value")
+    }
+
+    /// The constant `@f` returns once arith folds ran, zero-extended from
+    /// `core.i1`.
+    fn fold_to_i1(ir: &str) -> u64 {
+        use trunk_ir::analysis::AnalysisCache;
+        use trunk_ir::dialect::{arith, func};
+        use trunk_ir::ops::DialectOp;
+        use trunk_ir::pass::Pass;
+        use trunk_ir::transforms::canonicalize::Canonicalize;
+
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, ir);
+        let f = module
+            .ops(&ctx)
+            .iter()
+            .find_map(|&op| func::Func::from_op(&ctx, op).ok())
+            .unwrap();
+        Canonicalize
+            .run(&mut ctx, f, &mut AnalysisCache::default())
+            .unwrap();
+        let body = f.body(&ctx);
+        let block = ctx.region(body).blocks[0];
+        let &ret = ctx.block(block).ops.last().unwrap();
+        let value = ctx.op_operands(ret)[0];
+        let trunk_ir::refs::ValueDef::OpResult(def, _) = ctx.value_def(value) else {
+            panic!("@f returns a block argument");
+        };
+        let constant = arith::Constant::from_op(&ctx, def).unwrap();
+        match constant.value(&ctx) {
+            trunk_ir::types::Attribute::Int(v) => (v & 1) as u64,
+            trunk_ir::types::Attribute::Bool(b) => u64::from(b),
+            other => panic!("unexpected folded constant {other:?}"),
+        }
+    }
+
+    /// Lower `ir`, with `core.i1` held in an `I8` or converted to `core.i32`
+    /// as the native pipeline does, and evaluate what `@f` returns.
+    fn lower_and_evaluate(ir: &str, i1_to_i32: bool) -> u64 {
+        use trunk_ir::dialect::core;
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, ir);
+        let mut type_converter = TypeConverter::new();
+        if i1_to_i32 {
+            let i32_ty = core::I32::type_ref(&mut ctx);
+            type_converter
+                .add_conversion(move |ctx, ty| core::I1::matches(ctx, ty).then_some(i32_ty));
+        }
+        super::lower(&mut ctx, module, type_converter).unwrap();
+        evaluate_lowered(&ctx, module)
+    }
+
+    #[test]
+    fn boolean_arithmetic_agrees_with_its_folded_result() {
+        // Integer constants, which the folds read; `true` reads as -1.
+        let literal = |bit: bool| if bit { "-1" } else { "0" };
+        for a in [false, true] {
+            for b in [false, true] {
+                let module = |body: &str| {
+                    format!(
+                        "core.module @test {{\n  func.func @f() -> core.i1 {{\n    \
+                         %z = arith.constant 0 : core.i1\n    \
+                         %a = arith.constant {} : core.i1\n    \
+                         %b = arith.constant {} : core.i1\n    \
+                         {body}\n    func.return %r\n  }}\n}}",
+                        literal(a),
+                        literal(b),
+                    )
+                };
+                // `negi` has no fold; it agrees with the fold of `0 - a`.
+                for (body, folded_body) in [
+                    ("%r = arith.addi %a, %b : core.i1", None),
+                    ("%r = arith.subi %a, %b : core.i1", None),
+                    ("%r = arith.muli %a, %b : core.i1", None),
+                    (
+                        "%r = arith.negi %a : core.i1",
+                        Some("%r = arith.subi %z, %a : core.i1"),
+                    ),
+                ] {
+                    let folded = fold_to_i1(&module(folded_body.unwrap_or(body)));
+                    for i1_to_i32 in [false, true] {
+                        assert_eq!(
+                            lower_and_evaluate(&module(body), i1_to_i32),
+                            folded,
+                            "{body} with a = {a}, b = {b}, i1 as i32: {i1_to_i32}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn boolean_constants_and_left_shifts_stay_zero_extended() {
+        let output = run_pass(
+            r#"core.module @test {
+  func.func @f(%a: core.i1, %b: core.i1) -> core.i1 {
+    %t = arith.constant -1 : core.i1
+    %s = arith.shli %a, %b : core.i1
+    %r = arith.andi %s, %t : core.i1
+    func.return %r
+  }
+}"#,
+        );
+        assert!(!output.contains("clif.iconst -1"), "{output}");
+        assert_eq!(output.matches("clif.iconst 1 ").count(), 2, "{output}");
+        assert_eq!(output.matches("clif.band").count(), 2, "{output}");
+    }
+
+    #[test]
+    fn native_width_arithmetic_is_not_masked() {
+        let output = run_pass(
+            r#"core.module @test {
+  func.func @f(%a: core.i8, %b: core.i8) -> core.i8 {
+    %s = arith.addi %a, %b : core.i8
+    %n = arith.negi %s : core.i8
+    func.return %n
+  }
+}"#,
+        );
+        assert!(!output.contains("clif.band"), "{output}");
     }
 
     #[test]
