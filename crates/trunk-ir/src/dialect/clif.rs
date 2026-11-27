@@ -7,7 +7,9 @@ use crate::dialect::core::{I8, I32, IntegerLike};
 use crate::op_flag::{IsolatedFromAbove, NoTerminator, Terminator};
 use crate::op_interface::{CallLike, IndirectCallLike};
 use crate::ops::{DialectOp, DialectType};
-use crate::transforms::canonicalize::{ConstantLike, Fold, FoldResult, const_int_value};
+use crate::transforms::canonicalize::{
+    ConstantLike, ConstantMaterializer, Fold, FoldResult, const_int_value,
+};
 use crate::types::{Attribute, AttributeMap, Location, TypeDataBuilder};
 use crate::{IrContext, SymbolPath};
 use itertools::Itertools;
@@ -794,31 +796,34 @@ impl ConstantLike for Iconst {
     }
 }
 
-/// The `clif` constant materializer: a `clif.iconst` of an integer type of
-/// at most 64 bits holding an integer that fits `i64`.
-fn materialize_constant(
-    ctx: &mut IrContext,
-    value: Attribute,
-    ty: crate::TypeRef,
-    location: Location,
-) -> Option<crate::OpRef> {
-    let Attribute::Int(value) = value else {
-        return None;
-    };
-    let value = i64::try_from(value).ok()?;
-    if IntegerLike::width(ctx, ty)? > 64 {
-        return None;
+/// Materializes a `clif.iconst` of an integer type of at most 64 bits
+/// holding an integer that fits `i64`.
+impl ConstantMaterializer for Dialect {
+    fn materialize_constant(
+        &self,
+        ctx: &mut IrContext,
+        value: Attribute,
+        ty: crate::TypeRef,
+        location: Location,
+    ) -> Option<crate::OpRef> {
+        let Attribute::Int(value) = value else {
+            return None;
+        };
+        let value = i64::try_from(value).ok()?;
+        if IntegerLike::width(ctx, ty)? > 64 {
+            return None;
+        }
+        Some(
+            Iconst::operands()
+                .value(value)
+                .results(ty)
+                .build(ctx, location)
+                .op_ref(),
+        )
     }
-    Some(
-        Iconst::operands()
-            .value(value)
-            .results(ty)
-            .build(ctx, location)
-            .op_ref(),
-    )
 }
 
-crate::register_constant_materializer!(DIALECT_NAME, materialize_constant);
+crate::register_interfaces!(Dialect: ConstantMaterializer);
 
 /// Fold a binary integer operation whose operands are both constants to
 /// `apply` of them, wrapped to the result's width.

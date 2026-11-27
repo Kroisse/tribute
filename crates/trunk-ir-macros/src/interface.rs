@@ -1,20 +1,22 @@
-//! `#[op_interface]` and `#[type_interface]`: an interface declared as a
-//! trait that operation or type wrappers implement.
+//! `#[op_interface]`, `#[type_interface]`, and `#[dialect_interface]`: an
+//! interface declared as a trait that operation, type, or dialect wrappers
+//! implement.
 //!
 //! The trait keeps its items and gains a hidden registration constant. The
 //! macro also generates a vtable with one function pointer per method, its
-//! registry, and the `Dyn<Trait>` handle that queries an operation or a type
-//! by name.
+//! registry, and the `Dyn<Trait>` handle that queries an operation, a type,
+//! or a dialect by name.
 
 use heck::ToSnakeCase;
 use proc_macro2::{Delimiter, Ident, Spacing, TokenStream, TokenTree};
 use quote::{format_ident, quote};
 
-/// What an interface's implementors are: operations or types.
+/// What an interface's implementors are: operations, types, or dialects.
 #[derive(Clone, Copy)]
 pub enum Kind {
     Op,
     Type,
+    Dialect,
 }
 
 impl Kind {
@@ -22,6 +24,7 @@ impl Kind {
         match self {
             Kind::Op => "#[op_interface]",
             Kind::Type => "#[type_interface]",
+            Kind::Dialect => "#[dialect_interface]",
         }
     }
 
@@ -29,14 +32,17 @@ impl Kind {
         match self {
             Kind::Op => "operation",
             Kind::Type => "type",
+            Kind::Dialect => "dialect",
         }
     }
 
-    /// The handle's accessor for the operation or type it queries.
+    /// The handle's accessor for the operation, type, or dialect it
+    /// queries.
     fn subject(self) -> &'static str {
         match self {
             Kind::Op => "op",
             Kind::Type => "ty",
+            Kind::Dialect => "dialect",
         }
     }
 }
@@ -409,6 +415,13 @@ fn generate(def: &InterfaceTrait) -> TokenStream {
             quote!(from_type_ref),
             quote!(ctx.get_type(#subject).name),
         ),
+        Kind::Dialect => (
+            quote!(&'static str),
+            quote!(&'static str),
+            quote!(#krate::ops::Dialect),
+            TokenStream::new(),
+            quote!(#subject),
+        ),
     };
 
     let diagnostic = (!has_on_unimplemented(attrs)).then(|| {
@@ -437,11 +450,24 @@ fn generate(def: &InterfaceTrait) -> TokenStream {
         quote! { #field: Self::#thunk::<T> }
     });
 
-    let expect_msg = match kind {
-        Kind::Op => format!("{name_str} registry entries are keyed by the operation's name"),
-        Kind::Type => format!(
-            "{name_str} is queried only on types that pass their definition's shape and verifier"
-        ),
+    // How a thunk gets the implementor from the subject it is called for: a
+    // wrapper of the operation or type, or the dialect's marker.
+    let this = |ctx: &Ident| match kind {
+        Kind::Op => {
+            let msg = format!("{name_str} registry entries are keyed by the operation's name");
+            quote!(<T as #wrapper>::#from_ref(&*#ctx, __trunk_ir_subject).expect(#msg))
+        }
+        Kind::Type => {
+            let msg = format!(
+                "{name_str} is queried only on types that pass their definition's shape and \
+                 verifier"
+            );
+            quote!(<T as #wrapper>::#from_ref(&*#ctx, __trunk_ir_subject).expect(#msg))
+        }
+        Kind::Dialect => quote! {{
+            let _ = __trunk_ir_subject;
+            <T as #wrapper>::INSTANCE
+        }},
     };
     let thunks = methods.iter().map(|m| {
         let method = &m.name;
@@ -453,13 +479,14 @@ fn generate(def: &InterfaceTrait) -> TokenStream {
         let ret = &m.ret;
         let lifetimes = &m.lifetimes;
         let lifetimes = (!lifetimes.is_empty()).then(|| quote!(#lifetimes,));
+        let this = this(ctx);
         quote! {
             fn #thunk<#lifetimes T: #name>(
                 #ctx: #ctx_ty,
                 __trunk_ir_subject: #ref_ty
                 #(, #args: #tys)*
             ) #ret {
-                let __trunk_ir_this = <T as #wrapper>::#from_ref(&*#ctx, __trunk_ir_subject).expect(#expect_msg);
+                let __trunk_ir_this = #this;
                 <T as #name>::#method(&__trunk_ir_this, #ctx #(, #args)*)
             }
         }
@@ -489,13 +516,13 @@ fn generate(def: &InterfaceTrait) -> TokenStream {
         "{} {noun} together with its [`{name_str}`] implementation, found by its name.",
         match kind {
             Kind::Op => "An",
-            Kind::Type => "A",
+            Kind::Type | Kind::Dialect => "A",
         }
     );
     // A type's handle is only for a type its wrapper accepts, which passes
     // its definition's verifier, so every method may be called on it.
     let (accepts_field, accepts_init, accepts_filter) = match kind {
-        Kind::Op => (TokenStream::new(), TokenStream::new(), TokenStream::new()),
+        Kind::Op | Kind::Dialect => (TokenStream::new(), TokenStream::new(), TokenStream::new()),
         Kind::Type => (
             quote!(accepts: fn(&#krate::IrContext, #ref_ty) -> bool,),
             quote!(accepts: |ctx, ty| <T as #wrapper>::#from_ref(ctx, ty).is_some(),),
@@ -506,13 +533,33 @@ fn generate(def: &InterfaceTrait) -> TokenStream {
         Kind::Op => {
             format!("The [`{name_str}`] implementation of `{subject}`'s {noun}, if it has one.")
         }
+        Kind::Dialect => {
+            format!("The [`{name_str}`] implementation of the {noun} named `{subject}`, if any.")
+        }
         Kind::Type => format!(
             "The [`{name_str}`] implementation of `{subject}`'s {noun}, if it has one and \
              `{subject}` passes its definition's shape and verifier, so every method may be \
              queried on the handle. [`Self::is_implemented`] answers by name alone."
         ),
     };
-    let is_implemented_doc = format!("Whether `{subject}`'s {noun} implements this interface.");
+    let is_implemented_doc = match kind {
+        Kind::Dialect => format!("Whether the {noun} named `{subject}` implements this interface."),
+        _ => format!("Whether `{subject}`'s {noun} implements this interface."),
+    };
+    // A dialect is queried by its name alone; operations and types by their
+    // reference into the context.
+    let (query_params, query_key, query_subject) = match kind {
+        Kind::Op | Kind::Type => (
+            quote!(ctx: &#krate::IrContext, #subject: #ref_ty),
+            quote!(&#subject_name),
+            quote!(#subject),
+        ),
+        Kind::Dialect => (
+            quote!(#subject: &str),
+            quote!(#subject_name),
+            quote!(vtable.name),
+        ),
+    };
     let implementors_doc = format!(
         "The names of every {noun} that implements this interface, in no particular order."
     );
@@ -576,16 +623,16 @@ fn generate(def: &InterfaceTrait) -> TokenStream {
 
         impl #handle {
             #[doc = #get_doc]
-            pub fn get(ctx: &#krate::IrContext, #subject: #ref_ty) -> Option<Self> {
+            pub fn get(#query_params) -> Option<Self> {
                 #vtable::registry()
-                    .get(&#subject_name)
+                    .get(#query_key)
                     #accepts_filter
-                    .map(|vtable| Self { #subject, vtable })
+                    .map(|vtable| Self { #subject: #query_subject, vtable })
             }
 
             #[doc = #is_implemented_doc]
-            pub fn is_implemented(ctx: &#krate::IrContext, #subject: #ref_ty) -> bool {
-                #vtable::registry().contains_key(&#subject_name)
+            pub fn is_implemented(#query_params) -> bool {
+                #vtable::registry().contains_key(#query_key)
             }
 
             #[doc = #implementors_doc]

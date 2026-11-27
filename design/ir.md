@@ -127,6 +127,14 @@ interface와 같다. Type interface의 메서드는 그 타입의 wrapper로 호
 보고 답하는 표지이며(managed reference 여부), 다른 crate의 타입에도 붙일 수 있어야
 하므로 type definition의 flag가 아니라 interface로 정의한다.
 
+Dialect interface는 operation이나 타입이 아니라 dialect 전체가 답하는 질의다(MLIR의
+`DialectInterface`). `#[dialect]`는 dialect마다 `Dialect` marker를 만들고, dialect
+interface는 이 marker가 구현하는 trait 하나로 선언한다. Consumer는 dialect 이름으로
+registry에서 구현을 찾으며, 등록과 중복 규칙, 다른 crate가 정의한 dialect에도 구현을
+붙일 수 있다는 점은 operation interface와 같다. 질의 대상이 operation 하나가 아니라
+그 dialect의 operation 전체일 때, 예를 들어 dialect가 자기 상수 operation을 고르는
+일처럼 operation 인스턴스 없이 답해야 할 때 dialect interface를 쓴다.
+
 Operation flag는 동작 없이 operation 정의가 선언하는 예/아니오 성질이다
 (`Pure`, `IsolatedFromAbove`). 어느 crate든 `#[op_flag]`를 붙인 unit struct로 flag를
 선언한다. Flag는 operation마다의 구현을 갖지 않고 operation definition에 직접
@@ -190,11 +198,11 @@ Fold는 operand가 상수인지를 `ConstantLike` interface로 읽는다(MLIR의
 상관없이 `i128`로 부호 확장해 담는다.
 
 상수 attribute 결과는 fold한 operation의 dialect가 자기 상수 operation으로
-만든다(MLIR의 `Dialect::materializeConstant`). 각 dialect는 attribute와 결과
-타입에서 detached 상수 operation을 만드는 materializer를 하나까지 등록하며, 그
-dialect의 상수가 담을 수 없는 값이면 IR을 바꾸지 않고 거절한다. Driver는
-materializer가 없거나 거절하면 operation을 그대로 둔다. Materializer는 타입이
-아니라 dialect에 속한다. 같은 정수 타입(`core.i64`)을 여러 dialect의 상수
+만든다(MLIR의 `Dialect::materializeConstant`). Dialect는 `ConstantMaterializer`
+dialect interface를 구현해 attribute와 결과 타입에서 detached 상수 operation을
+만들며, 그 dialect의 상수가 담을 수 없는 값이면 IR을 바꾸지 않고 거절한다. Driver는
+dialect가 이 interface를 구현하지 않거나 거절하면 operation을 그대로 둔다.
+Materializer는 타입이 아니라 dialect에 속한다. 같은 정수 타입(`core.i64`)을 여러 dialect의 상수
 (`arith.constant`, `clif.iconst`)가 만들므로 타입만으로는 어느 상수를 만들지 정할
 수 없고, 같은 수준의 operation을 계속 쓰려면 fold한 operation의 dialect가 정해야
 한다. 따라서 driver는 특정 dialect를 알지 않으며 constant folding은 target lowering

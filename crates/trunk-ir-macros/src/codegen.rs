@@ -12,7 +12,7 @@ use crate::parse::{
 
 /// Generate all code for a dialect module.
 pub fn generate(crate_path: &TokenStream, module: &DialectModule) -> TokenStream {
-    let dialect_name_fn = gen_dialect_name(&module.name);
+    let dialect_name_fn = gen_dialect_name(crate_path, &module.name);
 
     let mut items = Vec::new();
     for item in &module.items {
@@ -32,10 +32,20 @@ pub fn generate(crate_path: &TokenStream, module: &DialectModule) -> TokenStream
     }
 }
 
-fn gen_dialect_name(dialect: &str) -> TokenStream {
+fn gen_dialect_name(crate_path: &TokenStream, dialect: &str) -> TokenStream {
+    let doc = format!("The `{dialect}` dialect, which implements its dialect interfaces.");
     quote! {
         /// The dialect's name.
         pub const DIALECT_NAME: &str = #dialect;
+
+        #[doc = #doc]
+        #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+        pub struct Dialect;
+
+        impl #crate_path::ops::Dialect for Dialect {
+            const NAME: &'static str = DIALECT_NAME;
+            const INSTANCE: Self = Dialect;
+        }
     }
 }
 

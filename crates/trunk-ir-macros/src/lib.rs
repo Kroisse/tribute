@@ -34,7 +34,9 @@ mod parse;
 ///
 /// ## Generated code
 ///
-/// For the dialect, a `DIALECT_NAME` constant. For each operation
+/// For the dialect, a `DIALECT_NAME` constant and a `Dialect` marker
+/// implementing `trunk_ir::ops::Dialect`, which implements the dialect's
+/// [dialect interfaces](macro@dialect_interface). For each operation
 /// `fn op_name(...)`:
 /// - `struct Wrapper(OpRef)` — wrapper struct, named in `UpperCamelCase`
 /// - A `static` `OpDef` whose address identifies the operation, and
@@ -133,6 +135,34 @@ pub fn op_interface(attr: ProcTokenStream, item: ProcTokenStream) -> ProcTokenSt
 #[proc_macro_attribute]
 pub fn type_interface(attr: ProcTokenStream, item: ProcTokenStream) -> ProcTokenStream {
     match interface::gen_interface(interface::Kind::Type, attr.into(), item.into()) {
+        Ok(tokens) => tokens.into(),
+        Err(msg) => quote::quote!(compile_error!(#msg);).into(),
+    }
+}
+
+/// Declare a dialect interface: a trait that dialect markers implement and
+/// that passes query for any dialect by its name, the counterpart of MLIR's
+/// `DialectInterface`.
+///
+/// ```ignore
+/// #[trunk_ir::dialect_interface]
+/// pub trait ConstantMaterializer: Dialect {
+///     fn materialize_constant(&self, ctx: &mut IrContext, ..) -> Option<OpRef>;
+/// }
+///
+/// impl ConstantMaterializer for arith::Dialect { .. }
+/// register_interfaces!(arith::Dialect: ConstantMaterializer);
+///
+/// let materializer = DynConstantMaterializer::get("arith")?;
+/// ```
+///
+/// The trait and its generated code follow [`op_interface`], with dialects
+/// in place of operations: the implementor is the `Dialect` marker that
+/// `#[dialect]` generates, the registry is keyed by dialect name, and
+/// `DynName::get(dialect)` finds a dialect's implementation by name alone.
+#[proc_macro_attribute]
+pub fn dialect_interface(attr: ProcTokenStream, item: ProcTokenStream) -> ProcTokenStream {
+    match interface::gen_interface(interface::Kind::Dialect, attr.into(), item.into()) {
         Ok(tokens) => tokens.into(),
         Err(msg) => quote::quote!(compile_error!(#msg);).into(),
     }

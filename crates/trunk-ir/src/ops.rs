@@ -283,3 +283,15 @@ pub trait DialectType: Sized + Copy {
         ctx.get_type(ty).name == Self::NAME
     }
 }
+
+/// The marker of a dialect, which `#[dialect]` generates as `Dialect` in
+/// the dialect's module. It implements the dialect's
+/// [dialect interfaces](macro@crate::dialect_interface), as an MLIR
+/// `Dialect` holds its `DialectInterface`s.
+pub trait Dialect: Sized + Copy + 'static {
+    /// The dialect's name, the `dialect` of its operations' and types'
+    /// `dialect.name`.
+    const NAME: &'static str;
+    /// The marker's only value.
+    const INSTANCE: Self;
+}

@@ -15,7 +15,7 @@
 //!   value.
 //! - [`FoldResult::Constant`] — replace the op with a constant of its
 //!   result type, which the op's dialect builds through its
-//!   [constant materializer](crate::register_constant_materializer).
+//!   [`ConstantMaterializer`].
 //! - [`FoldResult::Splice`] — splice a body of ops into the parent
 //!   block before the matched op and RAUW its results with the
 //!   supplied values; the dispatcher additionally drops anything
@@ -27,15 +27,13 @@
 //! that defines them. Folds are owned by their dialects: `arith`, `clif`,
 //! `core`, `scf`, `adt`, and `tribute_rt` register them today.
 
-use std::sync::LazyLock;
-
-use trunk_ir_macros::op_interface;
+use trunk_ir_macros::{dialect_interface, op_interface};
 
 use crate::OpName;
 use crate::analysis::AnalysisCache;
 use crate::context::IrContext;
 use crate::dialect::func;
-use crate::ops::DialectOp;
+use crate::ops::{Dialect, DialectOp};
 use crate::pass::{Pass, PassRunResult};
 use crate::refs::{OpRef, TypeRef, ValueDef, ValueRef};
 use crate::rewrite::{
@@ -142,65 +140,27 @@ pub fn const_int_value(ctx: &IrContext, value: ValueRef) -> Option<i128> {
 // Constant materialization
 // =========================================================================
 
-/// A dialect's constant materialization hook, the counterpart of MLIR's
+/// A dialect that builds its own constants, the counterpart of MLIR's
 /// `Dialect::materializeConstant`.
 ///
-/// It builds a detached constant operation of the dialect whose single
-/// result has type `ty` and holds `value`, at `location`. It returns `None`
-/// without changing the IR when the dialect has no constant for that value
-/// and type.
-pub type MaterializeConstantFn =
-    fn(ctx: &mut IrContext, value: Attribute, ty: TypeRef, location: Location) -> Option<OpRef>;
-
-/// Inventory entry registering a dialect's [`MaterializeConstantFn`].
-///
-/// Emitted by [`register_constant_materializer!`](crate::register_constant_materializer).
-#[doc(hidden)]
-pub struct ConstantMaterializerRegistration {
-    pub dialect: &'static str,
-    pub materialize: MaterializeConstantFn,
-}
-
-inventory::collect!(ConstantMaterializerRegistration);
-
-/// Register a dialect's constant materializer, a [`MaterializeConstantFn`],
-/// for the dialect named by its `DIALECT_NAME`.
-///
-/// ```text
-/// register_constant_materializer!(DIALECT_NAME, materialize_constant);
-/// ```
-///
-/// A dialect registers at most one; a second registration for the same
-/// dialect panics when the registry is first queried.
-#[macro_export]
-macro_rules! register_constant_materializer {
-    ($dialect:expr, $materialize:path) => {
-        $crate::__private::inventory::submit! {
-            $crate::transforms::canonicalize::ConstantMaterializerRegistration {
-                dialect: $dialect,
-                materialize: $materialize,
-            }
-        }
-    };
-}
-
-static MATERIALIZERS: LazyLock<crate::__private::HashMap<&'static str, MaterializeConstantFn>> =
-    LazyLock::new(|| {
-        let mut registry = crate::__private::HashMap::default();
-        for entry in inventory::iter::<ConstantMaterializerRegistration> {
-            let previous = registry.insert(entry.dialect, entry.materialize);
-            assert!(
-                previous.is_none(),
-                "dialect `{}` registers two constant materializers",
-                entry.dialect
-            );
-        }
-        registry
-    });
-
-/// The constant materializer `dialect` registers, if any.
-pub fn constant_materializer(dialect: &str) -> Option<MaterializeConstantFn> {
-    MATERIALIZERS.get(dialect).copied()
+/// The canonicalize driver builds a [`FoldResult::Constant`] with the
+/// materializer of the folded operation's dialect, so a fold's constant
+/// stays at that dialect's level of the pipeline. A dialect implements it on
+/// the `Dialect` marker `#[dialect]` generates and registers it with
+/// [`register_interfaces!`](crate::register_interfaces).
+#[dialect_interface]
+pub trait ConstantMaterializer: Dialect {
+    /// Build a detached constant operation of the dialect whose single
+    /// result has type `ty` and holds `value`, at `location`. Return `None`
+    /// without changing the IR when the dialect has no constant for that
+    /// value and type.
+    fn materialize_constant(
+        &self,
+        ctx: &mut IrContext,
+        value: Attribute,
+        ty: TypeRef,
+        location: Location,
+    ) -> Option<OpRef>;
 }
 
 /// One `RewritePattern` that dispatches to per-op folds through
@@ -257,12 +217,12 @@ impl RewritePattern for FoldDispatchPattern {
                 };
                 let data = ctx.op(op);
                 let location = data.location;
-                let materialize = rewriter.require(
-                    constant_materializer(data.name.dialect(ctx)),
+                let materializer = rewriter.require(
+                    DynConstantMaterializer::get(data.name.dialect(ctx)),
                     "the dialect has no constant materializer",
                 )?;
                 let constant = rewriter.require(
-                    materialize(ctx, value, result_ty, location),
+                    materializer.materialize_constant(ctx, value, result_ty, location),
                     "the dialect declined to materialize the constant",
                 )?;
                 rewriter.replace_op(constant);

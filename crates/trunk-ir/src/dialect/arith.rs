@@ -172,7 +172,9 @@ use crate::dialect::core::{FloatLike, I1, Index, IntegerLike, IntegerOrIndex, Nu
 use crate::op_flag::Pure;
 use crate::ops::DialectOp;
 use crate::refs::{OpRef, TypeRef, ValueDef, ValueRef};
-use crate::transforms::canonicalize::{ConstantLike, Fold, FoldResult, const_int_value};
+use crate::transforms::canonicalize::{
+    ConstantLike, ConstantMaterializer, Fold, FoldResult, const_int_value,
+};
 use crate::types::{Attribute, Location};
 
 crate::attr_kind::keyword_kind! {
@@ -220,24 +222,27 @@ impl ConstantLike for Constant {
     }
 }
 
-/// The `arith` constant materializer: an `arith.constant` of `ty` holding
-/// `value`, for an integer, boolean, or float that type can hold.
-fn materialize_constant(
-    ctx: &mut IrContext,
-    value: Attribute,
-    ty: TypeRef,
-    location: Location,
-) -> Option<OpRef> {
-    constant_holds(ctx, &value, ty).then(|| {
-        Constant::operands()
-            .value(value)
-            .results(ty)
-            .build(ctx, location)
-            .op_ref()
-    })
+/// Materializes an `arith.constant` of `ty` holding `value`, for an
+/// integer, boolean, or float that type can hold.
+impl ConstantMaterializer for Dialect {
+    fn materialize_constant(
+        &self,
+        ctx: &mut IrContext,
+        value: Attribute,
+        ty: TypeRef,
+        location: Location,
+    ) -> Option<OpRef> {
+        constant_holds(ctx, &value, ty).then(|| {
+            Constant::operands()
+                .value(value)
+                .results(ty)
+                .build(ctx, location)
+                .op_ref()
+        })
+    }
 }
 
-crate::register_constant_materializer!(DIALECT_NAME, materialize_constant);
+crate::register_interfaces!(Dialect: ConstantMaterializer);
 
 impl crate::ops::Verify for Constant {
     fn verify(&self, ctx: &IrContext) -> Result<(), crate::ops::VerificationError> {

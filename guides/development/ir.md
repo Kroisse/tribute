@@ -652,6 +652,31 @@ A hook that core infrastructure reaches through the definition, such as a
 verifier, an assembly format, an alias hint, or an identifier, belongs on
 `TypeDef` instead.
 
+### Dialect Interfaces
+
+A dialect interface is the same mechanism for a whole dialect, declared
+with `#[trunk_ir::dialect_interface]` on a trait over `ops::Dialect`.
+`#[dialect]` generates a `Dialect` marker in each dialect's module, which
+implements the interface and is registered with `register_interfaces!`:
+
+```rust
+#[dialect_interface]
+pub trait ConstantMaterializer: Dialect {
+    fn materialize_constant(&self, ctx: &mut IrContext, value: Attribute,
+                            ty: TypeRef, location: Location) -> Option<OpRef>;
+}
+
+impl ConstantMaterializer for arith::Dialect { .. }
+register_interfaces!(arith::Dialect: ConstantMaterializer);
+
+let materializer = DynConstantMaterializer::get(op_name.dialect(ctx));
+```
+
+The registry is keyed by dialect name, so `DynX::get(dialect)` and
+`DynX::is_implemented(dialect)` take the name alone. Use one for a question
+the dialect answers without an operation to ask, such as which operation
+holds its constants.
+
 ### Folding
 
 An operation folds by implementing the `Fold` interface of
@@ -659,23 +684,11 @@ An operation folds by implementing the `Fold` interface of
 A fold reads an operand's constant with `constant_value` or
 `const_int_value`, which accept any operation implementing `ConstantLike`,
 and returns `FoldResult::Constant(attr)` for a constant result. The
-canonicalize driver builds that constant with the folded operation's
-dialect materializer, registered next to the dialect
-([folding](../../design/ir.md#folding과-상수-materialization)):
-
-```rust
-fn materialize_constant(
-    ctx: &mut IrContext,
-    value: Attribute,
-    ty: TypeRef,
-    location: Location,
-) -> Option<OpRef> { .. }
-
-trunk_ir::register_constant_materializer!(DIALECT_NAME, materialize_constant);
-```
-
-The materializer returns a detached operation, or `None` without changing
-the IR when the dialect has no constant for the value and type.
+canonicalize driver builds that constant through the folded operation's
+dialect's `ConstantMaterializer`
+([folding](../../design/ir.md#folding과-상수-materialization)). The
+materializer returns a detached operation, or `None` without changing the
+IR when the dialect has no constant for the value and type.
 
 ## Working with IR
 
