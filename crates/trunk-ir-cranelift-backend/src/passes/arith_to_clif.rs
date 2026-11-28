@@ -35,6 +35,11 @@ pub fn lower(
     module: Module,
     type_converter: TypeConverter,
 ) -> Result<(), ConversionError> {
+    // Type conversion may widen the operands of a comparison before it is
+    // lowered, so signed comparisons of booleans become unsigned first.
+    PatternApplicator::new(TypeConverter::new())
+        .add_pattern(BooleanSignedCmpPattern)
+        .apply_partial(ctx, module);
     let applicator = PatternApplicator::new(type_converter)
         .with_auto_type_conversion(true)
         .add_pattern(ArithConstPattern)
@@ -71,6 +76,37 @@ fn type_category(ctx: &IrContext, ty: TypeRef) -> Option<&'static str> {
         Some(32) => Some("f32"),
         Some(_) => Some("f64"),
         None => None,
+    }
+}
+
+/// A signed `arith.cmpi` of `core.i1` operands, rewritten to the unsigned
+/// predicate that reads their zero-extended 0 or 1 the same way.
+struct BooleanSignedCmpPattern;
+
+impl OpRewritePattern for BooleanSignedCmpPattern {
+    type Op = arith::Cmpi;
+
+    fn match_and_rewrite(
+        &self,
+        ctx: &mut IrContext,
+        cmpi: Self::Op,
+        rewriter: &mut PatternRewriter<'_>,
+    ) -> Option<()> {
+        let (lhs, rhs) = (cmpi.lhs(ctx), cmpi.rhs(ctx));
+        if !core::I1::matches(ctx, ctx.value_ty(lhs)) {
+            return None;
+        }
+        let predicate = cmpi.predicate(ctx);
+        let unsigned = predicate.on_unsigned_booleans();
+        if unsigned == predicate {
+            return None;
+        }
+        let loc = ctx.op(cmpi.op_ref()).location;
+        let new_op = arith::Cmpi::operands(lhs, rhs)
+            .predicate(unsigned)
+            .build(ctx, loc);
+        rewriter.replace_op(new_op.op_ref());
+        Some(())
     }
 }
 
@@ -743,11 +779,33 @@ mod tests {
         use trunk_ir::ops::DialectOp;
         use trunk_ir::walk::{WalkAction, walk_op};
 
+        let held = |value| IntegerLike::width(ctx, ctx.value_ty(value)).unwrap().max(8);
         let mut values = rustc_hash::FxHashMap::<trunk_ir::refs::ValueRef, u64>::default();
         let mut returned = None;
         let _ = walk_op::<()>(ctx, module.op(), &mut |op| {
             let operand = |i: usize| values[&ctx.op_operands(op)[i]];
-            let result = if let Ok(iconst) = clif::Iconst::from_op(ctx, op) {
+            let signed = |i: usize| {
+                let shift = 64 - held(ctx.op_operands(op)[i]);
+                ((operand(i) << shift) as i64) >> shift
+            };
+            let result = if let Ok(icmp) = clif::Icmp::from_op(ctx, op) {
+                use clif::IntCond as C;
+                let (a, b, sa, sb) = (operand(0), operand(1), signed(0), signed(1));
+                Some(u64::from(match icmp.cond(ctx) {
+                    C::Eq => a == b,
+                    C::Ne => a != b,
+                    C::Slt => sa < sb,
+                    C::Sle => sa <= sb,
+                    C::Sgt => sa > sb,
+                    C::Sge => sa >= sb,
+                    C::Ult => a < b,
+                    C::Ule => a <= b,
+                    C::Ugt => a > b,
+                    C::Uge => a >= b,
+                }))
+            } else if clif::Uextend::matches(ctx, op) {
+                Some(operand(0))
+            } else if let Ok(iconst) = clif::Iconst::from_op(ctx, op) {
                 Some(iconst.value(ctx) as u64)
             } else if clif::Iadd::matches(ctx, op) {
                 Some(operand(0).wrapping_add(operand(1)))
@@ -774,7 +832,7 @@ mod tests {
             };
             if let Some(bits) = result {
                 let value = ctx.op_results(op)[0];
-                let held = IntegerLike::width(ctx, ctx.value_ty(value)).unwrap().max(8);
+                let held = held(value);
                 let mask = if held == 64 {
                     u64::MAX
                 } else {
@@ -870,6 +928,50 @@ mod tests {
                             lower_and_evaluate(&module(body), i1_to_i32),
                             folded,
                             "{body} with a = {a}, b = {b}, i1 as i32: {i1_to_i32}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn boolean_comparisons_read_their_declared_width() {
+        let literal = |bit: bool| if bit { "-1" } else { "0" };
+        for a in [false, true] {
+            for b in [false, true] {
+                // Signed, a set bit of `core.i1` is -1.
+                let (ua, ub) = (i8::from(a), i8::from(b));
+                let (sa, sb) = (-ua, -ub);
+                for (predicate, expected) in [
+                    ("eq", a == b),
+                    ("ne", a != b),
+                    ("slt", sa < sb),
+                    ("sle", sa <= sb),
+                    ("sgt", sa > sb),
+                    ("sge", sa >= sb),
+                    ("ult", ua < ub),
+                    ("ule", ua <= ub),
+                    ("ugt", ua > ub),
+                    ("uge", ua >= ub),
+                ] {
+                    // `%a` is a constant and `%b` the result of `0 - b`.
+                    let ir = format!(
+                        "core.module @test {{\n  func.func @f() -> core.i1 {{\n    \
+                         %z = arith.constant 0 : core.i1\n    \
+                         %a = arith.constant {} : core.i1\n    \
+                         %nb = arith.constant {} : core.i1\n    \
+                         %b = arith.subi %z, %nb : core.i1\n    \
+                         %r = arith.cmpi {predicate}, %a, %b : core.i1\n    \
+                         func.return %r\n  }}\n}}",
+                        literal(a),
+                        literal(b),
+                    );
+                    for i1_to_i32 in [false, true] {
+                        assert_eq!(
+                            lower_and_evaluate(&ir, i1_to_i32),
+                            u64::from(expected),
+                            "cmpi {predicate} with a = {a}, b = {b}, i1 as i32: {i1_to_i32}"
                         );
                     }
                 }

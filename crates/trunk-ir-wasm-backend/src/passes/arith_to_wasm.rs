@@ -514,6 +514,12 @@ impl RewritePattern for ArithCmpPattern {
                 "comparison of a narrow integer is not lowered",
             )?;
             let predicate = cmpi.predicate(ctx);
+            // A boolean is 0 or 1, read unsigned.
+            let predicate = if is_bool(ctx, ctx.value_ty(lhs)) {
+                predicate.on_unsigned_booleans()
+            } else {
+                predicate
+            };
             let suffix = type_suffix(ctx, ctx.value_ty(lhs))?;
             let new_op = match (suffix, predicate) {
                 ("i32", arith::CmpiPredicate::Eq) => wasm_dialect::I32Eq::operands(lhs, rhs)
@@ -1259,6 +1265,34 @@ core.module @test {
         assert!(!output.contains("arith."), "{output}");
         assert!(!output.contains("wasm.i32_const -1"), "{output}");
         assert_eq!(output.matches("wasm.i32_and").count(), 4, "{output}");
+    }
+
+    #[test]
+    fn signed_boolean_comparisons_reverse_into_unsigned_ones() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @f(%a: core.i1, %b: core.i1) {
+    %lt = arith.cmpi slt, %a, %b : core.i1
+    %le = arith.cmpi sle, %a, %b : core.i1
+    %gt = arith.cmpi sgt, %a, %b : core.i1
+    %ge = arith.cmpi sge, %a, %b : core.i1
+    func.return
+  }
+}"#,
+        );
+
+        lower(&mut ctx, module, TypeConverter::new());
+
+        let output = module.op().display(&ctx).to_string();
+        assert!(!output.contains("arith."), "{output}");
+        assert!(!output.contains("_s "), "{output}");
+        let ops: Vec<_> = ["i32_gt_u", "i32_ge_u", "i32_lt_u", "i32_le_u"]
+            .into_iter()
+            .filter(|op| output.contains(&format!("wasm.{op}")))
+            .collect();
+        assert_eq!(ops.len(), 4, "{output}");
     }
 
     #[test]
