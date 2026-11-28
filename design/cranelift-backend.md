@@ -155,6 +155,29 @@ operation은 이 dialect에 두지 않는다. 전체 연산 목록은
 - **스택 할당**: stack_slot으로 로컬 메모리 할당 가능
 - **함수 포인터**: funcref 대신 symbol_addr로 함수 주소 획득
 
+### Cranelift 정수보다 좁은 정수
+
+`clif` 정수 연산은 operand를 담은 Cranelift 정수 타입의 폭에서 계산한다.
+Cranelift에서 가장 좁은 정수는 `I8`이므로 `core.i1`은 `I8`에 담기고, 타입 변환이
+정수를 더 넓은 타입으로 바꿀 수도 있다(native 파이프라인은 `core.i1`을
+`core.i32`로 바꾼다). 선언 폭이 자신을 담은 Cranelift 정수보다 좁은 값은 0으로
+확장된 형태를 유지한다. 선언 폭 위의 비트는 언제나 0이며, `core.i1`은 0 또는
+1이다.
+
+- `arith_to_clif`는 결과가 선언 폭 위의 비트를 바꿀 수 있는 연산(`addi`, `subi`,
+  `muli`, `negi`, `shli`) 뒤에 선언 폭 mask와의 `clif.band`를 둔다. 그래서 낮춘
+  코드는 `arith`의 선언 폭 의미, 곧 선언 폭에서 계산한 fold 결과와 같은 값을 낸다.
+- 정수 상수는 선언 폭에서 0으로 확장한 immediate로 낮춘다. `core.i1`의 `-1`은
+  `clif.iconst 1`이다.
+- `andi`/`ori`/`xori`, 부호 없는 비교·나눗셈·나머지·오른쪽 shift, `extui`는 0으로
+  확장된 입력을 그대로 읽는다. `icmp`/`fcmp`의 결과는 0 또는 1이다.
+- 부호 있는 해석이 필요한 연산(부호 있는 `cmpi` predicate, `divsi`, `remsi`,
+  `shrsi`, `extsi`, `sitofp`)은 선언 폭에서 부호 확장한 값으로 계산해야 한다.
+  그렇게 낮추지 못하는 연산은 낮추지 않고 변환 경계에서 거부한다.
+- 부호 있는 해석에서 `core.i1`의 1은 -1이므로, `core.i1`의 부호 있는 순서 비교는
+  방향을 뒤집은 부호 없는 비교와 같다(`slt`는 `ugt`). 타입 변환이 operand를 넓히면
+  선언 폭을 알 수 없으므로 `arith_to_clif`는 변환 전에 이 predicate를 바꾼다.
+
 ### `clif.br_table` jump table 분기
 
 `clif.br_table`은 Cranelift의 `br_table` 명령과 같은 의미를 가진다.

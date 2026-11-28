@@ -190,6 +190,23 @@ crate::attr_kind::keyword_kind! {
     }
 }
 
+impl CmpiPredicate {
+    /// The predicate that compares `core.i1` operands as this one does, when
+    /// they are read as unsigned 0 or 1.
+    ///
+    /// Signed, the bit of a `core.i1` is -1, so a signed ordering of
+    /// booleans is the reverse unsigned one; other predicates are unchanged.
+    pub fn on_unsigned_booleans(self) -> Self {
+        match self {
+            Self::Slt => Self::Ugt,
+            Self::Sle => Self::Uge,
+            Self::Sgt => Self::Ult,
+            Self::Sge => Self::Ule,
+            other => other,
+        }
+    }
+}
+
 crate::attr_kind::keyword_kind! {
     /// How `arith.cmpf` compares its float operands: the ordered predicates
     /// and unordered inequality, the ones every backend lowers.
