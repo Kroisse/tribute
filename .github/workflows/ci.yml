@@ -68,6 +68,9 @@ jobs:
       - name: Test lint failure propagation
         run: .ci/test-lint.sh
 
+      - name: Test the Codex review gate
+        run: node --test .ci/codex-gate/decide.test.mjs
+
       - name: Setup Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
