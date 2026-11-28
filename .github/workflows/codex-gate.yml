@@ -16,7 +16,7 @@ on:
 permissions:
   contents: read
   issues: read
-  pull-requests: write
+  pull-requests: read
   statuses: write
 
 concurrency:
@@ -34,13 +34,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       PR: ${{ github.event.pull_request.number || github.event.issue.number }}
     steps:
-      # An acknowledgement waives the findings on the head it was given for;
-      # a new head needs a new one.
-      - if: >-
-          github.event.action == 'synchronize' &&
-          contains(github.event.pull_request.labels.*.name, 'codex-ack')
-        run: gh pr edit "$PR" -R "$GITHUB_REPOSITORY" --remove-label codex-ack
       - uses: actions/checkout@v7
         with:
           sparse-checkout: .ci
-      - run: .ci/codex-gate.sh "$GITHUB_REPOSITORY" "$PR"
+      - run: node .ci/codex-gate/main.mjs "$GITHUB_REPOSITORY" "$PR"
