@@ -65,7 +65,7 @@ cargo run -- --log=tribute_front::typeck=trace compile file.trb
   reviewed the PR's head and has no unresolved findings
   (`.github/workflows/codex-gate.yml`). Reply to a declined Codex finding in
   its thread with the reason, and add the `codex-ack` label; it waives only
-  the findings of a review of the current head.
+  the findings of a review of the current head, and a push removes it.
 - Use the Edit tool rather than `sed` for source changes, to avoid touching
   unrelated lines.
 - When the user asks for a specific small change, make it first, then share
