@@ -533,14 +533,14 @@ impl RegionBranchTerminator for Break {
 // =========================================================================
 
 use crate::context::IrContext;
-use crate::dialect::arith::const_int_value;
 use crate::dialect::core::{I1, IntegerOrIndex};
 use crate::ops::DialectOp;
 use crate::refs::{OpRef, ValueRef};
-use crate::transforms::canonicalize::{Fold, FoldResult};
+use crate::transforms::canonicalize::{Fold, FoldResult, const_int_value};
 use crate::types::Attribute;
 
-/// `scf.if(arith.constant Int(c) : core.i1)` → splice the chosen region's
+/// `scf.if(const Int(c) : core.i1)`, a condition any `ConstantLike`
+/// operation defines → splice the chosen region's
 /// body into the parent block.
 ///
 /// When the condition is a compile-time constant, exactly one branch
@@ -560,13 +560,14 @@ impl Fold for If {
         let if_op = self;
         let cond = if_op.cond(ctx);
         let cond_value = const_int_value(ctx, cond)?;
-        // The schema types cond as `core.i1`, whose only valid payloads
-        // are 0 and 1. Reject anything else (e.g.
-        // `arith.constant value=2 : core.i1`) so the validator surfaces the
-        // malformed const instead of the fold silently picking a branch.
+        // The schema types cond as `core.i1`, which a `ConstantLike` reports
+        // sign-extended: true is -1. Anything else (e.g.
+        // `arith.constant value=2 : core.i1`, reported as written) is
+        // rejected so the validator surfaces the malformed const instead of
+        // the fold silently picking a branch.
         let active_region = match cond_value {
             0 => if_op.else_region(ctx),
-            1 => if_op.then_region(ctx),
+            -1 => if_op.then_region(ctx),
             _ => return None,
         };
 
@@ -592,7 +593,7 @@ impl Fold for If {
     }
 }
 
-/// `scf.index_switch(arith.constant Int(c))` → splice the selected region's
+/// `scf.index_switch(const Int(c))` → splice the selected region's
 /// body into the parent block.
 ///
 /// The region is the case region whose value equals the selector, or the

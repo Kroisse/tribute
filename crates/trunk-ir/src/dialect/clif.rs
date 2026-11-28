@@ -7,7 +7,10 @@ use crate::dialect::core::{I8, I32, IntegerLike};
 use crate::op_flag::{IsolatedFromAbove, NoTerminator, Terminator};
 use crate::op_interface::{CallLike, IndirectCallLike};
 use crate::ops::{DialectOp, DialectType};
-use crate::types::{Attribute, AttributeMap, TypeDataBuilder};
+use crate::transforms::canonicalize::{
+    ConstantLike, ConstantMaterializer, Fold, FoldResult, canonical_int_of_type, const_int_value,
+};
+use crate::types::{Attribute, AttributeMap, Location, TypeDataBuilder};
 use crate::{IrContext, SymbolPath};
 use itertools::Itertools;
 use rustc_hash::FxHashSet as HashSet;
@@ -137,6 +140,20 @@ mod clif {
     fn r#return(values: Variadic<_>) {}
 
     // Constants
+    /// An integer constant, Cranelift's `iconst`. The immediate holds the
+    /// bits of the result's integer type, read signed or unsigned: `-1`
+    /// and `255` are the same `core.i8`. The native emitter stores the
+    /// immediate as written in the result's Cranelift type, which for a
+    /// `core.i1` is `I8`, so a one-bit true is written `1`.
+    ///
+    /// As a `ConstantLike`, it reports the canonical form of its value
+    /// (`transforms::canonicalize::canonical_int`), sign-extended from the
+    /// width, so `clif.iconst 1 : core.i1` reads `-1`.
+    ///
+    /// ```text
+    /// %c = clif.iconst 200 : core.i8
+    /// ```
+    #[implements(ConstantLike)]
     #[asm_format(attr_dict_bare value ":" type(result))]
     fn iconst(value: Attr<i64>) -> Value<_> {}
 
@@ -147,10 +164,13 @@ mod clif {
     fn f64const(value: Attr<f64>) -> Value<_> {}
 
     // Integer arithmetic
+    #[implements(Fold)]
     #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn iadd(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[implements(Fold)]
     #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn isub(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    #[implements(Fold)]
     #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
     fn imul(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
     #[asm_format(lhs "," rhs attr_dict_bare ":" type(result))]
@@ -779,6 +799,102 @@ impl CallLike for ReturnCall {
     }
 }
 
+/// The immediate in its canonical form for the result's width, since an
+/// immediate may also spell a narrow value as unsigned (`255 : core.i8` is
+/// `-1`).
+impl ConstantLike for Iconst {
+    fn constant_value(&self, ctx: &IrContext) -> Attribute {
+        let value = i128::from(self.value(ctx));
+        let ty = ctx.value_ty(self.result(ctx));
+        Attribute::Int(canonical_int_of_type(ctx, value, ty).unwrap_or(value))
+    }
+}
+
+/// Materializes a `clif.iconst` of an integer type of at most 64 bits.
+///
+/// The immediate is the value's bit pattern zero-extended from the type's
+/// width, which the native emitter stores as written: a `core.i1` lives in
+/// a Cranelift `I8`, so true is `1`, not the sign-extended `-1`.
+impl ConstantMaterializer for Dialect {
+    fn materialize_constant(
+        &self,
+        ctx: &mut IrContext,
+        value: Attribute,
+        ty: crate::TypeRef,
+        location: Location,
+    ) -> Option<crate::OpRef> {
+        let Attribute::Int(value) = value else {
+            return None;
+        };
+        let width = IntegerLike::width(ctx, ty)?;
+        if !(1..=64).contains(&width) {
+            return None;
+        }
+        // Either reading of the width's bits: signed or unsigned.
+        if !(-(1i128 << (width - 1))..(1i128 << width)).contains(&value) {
+            return None;
+        }
+        let value = (value as u64 & (u64::MAX >> (64 - width))) as i64;
+        Some(
+            Iconst::operands()
+                .value(value)
+                .results(ty)
+                .build(ctx, location)
+                .op_ref(),
+        )
+    }
+}
+
+crate::register_interfaces!(Dialect: ConstantMaterializer);
+
+/// Fold a binary integer operation whose operands are both constants to
+/// `apply` of them, wrapped to the result's width, when that width is a
+/// native Cranelift integer width.
+fn fold_integer_binary(
+    ctx: &IrContext,
+    op: crate::OpRef,
+    apply: fn(i128, i128) -> i128,
+) -> Option<FoldResult> {
+    let &[lhs, rhs] = ctx.op_operands(op) else {
+        return None;
+    };
+    let &[result_ty] = ctx.op_result_types(op) else {
+        return None;
+    };
+    // The native emitter computes a narrower integer, such as a `core.i1`
+    // in a Cranelift `I8`, at its native width without masking, so wrapping
+    // to the declared width would not match what it computes.
+    let width = IntegerLike::width(ctx, result_ty)?;
+    if !matches!(width, 8 | 16 | 32 | 64) {
+        return None;
+    }
+    let (a, b) = (const_int_value(ctx, lhs)?, const_int_value(ctx, rhs)?);
+    Some(FoldResult::Constant(Attribute::Int(
+        arith::wrap_signed_to_width(apply(a, b), width),
+    )))
+}
+
+/// `clif.iadd const(a), const(b)` → `clif.iconst(wrap(a+b))`.
+impl Fold for Iadd {
+    fn fold(&self, ctx: &IrContext) -> Option<FoldResult> {
+        fold_integer_binary(ctx, self.op_ref(), i128::wrapping_add)
+    }
+}
+
+/// `clif.isub const(a), const(b)` → `clif.iconst(wrap(a-b))`.
+impl Fold for Isub {
+    fn fold(&self, ctx: &IrContext) -> Option<FoldResult> {
+        fold_integer_binary(ctx, self.op_ref(), i128::wrapping_sub)
+    }
+}
+
+/// `clif.imul const(a), const(b)` → `clif.iconst(wrap(a*b))`.
+impl Fold for Imul {
+    fn fold(&self, ctx: &IrContext) -> Option<FoldResult> {
+        fold_integer_binary(ctx, self.op_ref(), i128::wrapping_mul)
+    }
+}
+
 /// Attach the required exact callable contract to a `clif` indirect transfer.
 ///
 /// Returns `false` without mutation when the operation is not a `clif`
@@ -808,6 +924,126 @@ mod tests {
     use crate::op_def::OpDef;
     use crate::op_interface::DynIndirectCallLike;
     use crate::parser::parse_test_module;
+    use crate::rewrite::{PatternApplicator, TypeConverter};
+    use crate::transforms::canonicalize::{FoldDispatchPattern, fold_ops_for_dialect};
+
+    #[test]
+    fn integer_folds_materialize_clif_constants() {
+        let mut ctx = crate::IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  clif.func @f(%x: core.i8) -> (core.i8, core.i8) {
+      %a = clif.iconst 100 : core.i8
+      %b = clif.iconst 100 : core.i8
+      %sum = clif.iadd %a, %b : core.i8
+      %c = clif.iconst 3 : core.i8
+      %product = clif.imul %sum, %c : core.i8
+      %partial = clif.isub %x, %c : core.i8
+      clif.return %product, %partial
+  }
+}"#,
+        );
+        let result = PatternApplicator::new(TypeConverter::new())
+            .add_pattern_box(Box::new(FoldDispatchPattern::from_ops(
+                fold_ops_for_dialect("clif"),
+            )))
+            .apply_partial(&mut ctx, module);
+        assert!(result.reached_fixpoint);
+        // `100 + 100` wraps to `-56` in eight bits, written as its bits
+        // `200`, and `-56 * 3` to `88`. The subtraction of a parameter
+        // stays.
+        assert_eq!(
+            module.op().display(&ctx).to_string(),
+            r#"core.module @test {
+  clif.func @f(%0: core.i8) -> (core.i8, core.i8) {
+      %1 = clif.iconst 100 : core.i8
+      %2 = clif.iconst 100 : core.i8
+      %3 = clif.iconst 200 : core.i8
+      %4 = clif.iconst 3 : core.i8
+      %5 = clif.iconst 88 : core.i8
+      %6 = clif.isub %0, %4 : core.i8
+      clif.return %5, %6
+  }
+}
+"#
+        );
+    }
+
+    #[test]
+    fn integer_folds_skip_widths_narrower_than_their_native_type() {
+        let mut ctx = crate::IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  clif.func @f() -> core.i1 {
+      %t = clif.iconst 1 : core.i1
+      %r = clif.iadd %t, %t : core.i1
+      clif.return %r
+  }
+}"#,
+        );
+        let result = PatternApplicator::new(TypeConverter::new())
+            .add_pattern_box(Box::new(FoldDispatchPattern::from_ops(
+                fold_ops_for_dialect("clif"),
+            )))
+            .apply_partial(&mut ctx, module);
+        // A `core.i1` lives in a Cranelift `I8` that the emitter adds
+        // without masking, so `1 + 1` is `2` there, not the one-bit `0`.
+        assert_eq!(result.total_changes, 0);
+    }
+
+    #[test]
+    fn a_one_bit_true_immediate_selects_the_then_region() {
+        let mut ctx = crate::IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @f(%x: core.i32, %y: core.i32) -> core.i32 {
+    %t = clif.iconst 1 : core.i1
+    %r = scf.if %t -> (core.i32) {
+      scf.yield %x
+    } else {
+      scf.yield %y
+    }
+    func.return %r
+  }
+}"#,
+        );
+        PatternApplicator::new(TypeConverter::new())
+            .add_pattern_box(Box::new(FoldDispatchPattern::from_ops(
+                fold_ops_for_dialect("scf"),
+            )))
+            .apply_partial(&mut ctx, module);
+        let printed = module.op().display(&ctx).to_string();
+        assert!(!printed.contains("scf.if"), "{printed}");
+        assert!(printed.contains("func.return %0"), "{printed}");
+    }
+
+    #[test]
+    fn unsigned_immediates_read_as_signed_constants_of_their_width() {
+        let mut ctx = crate::IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @f() -> core.i8 {
+    %a = clif.iconst 255 : core.i8
+    %b = clif.iconst 2 : core.i8
+    %r = arith.divsi %a, %b : core.i8
+    func.return %r
+  }
+}"#,
+        );
+        PatternApplicator::new(TypeConverter::new())
+            .add_pattern_box(Box::new(FoldDispatchPattern::from_ops(
+                fold_ops_for_dialect("arith"),
+            )))
+            .apply_partial(&mut ctx, module);
+        // `-1 / 2` is `0`; reading the immediate as `255` would give `127`.
+        let printed = module.op().display(&ctx).to_string();
+        assert!(printed.contains("arith.constant 0 : core.i8"), "{printed}");
+        assert!(!printed.contains("arith.divsi"), "{printed}");
+    }
 
     #[test]
     fn indirect_call_interface_uses_clif_owned_sig() {
