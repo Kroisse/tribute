@@ -18,7 +18,7 @@ if (!repo || !pr) {
 const gh = (...args) =>
   execFileSync('gh', args, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
 
-const info = JSON.parse(gh('pr', 'view', pr, '-R', repo, '--json', 'headRefOid,labels,url'));
+const info = JSON.parse(gh('pr', 'view', pr, '-R', repo, '--json', 'author,headRefOid,labels,url'));
 const list = (path) => JSON.parse(gh('api', '--paginate', '--slurp', path)).flat();
 const comments = list(`repos/${repo}/issues/${pr}/comments`);
 
@@ -32,7 +32,7 @@ if (info.labels.some((label) => label.name === ACK_LABEL)) {
 }
 
 const head = info.headRefOid;
-const { state, description } = decide({ head, ackedAt, comments });
+const { state, description } = decide({ head, author: info.author.login, ackedAt, comments });
 
 if (process.env.DRY_RUN === '1') {
   console.log(`${head} ${CONTEXT} ${state}: ${description}`);

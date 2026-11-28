@@ -14,6 +14,11 @@
 export const BOT = 'chatgpt-codex-connector[bot]';
 export const ACK_LABEL = 'codex-ack';
 
+// Codex does not review dependency update pull requests, so the gate does
+// not hold them. `gh pr view` spells the Dependabot app `app/dependabot`;
+// the REST API spells it `dependabot[bot]`.
+const EXEMPT_AUTHORS = new Set(['app/dependabot', 'dependabot[bot]']);
+
 const STATE = /codex-review-state:v1 (\{[^\n]*\}) -->/g;
 
 export function latestReview(comments) {
@@ -49,9 +54,13 @@ function hasUnresolvedFindings(review) {
 
 const status = (state, description) => ({ state, description });
 
-// `ackedAt` is when the `codex-ack` label was last added, or null when the
-// pull request does not carry it.
-export function decide({ head, ackedAt, comments }) {
+// `author` is the pull request author's login. `ackedAt` is when the
+// `codex-ack` label was last added, or null when the pull request does not
+// carry it.
+export function decide({ head, author, ackedAt, comments }) {
+  if (EXEMPT_AUTHORS.has(author)) {
+    return status('success', 'Dependency update; Codex does not review it');
+  }
   const short = head.slice(0, 7);
   const latest = latestReview(comments);
   if (!latest) return status('pending', 'No Codex review yet');
