@@ -19,9 +19,6 @@ permissions:
   pull-requests: read
   statuses: write
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event.issue.number }}
-
 jobs:
   gate:
     name: Codex review gate
@@ -29,6 +26,10 @@ jobs:
       github.event_name == 'pull_request_target' ||
       (github.event.issue.pull_request &&
        github.event.comment.user.login == 'chatgpt-codex-connector[bot]')
+    # On the job rather than the workflow, so that a skipped run for any
+    # other comment never enters the group and replaces a pending gate run.
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event.issue.number }}
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ github.token }}
