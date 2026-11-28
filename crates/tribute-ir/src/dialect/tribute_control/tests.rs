@@ -3452,6 +3452,26 @@ fn evidence_plans_with_row_tails_validate_and_round_trip() {
 }
 
 #[test]
+fn evidence_plans_with_fresh_tails_validate_and_round_trip() {
+    let plan = "[{tails = [[{fresh = unit}, {push = @State}], [{fresh = unit}]]}]";
+    let (ctx, module) = parse_fixture(&evidence_plan_module(plan, "[{mask = @State}]"));
+    let result = validate_local(&ctx, module);
+    assert!(result.errors.is_empty(), "{result}");
+    let call = Call::from_op(&ctx, control_op(&ctx, module, Call::NAME)).unwrap();
+    let steps: Vec<_> = call.evidence_plan(&ctx).unwrap().collect();
+    let [EvidenceStep::Tails(tails)] = steps.as_slice() else {
+        panic!("unexpected plan: {steps:?}");
+    };
+    assert!(matches!(
+        tails[0].as_slice(),
+        [EvidenceStep::Fresh, EvidenceStep::Push(_)]
+    ));
+    assert_eq!(tails[1], [EvidenceStep::Fresh]);
+    let printed = module.op().display(&ctx).to_string();
+    assert!(printed.contains(plan), "{printed}");
+}
+
+#[test]
 fn evidence_plan_verifier_rejects_malformed_selections() {
     for (call, handle, expected) in [
         ("[]", "[{mask = @State}]", "evidence_plan must not be empty"),
@@ -3463,8 +3483,14 @@ fn evidence_plan_verifier_rejects_malformed_selections() {
         (
             "[{keep = @State}]",
             "[{mask = @State}]",
-            "must be mask, dup, select, push, or tails, found keep",
+            "must be mask, dup, select, fresh, push, or tails, found keep",
         ),
+        (
+            "[{mask = @State}, {fresh = unit}]",
+            "[{mask = @State}]",
+            "fresh must be the first step",
+        ),
+        ("[{fresh = 0}]", "[{mask = @State}]", "fresh takes no value"),
         (
             "[{mask = @State}, {select = 0}]",
             "[{mask = @State}]",
@@ -3498,7 +3524,7 @@ fn evidence_plan_verifier_rejects_malformed_selections() {
         (
             "[{outer = @State}]",
             "[{mask = @State}]",
-            "must be mask, dup, select, push, or tails, found outer",
+            "must be mask, dup, select, fresh, push, or tails, found outer",
         ),
         (
             "[{mask = core.i32}]",

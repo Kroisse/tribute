@@ -974,8 +974,21 @@ pub(pkg) mod runtime {
             }
         }
 
+        // Nothing reads a tail slot that another replaced, so the marker of
+        // a slot shadows none.
         pub(pkg) fn with_tail(ev: Slots(Marker), slot: Int, tail: Slots(Marker)) ->{} Slots(Marker) {
-            ev.install(slot, 0, .None, tail)
+            let at = ev.find(slot)
+            let marker = Marker {
+                ability_id: slot,
+                prompt_tag: 0,
+                tr_dispatch_fn: .None,
+                shadowed: .None,
+                outer: tail,
+            }
+            case ev.holds(at, slot) {
+                True -> ev.replace(at, marker)
+                False -> ev.insert(at, marker)
+            }
         }
 
         pub(pkg) fn push(ev: Slots(Marker), source: Slots(Marker), ability_id: Int) ->{} Slots(Marker) {

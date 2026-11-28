@@ -269,6 +269,49 @@ fn main() ->{std::io::Io} Nil {
     assert_output_on_both_targets("become_plain_last_call.trb", &code, "220");
 }
 
+/// A tail whose row is closed takes a fresh evidence, and the callee pushes
+/// the handler it names on the tail it selects: each `State` operation of
+/// the loop reaches the one handler, from a closed row and from an open one.
+#[test]
+fn test_closed_tails_take_the_handlers_their_rows_name() {
+    let code = format!(
+        "{STATE_HANDLER}{}",
+        r#"
+fn two(f: fn(Int) ->{State(Int), e1} Int, g: fn() ->{e2} Nil, n: Int) ->{State(Int), e1, e2} Int {
+    g()
+    State::set(State::get() + +1)
+    f(n)
+}
+
+fn closed(n: Int) ->{State(Int)} Int {
+    case n == +0 {
+        True -> State::get()
+        False -> two(closed, fn() { Nil }, n - +1)
+    }
+}
+
+fn open(n: Int, h: fn() ->{r} Nil) ->{State(Int), r} Int {
+    case n == +0 {
+        True -> State::get()
+        False -> two(fn(m) { open(m, h) }, h, n - +1)
+    }
+}
+
+fn main() ->{std::io::Io} Nil {
+    let outer = run_state(fn() {
+        let inner = run_state(fn() {
+            closed(+50) * +1000 + open(+50, fn() { State::set(State::get() + +1) })
+        }, +0)
+        std::io::print_line(inner.to_string)
+        State::get()
+    }, +7)
+    std::io::print_line(outer.to_string)
+}
+"#
+    );
+    assert_output_on_both_targets("closed_tails.trb", &code, "50150\n7");
+}
+
 /// An `fn` arm answers an `op` operation performed in every iteration of a
 /// tail loop. The loop runs in constant stack, both directly under the
 /// handle and under an effect-polymorphic handler beneath another ability's

@@ -79,6 +79,7 @@ pub(super) fn lower_evidence_step<'db>(
         EvidenceStep::Dup(instance) => tribute_control::EvidenceStep::Dup(symbol_of(instance)),
         EvidenceStep::Push(instance) => tribute_control::EvidenceStep::Push(symbol_of(instance)),
         EvidenceStep::Select(index) => tribute_control::EvidenceStep::Select(*index),
+        EvidenceStep::Fresh => tribute_control::EvidenceStep::Fresh,
         EvidenceStep::Tails(plans) => tribute_control::EvidenceStep::Tails(
             plans
                 .iter()

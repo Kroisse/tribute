@@ -513,7 +513,12 @@ source의 순서이며, caller와 callee가 같은 순서로 센다. Ability별 
   tail마다 그 tail의 인스턴스 row를 callee row로 보고 같은 규칙으로 고른 evidence를
   붙인다. Tail의 선택은 서로 독립이고 모두 caller의 evidence에서 출발한다. 모든
   tail이 caller의 같은 번호 tail을 그대로 고르면 caller의 evidence가 이미 그 tail
-  evidence를 담고 있으므로 tail을 붙이지 않는다.
+  evidence를 담고 있으므로 tail을 붙이지 않는다. Tail의 인스턴스 row가 닫혀 있으면
+  (풀이 뒤에도 제약이 없는 row 변수도 같다) 그 tail의 evidence는 빈 evidence에서
+  시작해 그 row가 명시한 label의 handler만 caller의 evidence에서 얹는다. Caller의
+  evidence를 그대로 쓰면 그 row가 닿을 수 없는 handler가 아래에 남고, callee가 그
+  tail을 고른 뒤 얹는 handler가 그 위에 쌓이기 때문이다. Caller row가 닫혀 있고 같은
+  label만 명시하면 남는 handler가 없으므로 caller의 evidence를 그대로 쓴다.
 - **이런 callable 안의 호출:** callee row의 tail이 자기 tail 가운데 하나이면 그
   tail의 evidence를 고른다. 그 evidence에는 이 callable이 명시한 label의 handler가
   없으므로, callee가 그 label을 받는 자리마다 handler를 얹는다(첫 자리는 `push`,
