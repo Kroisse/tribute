@@ -233,8 +233,9 @@ impl OpRewritePattern for SlotsCallPattern<'_> {
             }
             SlotsOp::Replace => {
                 let at = lower.position(args[1]);
-                let after = lower.successor(at);
-                lower.splice(result_ty, args[0], at, after, Some(args[2]))
+                adt::ArraySet::operands(args[0], at, args[2])
+                    .build(lower.ctx, location)
+                    .op_ref()
             }
         };
         rewriter.replace_op(lowered);
@@ -360,13 +361,14 @@ mod tests {
         for op in [
             "adt.array_of",
             "adt.array_splice",
+            "adt.array_set",
             "adt.array_get",
             "adt.array_len",
         ] {
             assert!(output.contains(op), "{op}: {output}");
         }
-        assert_eq!(output.matches("adt.array_splice").count(), 3, "{output}");
-        assert_eq!(output.matches("arith.addi").count(), 2, "{output}");
+        assert_eq!(output.matches("adt.array_splice").count(), 2, "{output}");
+        assert_eq!(output.matches("arith.addi").count(), 1, "{output}");
     }
 
     #[test]

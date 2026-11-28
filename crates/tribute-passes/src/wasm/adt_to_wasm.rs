@@ -43,11 +43,12 @@
 //! - `adt.array_splice` -> a range check, `wasm.array_new`, and `wasm.array_copy`
 //!   of the kept ranges around `wasm.array_set` of the new elements
 //! - `adt.array_get` -> `wasm.array_get`
-//! - `adt.array_set` -> `wasm.array_set`
+//! - `adt.array_set` -> `wasm.array_new` filled with the new element,
+//!   `wasm.array_copy` of the source, and `wasm.array_set` of the element
 //! - `adt.array_len` -> `wasm.array_len`
 //!
 //! ## Reference Operations
-//! - `adt.ref_null` -> `wasm.ref_null`
+//! - `adt.ref_null` and `tribute_rt.null` -> `wasm.ref_null`
 //! - `adt.ref_is_null` -> `wasm.ref_is_null`
 //! - `adt.ref_cast` -> `wasm.ref_cast`
 //!
@@ -61,8 +62,9 @@
 //! operations before emission.
 
 use super::type_converter::gc_array_type;
-use tribute_ir::dialect::adt;
+use std::marker::PhantomData;
 use tribute_ir::dialect::adt::layout::get_enum_variants;
+use tribute_ir::dialect::{adt, tribute_rt};
 use trunk_ir::context::{IrContext, OpList, RegionList};
 use trunk_ir::dialect::core::{self, IntegerLike};
 use trunk_ir::dialect::wasm as wasm_dialect;
@@ -137,11 +139,12 @@ fn descriptor_operand(
     Some(constant.result(ctx))
 }
 
-/// Lower `adt.ref_null`, `adt.ref_is_null`, and `adt.ref_cast` to their
-/// Wasm operations, the `adt-references-to-wasm` pass.
+/// Lower `adt.ref_null`, `tribute_rt.null`, `adt.ref_is_null`, and
+/// `adt.ref_cast` to their Wasm operations, the `adt-references-to-wasm` pass.
 pub(crate) fn lower_references(ctx: &mut IrContext, module: Module) {
     PatternApplicator::new(TypeConverter::new())
-        .add_pattern(RefNullPattern)
+        .add_pattern(RefNullPattern::<adt::RefNull>(PhantomData))
+        .add_pattern(RefNullPattern::<tribute_rt::Null>(PhantomData))
         .add_pattern(RefIsNullPattern)
         .add_pattern(RefCastPattern)
         .apply_partial(ctx, module);
@@ -897,7 +900,12 @@ fn gc_element_operand(
     cast.result(ctx)
 }
 
-/// Pattern for `adt.array_set` -> `wasm.array_set`
+/// Pattern for `adt.array_set` -> a copy of the source with one element
+/// replaced
+///
+/// The result is filled with `value`, the whole source is copied into it,
+/// and `value` is stored at `index`, whose `wasm.array_set` traps unless
+/// `index < len`.
 struct ArraySetPattern;
 
 impl OpRewritePattern for ArraySetPattern {
@@ -911,14 +919,34 @@ impl OpRewritePattern for ArraySetPattern {
     ) -> Option<()> {
         let op = array_set.op_ref();
         let loc = ctx.op(op).location;
-        let ref_val = gc_array_operand(ctx, rewriter, array_set.r#ref(ctx), loc);
+        let source = gc_array_operand(ctx, rewriter, array_set.source(ctx), loc);
         let index = wasm_index(ctx, rewriter, array_set.index(ctx), loc);
-        let array_ty = gc_array_type(ctx, ctx.value_ty(ref_val));
+        let array_ty = gc_array_type(ctx, ctx.value_ty(source));
         let value = gc_element_operand(ctx, rewriter, array_ty, array_set.value(ctx), loc);
-        let new_op = wasm_gc_dialect::ArraySet::operands(ref_val, index, value)
+        let len = wasm_dialect::ArrayLen::operands(source).build(ctx, loc);
+        rewriter.insert_op(len.op_ref());
+        let len = len.result(ctx);
+        let fresh = wasm_gc_dialect::ArrayNew::operands(len, value)
             .r#type(array_ty)
             .build(ctx, loc);
-        rewriter.replace_op(new_op.op_ref());
+        rewriter.insert_op(fresh.op_ref());
+        let result = fresh.result(ctx);
+        let zero = wasm_dialect::I32Const::operands()
+            .value(0)
+            .results(core::I32::type_ref(ctx))
+            .build(ctx, loc);
+        rewriter.insert_op(zero.op_ref());
+        let zero = zero.result(ctx);
+        let copy = wasm_gc_dialect::ArrayCopy::operands(result, zero, source, zero, len)
+            .dst_type(array_ty)
+            .src_type(array_ty)
+            .build(ctx, loc);
+        rewriter.insert_op(copy.op_ref());
+        let store = wasm_gc_dialect::ArraySet::operands(result, index, value)
+            .r#type(array_ty)
+            .build(ctx, loc);
+        rewriter.insert_op(store.op_ref());
+        rewriter.erase_op(vec![result]);
         Some(())
     }
 }
@@ -966,11 +994,12 @@ fn wasm_index(
     cast.result(ctx)
 }
 
-/// Pattern for `adt.ref_null` -> `wasm.ref_null`
-struct RefNullPattern;
+/// Pattern for a null reference, `adt.ref_null` or `tribute_rt.null`, ->
+/// `wasm.ref_null`
+struct RefNullPattern<Op>(PhantomData<Op>);
 
-impl OpRewritePattern for RefNullPattern {
-    type Op = adt::RefNull;
+impl<Op: DialectOp> OpRewritePattern for RefNullPattern<Op> {
+    type Op = Op;
 
     fn match_and_rewrite(
         &self,
@@ -980,7 +1009,7 @@ impl OpRewritePattern for RefNullPattern {
     ) -> Option<()> {
         let op = ref_null.op_ref();
         let loc = ctx.op(op).location;
-        let result_ty = ref_null.result_ty(ctx);
+        let result_ty = ctx.op_result_types(op)[0];
 
         let new_op = wasm_gc_dialect::RefNull::operands()
             .target_type(result_ty)
@@ -1207,12 +1236,13 @@ mod tests {
     %filled = adt.array_new %count, %zero {type = !A} : !A
     %array = adt.array_of %one, %zero {type = !A} : !A
     %element = adt.array_get %array, %at : core.i32
-    adt.array_set %array, %at, %element
+    %set = adt.array_set %array[%at] = %element : !A
     %length = adt.array_len %filled : core.index
 
     %null = adt.ref_null : !S
     %is_null = adt.ref_is_null %null : !S
     %ref = adt.ref_cast %null : !S to !S
+    %anyref_null = tribute_rt.null : tribute_rt.anyref
     wasm.return
   }
 }"#,
@@ -1237,7 +1267,7 @@ mod tests {
                 .iter()
                 .filter(|&&op| ctx.op(op).name.dialect(&ctx) == wasm_gc_dialect::DIALECT_NAME)
                 .count(),
-            14
+            17
         );
         let variant_get = ctx
             .block(block)

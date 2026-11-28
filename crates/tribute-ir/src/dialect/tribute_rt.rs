@@ -83,6 +83,17 @@ mod tribute_rt {
     #[asm_format(ptr attr_dict_bare ":" type(result))]
     fn from_raw(ptr: Value<Ptr>) -> Value<impl ManagedRef> {}
 
+    /// The null `anyref`, the value of an erased slot that holds nothing,
+    /// such as the empty answer slot of a terminal frame's cell. Retaining
+    /// or releasing it is a no-op.
+    ///
+    /// ```text
+    /// %null = tribute_rt.null : tribute_rt.anyref
+    /// ```
+    #[flags(Pure)]
+    #[asm_format(attr_dict_bare ":" type(result))]
+    fn null() -> Value<Anyref> {}
+
     /// A reference to the static convention table holding the entry
     /// functions `entries` in order, the value a closure stores in its
     /// convention table field. The reference is unmanaged and never

@@ -3,27 +3,27 @@ source: crates/tribute-passes/src/native/array_to_clif.rs
 expression: lowered
 ---
   clif.func @access(%0: core.ptr, %1: core.i64, %2: core.i32) -> core.i32 {
-      %3 = tribute_rt.retain %0 : !Ints
-      %4 = core.unrealized_conversion_cast %0 : core.ptr to !Ints
-      %5 = core.unrealized_conversion_cast %1 : core.i64 to core.index
-      %6 = clif.load %4 {offset = 0} : core.i64
-      %7 = clif.icmp uge, %5, %6 : core.index
-      clif.trapnz %7 {code = "array_index_out_of_bounds"}
-      %8 = clif.iconst 4 : core.i64
-      %9 = clif.imul %5, %8 : core.i64
-      %10 = clif.iadd %4, %9 : core.ptr
-      clif.store %2, %10 {offset = 8}
-      %11 = core.unrealized_conversion_cast %0 : core.ptr to !Ints
-      %12 = core.unrealized_conversion_cast %1 : core.i64 to core.index
-      %13 = clif.load %11 {offset = 0} : core.i64
-      %14 = clif.icmp uge, %12, %13 : core.index
-      clif.trapnz %14 {code = "array_index_out_of_bounds"}
-      %15 = clif.iconst 4 : core.i64
-      %16 = clif.imul %12, %15 : core.i64
-      %17 = clif.iadd %11, %16 : core.ptr
-      %18 = clif.load %17 {offset = 8} : core.i32
-      %19 = core.unrealized_conversion_cast %0 : core.ptr to !Ints
-      %20 = clif.load %19 {offset = 0} : core.i64
-      tribute_rt.release %0 {alloc_size = 0}
-      clif.return %18
+      %3 = core.unrealized_conversion_cast %0 : core.ptr to !Ints
+      %4 = core.unrealized_conversion_cast %1 : core.i64 to core.index
+      %5 = clif.load %3 {offset = 0} : core.i64
+      %6 = clif.icmp uge, %4, %5 : core.index
+      clif.trapnz %6 {code = "array_index_out_of_bounds"}
+      %7 = clif.iconst 1 : core.i64
+      %8 = clif.iadd %4, %7 : core.i64
+      %9 = clif.call @__tribute_array_splice_5(%3, %4, %8, %7) : (!Ints, core.index, core.i64, core.i64) -> core.ptr
+      %10 = clif.iconst 4 : core.i64
+      %11 = clif.imul %4, %10 : core.i64
+      %12 = clif.iadd %9, %11 : core.ptr
+      clif.store %2, %12 {offset = 8}
+      %13 = core.unrealized_conversion_cast %1 : core.i64 to core.index
+      %14 = clif.load %9 {offset = 0} : core.i64
+      %15 = clif.icmp uge, %13, %14 : core.index
+      clif.trapnz %15 {code = "array_index_out_of_bounds"}
+      %16 = clif.iconst 4 : core.i64
+      %17 = clif.imul %13, %16 : core.i64
+      %18 = clif.iadd %9, %17 : core.ptr
+      %19 = clif.load %18 {offset = 8} : core.i32
+      %20 = clif.load %9 {offset = 0} : core.i64
+      tribute_rt.release %9 {alloc_size = 0}
+      clif.return %19
   }

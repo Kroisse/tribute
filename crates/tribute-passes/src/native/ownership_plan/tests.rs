@@ -538,7 +538,7 @@ fn internal_closure_raw_pointer_handoff_outside_native_evidence_fails_closed() {
   }
   func.func @install() -> core.nil {
     %code = arith.constant 0 : core.i32
-    %env = adt.ref_null : tribute_rt.anyref
+    %env = tribute_rt.null : tribute_rt.anyref
     %closure = adt.struct_new(%code) : (core.i32) -> !_closure
     %raw = core.unrealized_conversion_cast %closure : !_closure to core.ptr
     %result = func.call @escape(%raw) : (core.ptr) -> core.nil
@@ -556,7 +556,7 @@ fn into_raw_transfers_one_exact_closure_unit_without_materializing_rc() {
   !_closure = adt.struct<(tribute_rt.convention_table_ref), {layout = "closure"}>
   func.func @install() -> core.nil {
     %code = arith.constant 0 : core.i32
-    %env = adt.ref_null : tribute_rt.anyref
+    %env = tribute_rt.null : tribute_rt.anyref
     %closure = adt.struct_new(%code) : (core.i32) -> !_closure
     %raw = tribute_rt.into_raw %closure : core.ptr
     func.return
@@ -591,7 +591,7 @@ fn into_raw_fixture(transfers: &str) -> String {
   !_closure = adt.struct<(tribute_rt.convention_table_ref), {layout = "closure"}>
   func.func @transfers() -> core.nil {
     %code = arith.constant 0 : core.i32
-    %env = adt.ref_null : tribute_rt.anyref
+    %env = tribute_rt.null : tribute_rt.anyref
     %closure = adt.struct_new(%code) : (core.i32) -> !_closure
 "#,
         transfers,
@@ -710,7 +710,7 @@ fn into_raw_group_validation_ignores_preserved_field_borrow_acquire() {
   !Owner = adt.struct<"Owner",(!_closure)>
   func.func @transfers() -> core.nil {
     %code = arith.constant 0 : core.i32
-    %env = adt.ref_null : tribute_rt.anyref
+    %env = tribute_rt.null : tribute_rt.anyref
     %stored = adt.struct_new(%code) : (core.i32) -> !_closure
     %owner = adt.struct_new(%stored) : (!_closure) -> !Owner
     %closure = adt.struct_get %owner {field = 0, type = !Owner} : !_closure
@@ -757,7 +757,7 @@ fn into_raw_rejects_non_transfer_and_cross_block_uses_before_mutation() {
   !_closure = adt.struct<(tribute_rt.convention_table_ref), {layout = "closure"}>
   func.func @later_use() -> !_closure {
     %code = arith.constant 0 : core.i32
-    %env = adt.ref_null : tribute_rt.anyref
+    %env = tribute_rt.null : tribute_rt.anyref
     %closure = adt.struct_new(%code) : (core.i32) -> !_closure
     %raw = tribute_rt.into_raw %closure : core.ptr
     func.return %closure
@@ -771,7 +771,7 @@ fn into_raw_rejects_non_transfer_and_cross_block_uses_before_mutation() {
   func.func @cross_block() -> core.nil {
     ^entry:
       %code = arith.constant 0 : core.i32
-      %env = adt.ref_null : tribute_rt.anyref
+      %env = tribute_rt.null : tribute_rt.anyref
       %closure = adt.struct_new(%code) : (core.i32) -> !_closure
       %first = tribute_rt.into_raw %closure : core.ptr
       cf.br [^next]
@@ -3428,7 +3428,7 @@ fn each_array_type_is_one_descriptor() {
 }
 
 #[test]
-fn a_written_array_type_is_replaceable() {
+fn an_array_update_builds_a_new_array_and_leaves_reads_borrowed() {
     let ir = r#"core.module @test {
   !Node = adt.struct<"Node",(core.i32)>
   !NodeRef = adt.struct<"Node">
@@ -3439,36 +3439,23 @@ fn a_written_array_type_is_replaceable() {
     %value = adt.struct_get %node {field = 0, type = !Node} : core.i32
     func.return %value
   }
-  func.func @replace(%nodes: !Nodes, %at: core.index, %node: !NodeRef) -> core.nil {
-    adt.array_set %nodes, %at, %node
-    func.return
+  func.func @replace(%nodes: !Nodes, %at: core.index, %node: !NodeRef) -> !Nodes {
+    %replaced = adt.array_set %nodes[%at] = %node : !Nodes
+    func.return %replaced
   }
 }"#;
-    let (mut ctx, module, plan) = build(ir);
+    let (_ctx, _module, plan) = build(ir);
     let function = |name| plan.function(&SymbolPath::new([name])).unwrap();
 
-    // A read of an array type some operation writes keeps its own unit.
+    // No operation writes an array, so a read borrows its element.
     let first = function("first");
-    assert_eq!(count(first, ActionKind::BorrowLoad), 0);
-    assert_eq!(count(first, ActionKind::CopyAcquire), 1);
+    assert_eq!(count(first, ActionKind::BorrowLoad), 1);
+    assert_eq!(count(first, ActionKind::CopyAcquire), 0);
+    // The new element moves its unit into the new array; nothing is
+    // replaced in place.
     let replace = function("replace");
     assert_eq!(stores(replace), 1);
-    assert_eq!(count(replace, ActionKind::ReleaseReplacedField), 1);
-
-    materialize(&mut ctx, module, &plan).expect("typed RC materialization");
-    let materialized = module.op().display(&ctx).to_string();
-    let set = materialized.find("adt.array_set").unwrap();
-    let replaced = materialized[..set].rfind("adt.array_get").unwrap();
-    let release = materialized[replaced..set]
-        .find("tribute_rt.release")
-        .map(|offset| replaced + offset)
-        .unwrap();
-    assert!(replaced < release && release < set, "{materialized}");
-    // The replaced element's descriptor frees it by its exact layout.
-    assert!(
-        materialized[release..set].contains("alloc_size = 12"),
-        "{materialized}"
-    );
+    assert_eq!(count(replace, ActionKind::ReleaseReplacedField), 0);
 }
 
 #[test]
@@ -3490,35 +3477,11 @@ fn malformed_array_operations_are_rejected() {
         )
     };
     assert_plan_error_unchanged(
-        &module("adt.array_set %nodes, %at, %other"),
-        "array_set value type is malformed",
+        &module("%nodes2 = adt.array_set %nodes[%at] = %other : !Nodes"),
+        "aggregate managed field type is stale",
     );
     assert_plan_error_unchanged(
         &module("%nodes2 = adt.array_of %other {type = !Nodes} : !Nodes"),
         "aggregate managed field type is stale",
     );
-}
-
-#[test]
-fn a_stale_replaced_element_release_is_rejected_before_materializing() {
-    let (mut ctx, module, mut stale) = build(
-        r#"core.module @test {
-  !Node = adt.struct<"Node",(core.i32)>
-  !NodeRef = adt.struct<"Node">
-  !Nodes = adt.array<!NodeRef>
-  func.func @replace(%nodes: !Nodes, %at: core.index, %node: !NodeRef) -> core.nil {
-    adt.array_set %nodes, %at, %node
-    func.return
-  }
-}"#,
-    );
-    let action = stale.functions[0]
-        .actions
-        .iter_mut()
-        .find(|action| action.kind == ActionKind::ReleaseReplacedField)
-        .unwrap();
-    action.destination = 1;
-    assert_unchanged_on_error(&mut ctx, module, |ctx, module| {
-        materialize(ctx, module, &stale)
-    });
 }

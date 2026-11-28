@@ -3,7 +3,7 @@
 //! This pass converts ADT operations to their Cranelift equivalents:
 //! - `adt.struct_get(ref, field)` -> `clif.load(ref + offset)`
 //! - `adt.struct_set(ref, value, field)` -> `clif.store(value, ref + offset)`
-//! - `adt.ref_null(type)` -> `clif.iconst(0)` (null pointer)
+//! - `adt.ref_null(type)` and `tribute_rt.null` -> `clif.iconst(0)` (null pointer)
 //! - `adt.ref_cast(ref, type)` -> identity (native pointers are untyped)
 //! - `adt.ref_is_null(ref)` -> `clif.icmp(eq, ref, 0)`
 //!
@@ -18,11 +18,13 @@
 //! through `array_to_clif`, so an array operation
 //! left here is rejected.
 
-use tribute_ir::dialect::adt;
+use std::marker::PhantomData;
 use tribute_ir::dialect::adt::layout::compute_mem_struct_layout;
+use tribute_ir::dialect::{adt, tribute_rt};
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::clif;
 use trunk_ir::dialect::core;
+use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{OpRef, TypeRef};
 use trunk_ir::rewrite::{
     ConversionError, ConversionTarget, Module, OpRewritePattern, PatternApplicator,
@@ -48,7 +50,8 @@ fn lower(
         .with_auto_type_conversion(true)
         .add_pattern(StructGetPattern)
         .add_pattern(StructSetPattern)
-        .add_pattern(RefNullPattern)
+        .add_pattern(RefNullPattern::<adt::RefNull>(PhantomData))
+        .add_pattern(RefNullPattern::<tribute_rt::Null>(PhantomData))
         .add_pattern(RefCastPattern)
         .add_pattern(RefIsNullPattern)
         .add_pattern(adt::EraseNominalDecls)
@@ -170,10 +173,12 @@ impl OpRewritePattern for StructSetPattern {
     }
 }
 
-struct RefNullPattern;
+/// Lowers a null reference, `adt.ref_null` or `tribute_rt.null`, to the null
+/// pointer.
+struct RefNullPattern<Op>(PhantomData<Op>);
 
-impl OpRewritePattern for RefNullPattern {
-    type Op = adt::RefNull;
+impl<Op: DialectOp> OpRewritePattern for RefNullPattern<Op> {
+    type Op = Op;
 
     fn match_and_rewrite(
         &self,
@@ -368,8 +373,22 @@ mod tests {
     fn test_ref_null_to_clif() {
         let result = run_pass(
             r#"core.module @test {
+  !S = adt.struct<"S", (core.i32)>
+  func.func @test_fn() -> !S {
+    %0 = adt.ref_null : !S
+    func.return %0
+  }
+}"#,
+        );
+        insta::assert_snapshot!(result);
+    }
+
+    #[test]
+    fn test_tribute_rt_null_to_clif() {
+        let result = run_pass(
+            r#"core.module @test {
   func.func @test_fn() -> tribute_rt.anyref {
-    %0 = adt.ref_null : tribute_rt.anyref
+    %0 = tribute_rt.null : tribute_rt.anyref
     func.return %0
   }
 }"#,
@@ -396,7 +415,7 @@ mod tests {
         let result = run_pass_with_flag(
             r#"core.module @test {
   func.func @test_fn() -> core.i1 {
-    %0 = adt.ref_null : tribute_rt.anyref
+    %0 = tribute_rt.null : tribute_rt.anyref
     %1 = adt.ref_is_null %0 : tribute_rt.anyref
     func.return %1
   }
@@ -411,7 +430,7 @@ mod tests {
         let result = run_pass_with_flag(
             r#"core.module @test {
   func.func @test_fn() -> core.i1 {
-    %0 = adt.ref_null : tribute_rt.anyref
+    %0 = tribute_rt.null : tribute_rt.anyref
     %1 = adt.ref_is_null %0 : tribute_rt.anyref
     func.return %1
   }
@@ -490,7 +509,7 @@ mod tests {
         let result = run_pass_result(
             r#"core.module @test {
   func.func @test_fn() -> core.i1 {
-    %0 = adt.ref_null : tribute_rt.anyref
+    %0 = tribute_rt.null : tribute_rt.anyref
     %1 = adt.ref_is_null %0 : tribute_rt.anyref
     func.return %1
   }

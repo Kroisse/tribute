@@ -12,8 +12,10 @@
 //!   When the declared element kind is released, the helper retains each
 //!   element it fills or copies; the operation owns those acquisitions.
 //!   `adt.array_splice` then stores its `elements` in the gap the helper left.
-//! - `adt.array_get`, `adt.array_set`, and `adt.array_len` load the length and
-//!   access the element at `payload + 8 + index × stride`.
+//! - `adt.array_set` checks its index, then builds its result as the splice
+//!   of `source[index, index + 1)` and stores `value` in the gap.
+//! - `adt.array_get` and `adt.array_len` load the length and access the
+//!   element at `payload + 8 + index × stride`.
 //!
 //! Every index is checked against the length with an unsigned comparison
 //! before the access, and a length whose allocation size overflows traps.
@@ -98,10 +100,11 @@ impl ElementLayout {
 /// [`prepare`] collects while the RTTI layouts are still declared.
 pub(super) struct ArrayLowering {
     descriptors: HashMap<TypeRef, ArrayDescriptor>,
-    /// The element layout of each `adt.array_get`, `adt.array_set`, and
-    /// `adt.array_len`, read before construction rewrites erase the array
-    /// type of their operands.
+    /// The element layout of each `adt.array_get` and `adt.array_len`, read
+    /// before construction rewrites erase the array type of their operands.
     accesses: HashMap<OpRef, ElementLayout>,
+    /// The array type of each `adt.array_set`, read at the same time.
+    updates: HashMap<OpRef, TypeRef>,
 }
 
 /// Read the declared array descriptors, record the element layout of every
@@ -140,14 +143,13 @@ pub(super) fn prepare(
     }
 
     let mut accesses = HashMap::default();
+    let mut updates = HashMap::default();
     let mut helpers = Vec::new();
     let mut seen = HashSet::default();
     if let Some(body) = module.body(ctx) {
         let _ = walk_region::<()>(ctx, body, &mut |op| {
             let array = if let Ok(get) = adt::ArrayGet::from_op(ctx, op) {
                 Some(get.r#ref(ctx))
-            } else if let Ok(set) = adt::ArraySet::from_op(ctx, op) {
-                Some(set.r#ref(ctx))
             } else if let Ok(len) = adt::ArrayLen::from_op(ctx, op) {
                 Some(len.r#ref(ctx))
             } else {
@@ -163,6 +165,10 @@ pub(super) fn prepare(
                 Some((Helper::New, new.r#type(ctx)))
             } else if let Ok(splice) = adt::ArraySplice::from_op(ctx, op) {
                 Some((Helper::Splice, splice.r#type(ctx)))
+            } else if let Ok(set) = adt::ArraySet::from_op(ctx, op) {
+                let array_ty = ctx.value_ty(set.source(ctx));
+                updates.insert(op, array_ty);
+                Some((Helper::Splice, array_ty))
             } else {
                 None
             };
@@ -192,6 +198,7 @@ pub(super) fn prepare(
     ArrayLowering {
         descriptors,
         accesses,
+        updates,
     }
 }
 
@@ -510,12 +517,21 @@ impl ArrayOp for adt::ArraySet {
         ctx: &mut IrContext,
         emit: &mut Emitter<'_>,
     ) -> Option<ValueRef> {
-        let layout = arrays.access(self.op_ref());
-        let (array, index) = (self.r#ref(ctx), self.index(ctx));
-        emit.check_index(ctx, array, index);
-        let base = emit.element_base(ctx, array, index, layout.stride);
+        let descriptor = arrays.descriptor(arrays.updates[&self.op_ref()]);
+        let (source, index) = (self.source(ctx), self.index(ctx));
+        emit.check_index(ctx, source, index);
+        let one = emit.i64(ctx, 1);
+        let i64_ty = core::I64::type_ref(ctx);
+        let end = emit.iadd(ctx, index, one, i64_ty);
+        let ptr_ty = core::Ptr::params().intern(ctx).as_type_ref();
+        let call = clif::Call::operands([source, index, end, one])
+            .callee(helper_symbol(Helper::Splice, descriptor))
+            .results([ptr_ty])
+            .build(ctx, emit.loc);
+        let payload = emit.push(call).result(ctx);
+        let base = emit.element_base(ctx, payload, index, descriptor.stride);
         emit.store(ctx, self.value(ctx), base, ELEMENTS_OFFSET);
-        None
+        Some(payload)
     }
 }
 
@@ -859,9 +875,9 @@ mod tests {
             r#"core.module @test {
   !Ints = adt.array<core.i32>
   func.func @access(%ints: !Ints, %at: core.index, %value: core.i32) -> core.i32 {
-    adt.array_set %ints, %at, %value
-    %read = adt.array_get %ints, %at : core.i32
-    %len = adt.array_len %ints : core.index
+    %set = adt.array_set %ints[%at] = %value : !Ints
+    %read = adt.array_get %set, %at : core.i32
+    %len = adt.array_len %set : core.index
     func.return %read
   }
 }"#,

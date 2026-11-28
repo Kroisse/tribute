@@ -166,23 +166,9 @@ impl OperandOwnership for StructSet {
 
 impl OperandOwnership for ArraySet {
     fn operand_roles(&self, ctx: &IrContext) -> Result<Vec<OperandRole>> {
-        let object = ctx.value_ty(self.r#ref(ctx));
-        let field = array_element(ctx, object)?;
-        Ok(vec![
-            OperandRole::Borrow,
-            OperandRole::Borrow,
-            OperandRole::Assign {
-                target: 0,
-                object,
-                slot: 0,
-                field,
-            },
-        ])
-    }
-
-    fn build_replaced_read(&self, ctx: &mut IrContext, location: Location) -> Option<OpRef> {
-        let get = ArrayGet::operands(self.r#ref(ctx), self.index(ctx)).build(ctx, location);
-        Some(get.op_ref())
+        // `source` and `index` come before the new element.
+        let element = array_element(ctx, ctx.value_ty(self.source(ctx)))?;
+        initialize_from(ctx, self.op_ref(), 2, &[element])
     }
 }
 
