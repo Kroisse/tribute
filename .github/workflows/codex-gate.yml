@@ -1,0 +1,40 @@
+name: Codex review gate
+
+# Sets the `codex-review` status that the main ruleset requires. Codex posts
+# no check of its own; it edits a summary comment after each review, so this
+# reruns on that edit and on every change to the pull request's head or
+# labels. Both triggers run this file and the script from the default
+# branch, so a pull request cannot change the gate that judges it, and it
+# never checks out pull request code.
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
+  issue_comment:
+    types: [created, edited, deleted]
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+  statuses: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event.issue.number }}
+
+jobs:
+  gate:
+    name: Codex review gate
+    if: >-
+      github.event_name == 'pull_request_target' ||
+      (github.event.issue.pull_request &&
+       github.event.comment.user.login == 'chatgpt-codex-connector[bot]')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: .ci
+      - run: .ci/codex-gate.sh "$GITHUB_REPOSITORY" "$PR"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number || github.event.issue.number }}
