@@ -63,7 +63,8 @@ cargo run -- --log=tribute_front::typeck=trace compile file.trb
   the reason, in the PR description.
 - Merging requires the `codex-review` status, which passes once Codex has
   reviewed the PR's head and has no unresolved findings
-  (`.github/workflows/codex-gate.yml`). Reply to a declined Codex finding in
+  (`.github/workflows/codex-gate.yml`). Dependabot PRs, which Codex does
+  not review, pass it. Reply to a declined Codex finding in
   its thread with the reason, and add the `codex-ack` label; it waives only
   the findings of the latest Codex review before it was added, so remove
   and add it again after a later review.

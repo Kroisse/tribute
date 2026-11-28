@@ -17,10 +17,16 @@ function summary(state, { user = BOT, updatedAt = '2026-01-01T00:00:00Z' } = {})
   };
 }
 
-const run = (comments, ackedAt = null) => decide({ head: HEAD, ackedAt, comments }).state;
+const run = (comments, ackedAt = null, author = 'someone') =>
+  decide({ head: HEAD, author, ackedAt, comments }).state;
 
 test('no Codex comment is pending', () => {
   assert.equal(run([]), 'pending');
+});
+
+test('a Dependabot pull request passes without a Codex review', () => {
+  assert.equal(run([], null, 'app/dependabot'), 'success');
+  assert.equal(run([], null, 'dependabot[bot]'), 'success');
 });
 
 test('a clean review of the head passes', () => {
